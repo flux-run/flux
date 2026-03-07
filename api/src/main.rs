@@ -175,7 +175,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let app = create_app(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let port = std::env::var("PORT")
+        .unwrap_or_else(|_| "8080".to_string())
+        .parse::<u16>()
+        .unwrap_or(8080);
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Starting Fluxbase Control Plane on {}", addr);
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

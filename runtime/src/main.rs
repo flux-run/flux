@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/execute", post(execute_handler))
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Starting Runtime execution server on {}", addr);
     let listener = TcpListener::bind(addr).await?;
     
