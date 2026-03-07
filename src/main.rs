@@ -17,6 +17,8 @@ use tracing::info;
 use types::scope::Scope;
 use firebase_auth::FirebaseAuth;
 use std::sync::Arc;
+use tower_http::cors::{CorsLayer, AllowOrigin};
+use axum::http::{HeaderValue, Method, header};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -34,6 +36,46 @@ impl axum::extract::FromRef<AppState> for Arc<FirebaseAuth> {
     fn from_ref(state: &AppState) -> Self {
         state.firebase_auth.clone()
     }
+}
+
+/// Build the CORS layer from the `ALLOWED_ORIGINS` environment variable.
+///
+/// `ALLOWED_ORIGINS` is a comma-separated list of allowed origins, e.g.:
+///   `http://localhost:5173,https://fluxbase.co`
+///
+/// If the variable is not set, defaults to `http://localhost:5173`.
+pub fn build_cors() -> CorsLayer {
+    let raw = std::env::var("ALLOWED_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:5173".to_string());
+
+    let origins: Vec<HeaderValue> = raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<HeaderValue>().expect("Invalid ALLOWED_ORIGINS entry"))
+        .collect();
+
+    info!("CORS allowed origins: {:?}", origins);
+
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            "x-fluxbase-tenant".parse().unwrap(),
+            "x-fluxbase-project".parse().unwrap(),
+        ])
+        .allow_credentials(true)
+        .max_age(std::time::Duration::from_secs(3600))
 }
 
 pub fn create_app(state: AppState) -> Router {
@@ -77,7 +119,8 @@ pub fn create_app(state: AppState) -> Router {
             middleware::scope::require_scope(Scope::Project, req, next)
         }));
 
-    // Combine with core authentication middleware applied to all
+    // Combine with core authentication middleware applied to all.
+    // CORS is outermost so preflight OPTIONS requests are handled before auth.
     Router::new()
         .merge(platform_routes)
         .merge(tenant_routes)
@@ -90,6 +133,7 @@ pub fn create_app(state: AppState) -> Router {
             state.clone(),
             middleware::auth::verify_auth,
         ))
+        .layer(build_cors())
         .with_state(state)
 }
 
