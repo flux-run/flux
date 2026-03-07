@@ -1,16 +1,15 @@
 # ── Rust ─────────────────────────────────────────────────────────────────────
-api/target/
+**/target/
+**/*.rs.bk
 
 # ── Node / Dashboard ─────────────────────────────────────────────────────────
-node_modules/
-dashboard/node_modules/
-dashboard/dist/
-dashboard/.vite/
+**/node_modules/
+**/dist/
+**/.vite/
 
 # ── Env files (never commit secrets) ─────────────────────────────────────────
-.env
-api/.env
-dashboard/.env
+**/.env
+**/.env.*
 
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store

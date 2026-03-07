@@ -129,11 +129,11 @@ pub fn create_app(state: AppState) -> Router {
 
     // Combine with core authentication middleware applied to all.
     // CORS is outermost so preflight OPTIONS requests are handled before auth.
-    Router::new()
+    // Combine authenticated routes
+    let authenticated_api = Router::new()
         .merge(platform_routes)
         .merge(tenant_routes)
         .merge(project_routes)
-        .nest("/internal", internal_routes)
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::context::resolve_context,
@@ -141,7 +141,12 @@ pub fn create_app(state: AppState) -> Router {
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::auth::verify_auth,
-        ))
+        ));
+
+    // Combine all
+    Router::new()
+        .merge(authenticated_api)
+        .nest("/internal", internal_routes)
         .layer(build_cors())
         .with_state(state)
 }
