@@ -1,18 +1,19 @@
 # Stage 1: Build Sccache natively caching S2S dependency graph compilation
-FROM rust:1.80-slim-bookworm AS builder
+FROM rust:slim-bookworm AS builder
 
-# Install required build dependencies including SSL and pkg-config for reqwest/sqlx
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     gcc \
     make \
-    perl
+    perl \
+    curl \
+    python3
 
 WORKDIR /usr/src/app
 
 # Copy the API-specific Cargo lockfiles directly from the current build context (the `api/` folder)
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock* ./
 
 # Create dummy source wrapper to strictly cache dependency builds
 RUN mkdir -p src \

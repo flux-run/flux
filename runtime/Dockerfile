@@ -1,17 +1,18 @@
 # Stage 1: Build the rust application safely
-FROM rust:1.80-slim-bookworm AS builder
+FROM rust:slim-bookworm AS builder
 
-# Install essential dependencies needed by networking traits
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     gcc \
     make \
-    perl
+    perl \
+    curl \
+    python3
 
 WORKDIR /usr/src/app
 
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock* ./
 
 RUN mkdir -p src \
     && echo "fn main() {}" > src/main.rs \
