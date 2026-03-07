@@ -1,0 +1,8 @@
+target/
+**/.env
+**/.sqlx/
+node_modules/
+.git/
+.cargo/
+dashboard/
+cli/
