@@ -1,0 +1,7 @@
+[[build.env]]
+name = "BP_CARGO_WORKSPACE_MEMBERS"
+value = "api"
+
+[[build.env]]
+name = "BP_CARGO_INSTALL_ARGS"
+value = "--locked --path=api"
