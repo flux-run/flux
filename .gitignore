@@ -1,2 +1,23 @@
-/target
+# ── Rust ─────────────────────────────────────────────────────────────────────
+api/target/
+
+# ── Node / Dashboard ─────────────────────────────────────────────────────────
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+
+# ── Env files (never commit secrets) ─────────────────────────────────────────
 .env
+api/.env
+dashboard/.env
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editors ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
