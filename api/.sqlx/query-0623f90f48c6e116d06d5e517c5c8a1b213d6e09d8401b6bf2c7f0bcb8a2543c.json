@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE deployments SET is_active = false WHERE function_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0623f90f48c6e116d06d5e517c5c8a1b213d6e09d8401b6bf2c7f0bcb8a2543c"
+}

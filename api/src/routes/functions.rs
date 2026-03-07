@@ -80,6 +80,18 @@ pub async fn create_function(
         .tenant_id
         .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_tenant"}))))?;
 
+    // Validate runtime against platform registry
+    struct RuntimeValidationRow { id: Uuid }
+    let _runtime_valid = sqlx::query_as_unchecked!(
+        RuntimeValidationRow,
+        "SELECT id FROM platform_runtimes WHERE name = $1 AND status = 'active'",
+        payload.runtime
+    )
+    .fetch_optional(&pool)
+    .await
+    .map_err(|_| db_err())?
+    .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid_or_inactive_runtime"}))))?;
+
     let function_id = Uuid::new_v4();
 
     sqlx::query!(
@@ -93,6 +105,9 @@ pub async fn create_function(
     .execute(&pool)
     .await
     .map_err(|_| db_err())?;
+    
+    // TODO: Publish to actual event bus
+    println!(r#"{{"event": "function.created", "function_id": "{}", "tenant_id": "{}", "project_id": "{}"}}"#, function_id, tenant_id, project_id);
 
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "function_id": function_id }))))
 }

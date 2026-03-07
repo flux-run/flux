@@ -83,6 +83,8 @@ pub fn create_app(state: AppState) -> Router {
     let platform_routes = Router::new()
         .route("/auth/me", get(routes::auth::get_me))
         .route("/auth/logout", post(routes::auth::logout))
+        .route("/platform/runtimes", get(routes::platform::list_runtimes))
+        .route("/platform/services", get(routes::platform::list_services))
         .route("/tenants", post(routes::tenants::create_tenant))
         .route("/tenants", get(routes::tenants::get_tenants))
         .route("/tenants/{id}", get(routes::tenants::get_tenant))
@@ -115,6 +117,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/functions/{id}", delete(routes::functions::delete_function))
         .route("/functions/{id}/deployments", get(routes::deployments::list_deployments))
         .route("/functions/{id}/deployments", post(routes::deployments::create_deployment))
+        .route("/deployments/{id}/activate", post(routes::deployments::activate_deployment))
         .layer(axum_middleware::from_fn(|req, next| {
             middleware::scope::require_scope(Scope::Project, req, next)
         }));

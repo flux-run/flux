@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO deployments (id, function_id, storage_key, version) VALUES ($1, $2, $3, $4)",
+  "query": "INSERT INTO deployments (id, function_id, storage_key, version, status) VALUES ($1, $2, $3, $4, 'ready')",
   "describe": {
     "columns": [],
     "parameters": {
@@ -13,5 +13,5 @@
     },
     "nullable": []
   },
-  "hash": "23e221242c4f9becefae6819c9eaa09e5484c37d94dc071f5cf15d80553f6c84"
+  "hash": "c69c2c0100139e1f72acebc1d8109048c289011af8c6e2145d818d1b74b340a5"
 }

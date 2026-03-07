@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, version, is_active, created_at FROM deployments WHERE function_id = $1 ORDER BY version DESC",
+  "query": "SELECT id, version, is_active, status, created_at FROM deployments WHERE function_id = $1 ORDER BY version DESC",
   "describe": {
     "columns": [
       {
@@ -20,6 +20,11 @@
       },
       {
         "ordinal": 3,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
         "name": "created_at",
         "type_info": "Timestamp"
       }
@@ -33,8 +38,9 @@
       false,
       false,
       false,
+      false,
       true
     ]
   },
-  "hash": "4521b9f93f1cb67fecaf93bd2c9fca340b09e4ef8ea3b2de88f7466379d9edd8"
+  "hash": "aba1efe53716c59172cbd16b1796fadd771e6aadf02fae83b4d4cc1864aaab4a"
 }
