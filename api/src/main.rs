@@ -6,6 +6,7 @@ mod routes;
 mod services;
 mod types;
 mod secrets;
+mod api_keys;
 
 use axum::{
     middleware as axum_middleware,
@@ -112,6 +113,8 @@ pub fn create_app(state: AppState) -> Router {
 
     // Project Scope routes (X-Fluxbase-Project required + project verified under tenant)
     let project_routes = Router::new()
+        .route("/api-keys", get(crate::api_keys::routes::list_api_keys))
+        .route("/api-keys", post(crate::api_keys::routes::create_api_key))
         .route("/secrets", get(secrets::routes::list_secrets))
         .route("/secrets", post(secrets::routes::create_secret))
         .route("/secrets/{key}", put(secrets::routes::update_secret))
@@ -129,11 +132,18 @@ pub fn create_app(state: AppState) -> Router {
 
     // Combine with core authentication middleware applied to all.
     // CORS is outermost so preflight OPTIONS requests are handled before auth.
+    let mixed_tenant_project_routes = Router::new()
+        .route("/api-keys/{id}", delete(crate::api_keys::routes::revoke_api_key))
+        .layer(axum_middleware::from_fn(|req, next| {
+            middleware::scope::require_scope(Scope::Tenant, req, next)
+        }));
+
     // Combine authenticated routes
     let authenticated_api = Router::new()
         .merge(platform_routes)
         .merge(tenant_routes)
         .merge(project_routes)
+        .merge(mixed_tenant_project_routes)
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::context::resolve_context,

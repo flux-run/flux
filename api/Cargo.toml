@@ -24,3 +24,5 @@ uuid = { version = "1.22.0", features = ["v4", "serde"] }
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
+sha2 = "0.10.9"
+hex = "0.4.3"
