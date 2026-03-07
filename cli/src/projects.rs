@@ -22,7 +22,7 @@ pub async fn execute(command: ProjectCommands) -> anyhow::Result<()> {
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
-            let projects = json.get("projects").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let projects = json.get("data").and_then(|data| data.get("projects")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
             
             println!("{:<40} {:<30}", "ID", "NAME");
             for project in projects {

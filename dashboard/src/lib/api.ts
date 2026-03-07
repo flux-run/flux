@@ -38,9 +38,17 @@ export async function apiFetch<T = unknown>(
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "unknown_error" }));
+    // API standardised error format: { success: false, error: "..." }
     throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`);
   }
 
   const text = await res.text();
-  return text ? (JSON.parse(text) as T) : ({} as T);
+  if (!text) return {} as T;
+
+  const json = JSON.parse(text);
+  // Support standard ApiResponse<T> where `{ success: true, data: T }`
+  if ("success" in json && "data" in json) {
+    return json.data as T;
+  }
+  return json as T;
 }

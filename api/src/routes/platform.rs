@@ -5,6 +5,7 @@ use axum::{
 };
 use sqlx::PgPool;
 use crate::types::context::RequestContext;
+use crate::types::response::{ApiResponse, ApiError};
 
 // ── Row structs ────────────────────────────────────────────────────────────
 
@@ -21,10 +22,10 @@ struct ServiceRow {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-type ApiResult<T> = Result<T, (StatusCode, Json<serde_json::Value>)>;
+type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
-fn db_err() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "database_error"})))
+fn db_err() -> ApiError {
+    ApiError::internal("database_error")
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ fn db_err() -> (StatusCode, Json<serde_json::Value>) {
 pub async fn list_runtimes(
     State(pool): State<PgPool>,
     Extension(_context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let records = sqlx::query_as_unchecked!(
         RuntimeRow,
         "SELECT name, engine, status FROM platform_runtimes WHERE status = 'active'"
@@ -52,13 +53,13 @@ pub async fn list_runtimes(
         })
         .collect();
 
-    Ok(Json(serde_json::json!({ "runtimes": runtimes })))
+    Ok(ApiResponse::new(serde_json::json!({ "runtimes": runtimes })))
 }
 
 pub async fn list_services(
     State(pool): State<PgPool>,
     Extension(_context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let records = sqlx::query_as_unchecked!(
         ServiceRow,
         "SELECT name, status FROM platform_services"
@@ -77,5 +78,5 @@ pub async fn list_services(
         })
         .collect();
 
-    Ok(Json(serde_json::json!({ "services": services })))
+    Ok(ApiResponse::new(serde_json::json!({ "services": services })))
 }

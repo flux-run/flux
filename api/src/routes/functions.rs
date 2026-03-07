@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use crate::types::response::{ApiResponse, ApiError};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -27,10 +28,10 @@ pub struct CreateFunctionPayload {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-type ApiResult<T> = Result<T, (StatusCode, Json<serde_json::Value>)>;
+type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
-fn db_err() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "database_error"})))
+fn db_err() -> ApiError {
+    ApiError::internal("database_error")
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────
@@ -38,10 +39,10 @@ fn db_err() -> (StatusCode, Json<serde_json::Value>) {
 pub async fn list_functions(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let project_id = context
         .project_id
-        .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_project"}))))?;
+        .ok_or(ApiError::bad_request("missing_project"))?;
 
     let records = sqlx::query_as_unchecked!(
         FunctionRow,
@@ -64,33 +65,33 @@ pub async fn list_functions(
         })
         .collect();
 
-    Ok(Json(serde_json::json!({ "functions": functions })))
+    Ok(ApiResponse::new(serde_json::json!({ "functions": functions })))
 }
 
 pub async fn create_function(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<CreateFunctionPayload>,
-) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<serde_json::Value> {
     let project_id = context
         .project_id
-        .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_project"}))))?;
+        .ok_or(ApiError::bad_request("missing_project"))?;
 
     let tenant_id = context
         .tenant_id
-        .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_tenant"}))))?;
+        .ok_or(ApiError::bad_request("missing_tenant"))?;
 
     // Validate runtime against platform registry
-    struct RuntimeValidationRow { id: Uuid }
-    let _runtime_valid = sqlx::query_as_unchecked!(
-        RuntimeValidationRow,
-        "SELECT id FROM platform_runtimes WHERE name = $1 AND status = 'active'",
-        payload.runtime
+    #[derive(sqlx::FromRow)]
+    struct RuntimeValidationRow { _id: Uuid }
+    let _runtime_valid = sqlx::query_as::<_, RuntimeValidationRow>(
+        "SELECT id as _id FROM platform_runtimes WHERE name = $1 AND status = 'active'"
     )
+    .bind(&payload.runtime)
     .fetch_optional(&pool)
     .await
     .map_err(|_| db_err())?
-    .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid_or_inactive_runtime"}))))?;
+    .ok_or(ApiError::bad_request("invalid_or_inactive_runtime"))?;
 
     let function_id = Uuid::new_v4();
 
@@ -109,17 +110,17 @@ pub async fn create_function(
     // TODO: Publish to actual event bus
     println!(r#"{{"event": "function.created", "function_id": "{}", "tenant_id": "{}", "project_id": "{}"}}"#, function_id, tenant_id, project_id);
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "function_id": function_id }))))
+    Ok(ApiResponse::new(serde_json::json!({ "function_id": function_id })))
 }
 
 pub async fn get_function(
     Path(id): Path<Uuid>,
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let project_id = context
         .project_id
-        .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_project"}))))?;
+        .ok_or(ApiError::bad_request("missing_project"))?;
 
     let record = sqlx::query_as_unchecked!(
         FunctionRow,
@@ -130,9 +131,9 @@ pub async fn get_function(
     .fetch_optional(&pool)
     .await
     .map_err(|_| db_err())?
-    .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "function_not_found"}))))?;
+    .ok_or(ApiError::not_found("function_not_found"))?;
 
-    Ok(Json(serde_json::json!({
+    Ok(ApiResponse::new(serde_json::json!({
         "id": record.id,
         "name": record.name,
         "runtime": record.runtime,
@@ -144,10 +145,10 @@ pub async fn delete_function(
     Path(id): Path<Uuid>,
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let project_id = context
         .project_id
-        .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_project"}))))?;
+        .ok_or(ApiError::bad_request("missing_project"))?;
 
     sqlx::query!(
         "DELETE FROM functions WHERE id = $1 AND project_id = $2",
@@ -158,5 +159,5 @@ pub async fn delete_function(
     .await
     .map_err(|_| db_err())?;
 
-    Ok(Json(serde_json::json!({ "deleted": true })))
+    Ok(ApiResponse::new(serde_json::json!({ "deleted": true })))
 }

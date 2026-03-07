@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use crate::types::response::{ApiResponse, ApiError};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -27,10 +28,10 @@ pub struct CreateDeploymentPayload {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-type ApiResult<T> = Result<T, (StatusCode, Json<serde_json::Value>)>;
+type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
-fn db_err() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "database_error"})))
+fn db_err() -> ApiError {
+    ApiError::internal("database_error")
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────
@@ -39,7 +40,7 @@ pub async fn list_deployments(
     Path(function_id): Path<Uuid>,
     State(pool): State<PgPool>,
     Extension(_context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let records = sqlx::query_as_unchecked!(
         DeploymentRow,
         "SELECT id, version, is_active, status, created_at FROM deployments WHERE function_id = $1 ORDER BY version DESC",
@@ -62,7 +63,7 @@ pub async fn list_deployments(
         })
         .collect();
 
-    Ok(Json(serde_json::json!({ "deployments": deployments })))
+    Ok(ApiResponse::new(serde_json::json!({ "deployments": deployments })))
 }
 
 pub async fn create_deployment(
@@ -70,7 +71,7 @@ pub async fn create_deployment(
     State(pool): State<PgPool>,
     Extension(_context): Extension<RequestContext>,
     Json(payload): Json<CreateDeploymentPayload>,
-) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<serde_json::Value> {
     let deployment_id = Uuid::new_v4();
 
     // Get next version number
@@ -100,20 +101,17 @@ pub async fn create_deployment(
     // TODO: Publish to actual event bus
     println!(r#"{{"event": "function.deployed", "function_id": "{}", "deployment_id": "{}"}}"#, function_id, deployment_id);
 
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "deployment_id": deployment_id,
-            "version": next_version
-        })),
-    ))
+    Ok(ApiResponse::new(serde_json::json!({
+        "deployment_id": deployment_id,
+        "version": next_version
+    })))
 }
 
 pub async fn activate_deployment(
     Path(id): Path<Uuid>,
     State(pool): State<PgPool>,
     Extension(_context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let mut tx = pool.begin().await.map_err(|_| db_err())?;
 
     // Find the function_id for this deployment to deactivate others
@@ -126,7 +124,7 @@ pub async fn activate_deployment(
     .fetch_optional(&mut *tx)
     .await
     .map_err(|_| db_err())?
-    .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "deployment_not_found"}))))?;
+    .ok_or(ApiError::not_found("deployment_not_found"))?;
 
     // Deactivate all deployments for this function
     sqlx::query!(
@@ -151,21 +149,21 @@ pub async fn activate_deployment(
     // TODO: Publish to event bus
     println!(r#"{{"event": "function.activated", "function_id": "{}", "deployment_id": "{}"}}"#, fn_record.function_id, id);
 
-    Ok(Json(serde_json::json!({ "activated": true })))
+    Ok(ApiResponse::new(serde_json::json!({ "activated": true })))
 }
 
 pub async fn deploy_function_cli(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
     mut multipart: axum::extract::Multipart,
-) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<serde_json::Value> {
     let project_id = context
         .project_id
-        .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_project"}))))?;
+        .ok_or(ApiError::bad_request("missing_project"))?;
     
     let tenant_id = context
         .tenant_id
-        .ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_tenant"}))))?;
+        .ok_or(ApiError::bad_request("missing_tenant"))?;
 
     let mut name = String::new();
     let mut runtime = String::new();
@@ -189,11 +187,11 @@ pub async fn deploy_function_cli(
     }
 
     if name.is_empty() || runtime.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Missing 'name' or 'runtime' fields."}))));
+        return Err(ApiError::bad_request("Missing 'name' or 'runtime' fields."));
     }
 
     if bundle_bytes.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Missing 'bundle' payload."}))));
+        return Err(ApiError::bad_request("Missing 'bundle' payload."));
     }
 
     // Attempt to locate an existing function by name and project
@@ -275,13 +273,10 @@ pub async fn deploy_function_cli(
     // Return structured payload mirroring production router architectures.
     let run_url = format!("https://run.fluxbase.co/{}", name);
 
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "function_id": function_id,
-            "deployment_id": deployment_id,
-            "version": next_version,
-            "url": run_url
-        })),
-    ))
+    Ok(ApiResponse::new(serde_json::json!({
+        "function_id": function_id,
+        "deployment_id": deployment_id,
+        "version": next_version,
+        "url": run_url
+    })))
 }

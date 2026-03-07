@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use crate::types::response::{ApiResponse, ApiError};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -30,14 +31,14 @@ pub struct CreateProjectPayload {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-type ApiResult<T> = Result<T, (StatusCode, Json<serde_json::Value>)>;
+type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
-fn db_err() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "database_error"})))
+fn db_err() -> ApiError {
+    ApiError::internal("database_error")
 }
 
-fn missing_tenant() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_tenant"})))
+fn missing_tenant() -> ApiError {
+    ApiError::bad_request("missing_tenant")
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ pub async fn create_project(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<CreateProjectPayload>,
-) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<serde_json::Value> {
     let tenant_id = context.tenant_id.ok_or_else(missing_tenant)?;
     let project_id = Uuid::new_v4();
 
@@ -60,13 +61,13 @@ pub async fn create_project(
     .await
     .map_err(|_| db_err())?;
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "project_id": project_id }))))
+    Ok(ApiResponse::new(serde_json::json!({ "project_id": project_id })))
 }
 
 pub async fn get_projects(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let tenant_id = context.tenant_id.ok_or_else(missing_tenant)?;
 
     let records = sqlx::query_as_unchecked!(
@@ -83,14 +84,14 @@ pub async fn get_projects(
         .map(|r| serde_json::json!({ "id": r.id, "name": r.name }))
         .collect();
 
-    Ok(Json(serde_json::json!({ "projects": projects })))
+    Ok(ApiResponse::new(serde_json::json!({ "projects": projects })))
 }
 
 pub async fn get_project(
     Path(id): Path<Uuid>,
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let tenant_id = context.tenant_id.ok_or_else(missing_tenant)?;
 
     let record = sqlx::query_as_unchecked!(
@@ -102,9 +103,9 @@ pub async fn get_project(
     .fetch_optional(&pool)
     .await
     .map_err(|_| db_err())?
-    .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "project_not_found"}))))?;
+    .ok_or(ApiError::not_found("project_not_found"))?;
 
-    Ok(Json(serde_json::json!({
+    Ok(ApiResponse::new(serde_json::json!({
         "id": record.id,
         "name": record.name,
         "created_at": record.created_at.to_string()
@@ -115,11 +116,11 @@ pub async fn delete_project(
     Path(id): Path<Uuid>,
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let tenant_id = context.tenant_id.ok_or_else(missing_tenant)?;
 
     if context.role.as_deref() != Some("owner") && context.role.as_deref() != Some("admin") {
-        return Err((StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "forbidden"}))));
+        return Err(ApiError::forbidden("forbidden"));
     }
 
     sqlx::query!(
@@ -131,5 +132,5 @@ pub async fn delete_project(
     .await
     .map_err(|_| db_err())?;
 
-    Ok(Json(serde_json::json!({ "deleted": true })))
+    Ok(ApiResponse::new(serde_json::json!({ "deleted": true })))
 }

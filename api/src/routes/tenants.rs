@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use crate::types::response::{ApiResponse, ApiError};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -47,17 +48,17 @@ pub struct InviteMemberPayload {
 
 // ── Handlers ───────────────────────────────────────────────────────────────
 
-type ApiResult<T> = Result<T, (StatusCode, Json<serde_json::Value>)>;
+type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
-fn db_err() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "database_error"})))
+fn db_err() -> ApiError {
+    ApiError::internal("database_error")
 }
 
 pub async fn create_tenant(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<CreateTenantPayload>,
-) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<serde_json::Value> {
     let tenant_id = Uuid::new_v4();
 
     sqlx::query!(
@@ -79,13 +80,13 @@ pub async fn create_tenant(
     .await
     .map_err(|_| db_err())?;
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "tenant_id": tenant_id }))))
+    Ok(ApiResponse::new(serde_json::json!({ "tenant_id": tenant_id })))
 }
 
 pub async fn get_tenants(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let records = sqlx::query_as_unchecked!(
         TenantRow,
         r#"
@@ -106,14 +107,14 @@ pub async fn get_tenants(
         .map(|r| serde_json::json!({ "id": r.id, "name": r.name, "role": r.role }))
         .collect();
 
-    Ok(Json(serde_json::json!({ "tenants": tenants })))
+    Ok(ApiResponse::new(serde_json::json!({ "tenants": tenants })))
 }
 
 pub async fn get_tenant(
     Path(id): Path<Uuid>,
     State(pool): State<PgPool>,
     Extension(_context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let record = sqlx::query_as_unchecked!(
         TenantDetailRow,
         "SELECT id, name, created_at FROM tenants WHERE id = $1",
@@ -122,9 +123,9 @@ pub async fn get_tenant(
     .fetch_optional(&pool)
     .await
     .map_err(|_| db_err())?
-    .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "tenant_not_found"}))))?;
+    .ok_or(ApiError::not_found("tenant_not_found"))?;
 
-    Ok(Json(serde_json::json!({
+    Ok(ApiResponse::new(serde_json::json!({
         "id": record.id,
         "name": record.name,
         "created_at": record.created_at.to_string()
@@ -135,12 +136,9 @@ pub async fn delete_tenant(
     Path(id): Path<Uuid>,
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     if context.role.as_deref() != Some("owner") {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "forbidden", "message": "Only owners can delete tenants"})),
-        ));
+        return Err(ApiError::forbidden("Only owners can delete tenants"));
     }
 
     sqlx::query!("DELETE FROM tenants WHERE id = $1", id)
@@ -148,7 +146,7 @@ pub async fn delete_tenant(
         .await
         .map_err(|_| db_err())?;
 
-    Ok(Json(serde_json::json!({ "deleted": true })))
+    Ok(ApiResponse::new(serde_json::json!({ "deleted": true })))
 }
 
 // ── Members ────────────────────────────────────────────────────────────────
@@ -156,7 +154,7 @@ pub async fn delete_tenant(
 pub async fn get_members(
     Path(tenant_id): Path<Uuid>,
     State(pool): State<PgPool>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     let records = sqlx::query_as_unchecked!(
         MemberRow,
         r#"
@@ -176,7 +174,7 @@ pub async fn get_members(
         .map(|r| serde_json::json!({ "user_id": r.id, "email": r.email, "role": r.role }))
         .collect();
 
-    Ok(Json(serde_json::json!({ "members": members })))
+    Ok(ApiResponse::new(serde_json::json!({ "members": members })))
 }
 
 pub async fn invite_member(
@@ -184,12 +182,9 @@ pub async fn invite_member(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<InviteMemberPayload>,
-) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<serde_json::Value> {
     if context.role.as_deref() != Some("owner") && context.role.as_deref() != Some("admin") {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "forbidden", "message": "Only admins or owners can invite"})),
-        ));
+        return Err(ApiError::forbidden("Only admins or owners can invite"));
     }
 
     let user = sqlx::query_as_unchecked!(
@@ -200,7 +195,7 @@ pub async fn invite_member(
     .fetch_optional(&pool)
     .await
     .map_err(|_| db_err())?
-    .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "user_not_found"}))))?;
+    .ok_or(ApiError::not_found("user_not_found"))?;
 
     sqlx::query!(
         "INSERT INTO tenant_members (tenant_id, user_id, role) VALUES ($1, $2, $3)
@@ -213,16 +208,16 @@ pub async fn invite_member(
     .await
     .map_err(|_| db_err())?;
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "invited": true }))))
+    Ok(ApiResponse::new(serde_json::json!({ "invited": true })))
 }
 
 pub async fn remove_member(
     Path((tenant_id, member_id)): Path<(Uuid, Uuid)>,
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> ApiResult<serde_json::Value> {
     if context.role.as_deref() != Some("owner") && context.role.as_deref() != Some("admin") {
-        return Err((StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "forbidden"}))));
+        return Err(ApiError::forbidden("forbidden"));
     }
 
     sqlx::query!(
@@ -234,5 +229,5 @@ pub async fn remove_member(
     .await
     .map_err(|_| db_err())?;
 
-    Ok(Json(serde_json::json!({ "deleted": true })))
+    Ok(ApiResponse::new(serde_json::json!({ "deleted": true })))
 }

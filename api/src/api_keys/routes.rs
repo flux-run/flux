@@ -5,17 +5,14 @@ use axum::{
 };
 use uuid::Uuid;
 use crate::{
-    types::context::RequestContext,
+    types::{context::RequestContext, response::{ApiResponse, ApiError}},
     AppState,
 };
 
-type ApiResult<T> = Result<T, (StatusCode, Json<serde_json::Value>)>;
+type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
-fn db_err<E: std::fmt::Display>(e: E) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({"error": "database_error", "message": e.to_string()})),
-    )
+fn db_err<E: std::fmt::Display>(e: E) -> ApiError {
+    ApiError::internal(&format!("database_error: {}", e))
 }
 
 use super::{
@@ -27,9 +24,9 @@ pub async fn create_api_key(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
     Json(payload): Json<CreateApiKeyRequest>,
-) -> ApiResult<(StatusCode, Json<CreateApiKeyResponse>)> {
+) -> ApiResult<CreateApiKeyResponse> {
     let tenant_id = ctx.tenant_id.unwrap_or_default();
-    let project_id = ctx.project_id.ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_project_id"}))))?;
+    let project_id = ctx.project_id.ok_or(ApiError::bad_request("missing_project_id"))?;
     
     let (_record, plaintext_key) = service::create_api_key(&state.pool, tenant_id, project_id, &payload.name)
         .await
@@ -40,33 +37,33 @@ pub async fn create_api_key(
         key: plaintext_key,
     };
 
-    Ok((StatusCode::CREATED, Json(response)))
+    Ok(ApiResponse::new(response))
 }
 
 pub async fn list_api_keys(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
-) -> ApiResult<(StatusCode, Json<Vec<super::model::ApiKey>>)> {
+) -> ApiResult<Vec<super::model::ApiKey>> {
     let tenant_id = ctx.tenant_id.unwrap_or_default();
-    let project_id = ctx.project_id.ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_project_id"}))))?;
+    let project_id = ctx.project_id.ok_or(ApiError::bad_request("missing_project_id"))?;
     
     let keys = service::list_api_keys(&state.pool, tenant_id, project_id)
         .await
         .map_err(db_err)?;
 
-    Ok((StatusCode::OK, Json(keys)))
+    Ok(ApiResponse::new(keys))
 }
 
 pub async fn revoke_api_key(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
     Path(id): Path<Uuid>,
-) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+) -> ApiResult<serde_json::Value> {
     let tenant_id = ctx.tenant_id.unwrap_or_default();
 
     service::revoke_api_key(&state.pool, id, tenant_id)
         .await
         .map_err(db_err)?;
 
-    Ok((StatusCode::OK, Json(serde_json::json!({ "message": "API Key revoked successfully" }))))
+    Ok(ApiResponse::new(serde_json::json!({ "message": "API Key revoked successfully" })))
 }

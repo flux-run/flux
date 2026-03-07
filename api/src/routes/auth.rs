@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use crate::types::context::RequestContext;
+use crate::types::response::{ApiResponse, ApiError};
 use serde_json::json;
 use sqlx::PgPool;
 
@@ -20,9 +21,9 @@ struct TenantMembershipRow {
 pub async fn get_me(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<ApiResponse<serde_json::Value>, ApiError> {
     if context.firebase_uid == "api_key" {
-        return Ok(Json(json!({
+        return Ok(ApiResponse::new(json!({
             "user_id": context.user_id,
             "email": "cli-api-key@fluxbase.local",
             "tenants": []
@@ -35,8 +36,8 @@ pub async fn get_me(
     )
     .fetch_optional(&pool)
     .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "database_error"}))))?
-    .ok_or((StatusCode::NOT_FOUND, Json(json!({"error": "user_not_found"}))))?;
+    .map_err(|_| ApiError::internal("database_error"))?
+    .ok_or(ApiError::not_found("user_not_found"))?;
 
     let tenant_records = sqlx::query_as_unchecked!(
         TenantMembershipRow,
@@ -50,7 +51,7 @@ pub async fn get_me(
     )
     .fetch_all(&pool)
     .await
-    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "database_error"}))))?;
+    .map_err(|_| ApiError::internal("database_error"))?;
 
     let tenants: Vec<serde_json::Value> = tenant_records
         .into_iter()
@@ -63,13 +64,13 @@ pub async fn get_me(
         })
         .collect();
 
-    Ok(Json(json!({
+    Ok(ApiResponse::new(json!({
         "user_id": context.user_id,
         "email": user_record.email,
         "tenants": tenants
     })))
 }
 
-pub async fn logout() -> Json<serde_json::Value> {
-    Json(json!({ "success": true }))
+pub async fn logout() -> ApiResponse<serde_json::Value> {
+    ApiResponse::new(json!({ "success": true }))
 }
