@@ -21,7 +21,8 @@ pub async fn execute(command: ProjectCommands) -> anyhow::Result<()> {
                 .get(format!("{}/projects", client.base_url))
                 .send()
                 .await?;
-            let projects: Vec<Value> = res.error_for_status()?.json().await?;
+            let json: Value = res.error_for_status()?.json().await?;
+            let projects = json.get("projects").and_then(|v| v.as_array()).cloned().unwrap_or_default();
             
             println!("{:<40} {:<30}", "ID", "NAME");
             for project in projects {
