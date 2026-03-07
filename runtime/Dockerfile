@@ -12,22 +12,17 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /usr/src/app
 
 COPY Cargo.toml Cargo.lock ./
-COPY api/Cargo.toml api/
-COPY runtime/Cargo.toml runtime/
-COPY cli/Cargo.toml cli/
 
-RUN mkdir -p api/src runtime/src cli/src \
-    && echo "fn main() {}" > api/src/main.rs \
-    && echo "fn main() {}" > runtime/src/main.rs \
-    && echo "fn main() {}" > cli/src/main.rs \
-    && cargo build --release --bin runtime \
-    && rm -rf runtime/src
+RUN mkdir -p src \
+    && echo "fn main() {}" > src/main.rs \
+    && cargo build --release \
+    && rm -rf src
 
 # Bring over the real code to compile
-COPY runtime/ runtime/
+COPY src/ src/
 
 # Touch main.rs to invalidate the cache marker and rebuild the actual target
-RUN touch runtime/src/main.rs && cargo build --release --bin runtime
+RUN touch src/main.rs && cargo build --release
 
 # Stage 2: Tiny runner mapping
 FROM debian:bookworm-slim

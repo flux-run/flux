@@ -11,28 +11,24 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /usr/src/app
 
-# Only copy in Cargo manifests to cache dependencies
+# Copy the API-specific Cargo lockfiles directly from the current build context (the `api/` folder)
 COPY Cargo.toml Cargo.lock ./
-COPY api/Cargo.toml api/
-COPY runtime/Cargo.toml runtime/
-COPY cli/Cargo.toml cli/
 
-# Create dummy source files so `cargo fetch` builds standard dependencies
-RUN mkdir -p api/src runtime/src cli/src \
-    && echo "fn main() {}" > api/src/main.rs \
-    && echo "fn main() {}" > runtime/src/main.rs \
-    && echo "fn main() {}" > cli/src/main.rs \
-    && cargo build --release --bin api \
-    && rm -rf api/src
+# Create dummy source wrapper to strictly cache dependency builds
+RUN mkdir -p src \
+    && echo "fn main() {}" > src/main.rs \
+    && cargo build --release \
+    && rm -rf src
 
 # Copy the actual API source code (which triggers a rebuild of the binary only)
-COPY api/ api/
+COPY src/ src/
+COPY .sqlx/ .sqlx/
 
 # Ensure macro evaluation can use offline mode using the .sqlx cache
 ENV SQLX_OFFLINE=true
 
 # Rebuild the final binary natively over the dependency caches
-RUN touch api/src/main.rs && cargo build --release --bin api
+RUN touch src/main.rs && cargo build --release
 
 # Stage 2: Create a tiny minimal runtime image
 FROM debian:bookworm-slim
