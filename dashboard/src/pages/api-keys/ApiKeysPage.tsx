@@ -24,7 +24,7 @@ export default function ApiKeysPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['api-keys', projectId],
-    queryFn: () => apiFetch<{ api_keys: ApiKey[] }>('/api-keys'),
+    queryFn: () => apiFetch<ApiKey[]>('/api-keys'),
     enabled: !!projectId,
   })
 
@@ -54,7 +54,7 @@ export default function ApiKeysPage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const apiKeys = data?.api_keys ?? []
+  const apiKeys = Array.isArray(data) ? data : []
 
   return (
     <div className="p-8 max-w-4xl mx-auto">

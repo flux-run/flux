@@ -123,6 +123,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/functions", post(routes::functions::create_function))
         .route("/functions/{id}", get(routes::functions::get_function))
         .route("/functions/{id}", delete(routes::functions::delete_function))
+        .route("/functions/deploy", post(routes::deployments::deploy_function_cli))
         .route("/functions/{id}/deployments", get(routes::deployments::list_deployments))
         .route("/functions/{id}/deployments", post(routes::deployments::create_deployment))
         .route("/deployments/{id}/activate", post(routes::deployments::activate_deployment))

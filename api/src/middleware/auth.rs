@@ -25,10 +25,29 @@ pub async fn verify_auth(
     
     // 1 Extract Authorization header
     if !auth_header.starts_with("Bearer ") {
+        tracing::error!("Auth header missing 'Bearer ' prefix: {}", auth_header);
         return Err(StatusCode::UNAUTHORIZED);
     }
     
     let token = &auth_header["Bearer ".len()..];
+
+    if token.starts_with("flux_") {
+        let hash = crate::api_keys::crypto::generate_hash(token);
+        let api_key = match crate::api_keys::service::mark_key_used(&pool, &hash).await {
+            Ok(k) => k,
+            Err(_) => return Err(StatusCode::UNAUTHORIZED),
+        };
+
+        let context = RequestContext {
+            user_id: api_key.id,
+            firebase_uid: "api_key".to_string(),
+            tenant_id: Some(api_key.tenant_id),
+            project_id: Some(api_key.project_id),
+            role: Some("owner".to_string()),
+        };
+        req.extensions_mut().insert(context);
+        return Ok(next.run(req).await);
+    }
 
     // 2 Verify Firebase JWT & 3 Extract firebase_uid
     #[cfg(not(test))]
@@ -36,7 +55,10 @@ pub async fn verify_auth(
         // The verify call cryptographically checks the JWT signature against Google's public JWKs
         let user: firebase_auth::FirebaseUser = firebase_auth
             .verify(token)
-            .map_err(|_| StatusCode::UNAUTHORIZED)?;
+            .map_err(|e| {
+                tracing::error!("Firebase JWT Verification failed: {:?}", e);
+                StatusCode::UNAUTHORIZED
+            })?;
         (user.user_id, user.email.unwrap_or_default())
     };
 

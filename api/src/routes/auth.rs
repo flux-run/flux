@@ -21,6 +21,13 @@ pub async fn get_me(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if context.firebase_uid == "api_key" {
+        return Ok(Json(json!({
+            "user_id": context.user_id,
+            "email": "cli-api-key@fluxbase.local",
+            "tenants": []
+        })));
+    }
     let user_record = sqlx::query_as_unchecked!(
         UserEmailRow,
         "SELECT email FROM users WHERE id = $1",

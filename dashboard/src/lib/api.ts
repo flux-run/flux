@@ -13,6 +13,7 @@ export async function apiFetch<T = unknown>(
   options: FetchOptions = {},
 ): Promise<T> {
   const auth = getAuth();
+  await auth.authStateReady();
   const user = auth.currentUser;
   const token = user ? await user.getIdToken() : null;
 

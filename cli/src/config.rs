@@ -2,10 +2,23 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub api_key: Option<String>,
+    pub api_url: String,
+    pub token: Option<String>,
+    pub tenant_id: Option<String>,
     pub project_id: Option<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            api_url: "https://api.fluxbase.co".to_string(),
+            token: None,
+            tenant_id: None,
+            project_id: None,
+        }
+    }
 }
 
 impl Config {
@@ -18,16 +31,19 @@ impl Config {
 
     pub async fn load() -> Self {
         let path = Self::config_path();
-        if !path.exists() {
-            return Config::default();
-        }
-
-        let contents = match fs::read_to_string(&path).await {
-            Ok(c) => c,
-            Err(_) => return Config::default(),
+        
+        let mut config = if path.exists() {
+            let contents = fs::read_to_string(&path).await.unwrap_or_default();
+            serde_json::from_str(&contents).unwrap_or_else(|_| Config::default())
+        } else {
+            Config::default()
         };
 
-        serde_json::from_str(&contents).unwrap_or_default()
+        if let Ok(url) = std::env::var("FLUXBASE_API_URL") {
+            config.api_url = url;
+        }
+
+        config
     }
 
     pub async fn save(&self) -> Result<(), std::io::Error> {

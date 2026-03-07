@@ -1,11 +1,20 @@
 use clap::{Parser, Subcommand};
 
-mod api;
-mod commands;
+mod auth;
+mod client;
+mod config;
+mod deploy;
+mod dev;
+mod functions;
+mod invoke;
+mod logs;
+mod projects;
+mod secrets;
+mod tenant;
 
 #[derive(Parser)]
 #[command(name = "flux")]
-#[command(about = "Fluxbase Control Plane Command Line Interface", long_about = None)]
+#[command(about = "Fluxbase CLI", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -13,23 +22,57 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Authenticate the CLI with an API Key
+    /// Authenticate with Fluxbase
     Login,
-    /// Package and deploy the function in the current directory
+    /// Tenant operations
+    Tenant {
+        #[command(subcommand)]
+        command: tenant::TenantCommands,
+    },
+    /// Project operations
+    Project {
+        #[command(subcommand)]
+        command: projects::ProjectCommands,
+    },
+    /// Function operations
+    Function {
+        #[command(subcommand)]
+        command: functions::FunctionCommands,
+    },
+    /// Secrets operations
+    Secrets {
+        #[command(subcommand)]
+        command: secrets::SecretsCommands,
+    },
+    /// Run function locally
+    Dev,
+    /// Deploy function
     Deploy,
-    // Future: Logs, Secrets
+    /// Invoke function
+    Invoke {
+        name: String,
+    },
+    /// Fetch function logs
+    Logs {
+        name: String,
+    },
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Login => {
-            commands::login::execute().await;
-        }
-        Commands::Deploy => {
-            commands::deploy::execute().await;
-        }
+        Commands::Login => auth::execute().await?,
+        Commands::Tenant { command } => tenant::execute(command).await?,
+        Commands::Project { command } => projects::execute(command).await?,
+        Commands::Function { command } => functions::execute(command).await?,
+        Commands::Secrets { command } => secrets::execute(command).await?,
+        Commands::Dev => dev::execute().await?,
+        Commands::Deploy => deploy::execute().await?,
+        Commands::Invoke { name } => invoke::execute(&name).await?,
+        Commands::Logs { name } => logs::execute(&name).await?,
     }
+
+    Ok(())
 }

@@ -26,10 +26,10 @@ use super::{
 pub async fn create_api_key(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
-    Path(project_id): Path<Uuid>,
     Json(payload): Json<CreateApiKeyRequest>,
 ) -> ApiResult<(StatusCode, Json<CreateApiKeyResponse>)> {
     let tenant_id = ctx.tenant_id.unwrap_or_default();
+    let project_id = ctx.project_id.ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_project_id"}))))?;
     
     let (_record, plaintext_key) = service::create_api_key(&state.pool, tenant_id, project_id, &payload.name)
         .await
@@ -46,9 +46,9 @@ pub async fn create_api_key(
 pub async fn list_api_keys(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
-    Path(project_id): Path<Uuid>,
 ) -> ApiResult<(StatusCode, Json<Vec<super::model::ApiKey>>)> {
     let tenant_id = ctx.tenant_id.unwrap_or_default();
+    let project_id = ctx.project_id.ok_or((StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing_project_id"}))))?;
     
     let keys = service::list_api_keys(&state.pool, tenant_id, project_id)
         .await
