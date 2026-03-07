@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE secrets SET encrypted_value = $1, version = version + 1, updated_at = NOW() WHERE tenant_id = $2 AND project_id = $3 AND key = $4 RETURNING version",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cf8c0392d458b7a506e1b825bc64acc9b9da2ccac5960d31651244fbc3d5b445"
+}

@@ -5,10 +5,11 @@ mod models;
 mod routes;
 mod services;
 mod types;
+mod secrets;
 
 use axum::{
     middleware as axum_middleware,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use std::net::SocketAddr;
@@ -93,6 +94,9 @@ pub fn create_app(state: AppState) -> Router {
             middleware::scope::require_scope(Scope::Platform, req, next)
         }));
 
+    let internal_routes = Router::new()
+        .route("/secrets", get(secrets::routes::get_internal_runtime_secrets));
+
     // Tenant Scope routes (X-Fluxbase-Tenant required + membership verified)
     let tenant_routes = Router::new()
         .route("/tenants/{id}/members", get(routes::tenants::get_members))
@@ -108,9 +112,10 @@ pub fn create_app(state: AppState) -> Router {
 
     // Project Scope routes (X-Fluxbase-Project required + project verified under tenant)
     let project_routes = Router::new()
-        .route("/secrets", get(routes::secrets::list_secrets))
-        .route("/secrets", post(routes::secrets::create_secret))
-        .route("/secrets/{key}", delete(routes::secrets::delete_secret))
+        .route("/secrets", get(secrets::routes::list_secrets))
+        .route("/secrets", post(secrets::routes::create_secret))
+        .route("/secrets/{key}", put(secrets::routes::update_secret))
+        .route("/secrets/{key}", delete(secrets::routes::delete_secret))
         .route("/functions", get(routes::functions::list_functions))
         .route("/functions", post(routes::functions::create_function))
         .route("/functions/{id}", get(routes::functions::get_function))
@@ -128,6 +133,7 @@ pub fn create_app(state: AppState) -> Router {
         .merge(platform_routes)
         .merge(tenant_routes)
         .merge(project_routes)
+        .nest("/internal", internal_routes)
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::context::resolve_context,

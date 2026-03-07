@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM secrets WHERE project_id = $1 AND key = $2",
+  "query": "DELETE FROM secrets WHERE tenant_id = $1 AND project_id IS NULL AND key = $2",
   "describe": {
     "columns": [],
     "parameters": {
@@ -11,5 +11,5 @@
     },
     "nullable": []
   },
-  "hash": "e8b01e9d294f69ad428ecbf4b020ed0f55d4dca9093ddcb76f1118aac136db66"
+  "hash": "cc833d96623aed81abece04857a2d7ca50c439137669d6c58f22e90a7d5f8ae8"
 }
