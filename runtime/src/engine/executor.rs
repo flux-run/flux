@@ -20,6 +20,8 @@ pub async fn execute_function(
     code: String,
     secrets: HashMap<String, String>,
     payload: serde_json::Value,
+    tenant_id: String,
+    tenant_slug: String,
 ) -> Result<ExecutionResult, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -60,6 +62,10 @@ pub async fn execute_function(
 
                     // Full FluxContext implementation
                     const __ctx = {{
+                        tenant: {{
+                            id: "{tenant_id}",
+                            slug: "{tenant_slug}",
+                        }},
                         payload: __payload,
                         env: __secrets,
                         secrets: {{
@@ -109,6 +115,8 @@ pub async fn execute_function(
                 secrets_json = secrets_json,
                 payload_json = payload_json,
                 transformed_code = transformed_code,
+                tenant_id = tenant_id,
+                tenant_slug = tenant_slug,
             );
 
             let res = timeout(Duration::from_secs(10), async {

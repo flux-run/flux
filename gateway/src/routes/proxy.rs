@@ -19,8 +19,8 @@ pub async fn proxy_handler(
     let method_str = method.to_string();
 
     // 0. Extract Resolved Identity
-    let identity = match req.extensions().get::<crate::middleware::identity_resolver::ResolvedIdentity>() {
-        Some(id) => id,
+    let (tenant_id, tenant_slug) = match req.extensions().get::<crate::middleware::identity_resolver::ResolvedIdentity>() {
+        Some(id) => (id.tenant_id, id.tenant_slug.clone()),
         None => {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
@@ -30,13 +30,13 @@ pub async fn proxy_handler(
     };
 
     // 1. Resolve Route
-    let cache_key = (identity.tenant_id, full_path.clone(), method_str.clone());
+    let cache_key = (tenant_id, full_path.clone(), method_str.clone());
     
     let route = if let Some(r) = state.route_cache.get(&cache_key) {
         tracing::debug!("Route cache hit: {} {}", method_str, full_path);
         r.clone()
     } else {
-        match lookup_route(&state.db_pool, identity.tenant_id, &full_path, &method_str).await {
+        match lookup_route(&state.db_pool, tenant_id, &full_path, &method_str).await {
             Ok(Some(r)) => {
                 state.route_cache.insert(cache_key, r.clone());
                 r
@@ -130,6 +130,8 @@ pub async fn proxy_handler(
     let runtime_resp = state.http_client
         .post(&runtime_url)
         .header("X-Service-Token", &state.internal_service_token)
+        .header("X-Tenant-Id", tenant_id.to_string())
+        .header("X-Tenant-Slug", &tenant_slug)
         .json(&forward_payload)
         .send()
         .await;

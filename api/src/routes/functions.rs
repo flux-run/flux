@@ -21,6 +21,7 @@ struct FunctionRow {
     input_schema: Option<serde_json::Value>,
     output_schema: Option<serde_json::Value>,
     created_at: chrono::NaiveDateTime,
+    tenant_slug: String,
 }
 
 // ── Payloads ───────────────────────────────────────────────────────────────
@@ -50,8 +51,10 @@ pub async fn list_functions(
         .ok_or(ApiError::bad_request("missing_project"))?;
 
     let records = sqlx::query_as::<_, FunctionRow>(
-        "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
-         FROM functions WHERE project_id = $1 ORDER BY created_at DESC"
+        "SELECT f.id, f.name, f.runtime, f.description, f.input_schema, f.output_schema, f.created_at, t.slug as tenant_slug \
+         FROM functions f \
+         JOIN tenants t ON t.id = f.tenant_id \
+         WHERE f.project_id = $1 ORDER BY f.created_at DESC"
     )
     .bind(project_id)
     .fetch_all(&pool)
@@ -61,6 +64,7 @@ pub async fn list_functions(
     let functions: Vec<_> = records
         .into_iter()
         .map(|r| {
+            let run_url = format!("https://{}.fluxbase.co/{}", r.tenant_slug, r.name);
             serde_json::json!({
                 "id": r.id,
                 "name": r.name,
@@ -68,7 +72,8 @@ pub async fn list_functions(
                 "description": r.description,
                 "input_schema": r.input_schema,
                 "output_schema": r.output_schema,
-                "created_at": r.created_at.to_string()
+                "created_at": r.created_at.to_string(),
+                "run_url": run_url
             })
         })
         .collect();
@@ -131,8 +136,10 @@ pub async fn get_function(
         .ok_or(ApiError::bad_request("missing_project"))?;
 
     let record = sqlx::query_as::<_, FunctionRow>(
-        "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
-         FROM functions WHERE id = $1 AND project_id = $2"
+        "SELECT f.id, f.name, f.runtime, f.description, f.input_schema, f.output_schema, f.created_at, t.slug as tenant_slug \
+         FROM functions f \
+         JOIN tenants t ON t.id = f.tenant_id \
+         WHERE f.id = $1 AND f.project_id = $2"
     )
     .bind(id)
     .bind(project_id)
@@ -141,6 +148,8 @@ pub async fn get_function(
     .map_err(|_| db_err())?
     .ok_or(ApiError::not_found("function_not_found"))?;
 
+    let run_url = format!("https://{}.fluxbase.co/{}", record.tenant_slug, record.name);
+
     Ok(ApiResponse::new(serde_json::json!({
         "id": record.id,
         "name": record.name,
@@ -148,7 +157,8 @@ pub async fn get_function(
         "description": record.description,
         "input_schema": record.input_schema,
         "output_schema": record.output_schema,
-        "created_at": record.created_at.to_string()
+        "created_at": record.created_at.to_string(),
+        "run_url": run_url
     })))
 }
 

@@ -17,6 +17,8 @@ struct DeploymentRow {
     is_active: bool,
     status: String,
     created_at: chrono::NaiveDateTime,
+    tenant_slug: String,
+    function_name: String,
 }
 
 // ── Payloads ───────────────────────────────────────────────────────────────
@@ -46,9 +48,10 @@ pub async fn list_deployments(
         .ok_or(ApiError::bad_request("missing_project"))?;
 
     let records = sqlx::query_as::<_, DeploymentRow>(
-        "SELECT d.id, d.version, d.is_active, d.status, d.created_at \
+        "SELECT d.id, d.version, d.is_active, d.status, d.created_at, t.slug as tenant_slug, f.name as function_name \
          FROM deployments d \
          JOIN functions f ON f.id = d.function_id \
+         JOIN tenants t ON t.id = f.tenant_id \
          WHERE f.name = $1 AND f.project_id = $2 \
          ORDER BY d.version DESC"
     )
@@ -61,12 +64,14 @@ pub async fn list_deployments(
     let deployments: Vec<_> = records
         .into_iter()
         .map(|r| {
+            let run_url = format!("https://{}.fluxbase.co/{}", r.tenant_slug, r.function_name);
             serde_json::json!({
                 "id": r.id,
                 "version": r.version,
                 "is_active": r.is_active,
                 "status": r.status,
-                "created_at": r.created_at.to_string()
+                "created_at": r.created_at.to_string(),
+                "run_url": if r.is_active { Some(run_url) } else { None }
             })
         })
         .collect();

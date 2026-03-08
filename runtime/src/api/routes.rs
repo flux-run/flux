@@ -34,8 +34,16 @@ pub struct AppState {
 #[axum::debug_handler]
 pub async fn execute_handler(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<ExecuteRequest>,
 ) -> impl IntoResponse {
+    let tenant_id_header = headers.get("X-Tenant-Id")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or_else(|| "unknown");
+    let tenant_slug_header = headers.get("X-Tenant-Slug")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or_else(|| "unknown");
+
     let start_time = std::time::Instant::now();
 
     // Fetch secrets from the control plane
@@ -172,7 +180,13 @@ pub async fn execute_handler(
     };
 
     // Execute the function with the new framework-aware executor
-    let execution = match execute_function(code, secrets, req.payload).await {
+    let execution = match execute_function(
+        code, 
+        secrets, 
+        req.payload,
+        tenant_id_header.to_string(),
+        tenant_slug_header.to_string(),
+    ).await {
         Ok(r) => r,
         Err(e) => {
             // Parse structured error from the framework if available
