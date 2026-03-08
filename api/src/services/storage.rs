@@ -14,11 +14,11 @@ pub struct StorageService {
 
 impl StorageService {
     pub async fn new() -> Self {
-        let endpoint = env::var("S3_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
-        let access_key = env::var("S3_ACCESS_KEY_ID").unwrap_or_else(|_| "minioadmin".to_string());
-        let secret_key = env::var("S3_SECRET_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".to_string());
-        let bucket_name = env::var("S3_BUCKET_NAME").unwrap_or_else(|_| "fluxbase-bundles".to_string());
-        let region_name = env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+        let endpoint = env::var("R2_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
+        let access_key = env::var("R2_ACCESS_KEY_ID").unwrap_or_else(|_| "minioadmin".to_string());
+        let secret_key = env::var("R2_SECRET_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".to_string());
+        let bucket_name = env::var("R2_BUCKET").unwrap_or_else(|_| "fluxbase-bundles".to_string());
+        let region_name = "auto".to_string(); // R2 uses 'auto'
 
         let region_provider = RegionProviderChain::first_try(Region::new(region_name));
         let credentials = Credentials::new(access_key, secret_key, None, None, "env");
