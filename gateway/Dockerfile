@@ -4,8 +4,8 @@ FROM rust:1.75-bookworm as builder
 WORKDIR /usr/src/app
 COPY . .
 
-# Build the Runtime binary
-RUN cargo build --release -p runtime
+# Build the Gateway binary
+RUN cargo build --release -p gateway
 
 # Final Stage
 FROM debian:bookworm-slim
@@ -15,11 +15,11 @@ RUN apt-get update && apt-get install -y libssl-dev ca-certificates && rm -rf /v
 WORKDIR /usr/local/bin
 
 # Copy the binary from the builder stage
-COPY --from=builder /usr/src/app/target/release/runtime .
+COPY --from=builder /usr/src/app/target/release/gateway .
 
 # Set the environment variables and expose port
 ENV PORT=8080
 EXPOSE 8080
 
-# Run the Runtime
-CMD ["./runtime"]
+# Run the Gateway
+CMD ["./gateway"]

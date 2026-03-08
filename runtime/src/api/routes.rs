@@ -228,6 +228,6 @@ pub async fn execute_handler(
     ).into_response()
 }
 
-pub async fn health_check() -> &'static str {
-    "OK"
+pub async fn health_check() -> impl IntoResponse {
+    Json(serde_json::json!({ "status": "ok" }))
 }

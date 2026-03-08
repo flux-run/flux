@@ -31,7 +31,7 @@ impl StorageService {
             .await;
 
         let mut config_builder = Builder::from(&shared_config);
-        config_builder = config_builder.force_path_style(true); // Required for MinIO/R2
+        config_builder = config_builder.force_path_style(true); 
 
         let s3_config = config_builder.build();
         let client = Client::from_conf(s3_config);

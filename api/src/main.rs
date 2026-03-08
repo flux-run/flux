@@ -166,6 +166,7 @@ pub fn create_app(state: AppState) -> Router {
     Router::new()
         .merge(authenticated_api)
         .nest("/internal", internal_routes)
+        .route("/health", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
         .layer(build_cors())
         .with_state(state)
 }
