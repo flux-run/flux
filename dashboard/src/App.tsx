@@ -12,6 +12,7 @@ import TenantSettingsPage from '@/pages/tenants/TenantSettingsPage'
 import LogsPage from '@/pages/logs/LogsPage'
 import ProjectSettingsPage from '@/pages/projects/ProjectSettingsPage'
 import RoutesPage from '@/pages/routes/RoutesPage'
+import ProjectLayout from '@/components/layout/ProjectLayout'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,7 +38,7 @@ export default function App() {
             <Route path="tenants" element={<TenantSettingsPage />} />
 
             {/* Project level */}
-            <Route path="projects/:projectId">
+            <Route path="projects/:projectId" element={<ProjectLayout />}>
               <Route path="overview" element={<OverviewPage />} />
               <Route path="functions" element={<FunctionsPage />} />
               <Route path="functions/:functionId" element={<FunctionDetailPage />} />

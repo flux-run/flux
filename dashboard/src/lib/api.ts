@@ -6,6 +6,7 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
 interface FetchOptions extends RequestInit {
   skipTenant?: boolean;
   skipProject?: boolean;
+  projectId?: string;
 }
 
 export async function apiFetch<T = unknown>(
@@ -19,14 +20,16 @@ export async function apiFetch<T = unknown>(
 
   const state = useStore.getState();
 
+  const finalProjectId = options.projectId || state.projectId;
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(!options.skipTenant && state.tenantId
       ? { "X-Fluxbase-Tenant": state.tenantId }
       : {}),
-    ...(!options.skipProject && state.projectId
-      ? { "X-Fluxbase-Project": state.projectId }
+    ...(!options.skipProject && finalProjectId
+      ? { "X-Fluxbase-Project": finalProjectId }
       : {}),
     ...(options.headers as Record<string, string>),
   };
