@@ -6,7 +6,7 @@ COPY . .
 
 # Build the Queue binary
 ENV SQLX_OFFLINE=true
-RUN cargo build --release -p queue
+RUN cargo build --release -p fluxbase-queue
 
 # Final Stage
 FROM debian:bookworm-slim
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y libssl-dev ca-certificates && rm -rf /v
 WORKDIR /usr/local/bin
 
 # Copy the binary from the builder stage
-COPY --from=builder /usr/src/app/target/release/queue .
+COPY --from=builder /usr/src/app/target/release/fluxbase-queue .
 
 # Set the environment variables
 ENV PORT=8080
