@@ -26,6 +26,8 @@ pub struct ExecuteResponse {
 
 pub struct AppState {
     pub secrets_client: SecretsClient,
+    pub control_plane_url: String,
+    pub service_token: String,
 }
 
 #[axum::debug_handler]
@@ -35,6 +37,7 @@ pub async fn execute_handler(
 ) -> impl IntoResponse {
     let start_time = std::time::Instant::now();
 
+    // Fetch secrets from the control plane
     let secrets = match state.secrets_client.fetch_secrets(req.tenant_id, req.project_id).await {
         Ok(s) => s,
         Err(e) => {
@@ -45,18 +48,79 @@ pub async fn execute_handler(
         }
     };
 
-    // MVP Mock Code load (future: fetch from S3)
-    let code = r#"
-        export default async function(ctx) {
-            return {
-                status: "success",
-                echo: ctx.payload,
-                secret_count: Object.keys(ctx.env).length
-            };
-        }
-    "#;
+    // Fetch the real bundle code from the control plane internal API
+    let bundle_url = format!(
+        "{}/internal/bundle?function_id={}",
+        state.control_plane_url, req.function_id
+    );
 
-    let result = match execute_function(code.to_string(), secrets, req.payload).await {
+    let http_client = reqwest::Client::new();
+    let bundle_resp = http_client
+        .get(&bundle_url)
+        .header("X-Service-Token", &state.service_token)
+        .send()
+        .await;
+
+    let code = match bundle_resp {
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": "BundleFetchError",
+                    "message": format!("Failed to reach control plane: {}", e)
+                })),
+            ).into_response();
+        }
+        Ok(resp) => {
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": "no_bundle_found",
+                        "message": "No active deployment found for this function. Deploy it first."
+                    })),
+                ).into_response();
+            }
+            if !resp.status().is_success() {
+                let status = resp.status().as_u16();
+                let body = resp.text().await.unwrap_or_default();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "BundleFetchError",
+                        "message": format!("Control plane returned HTTP {}: {}", status, body)
+                    })),
+                ).into_response();
+            }
+            let json: serde_json::Value = match resp.json().await {
+                Ok(j) => j,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": "BundleParseError",
+                            "message": format!("Failed to parse bundle response: {}", e)
+                        })),
+                    ).into_response();
+                }
+            };
+            // Unwrap ApiResponse<T> data wrapper
+            match json.get("data").and_then(|d| d.get("code")).and_then(|c| c.as_str()) {
+                Some(code_str) => code_str.to_string(),
+                None => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": "no_bundle_found",
+                            "message": "Bundle response did not contain code field"
+                        })),
+                    ).into_response();
+                }
+            }
+        }
+    };
+
+    let result = match execute_function(code, secrets, req.payload).await {
         Ok(r) => r,
         Err(e) => {
             return (

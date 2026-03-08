@@ -25,6 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let state = Arc::new(AppState {
         secrets_client,
+        control_plane_url: settings.control_plane_url.clone(),
+        service_token: settings.service_token.clone(),
     });
 
     let app = Router::new()

@@ -96,7 +96,8 @@ pub fn create_app(state: AppState) -> Router {
         }));
 
     let internal_routes = Router::new()
-        .route("/secrets", get(secrets::routes::get_internal_runtime_secrets));
+        .route("/secrets", get(secrets::routes::get_internal_runtime_secrets))
+        .route("/bundle", get(routes::deployments::get_internal_bundle));
 
     // Tenant Scope routes (X-Fluxbase-Tenant required + membership verified)
     let tenant_routes = Router::new()

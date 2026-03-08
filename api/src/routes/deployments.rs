@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -230,9 +230,11 @@ pub async fn deploy_function_cli(
     let deployment_id = Uuid::new_v4();
     let storage_key = format!("deployments/{}_{}.js", function_id, deployment_id);
 
-    println!("Simulating S3 Storage upload for {} ({} bytes)...", storage_key, bundle_bytes.len());
+    // Convert bundle bytes to UTF-8 string for inline storage
+    let bundle_code = String::from_utf8(bundle_bytes)
+        .map_err(|_| ApiError::bad_request("bundle_not_valid_utf8"))?;
 
-    // Evaluate Next Deployment version tree
+    // Evaluate next deployment version
     #[derive(sqlx::FromRow)]
     struct VersionRow { max: Option<i32> }
     
@@ -256,13 +258,14 @@ pub async fn deploy_function_cli(
     .await
     .map_err(|_| db_err())?;
 
-    // Push new deployment artifact mapped atomically
+    // Insert new deployment with actual bundle code stored inline
     sqlx::query(
-        "INSERT INTO deployments (id, function_id, storage_key, version, status, is_active) VALUES ($1, $2, $3, $4, 'ready', true)"
+        "INSERT INTO deployments (id, function_id, storage_key, bundle_code, version, status, is_active) VALUES ($1, $2, $3, $4, $5, 'ready', true)"
     )
     .bind(deployment_id)
     .bind(function_id)
     .bind(storage_key)
+    .bind(&bundle_code)
     .bind(next_version)
     .execute(&mut *tx)
     .await
@@ -279,4 +282,54 @@ pub async fn deploy_function_cli(
         "version": next_version,
         "url": run_url
     })))
+}
+
+// ── Internal: bundle code fetch (used by the runtime engine) ────────────────
+
+#[derive(serde::Deserialize)]
+pub struct BundleQuery {
+    pub function_id: String,
+}
+
+pub async fn get_internal_bundle(
+    State(pool): State<PgPool>,
+    Query(params): Query<BundleQuery>,
+) -> Result<ApiResponse<serde_json::Value>, ApiError> {
+    #[derive(sqlx::FromRow)]
+    struct BundleRow { bundle_code: Option<String> }
+
+    // Try to parse as UUID first; if that fails, treat as function name
+    let row = if let Ok(fid) = params.function_id.parse::<Uuid>() {
+        sqlx::query_as::<_, BundleRow>(
+            "SELECT d.bundle_code FROM deployments d \
+             WHERE d.function_id = $1 AND d.is_active = true \
+             ORDER BY d.version DESC LIMIT 1"
+        )
+        .bind(fid)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| db_err())?
+    } else {
+        // Look up by function name via JOIN
+        sqlx::query_as::<_, BundleRow>(
+            "SELECT d.bundle_code FROM deployments d \
+             JOIN functions f ON f.id = d.function_id \
+             WHERE f.name = $1 AND d.is_active = true \
+             ORDER BY d.version DESC LIMIT 1"
+        )
+        .bind(&params.function_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|_| db_err())?
+    };
+
+    match row {
+        Some(r) => {
+            match r.bundle_code {
+                Some(code) => Ok(ApiResponse::new(serde_json::json!({ "code": code }))),
+                None => Err(ApiError::not_found("no_bundle_found")),
+            }
+        }
+        None => Err(ApiError::not_found("no_bundle_found")),
+    }
 }

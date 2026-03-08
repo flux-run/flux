@@ -6,7 +6,7 @@ pub async fn execute(name: &str) -> anyhow::Result<()> {
 
     // Default to the provided public runtime URL
     let runtime_url = std::env::var("FLUXBASE_RUNTIME_URL")
-        .unwrap_or_else(|_| "https://run.fluxbase.co".to_string());
+        .unwrap_or_else(|_| "http://localhost:8081".to_string());
 
     let exec_url = format!("{}/execute", runtime_url);
 
