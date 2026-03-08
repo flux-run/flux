@@ -28,6 +28,7 @@ pub struct AppState {
     pub secrets_client: SecretsClient,
     pub control_plane_url: String,
     pub service_token: String,
+    pub bundle_cache: crate::cache::bundle_cache::BundleCache,
 }
 
 #[axum::debug_handler]
@@ -104,12 +105,32 @@ pub async fn execute_handler(
                     ).into_response();
                 }
             };
-            // First check if a pre-signed URL was returned
-            if let Some(url) = json.get("data").and_then(|d| d.get("url")).and_then(|u| u.as_str()) {
-                let s3_resp = http_client.get(url).send().await;
+            let (deployment_id, url_opt, code_opt) = {
+                let d_id = json.get("data").and_then(|d| d.get("deployment_id")).and_then(|id| id.as_str());
+                let u_id = json.get("data").and_then(|d| d.get("url")).and_then(|u| u.as_str());
+                let c_id = json.get("data").and_then(|d| d.get("code")).and_then(|c| c.as_str());
+                (d_id.map(|s| s.to_string()), u_id.map(|s| s.to_string()), c_id.map(|s| s.to_string()))
+            };
+
+            let final_code = if let Some(d_id) = deployment_id.clone() {
+                if let Some(cached_code) = state.bundle_cache.get(&d_id) {
+                    println!("[CACHE HIT] Bundle {}", d_id);
+                     Some(cached_code)
+                } else { None }
+            } else { None };
+
+            if let Some(c) = final_code {
+                c
+            } else if let Some(url) = url_opt {
+                let s3_resp = http_client.get(&url).send().await;
                 match s3_resp {
                     Ok(res) if res.status().is_success() => {
-                        res.text().await.unwrap_or_default()
+                        let text = res.text().await.unwrap_or_default();
+                        if let Some(d_id) = deployment_id {
+                            println!("[CACHE MISS] Downloaded bundle {}", d_id);
+                            state.bundle_cache.insert(d_id, text.clone());
+                        }
+                        text
                     }
                     Ok(res) => {
                         let status = res.status().as_u16();
@@ -132,9 +153,12 @@ pub async fn execute_handler(
                         ).into_response();
                     }
                 }
-            } else if let Some(code_str) = json.get("data").and_then(|d| d.get("code")).and_then(|c| c.as_str()) {
+            } else if let Some(code_str) = code_opt {
                 // Fallback to inline database storage
-                code_str.to_string()
+                if let Some(d_id) = deployment_id {
+                    state.bundle_cache.insert(d_id, code_str.clone());
+                }
+                code_str
             } else {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,

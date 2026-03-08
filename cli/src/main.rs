@@ -11,6 +11,7 @@ mod logs;
 mod projects;
 mod secrets;
 mod tenant;
+mod deployments;
 
 #[derive(Parser)]
 #[command(name = "flux")]
@@ -61,6 +62,17 @@ enum Commands {
     Logs {
         name: String,
     },
+    /// Deployment operations
+    Deployments {
+        #[command(subcommand)]
+        command: deployments::DeploymentCommands,
+    },
+    /// Rollback function to a specific version
+    Rollback {
+        name: String,
+        #[arg(long)]
+        version: i32,
+    },
 }
 
 #[tokio::main]
@@ -77,6 +89,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Deploy { name, runtime } => deploy::execute(name, runtime).await?,
         Commands::Invoke { name } => invoke::execute(&name).await?,
         Commands::Logs { name } => logs::execute(&name).await?,
+        Commands::Deployments { command } => deployments::execute_deployments(command).await?,
+        Commands::Rollback { name, version } => deployments::execute_rollback(&name, version).await?,
     }
 
     Ok(())

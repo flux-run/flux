@@ -3283,6 +3283,7 @@ dependencies = [
  "chrono",
  "deno_core",
  "dotenvy",
+ "lru",
  "reqwest 0.13.2",
  "serde",
  "serde_json",

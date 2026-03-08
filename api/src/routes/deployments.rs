@@ -11,6 +11,7 @@ use crate::types::context::RequestContext;
 
 // ── Row structs ────────────────────────────────────────────────────────────
 
+#[derive(sqlx::FromRow)]
 struct DeploymentRow {
     id: Uuid,
     version: i32,
@@ -37,15 +38,23 @@ fn db_err() -> ApiError {
 // ── Handlers ───────────────────────────────────────────────────────────────
 
 pub async fn list_deployments(
-    Path(function_id): Path<Uuid>,
+    Path(function_name): Path<String>,
     State(pool): State<PgPool>,
-    Extension(_context): Extension<RequestContext>,
+    Extension(context): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    let records = sqlx::query_as_unchecked!(
-        DeploymentRow,
-        "SELECT id, version, is_active, status, created_at FROM deployments WHERE function_id = $1 ORDER BY version DESC",
-        function_id
+    let project_id = context
+        .project_id
+        .ok_or(ApiError::bad_request("missing_project"))?;
+
+    let records = sqlx::query_as::<_, DeploymentRow>(
+        "SELECT d.id, d.version, d.is_active, d.status, d.created_at \
+         FROM deployments d \
+         JOIN functions f ON f.id = d.function_id \
+         WHERE f.name = $1 AND f.project_id = $2 \
+         ORDER BY d.version DESC"
     )
+    .bind(&function_name)
+    .bind(project_id)
     .fetch_all(&pool)
     .await
     .map_err(|_| db_err())?;
@@ -108,19 +117,29 @@ pub async fn create_deployment(
 }
 
 pub async fn activate_deployment(
-    Path(id): Path<Uuid>,
+    Path((function_name, version)): Path<(String, i32)>,
     State(pool): State<PgPool>,
-    Extension(_context): Extension<RequestContext>,
+    Extension(context): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
+    let project_id = context
+        .project_id
+        .ok_or(ApiError::bad_request("missing_project"))?;
+
     let mut tx = pool.begin().await.map_err(|_| db_err())?;
 
-    // Find the function_id for this deployment to deactivate others
-    struct DeploymentFunctionRow { function_id: Uuid }
-    let fn_record = sqlx::query_as_unchecked!(
-        DeploymentFunctionRow,
-        "SELECT function_id FROM deployments WHERE id = $1",
-        id
+    // Find the specific deployment ID and its function_id
+    #[derive(sqlx::FromRow)]
+    struct DeploymentFunctionRow { deployment_id: Uuid, function_id: Uuid }
+    
+    let fn_record = sqlx::query_as::<_, DeploymentFunctionRow>(
+        "SELECT d.id as deployment_id, f.id as function_id \
+         FROM deployments d \
+         JOIN functions f ON f.id = d.function_id \
+         WHERE f.name = $1 AND f.project_id = $2 AND d.version = $3"
     )
+    .bind(&function_name)
+    .bind(project_id)
+    .bind(version)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|_| db_err())?
@@ -138,7 +157,7 @@ pub async fn activate_deployment(
     // Activate the requested deployment
     sqlx::query!(
         "UPDATE deployments SET is_active = true WHERE id = $1",
-        id
+        fn_record.deployment_id
     )
     .execute(&mut *tx)
     .await
@@ -146,10 +165,7 @@ pub async fn activate_deployment(
 
     tx.commit().await.map_err(|_| db_err())?;
 
-    // TODO: Publish to event bus
-    println!(r#"{{"event": "function.activated", "function_id": "{}", "deployment_id": "{}"}}"#, fn_record.function_id, id);
-
-    Ok(ApiResponse::new(serde_json::json!({ "activated": true })))
+    Ok(ApiResponse::new(serde_json::json!({ "activated": true, "version": version })))
 }
 
 pub async fn deploy_function_cli(
@@ -337,12 +353,12 @@ pub async fn get_internal_bundle(
     let storage = state.storage;
 
     #[derive(sqlx::FromRow)]
-    struct BundleRow { bundle_code: Option<String>, bundle_url: Option<String> }
+    struct BundleRow { id: Uuid, bundle_code: Option<String>, bundle_url: Option<String> }
 
     // Try to parse as UUID first; if that fails, treat as function name
     let row = if let Ok(fid) = params.function_id.parse::<Uuid>() {
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.bundle_code, d.bundle_url FROM deployments d \
+            "SELECT d.id, d.bundle_code, d.bundle_url FROM deployments d \
              WHERE d.function_id = $1 AND d.is_active = true \
              ORDER BY d.version DESC LIMIT 1"
         )
@@ -353,7 +369,7 @@ pub async fn get_internal_bundle(
     } else {
         // Look up by function name via JOIN
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.bundle_code, d.bundle_url FROM deployments d \
+            "SELECT d.id, d.bundle_code, d.bundle_url FROM deployments d \
              JOIN functions f ON f.id = d.function_id \
              WHERE f.name = $1 AND d.is_active = true \
              ORDER BY d.version DESC LIMIT 1"
@@ -370,9 +386,9 @@ pub async fn get_internal_bundle(
                 let url = storage.presigned_get_object(&s3_key, std::time::Duration::from_secs(300))
                     .await
                     .map_err(|e| ApiError::internal(&format!("s3_presign_failed: {}", e)))?;
-                Ok(ApiResponse::new(serde_json::json!({ "url": url })))
+                Ok(ApiResponse::new(serde_json::json!({ "deployment_id": r.id, "url": url })))
             } else if let Some(code) = r.bundle_code {
-                Ok(ApiResponse::new(serde_json::json!({ "code": code })))
+                Ok(ApiResponse::new(serde_json::json!({ "deployment_id": r.id, "code": code })))
             } else {
                 Err(ApiError::not_found("no_bundle_found"))
             }

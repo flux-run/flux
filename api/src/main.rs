@@ -131,7 +131,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/functions/deploy", post(routes::deployments::deploy_function_cli))
         .route("/functions/{id}/deployments", get(routes::deployments::list_deployments))
         .route("/functions/{id}/deployments", post(routes::deployments::create_deployment))
-        .route("/deployments/{id}/activate", post(routes::deployments::activate_deployment))
+        .route("/functions/{id}/deployments/{version}/activate", post(routes::deployments::activate_deployment))
         .layer(axum_middleware::from_fn(|req, next| {
             middleware::scope::require_scope(Scope::Project, req, next)
         }));
