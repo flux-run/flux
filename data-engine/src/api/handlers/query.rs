@@ -3,8 +3,10 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::{
+    cache,
+    cache::SchemaCacheEntry,
     compiler::{
-        query_compiler::{ComputedCol, QueryCompiler, QueryRequest},
+        query_compiler::{CompiledQuery, ComputedCol, QueryCompiler, QueryRequest},
         relational::load_relationships,
         CompilerOptions,
     },
@@ -55,15 +57,41 @@ pub async fn handler(
     )
     .await?;
 
-    // 5. Load column metadata (computed cols, file cols).
-    let col_meta = TransformEngine::load_columns(
-        &state.pool,
-        auth.tenant_id,
-        auth.project_id,
-        &schema,
-        &req.table,
-    )
-    .await?;
+    // 5. Schema metadata — schema cache (L1) or DB.  Saves two round-trips
+    //    (`load_columns` + `load_relationships`) on every request where the
+    //    table's metadata hasn't changed since the last 60-second TTL window.
+    let sk = cache::schema_key(auth.tenant_id, auth.project_id, &schema, &req.table);
+    let (col_meta, relationships) = {
+        // Fast path — read lock only, no DB.
+        let hit = {
+            let guard = state.schema_cache.read().await;
+            guard
+                .get(&sk)
+                .filter(|e| e.is_fresh())
+                .map(|e| (e.col_meta.clone(), e.relationships.clone()))
+        };
+        if let Some(pair) = hit {
+            tracing::debug!(key = %sk, "schema cache hit");
+            pair
+        } else {
+            // Slow path — load both, then populate cache.
+            let cm = TransformEngine::load_columns(
+                &state.pool, auth.tenant_id, auth.project_id, &schema, &req.table,
+            ).await?;
+            let rels = load_relationships(
+                &state.pool, auth.tenant_id, auth.project_id, &schema, &req.table,
+            ).await?;
+            {
+                let mut guard = state.schema_cache.write().await;
+                guard.insert(sk, SchemaCacheEntry {
+                    col_meta: cm.clone(),
+                    relationships: rels.clone(),
+                    inserted_at: std::time::Instant::now(),
+                });
+            }
+            (cm, rels)
+        }
+    };
 
     // Build computed col list for the compiler.
     let computed_cols: Vec<ComputedCol> = col_meta
@@ -77,23 +105,44 @@ pub async fn handler(
         })
         .collect();
 
-    // 6. Compile (CLS + RLS + limit enforcement + computed cols + nested selectors).
-    let relationships = load_relationships(
-        &state.pool,
-        auth.tenant_id,
-        auth.project_id,
-        &schema,
-        &req.table,
-    )
-    .await?;
-
+    // 6. Compile — plan cache (L2) for SELECT, full compile otherwise.
+    //
+    //    For SELECT: if we've seen this exact query shape + policy before, skip
+    //    the compiler entirely and reconstruct only the bind-parameter list
+    //    (O(filters) instead of O(cols × filters)).
     let opts = CompilerOptions {
         default_limit: state.default_query_limit,
         max_limit: state.max_query_limit,
         computed_cols,
         relationships,
     };
-    let compiled = QueryCompiler::compile(&req, &policy, &schema, &opts)?;
+    let compiled = if req.operation == "select" {
+        let plan_key = cache::build_plan_key(
+            auth.tenant_id, auth.project_id, &schema, &req, &policy,
+            opts.default_limit, opts.max_limit,
+        );
+        let cached_sql = {
+            let guard = state.plan_cache.read().await;
+            guard.get(&plan_key).filter(|p| p.is_fresh()).map(|p| p.sql.clone())
+        };
+        if let Some(sql) = cached_sql {
+            tracing::debug!("plan cache hit");
+            let params = cache::extract_select_params(&req, &policy, opts.default_limit, opts.max_limit);
+            CompiledQuery { sql, params }
+        } else {
+            let cq = QueryCompiler::compile(&req, &policy, &schema, &opts)?;
+            {
+                let mut guard = state.plan_cache.write().await;
+                guard.insert(plan_key, cache::CachedPlan {
+                    sql: cq.sql.clone(),
+                    inserted_at: std::time::Instant::now(),
+                });
+            }
+            cq
+        }
+    } else {
+        QueryCompiler::compile(&req, &policy, &schema, &opts)?
+    };
 
     tracing::debug!(sql = %compiled.sql, "executing compiled query");
 

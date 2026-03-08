@@ -206,6 +206,10 @@ pub async fn create(
 
     tx.commit().await.map_err(EngineError::Db)?;
 
+    // Evict schema + plan cache for this table so subsequent queries pick up
+    // the new column metadata immediately.
+    state.invalidate_table(auth.tenant_id, auth.project_id, &schema, &body.name).await;
+
     Ok(Json(json!({
         "database": body.database,
         "table":    body.name,
@@ -290,6 +294,8 @@ pub async fn drop_table(
     .map_err(EngineError::Db)?;
 
     tx.commit().await.map_err(EngineError::Db)?;
+
+    state.invalidate_table(auth.tenant_id, auth.project_id, &schema, &table).await;
 
     Ok(Json(json!({ "database": database, "table": table, "status": "dropped" })))
 }

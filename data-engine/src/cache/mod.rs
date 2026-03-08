@@ -1,0 +1,230 @@
+//! Two-layer query plan cache.
+//!
+//! **Layer 1 — Schema cache**
+//! Caches `(col_meta, relationships)` per `(tenant, project, schema, table)`.
+//! Eliminates two DB round-trips on the hot read path.
+//! TTL: 60 s; explicitly invalidated on DDL mutations.
+//!
+//! **Layer 2 — Plan cache**
+//! Caches the compiled SQL template for SELECT queries, keyed by request shape
+//! + policy fingerprint.  On a cache hit the caller rebuilds the bind parameters
+//! directly from the request (O(n) walk of the filter list) instead of running
+//! the full compiler pipeline.
+//! TTL: 300 s; invalidated together with Layer 1.
+//!
+//! ## Why this matters
+//!
+//! Each `POST /db/query` would otherwise pay:
+//!   1. `TransformEngine::load_columns`   — 1 DB round-trip
+//!   2. `load_relationships`              — 1 DB round-trip
+//!   3. `QueryCompiler::compile`          — CPU: parse selectors, resolve cols,
+//!                                          expand lateral subqueries, build WHERE
+//!
+//! With both caches warm, steps 1-2 become an in-memory HashMap lookup and
+//! step 3 becomes a filter-list walk to collect bind values.
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use tokio::sync::RwLock;
+use uuid::Uuid;
+
+use crate::compiler::relational::{parse_selectors, ColumnSelector, RelationshipDef};
+use crate::compiler::query_compiler::QueryRequest;
+use crate::policy::PolicyResult;
+use crate::transform::ColumnMeta;
+
+// ─── TTLs ─────────────────────────────────────────────────────────────────────
+
+/// Schema metadata (col_meta + relationships) lives for 60 s.
+/// Most schema changes are rare DDL operations; explicit invalidation covers
+/// those cases and the TTL acts as a safety net.
+pub const SCHEMA_TTL: Duration = Duration::from_secs(60);
+
+/// Compiled SQL templates live for 5 min.  They are pure functions of the
+/// request shape + policy, so they're safe to cache indefinitely; the TTL
+/// prevents unbounded memory growth for one-off query shapes.
+pub const PLAN_TTL: Duration = Duration::from_secs(300);
+
+// ─── Schema cache ─────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct SchemaCacheEntry {
+    pub col_meta: Vec<ColumnMeta>,
+    pub relationships: Vec<RelationshipDef>,
+    pub inserted_at: Instant,
+}
+
+impl SchemaCacheEntry {
+    /// Returns `true` when the entry is still within its TTL.
+    pub fn is_fresh(&self) -> bool {
+        self.inserted_at.elapsed() < SCHEMA_TTL
+    }
+}
+
+/// `RwLock<HashMap<key, entry>>` — same pattern as `PolicyCache`.
+pub type SchemaCache = RwLock<HashMap<String, SchemaCacheEntry>>;
+
+/// Build the string key for one specific table.
+///
+/// Format: `"{tenant_id}:{project_id}:{schema}:{table}"`
+pub fn schema_key(tenant_id: Uuid, project_id: Uuid, schema: &str, table: &str) -> String {
+    format!("{}:{}:{}:{}", tenant_id, project_id, schema, table)
+}
+
+/// Build the prefix used to evict all entries for a tenant+project at once.
+///
+/// Format: `"{tenant_id}:{project_id}:"`
+pub fn tenant_prefix(tenant_id: Uuid, project_id: Uuid) -> String {
+    format!("{}:{}:", tenant_id, project_id)
+}
+
+// ─── Plan cache ───────────────────────────────────────────────────────────────
+
+/// Stable fingerprint of a SELECT query's shape.
+///
+/// Two requests are "same shape" iff they produce identical SQL — the only
+/// difference between them being the values bound to `$N` placeholders.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct PlanKey {
+    pub tenant_id: Uuid,
+    pub project_id: Uuid,
+    /// Postgres schema name.
+    pub schema: String,
+    /// Table name.
+    pub table: String,
+    /// Alphabetically-sorted flat column names, comma-joined.
+    /// `"*"` when no columns were specified.
+    pub columns: String,
+    /// Alphabetically-sorted nested-selector aliases, comma-joined.
+    /// `""` when there are no nested selectors.
+    pub nested_aliases: String,
+    /// Sorted `"col:op"` pairs, e.g. `"age:gt,role:eq"`.
+    /// `""` when there are no filters.
+    pub filter_shape: String,
+    /// Whether the request carries an OFFSET clause (affects SQL structure).
+    pub has_offset: bool,
+    /// `"{sorted_allowed_cols}|{row_condition_sql}"`.
+    /// Ensures plans aren't reused across policies.
+    pub policy_fingerprint: String,
+}
+
+#[derive(Clone)]
+pub struct CachedPlan {
+    pub sql: String,
+    pub inserted_at: Instant,
+}
+
+impl CachedPlan {
+    pub fn is_fresh(&self) -> bool {
+        self.inserted_at.elapsed() < PLAN_TTL
+    }
+}
+
+pub type PlanCache = RwLock<HashMap<PlanKey, CachedPlan>>;
+
+// ─── Key builders ─────────────────────────────────────────────────────────────
+
+/// Build a `PlanKey` from a SELECT request and its evaluated policy.
+///
+/// Called on every SELECT request.  The result is used for cache lookup before
+/// the compiler runs, and for cache insertion after a compile miss.
+pub fn build_plan_key(
+    tenant_id: Uuid,
+    project_id: Uuid,
+    schema: &str,
+    req: &QueryRequest,
+    policy: &PolicyResult,
+    _default_limit: i64,
+    _max_limit: i64,
+) -> PlanKey {
+    // Split user columns into flat names and nested-selector aliases.
+    let (mut flat, mut aliases) = (Vec::<String>::new(), Vec::<String>::new());
+    if let Some(ref cols) = req.columns {
+        for sel in parse_selectors(cols) {
+            match sel {
+                ColumnSelector::Flat(c) => flat.push(c),
+                ColumnSelector::Nested { alias, .. } => aliases.push(alias),
+            }
+        }
+    }
+    flat.sort_unstable();
+    aliases.sort_unstable();
+
+    let columns = if flat.is_empty() { "*".to_string() } else { flat.join(",") };
+    let nested_aliases = aliases.join(",");
+
+    // Filter shape: sorted "column:op" pairs.
+    let mut pairs: Vec<String> = req
+        .filters
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .map(|f| format!("{}:{}", f.column, f.op))
+        .collect();
+    pairs.sort_unstable();
+    let filter_shape = pairs.join(",");
+
+    // Policy fingerprint: sorted allowed columns + row condition expression.
+    let mut allowed = policy.allowed_columns.clone();
+    allowed.sort_unstable();
+    let policy_fingerprint = format!(
+        "{}|{}",
+        allowed.join(","),
+        policy.row_condition_sql.as_deref().unwrap_or(""),
+    );
+
+    PlanKey {
+        tenant_id,
+        project_id,
+        schema: schema.to_owned(),
+        table: req.table.clone(),
+        columns,
+        nested_aliases,
+        filter_shape,
+        has_offset: req.offset.is_some(),
+        policy_fingerprint,
+    }
+}
+
+// ─── Param extraction (SELECT fast path) ──────────────────────────────────────
+
+/// Reconstruct the bind-parameter list for a SELECT query whose SQL template
+/// was retrieved from the plan cache.
+///
+/// The ordering **must** match `compile_select` in `query_compiler.rs`:
+///
+///   1. Policy row-condition params (already embedded in the SQL template at
+///      positions `$1 … $N_rls`).
+///   2. Filter params — one per filter, in request order, skipping `is_null` /
+///      `not_null` ops (which generate no placeholder).
+///   3. `LIMIT $N` value.
+///   4. `OFFSET $N` value — only when `req.offset` is `Some`.
+pub fn extract_select_params(
+    req: &QueryRequest,
+    policy: &PolicyResult,
+    default_limit: i64,
+    max_limit: i64,
+) -> Vec<serde_json::Value> {
+    let mut params: Vec<serde_json::Value> = policy.row_condition_params.clone();
+
+    if let Some(filters) = &req.filters {
+        for f in filters {
+            if f.op != "is_null" && f.op != "not_null" {
+                params.push(f.value.clone());
+            }
+        }
+    }
+
+    let effective_limit = match req.limit {
+        Some(l) => l.min(max_limit).max(1),
+        None => default_limit,
+    };
+    params.push(serde_json::Value::Number(effective_limit.into()));
+
+    if let Some(offset) = req.offset {
+        params.push(serde_json::Value::Number(offset.into()));
+    }
+
+    params
+}

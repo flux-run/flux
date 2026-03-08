@@ -111,6 +111,7 @@ pub async fn create(
     .map_err(EngineError::Db)?;
 
     let id: Uuid = row.get("id");
+    state.invalidate_tenant_schema(auth.tenant_id, auth.project_id).await;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -138,5 +139,6 @@ pub async fn delete(
         return Err(EngineError::DatabaseNotFound(format!("relationship {}", id)));
     }
 
+    state.invalidate_tenant_schema(auth.tenant_id, auth.project_id).await;
     Ok(Json(json!({ "deleted": true })))
 }
