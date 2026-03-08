@@ -1,6 +1,5 @@
 use axum::{
     extract::{Extension, Path, State},
-    http::StatusCode,
     Json,
 };
 use crate::types::response::{ApiResponse, ApiError};

@@ -25,7 +25,8 @@ pub async fn resolve_identity(
         .and_then(|h| h.to_str().ok())
         .ok_or(StatusCode::BAD_REQUEST)?;
 
-    // Expected format: tenant.api.fluxbase.co
+    // Expected format: tenant.fluxbase.co (Production)
+    // Or: tenant.api.fluxbase.co (Legacy/Alternative)
     // For local dev: tenant.localhost:8082
     let parts: Vec<&str> = host.split('.').collect();
 
@@ -33,7 +34,15 @@ pub async fn resolve_identity(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let tenant_slug = parts[0].to_string();
+    let tenant_slug = parts[0];
+
+    // Ignore reserved subdomains that point to platform services
+    let reserved = ["api", "run", "gateway", "www", "dashboard", "localhost"];
+    if reserved.contains(&tenant_slug) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let tenant_slug = tenant_slug.to_string();
 
     // 1. Check Cache
     if let Some(tenant_id) = state.tenant_cache.get(&tenant_slug) {

@@ -62,8 +62,20 @@ pub fn build_cors() -> CorsLayer {
 
     info!("CORS allowed origins: {:?}", origins);
 
+    let origins_list = origins.clone();
+
     CorsLayer::new()
-        .allow_origin(AllowOrigin::list(origins))
+        .allow_origin(AllowOrigin::predicate(move |origin, _parts| {
+            let Ok(origin_str) = origin.to_str() else { return false };
+            
+            // Check explicit list
+            if origins_list.iter().any(|o| o == origin) {
+                return true;
+            }
+
+            // Allow any subdomain of fluxbase.co
+            origin_str.ends_with(".fluxbase.co") || origin_str == "https://fluxbase.co"
+        }))
         .allow_methods([
             Method::GET,
             Method::POST,

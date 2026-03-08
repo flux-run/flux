@@ -1,6 +1,5 @@
 use axum::{
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
     Json,
 };
 use crate::types::response::{ApiResponse, ApiError};
@@ -327,8 +326,19 @@ pub async fn deploy_function_cli(
 
     tx.commit().await.map_err(|_| db_err())?;
 
+    // Fetch tenant slug for URL generation
+    #[derive(sqlx::FromRow)]
+    struct TenantSlugRow { slug: String }
+    let tenant_row = sqlx::query_as::<_, TenantSlugRow>(
+        "SELECT slug FROM tenants WHERE id = $1"
+    )
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|_| db_err())?;
+
     // Return structured payload mirroring production router architectures.
-    let run_url = format!("https://run.fluxbase.co/{}", name);
+    let run_url = format!("https://{}.fluxbase.co/{}", tenant_row.slug, name);
 
     Ok(ApiResponse::new(serde_json::json!({
         "function_id": function_id,
