@@ -41,10 +41,17 @@ impl SecretsClient {
             return Err(format!("Control plane error HTTP {}: {}", status, error_text));
         }
 
-        let secrets_map: HashMap<String, String> = resp
+        // Control plane now returns ApiResponse<T>: { success: true, data: {...} }
+        let json: serde_json::Value = resp
             .json()
             .await
             .map_err(|e| format!("Failed parsing secrets JSON: {}", e))?;
+
+        // Extract the `data` wrapper if present (ApiResponse), else use root directly
+        let secrets_value = json.get("data").cloned().unwrap_or(json);
+
+        let secrets_map: HashMap<String, String> = serde_json::from_value(secrets_value)
+            .map_err(|e| format!("Failed deserializing secrets map: {}", e))?;
 
         Ok(secrets_map)
     }

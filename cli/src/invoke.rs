@@ -10,8 +10,11 @@ pub async fn execute(name: &str) -> anyhow::Result<()> {
 
     let exec_url = format!("{}/execute", runtime_url);
 
+    let tenant_id = client.config.tenant_id.clone().unwrap_or_default();
+
     let payload = serde_json::json!({
         "function_id": name,
+        "tenant_id": tenant_id,
         "payload": { "invoked_by": "flux-cli" }
     });
 

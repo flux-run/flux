@@ -55,7 +55,8 @@ pub async fn execute(command: FunctionCommands) -> anyhow::Result<()> {
                 .get(format!("{}/functions", client.base_url))
                 .send()
                 .await?;
-            let functions: Vec<Value> = res.error_for_status()?.json().await?;
+            let json: Value = res.error_for_status()?.json().await?;
+            let functions = json.get("data").and_then(|data| data.get("functions")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
             
             println!("{:<40} {:<30} {:<10}", "ID", "NAME", "RUNTIME");
             for func in functions {

@@ -21,13 +21,15 @@ pub async fn execute(command: TenantCommands) -> anyhow::Result<()> {
                 .get(format!("{}/tenants", client.base_url))
                 .send()
                 .await?;
-            let tenants: Vec<Value> = res.error_for_status()?.json().await?;
+            let json: Value = res.error_for_status()?.json().await?;
+            let tenants = json.get("data").and_then(|d| d.get("tenants")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
             
-            println!("{:<40} {:<30}", "ID", "NAME");
+            println!("{:<40} {:<30} {:<10}", "ID", "NAME", "ROLE");
             for tenant in tenants {
                 let id = tenant.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 let name = tenant.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                println!("{:<40} {:<30}", id, name);
+                let role = tenant.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                println!("{:<40} {:<30} {:<10}", id, name, role);
             }
         }
         TenantCommands::Use { id } => {

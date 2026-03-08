@@ -47,7 +47,14 @@ enum Commands {
     /// Run function locally
     Dev,
     /// Deploy function
-    Deploy,
+    Deploy {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        runtime: Option<String>,
+        #[arg(long)]
+        file: Option<String>,
+    },
     /// Invoke function
     Invoke {
         name: String,
@@ -69,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Function { command } => functions::execute(command).await?,
         Commands::Secrets { command } => secrets::execute(command).await?,
         Commands::Dev => dev::execute().await?,
-        Commands::Deploy => deploy::execute().await?,
+        Commands::Deploy { name, runtime, file } => deploy::execute(name, runtime, file).await?,
         Commands::Invoke { name } => invoke::execute(&name).await?,
         Commands::Logs { name } => logs::execute(&name).await?,
     }

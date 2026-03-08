@@ -20,6 +20,14 @@ pub async fn resolve_context(
         .cloned()
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
+    // API key auth already populates tenant_id and project_id from the DB.
+    // Skip the header-based tenant resolution — API key users aren't in
+    // tenant_members so the lookup would always return 403.
+    if context.firebase_uid == "api_key" {
+        req.extensions_mut().insert(context);
+        return Ok(next.run(req).await);
+    }
+
     let tenant_id_str = req
         .headers()
         .get("X-Fluxbase-Tenant")

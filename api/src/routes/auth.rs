@@ -26,9 +26,12 @@ pub async fn get_me(
         return Ok(ApiResponse::new(json!({
             "user_id": context.user_id,
             "email": "cli-api-key@fluxbase.local",
+            "tenant_id": context.tenant_id,
+            "project_id": context.project_id,
             "tenants": []
         })));
     }
+
     let user_record = sqlx::query_as_unchecked!(
         UserEmailRow,
         "SELECT email FROM users WHERE id = $1",
