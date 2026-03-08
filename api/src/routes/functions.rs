@@ -11,10 +11,16 @@ use crate::types::context::RequestContext;
 
 // ── Row structs ────────────────────────────────────────────────────────────
 
+// Using sqlx::FromRow derive with runtime query_as to avoid SQLX_OFFLINE cache
+// requirement for the new schema columns (input_schema, output_schema).
+#[derive(sqlx::FromRow)]
 struct FunctionRow {
     id: Uuid,
     name: String,
     runtime: String,
+    description: Option<String>,
+    input_schema: Option<serde_json::Value>,
+    output_schema: Option<serde_json::Value>,
     created_at: chrono::NaiveDateTime,
 }
 
@@ -44,11 +50,11 @@ pub async fn list_functions(
         .project_id
         .ok_or(ApiError::bad_request("missing_project"))?;
 
-    let records = sqlx::query_as_unchecked!(
-        FunctionRow,
-        "SELECT id, name, runtime, created_at FROM functions WHERE project_id = $1 ORDER BY created_at DESC",
-        project_id
+    let records = sqlx::query_as::<_, FunctionRow>(
+        "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
+         FROM functions WHERE project_id = $1 ORDER BY created_at DESC"
     )
+    .bind(project_id)
     .fetch_all(&pool)
     .await
     .map_err(|_| db_err())?;
@@ -60,6 +66,9 @@ pub async fn list_functions(
                 "id": r.id,
                 "name": r.name,
                 "runtime": r.runtime,
+                "description": r.description,
+                "input_schema": r.input_schema,
+                "output_schema": r.output_schema,
                 "created_at": r.created_at.to_string()
             })
         })
@@ -122,12 +131,12 @@ pub async fn get_function(
         .project_id
         .ok_or(ApiError::bad_request("missing_project"))?;
 
-    let record = sqlx::query_as_unchecked!(
-        FunctionRow,
-        "SELECT id, name, runtime, created_at FROM functions WHERE id = $1 AND project_id = $2",
-        id,
-        project_id
+    let record = sqlx::query_as::<_, FunctionRow>(
+        "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
+         FROM functions WHERE id = $1 AND project_id = $2"
     )
+    .bind(id)
+    .bind(project_id)
     .fetch_optional(&pool)
     .await
     .map_err(|_| db_err())?
@@ -137,6 +146,9 @@ pub async fn get_function(
         "id": record.id,
         "name": record.name,
         "runtime": record.runtime,
+        "description": record.description,
+        "input_schema": record.input_schema,
+        "output_schema": record.output_schema,
         "created_at": record.created_at.to_string()
     })))
 }

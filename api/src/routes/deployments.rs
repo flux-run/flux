@@ -168,20 +168,20 @@ pub async fn deploy_function_cli(
     let mut name = String::new();
     let mut runtime = String::new();
     let mut bundle_bytes = Vec::new();
+    let mut description: Option<String> = None;
+    let mut input_schema: Option<String> = None;
+    let mut output_schema: Option<String> = None;
 
     while let Ok(Some(field)) = multipart.next_field().await {
         let field_name = field.name().unwrap_or("").to_string();
         
         match field_name.as_str() {
-            "name" => {
-                name = field.text().await.unwrap_or_default();
-            }
-            "runtime" => {
-                runtime = field.text().await.unwrap_or_default();
-            }
-            "bundle" => {
-                bundle_bytes = field.bytes().await.unwrap_or_default().to_vec();
-            }
+            "name"    => { name         = field.text().await.unwrap_or_default(); }
+            "runtime" => { runtime       = field.text().await.unwrap_or_default(); }
+            "bundle"  => { bundle_bytes  = field.bytes().await.unwrap_or_default().to_vec(); }
+            "description"   => { description   = field.text().await.ok().filter(|s| !s.is_empty()); }
+            "input_schema"  => { input_schema   = field.text().await.ok().filter(|s| !s.is_empty()); }
+            "output_schema" => { output_schema  = field.text().await.ok().filter(|s| !s.is_empty()); }
             _ => {}
         }
     }
@@ -208,18 +208,44 @@ pub async fn deploy_function_cli(
     .map_err(|_| db_err())?;
 
     let function_id = match existing_fn {
-        Some(f) => f.id,
-        None => {
-            // Function does not exist. Mock insert it natively resolving scaffolding behaviors.
-            let new_id = Uuid::new_v4();
+        Some(f) => {
+            // Update schema metadata on re-deploy
+            let input_json: Option<serde_json::Value> = input_schema.as_deref()
+                .and_then(|s| serde_json::from_str(s).ok());
+            let output_json: Option<serde_json::Value> = output_schema.as_deref()
+                .and_then(|s| serde_json::from_str(s).ok());
             sqlx::query(
-                "INSERT INTO functions (id, tenant_id, project_id, name, runtime) VALUES ($1, $2, $3, $4, $5)"
+                "UPDATE functions SET description = COALESCE($1, description), \
+                 input_schema = COALESCE($2::jsonb, input_schema), \
+                 output_schema = COALESCE($3::jsonb, output_schema) WHERE id = $4"
+            )
+            .bind(description.as_deref())
+            .bind(input_json)
+            .bind(output_json)
+            .bind(f.id)
+            .execute(&pool)
+            .await
+            .map_err(|_| db_err())?;
+            f.id
+        }
+        None => {
+            let new_id = Uuid::new_v4();
+            let input_json: Option<serde_json::Value> = input_schema.as_deref()
+                .and_then(|s| serde_json::from_str(s).ok());
+            let output_json: Option<serde_json::Value> = output_schema.as_deref()
+                .and_then(|s| serde_json::from_str(s).ok());
+            sqlx::query(
+                "INSERT INTO functions (id, tenant_id, project_id, name, runtime, description, input_schema, output_schema) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
             )
             .bind(new_id)
             .bind(tenant_id)
             .bind(project_id)
             .bind(&name)
             .bind(&runtime)
+            .bind(description.as_deref())
+            .bind(input_json)
+            .bind(output_json)
             .execute(&pool)
             .await
             .map_err(|_| db_err())?;

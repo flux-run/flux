@@ -48,7 +48,7 @@ pub async fn execute_handler(
         }
     };
 
-    // Fetch the real bundle code from the control plane internal API
+    // Fetch real bundle code from the control plane
     let bundle_url = format!(
         "{}/internal/bundle?function_id={}",
         state.control_plane_url, req.function_id
@@ -104,7 +104,6 @@ pub async fn execute_handler(
                     ).into_response();
                 }
             };
-            // Unwrap ApiResponse<T> data wrapper
             match json.get("data").and_then(|d| d.get("code")).and_then(|c| c.as_str()) {
                 Some(code_str) => code_str.to_string(),
                 None => {
@@ -120,21 +119,60 @@ pub async fn execute_handler(
         }
     };
 
-    let result = match execute_function(code, secrets, req.payload).await {
+    // Execute the function with the new framework-aware executor
+    let execution = match execute_function(code, secrets, req.payload).await {
         Ok(r) => r,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "FunctionExecutionError", "message": e })),
-            ).into_response();
+            // Parse structured error from the framework if available
+            let (err_code, message) = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&e) {
+                let code = parsed.get("code").and_then(|c| c.as_str()).unwrap_or("FunctionExecutionError").to_string();
+                let msg = parsed.get("message").and_then(|m| m.as_str()).unwrap_or(&e).to_string();
+                (code, msg)
+            } else {
+                ("FunctionExecutionError".to_string(), e)
+            };
+
+            let status = if err_code == "INPUT_VALIDATION_ERROR" {
+                StatusCode::BAD_REQUEST
+            } else if err_code == "OUTPUT_VALIDATION_ERROR" {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+
+            return (status, Json(serde_json::json!({ "error": err_code, "message": message }))).into_response();
         }
     };
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
 
+    // Fire-and-forget: forward ctx.log() lines to /internal/logs
+    if !execution.logs.is_empty() {
+        let log_url = format!("{}/internal/logs", state.control_plane_url);
+        let service_token = state.service_token.clone();
+        let function_id = req.function_id.clone();
+        let logs = execution.logs;
+        let client = http_client;
+
+        tokio::spawn(async move {
+            for log in logs {
+                let _ = client
+                    .post(&log_url)
+                    .header("X-Service-Token", &service_token)
+                    .json(&serde_json::json!({
+                        "function_id": function_id,
+                        "level": log.level,
+                        "message": log.message,
+                    }))
+                    .send()
+                    .await;
+            }
+        });
+    }
+
     (
         StatusCode::OK,
-        Json(ExecuteResponse { result, duration_ms }),
+        Json(ExecuteResponse { result: execution.output, duration_ms }),
     ).into_response()
 }
 

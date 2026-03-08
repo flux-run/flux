@@ -1,0 +1,4 @@
+{
+  "runtime": "deno",
+  "entry": "index.ts"
+}

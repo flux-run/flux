@@ -1,0 +1,13 @@
+{
+  "name": "hello",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild index.ts --bundle --platform=neutral --format=esm --outfile=dist/bundle.js"
+  },
+  "dependencies": {
+    "@fluxbase/functions": "*",
+    "zod": "^3.23.0"
+  }
+}

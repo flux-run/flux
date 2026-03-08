@@ -4,7 +4,11 @@
   "private": true,
   "description": "Fluxbase — Serverless function platform monorepo",
   "workspaces": [
-    "dashboard"
+    "dashboard",
+    "packages/functions",
+    "test_functions/hello",
+    "test_functions/echo",
+    "test_functions/math"
   ],
   "scripts": {
     "dev": "npm run dev --workspace=dashboard",

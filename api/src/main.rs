@@ -7,6 +7,7 @@ mod services;
 mod types;
 mod secrets;
 mod api_keys;
+mod logs;
 
 use axum::{
     middleware as axum_middleware,
@@ -97,7 +98,9 @@ pub fn create_app(state: AppState) -> Router {
 
     let internal_routes = Router::new()
         .route("/secrets", get(secrets::routes::get_internal_runtime_secrets))
-        .route("/bundle", get(routes::deployments::get_internal_bundle));
+        .route("/bundle", get(routes::deployments::get_internal_bundle))
+        .route("/logs", post(logs::routes::create_log))
+        .route("/logs", get(logs::routes::list_logs));
 
     // Tenant Scope routes (X-Fluxbase-Tenant required + membership verified)
     let tenant_routes = Router::new()
