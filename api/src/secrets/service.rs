@@ -186,7 +186,7 @@ pub async fn list_secrets(
     let response = records.into_iter().map(|r| SecretResponse {
         key: r.key,
         version: r.version,
-        created_at: r.created_at.map(|d| d.to_string()).unwrap_or_default(),
+        created_at: r.created_at.map(|d: chrono::NaiveDateTime| d.to_string()).unwrap_or_default(),
     }).collect();
 
     Ok(response)
@@ -217,7 +217,7 @@ pub async fn get_runtime_secrets(
             )
             .fetch_all(pool)
             .await
-            .map_err(|e| ServiceError::Database(e.to_string()))?
+            .map_err(|e: sqlx::Error| ServiceError::Database(e.to_string()))?
         },
         None => {
             sqlx::query_as_unchecked!(
