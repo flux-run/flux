@@ -1,5 +1,4 @@
-use std::time::Duration;
-
-pub fn retry_delay(attempts: u32) -> Duration {
-    Duration::from_secs(5 * (1 << attempts))
-}
+// Backoff logic lives in worker::backoff.
+// This module is kept for forward-compatibility.
+#[allow(unused_imports)]
+pub use crate::worker::backoff::retry_delay;

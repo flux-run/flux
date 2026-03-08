@@ -7,6 +7,8 @@ pub struct Config {
     pub database_url: String,
     pub runtime_url: String,
     pub port: u16,
+    pub worker_concurrency: usize,
+    pub poll_interval_ms: u64,
 }
 
 pub fn load() -> Config {
@@ -16,9 +18,17 @@ pub fn load() -> Config {
             .unwrap_or_else(|_| "http://localhost:3002".to_string()),
         port: std::env::var("PORT")
             .or_else(|_| std::env::var("QUEUE_PORT"))
-            .unwrap_or_else(|_| "8082".to_string())
+            .unwrap_or_else(|_| "8083".to_string())
             .parse()
             .expect("PORT must be a number"),
+        worker_concurrency: std::env::var("WORKER_CONCURRENCY")
+            .unwrap_or_else(|_| "50".to_string())
+            .parse()
+            .expect("WORKER_CONCURRENCY must be a number"),
+        poll_interval_ms: std::env::var("WORKER_POLL_INTERVAL_MS")
+            .unwrap_or_else(|_| "200".to_string())
+            .parse()
+            .expect("WORKER_POLL_INTERVAL_MS must be a number"),
     }
 }
 

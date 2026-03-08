@@ -3,13 +3,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(FromRow, Serialize, Deserialize)]
+#[derive(FromRow, Serialize, Deserialize, Clone)]
 pub struct Job {
     pub id: Uuid,
     pub tenant_id: Uuid,
     pub project_id: Uuid,
-    pub r#type: String,
-    pub function_id: Option<Uuid>,
+    pub function_id: Uuid,
     pub payload: serde_json::Value,
     pub status: String,
     pub attempts: i32,

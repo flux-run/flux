@@ -1,7 +1,8 @@
+use std::sync::Arc;
 use axum::{Router, routing::{post, get}};
-use sqlx::PgPool;
+use crate::state::AppState;
 
-pub fn routes(pool: PgPool) -> Router {
+pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/jobs", post(crate::api::handlers::create_job::handler))
         .route(
@@ -11,5 +12,5 @@ pub fn routes(pool: PgPool) -> Router {
         )
         .route("/jobs/:id/retry", post(crate::api::handlers::retry_job::handler))
         .route("/health", get(|| async { axum::Json(serde_json::json!({ "status": "ok" })) }))
-        .with_state(pool)
+        .with_state(state)
 }
