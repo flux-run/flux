@@ -129,9 +129,12 @@ pub fn create_app(state: AppState) -> Router {
         .route("/functions/{id}", get(routes::functions::get_function))
         .route("/functions/{id}", delete(routes::functions::delete_function))
         .route("/functions/deploy", post(routes::deployments::deploy_function_cli))
-        .route("/functions/{id}/deployments", get(routes::deployments::list_deployments))
-        .route("/functions/{id}/deployments", post(routes::deployments::create_deployment))
-        .route("/functions/{id}/deployments/{version}/activate", post(routes::deployments::activate_deployment))
+        .route("/deployments", post(routes::deployments::create_deployment))
+        .route("/deployments/list/{id}", get(routes::deployments::list_deployments))
+        .route("/deployments/{id}/activate/{version}", post(routes::deployments::activate_deployment))
+        // Gateway Routes
+        .route("/routes", get(routes::gateway_routes::list_gateway_routes).post(routes::gateway_routes::create_gateway_route))
+        .route("/routes/{id}", axum::routing::patch(routes::gateway_routes::update_gateway_route).delete(routes::gateway_routes::delete_gateway_route))
         .layer(axum_middleware::from_fn(|req, next| {
             middleware::scope::require_scope(Scope::Project, req, next)
         }));

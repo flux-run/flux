@@ -1,7 +1,7 @@
 import { NavLink, useParams } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { Zap, FolderOpen, Settings, LayoutDashboard,
-  Code2, KeyRound, ShieldCheck, ScrollText,
+  Code2, KeyRound, ShieldCheck, ScrollText, Globe,
 } from 'lucide-react'
 import { TenantSwitcher } from '@/components/TenantSwitcher'
 import { useAuth } from '@/hooks/useAuth'
@@ -78,6 +78,7 @@ export function Sidebar() {
             </p>
             {navItem(`/dashboard/projects/${projectId}/overview`, LayoutDashboard, 'Overview')}
             {navItem(`/dashboard/projects/${projectId}/functions`, Code2, 'Functions')}
+            {navItem(`/dashboard/projects/${projectId}/routes`, Globe, 'Routes')}
             {navItem(`/dashboard/projects/${projectId}/secrets`, ShieldCheck, 'Secrets')}
             {navItem(`/dashboard/projects/${projectId}/api-keys`, KeyRound, 'API Keys')}
             {navItem(`/dashboard/projects/${projectId}/logs`, ScrollText, 'Logs')}

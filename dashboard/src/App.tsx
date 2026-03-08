@@ -11,6 +11,7 @@ import ApiKeysPage from '@/pages/api-keys/ApiKeysPage'
 import TenantSettingsPage from '@/pages/tenants/TenantSettingsPage'
 import LogsPage from '@/pages/logs/LogsPage'
 import ProjectSettingsPage from '@/pages/projects/ProjectSettingsPage'
+import RoutesPage from '@/pages/routes/RoutesPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,6 +41,7 @@ export default function App() {
               <Route path="overview" element={<OverviewPage />} />
               <Route path="functions" element={<FunctionsPage />} />
               <Route path="functions/:functionId" element={<FunctionDetailPage />} />
+              <Route path="routes" element={<RoutesPage />} />
               <Route path="secrets" element={<SecretsPage />} />
               <Route path="api-keys" element={<ApiKeysPage />} />
               <Route path="logs" element={<LogsPage />} />
