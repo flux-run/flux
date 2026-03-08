@@ -17,6 +17,7 @@ pub struct RouteRow {
     pub path: String,
     pub method: String,
     pub function_id: Uuid,
+    pub is_async: bool,
     pub auth_type: String,
     pub cors_enabled: bool,
     pub rate_limit: Option<i32>,
@@ -35,6 +36,8 @@ pub struct CreateRoutePayload {
     pub method: String,
     pub path: String,
     pub function_id: Uuid,
+    #[serde(default)]
+    pub is_async: bool,
     pub auth_type: String,
     pub cors_enabled: bool,
     pub rate_limit: Option<i32>,
@@ -45,6 +48,7 @@ pub struct UpdateRoutePayload {
     pub path: Option<String>,
     pub method: Option<String>,
     pub function_id: Option<Uuid>,
+    pub is_async: Option<bool>,
     pub auth_type: Option<String>,
     pub cors_enabled: Option<bool>,
     pub rate_limit: Option<Option<i32>>,
@@ -67,7 +71,7 @@ pub async fn list_gateway_routes(
     Extension(_context): Extension<RequestContext>,
 ) -> ApiResult<Vec<RouteRow>> {
     let routes = sqlx::query_as::<_, RouteRow>(
-        "SELECT id, project_id, path, method, function_id, auth_type, cors_enabled, rate_limit, created_at \
+        "SELECT id, project_id, path, method, function_id, is_async, auth_type, cors_enabled, rate_limit, created_at \
          FROM routes WHERE project_id = $1 ORDER BY created_at DESC"
     )
     .bind(params.project_id)
@@ -91,15 +95,16 @@ pub async fn create_gateway_route(
     let id = Uuid::new_v4();
     
     let route = sqlx::query_as::<_, RouteRow>(
-        "INSERT INTO routes (id, project_id, path, method, function_id, auth_type, cors_enabled, rate_limit) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-         RETURNING id, project_id, path, method, function_id, auth_type, cors_enabled, rate_limit, created_at"
+           "INSERT INTO routes (id, project_id, path, method, function_id, is_async, auth_type, cors_enabled, rate_limit) \
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+            RETURNING id, project_id, path, method, function_id, is_async, auth_type, cors_enabled, rate_limit, created_at"
     )
     .bind(id)
     .bind(project_id)
     .bind(payload.path)
     .bind(payload.method)
     .bind(payload.function_id)
+    .bind(payload.is_async)
     .bind(payload.auth_type)
     .bind(payload.cors_enabled)
     .bind(payload.rate_limit)
@@ -153,14 +158,16 @@ pub async fn update_gateway_route(
          path = COALESCE($1, path), \
          method = COALESCE($2, method), \
          function_id = COALESCE($3, function_id), \
-         auth_type = COALESCE($4, auth_type), \
-         cors_enabled = COALESCE($5, cors_enabled) \
-         WHERE id = $6 \
-         RETURNING id, project_id, path, method, function_id, auth_type, cors_enabled, rate_limit, created_at"
+            is_async = COALESCE($4, is_async), \
+            auth_type = COALESCE($5, auth_type), \
+            cors_enabled = COALESCE($6, cors_enabled) \
+            WHERE id = $7 \
+            RETURNING id, project_id, path, method, function_id, is_async, auth_type, cors_enabled, rate_limit, created_at"
     )
     .bind(payload.path)
     .bind(payload.method)
     .bind(payload.function_id)
+        .bind(payload.is_async)
     .bind(payload.auth_type)
     .bind(payload.cors_enabled)
     .bind(id)

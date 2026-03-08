@@ -5,6 +5,7 @@ mod router;
 mod routes;
 mod services;
 mod middleware;
+mod clients;
 
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -41,11 +42,16 @@ async fn main() -> anyhow::Result<()> {
     // Initialize state
     let http_client = reqwest::Client::new();
     let jwks_cache = cache::jwks::JwksCache::new(http_client.clone());
+    let queue_client = clients::queue_client::QueueClient::new(
+        config.queue_url.clone(),
+        http_client.clone(),
+    );
 
     let state = Arc::new(state::GatewayState {
         db_pool,
         http_client,
         runtime_url: config.runtime_url,
+        queue_client,
         internal_service_token: config.internal_service_token,
         snapshot,
         jwks_cache,

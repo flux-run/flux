@@ -1,4 +1,3 @@
-use sqlx::PgPool;
 use uuid::Uuid;
 use serde::Serialize;
 
@@ -10,6 +9,7 @@ pub struct RouteRecord {
     pub path: String,
     pub method: String,
     pub function_id: Uuid,
+    pub is_async: bool,
     pub auth_type: String,
     pub cors_enabled: bool,
     pub rate_limit: Option<i32>,

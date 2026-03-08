@@ -49,7 +49,7 @@ impl GatewaySnapshot {
 
         // Fetch routes
         let routes = sqlx::query_as::<_, RouteRecord>(
-            "SELECT r.id, r.project_id, p.tenant_id, r.path, r.method, r.function_id, r.auth_type, r.cors_enabled, r.rate_limit, \
+            "SELECT r.id, r.project_id, p.tenant_id, r.path, r.method, r.function_id, r.is_async, r.auth_type, r.cors_enabled, r.rate_limit, \
              r.jwks_url, r.jwt_audience, r.jwt_issuer, r.json_schema, r.cors_origins, r.cors_headers \
              FROM routes r \
              JOIN projects p ON p.id = r.project_id"

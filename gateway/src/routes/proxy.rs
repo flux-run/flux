@@ -1,11 +1,12 @@
 use axum::{
     extract::{Path, State},
-    http::{Method, Request},
+    http::{Method, Request, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use axum::body::Body;
 use crate::state::SharedState;
+use job_contract::job::CreateJobRequest;
 use serde_json::Value;
 
 pub async fn proxy_handler(
@@ -192,6 +193,63 @@ pub async fn proxy_handler(
                 ).into_response();
             }
         }
+    }
+
+    if route.is_async {
+        let enqueue_req = CreateJobRequest {
+            tenant_id: route.tenant_id,
+            project_id: route.project_id,
+            function_id: route.function_id,
+            payload,
+        };
+
+        let mut response = match state.queue_client.enqueue(enqueue_req).await {
+            Ok(job) => (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "job_id": job.job_id,
+                    "status": "queued"
+                })),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": "queue_unreachable", "message": e.to_string() })),
+            )
+                .into_response(),
+        };
+
+        if route.cors_enabled {
+            let headers = response.headers_mut();
+
+            let origin_str = route.cors_origins
+                .as_ref()
+                .and_then(|o| if o.is_empty() { None } else { Some(o.join(", ")) })
+                .unwrap_or_else(|| "*".to_string());
+
+            let allowed_headers = route.cors_headers
+                .as_ref()
+                .and_then(|h| if h.is_empty() { None } else { Some(h.join(", ")) })
+                .unwrap_or_else(|| "Content-Type, Authorization, X-API-Key".to_string());
+
+            if let Ok(val) = origin_str.parse() {
+                headers.insert("Access-Control-Allow-Origin", val);
+            }
+            headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+            if let Ok(val) = allowed_headers.parse() {
+                headers.insert("Access-Control-Allow-Headers", val);
+            }
+        }
+
+        crate::middleware::analytics::log_request(
+            state.db_pool.clone(),
+            route.id,
+            tenant_id,
+            response.status().as_u16(),
+            start_time.elapsed().as_millis() as i64,
+        );
+
+        return response;
     }
 
     let forward_payload = serde_json::json!({

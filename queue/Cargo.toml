@@ -18,3 +18,4 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 dotenvy = "0.15.7"
 anyhow = "1.0"
+job_contract = { path = "../shared/job_contract" }

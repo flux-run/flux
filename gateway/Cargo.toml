@@ -21,3 +21,4 @@ lazy_static = "1.5.0"
 dotenvy = "0.15.7"
 jsonwebtoken = "10.3.0"
 jsonschema = "0.44.1"
+job_contract = { path = "../shared/job_contract" }
