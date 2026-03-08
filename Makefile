@@ -14,13 +14,24 @@ dashboard:
 	cd dashboard && npm run dev
 
 # ── Build (production artefacts) ────────────────────────────────────────────
-build: build-api build-dashboard
+# Builds all services using the new build script.
+build:
+	./scripts/build.sh
 
-build-api:
-	cd api && SQLX_OFFLINE=true cargo build --release
+# Builds all services as Docker images.
+build-docker:
+	./scripts/build.sh --docker
 
-build-dashboard:
-	cd dashboard && npm run build
+# ── Deploy ──────────────────────────────────────────────────────────────────
+# Deploys all services to the specified environment.
+# Usage: make deploy ENV=staging
+deploy:
+	./scripts/deploy.sh --env $(ENV)
+
+# Deploys with a dry-run.
+deploy-dry-run:
+	./scripts/deploy.sh --env $(ENV) --dry-run
+
 
 # ── Database ─────────────────────────────────────────────────────────────────
 # Regenerate sqlx offline cache — run against direct (non-pooler) DB connection.

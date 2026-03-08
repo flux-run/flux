@@ -4,5 +4,6 @@ members = [
     "api",
     "runtime",
     "cli",
-    "gateway"
+    "gateway",
+    "queue"
 ]
