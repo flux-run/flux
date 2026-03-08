@@ -14,7 +14,10 @@ struct StuckJob {
 /// Background loop that rescues jobs stuck in `running` state.
 ///
 /// A job is considered stuck when:
-///   `locked_at < now() - (max_runtime_seconds * interval '1 second')`
+///   `started_at + max_runtime_seconds < now()`
+///
+/// `started_at` is stamped when execution actually begins (HTTP call to runtime),
+/// which is more accurate than `locked_at` (which is stamped when the row is claimed).
 ///
 /// Each timed-out job has its attempt count incremented:
 /// - If `attempts < max_attempts`: reset to `pending` so a worker picks it up again.
@@ -35,10 +38,10 @@ async fn recover_stuck_jobs(pool: &PgPool) -> Result<u64, sqlx::Error> {
     // Atomically claim all stuck running jobs beyond their max_runtime_seconds.
     let rows = sqlx::query_as::<_, StuckJob>(
         "UPDATE jobs
-         SET attempts = attempts + 1, locked_at = NULL, updated_at = now()
+         SET attempts = attempts + 1, locked_at = NULL, started_at = NULL, updated_at = now()
          WHERE status = 'running'
-           AND locked_at IS NOT NULL
-           AND locked_at < now() - (max_runtime_seconds * interval '1 second')
+           AND started_at IS NOT NULL
+           AND started_at + (max_runtime_seconds * interval '1 second') < now()
          RETURNING id, attempts, max_attempts",
     )
     .fetch_all(pool)

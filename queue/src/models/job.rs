@@ -16,6 +16,7 @@ pub struct Job {
     pub max_runtime_seconds: i32,
     pub run_at: NaiveDateTime,
     pub locked_at: Option<NaiveDateTime>,
+    pub started_at: Option<NaiveDateTime>,
     pub idempotency_key: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,

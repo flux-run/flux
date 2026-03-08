@@ -4,4 +4,5 @@ pub mod handlers {
     pub mod get_job;
     pub mod retry_job;
     pub mod cancel_job;
+    pub mod stats;
 }

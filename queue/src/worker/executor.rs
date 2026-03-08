@@ -21,6 +21,15 @@ pub async fn execute(pool: PgPool, runtime_url: String, client: Client, job: Job
     info!(job_id = %job.id, function_id = %job.function_id, "job started");
     log_job(&pool, job.id, "job started").await;
 
+    // Stamp started_at immediately before the runtime call.
+    // Timeout recovery measures elapsed time from this column, not from locked_at.
+    let _ = sqlx::query(
+        "UPDATE jobs SET started_at = now(), updated_at = now() WHERE id = $1",
+    )
+    .bind(job.id)
+    .execute(&pool)
+    .await;
+
     let runtime_endpoint = format!("{}/internal/execute", runtime_url.trim_end_matches('/'));
 
     let res = client
