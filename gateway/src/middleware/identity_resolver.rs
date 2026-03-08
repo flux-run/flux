@@ -21,7 +21,8 @@ pub async fn resolve_identity(
 ) -> Result<Response, StatusCode> {
     let host = req
         .headers()
-        .get("host")
+        .get("x-forwarded-host")
+        .or_else(|| req.headers().get("host"))
         .and_then(|h| h.to_str().ok())
         .ok_or(StatusCode::BAD_REQUEST)?;
 
