@@ -4,8 +4,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 pub struct Config {
     pub database_url: String,
     pub port: u16,
-    /// Hard cap on rows returned from SELECT when the caller omits a LIMIT.
+    /// Default row cap when the caller omits LIMIT.
     pub default_query_limit: i64,
+    /// Hard ceiling — a client cannot exceed this even if they send limit=N.
+    pub max_query_limit: i64,
+    /// Base URL of the runtime service, used by the hooks engine.
+    pub runtime_url: String,
 }
 
 pub fn load() -> Config {
@@ -17,9 +21,15 @@ pub fn load() -> Config {
             .parse()
             .expect("PORT must be a number"),
         default_query_limit: std::env::var("DEFAULT_QUERY_LIMIT")
-            .unwrap_or_else(|_| "1000".to_string())
+            .unwrap_or_else(|_| "100".to_string())
             .parse()
             .expect("DEFAULT_QUERY_LIMIT must be a positive integer"),
+        max_query_limit: std::env::var("MAX_QUERY_LIMIT")
+            .unwrap_or_else(|_| "5000".to_string())
+            .parse()
+            .expect("MAX_QUERY_LIMIT must be a positive integer"),
+        runtime_url: std::env::var("RUNTIME_URL")
+            .unwrap_or_else(|_| "http://localhost:8082".to_string()),
     }
 }
 

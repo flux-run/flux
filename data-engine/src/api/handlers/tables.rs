@@ -56,6 +56,18 @@ pub struct ColumnDef {
     #[serde(default)]
     pub unique: bool,
     pub default: Option<String>,
+    /// Extended Fluxbase type: "default" | "file" | "computed" | "relation".
+    /// Defaults to "default" (plain Postgres column).
+    #[serde(default = "default_fb_type")]
+    pub fb_type: String,
+    /// For fb_type = "file": "public" or "private".
+    pub file_visibility: Option<String>,
+    /// For fb_type = "computed": SQL expression, e.g. "age > 18".
+    pub computed_expr: Option<String>,
+}
+
+fn default_fb_type() -> String {
+    "default".to_string()
 }
 
 #[derive(Deserialize)]
@@ -103,6 +115,10 @@ pub async fn create(
 
     for col in &body.columns {
         let mut def = format!("{} {}", quote_ident(&col.name), col.col_type);
+        // Computed columns are virtual — no backing Postgres column.
+        if col.fb_type == "computed" {
+            continue;
+        }
         if col.not_null || col.primary_key {
             def.push_str(" NOT NULL");
         }
@@ -150,6 +166,43 @@ pub async fn create(
     .execute(&mut *tx)
     .await
     .map_err(EngineError::Db)?;
+
+    // Write per-column metadata rows.
+    for (ordinal, col) in body.columns.iter().enumerate() {
+        let _file_accept: serde_json::Value = serde_json::Value::Null; // extended when file engine is implemented
+        sqlx::query(
+            "INSERT INTO fluxbase_internal.column_metadata \
+                 (tenant_id, project_id, schema_name, table_name, column_name, \
+                  pg_type, fb_type, not_null, primary_key, unique_col, \
+                  default_expr, file_visibility, computed_expr, ordinal) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) \
+             ON CONFLICT (tenant_id, project_id, schema_name, table_name, column_name) \
+             DO UPDATE SET \
+                 pg_type = EXCLUDED.pg_type, fb_type = EXCLUDED.fb_type, \
+                 not_null = EXCLUDED.not_null, primary_key = EXCLUDED.primary_key, \
+                 unique_col = EXCLUDED.unique_col, default_expr = EXCLUDED.default_expr, \
+                 file_visibility = EXCLUDED.file_visibility, \
+                 computed_expr = EXCLUDED.computed_expr, \
+                 ordinal = EXCLUDED.ordinal, updated_at = now()",
+        )
+        .bind(auth.tenant_id)
+        .bind(auth.project_id)
+        .bind(&schema)
+        .bind(&body.name)
+        .bind(&col.name)
+        .bind(&col.col_type)
+        .bind(&col.fb_type)
+        .bind(col.not_null)
+        .bind(col.primary_key)
+        .bind(col.unique)
+        .bind(col.default.as_deref())
+        .bind(col.file_visibility.as_deref())
+        .bind(col.computed_expr.as_deref())
+        .bind(ordinal as i32)
+        .execute(&mut *tx)
+        .await
+        .map_err(EngineError::Db)?;
+    }
 
     tx.commit().await.map_err(EngineError::Db)?;
 
@@ -223,6 +276,19 @@ pub async fn drop_table(
     .execute(&mut *tx)
     .await
     .map_err(EngineError::Db)?;
+
+    sqlx::query(
+        "DELETE FROM fluxbase_internal.column_metadata \
+         WHERE tenant_id = $1 AND project_id = $2 AND schema_name = $3 AND table_name = $4",
+    )
+    .bind(auth.tenant_id)
+    .bind(auth.project_id)
+    .bind(&schema)
+    .bind(&table)
+    .execute(&mut *tx)
+    .await
+    .map_err(EngineError::Db)?;
+
     tx.commit().await.map_err(EngineError::Db)?;
 
     Ok(Json(json!({ "database": database, "table": table, "status": "dropped" })))

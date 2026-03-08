@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod engine;
 mod executor;
+mod hooks;
 mod policy;
 mod router;
 mod state;

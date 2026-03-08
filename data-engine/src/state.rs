@@ -8,6 +8,10 @@ use crate::policy::PolicyCache;
 pub struct AppState {
     pub pool: PgPool,
     pub default_query_limit: i64,
+    pub max_query_limit: i64,
+    pub runtime_url: String,
+    /// Shared HTTP client for hook invocations (connection-pooled).
+    pub http_client: reqwest::Client,
     pub policy_cache: Arc<PolicyCache>,
 }
 
@@ -16,6 +20,9 @@ impl AppState {
         Self {
             pool,
             default_query_limit: cfg.default_query_limit,
+            max_query_limit: cfg.max_query_limit,
+            runtime_url: cfg.runtime_url.clone(),
+            http_client: reqwest::Client::new(),
             policy_cache: Arc::new(PolicyCache::new(std::collections::HashMap::new())),
         }
     }
