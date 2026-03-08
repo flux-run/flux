@@ -1,16 +1,5 @@
-// Basic Rate Limiting using DashMap
-// In-memory implementation for V1
-
-use axum::{
-    extract::State,
-    http::{Request, StatusCode},
-    middleware::Next,
-    response::Response,
-};
 use dashmap::DashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use crate::state::SharedState;
+use std::time::Instant;
 
 struct TokenBucket {
     tokens: f64,

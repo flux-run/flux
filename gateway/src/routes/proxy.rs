@@ -30,19 +30,29 @@ pub async fn proxy_handler(
     };
 
     // 1. Resolve Route
-    let route = match lookup_route(&state.db_pool, identity.tenant_id, &full_path, &method_str).await {
-        Ok(Some(r)) => r,
-        Ok(None) => {
-            return (
-                axum::http::StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "route_not_found", "message": format!("No route for {} {}", method_str, full_path) }))
-            ).into_response();
-        }
-        Err(e) => {
-            return (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "internal_error", "message": e.to_string() }))
-            ).into_response();
+    let cache_key = (identity.tenant_id, full_path.clone(), method_str.clone());
+    
+    let route = if let Some(r) = state.route_cache.get(&cache_key) {
+        tracing::debug!("Route cache hit: {} {}", method_str, full_path);
+        r.clone()
+    } else {
+        match lookup_route(&state.db_pool, identity.tenant_id, &full_path, &method_str).await {
+            Ok(Some(r)) => {
+                state.route_cache.insert(cache_key, r.clone());
+                r
+            },
+            Ok(None) => {
+                return (
+                    axum::http::StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "route_not_found", "message": format!("No route for {} {}", method_str, full_path) }))
+                ).into_response();
+            }
+            Err(e) => {
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "internal_error", "message": e.to_string() }))
+                ).into_response();
+            }
         }
     };
 

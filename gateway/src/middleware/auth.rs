@@ -1,9 +1,3 @@
-use axum::{
-    http::{Request, StatusCode},
-    middleware::Next,
-    response::Response,
-    Json,
-};
 use sqlx::PgPool;
 
 pub async fn validate_api_key(

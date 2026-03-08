@@ -5,7 +5,6 @@ mod routes;
 mod services;
 mod middleware;
 
-use axum::Router;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tracing::info;
@@ -35,6 +34,8 @@ async fn main() -> anyhow::Result<()> {
         http_client: reqwest::Client::new(),
         runtime_url: config.runtime_url,
         internal_service_token: config.internal_service_token,
+        tenant_cache: dashmap::DashMap::new(),
+        route_cache: dashmap::DashMap::new(),
     });
 
     // Build router

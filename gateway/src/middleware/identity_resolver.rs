@@ -5,7 +5,6 @@ use axum::{
     response::Response,
     extract::State,
 };
-use std::sync::Arc;
 use crate::state::SharedState;
 use uuid::Uuid;
 
@@ -36,7 +35,17 @@ pub async fn resolve_identity(
 
     let tenant_slug = parts[0].to_string();
 
-    // Resolve from database (ideally cached)
+    // 1. Check Cache
+    if let Some(tenant_id) = state.tenant_cache.get(&tenant_slug) {
+        tracing::debug!("Tenant cache hit: {}", tenant_slug);
+        req.extensions_mut().insert(ResolvedIdentity {
+            tenant_id: *tenant_id,
+            tenant_slug,
+        });
+        return Ok(next.run(req).await);
+    }
+
+    // 2. Resolve from database
     #[derive(sqlx::FromRow)]
     struct IdentityRow {
         tenant_id: Uuid,
@@ -55,6 +64,9 @@ pub async fn resolve_identity(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if let Some(row) = result {
+        // Update Cache
+        state.tenant_cache.insert(tenant_slug.clone(), row.tenant_id);
+
         req.extensions_mut().insert(ResolvedIdentity {
             tenant_id: row.tenant_id,
             tenant_slug,

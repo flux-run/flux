@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 use serde::Serialize;
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RouteRecord {
     pub id: Uuid,
     pub project_id: Uuid,
