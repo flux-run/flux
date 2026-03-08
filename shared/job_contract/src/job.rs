@@ -8,6 +8,11 @@ pub struct CreateJobRequest {
     pub project_id: Uuid,
     pub function_id: Uuid,
     pub payload: Value,
+    /// Optional caller-supplied deduplication key.
+    /// If a job with this key already exists, the existing job_id is returned
+    /// rather than creating a duplicate.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

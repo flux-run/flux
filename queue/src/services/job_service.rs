@@ -10,12 +10,16 @@ pub struct CreateJobInput {
     pub payload: serde_json::Value,
     pub run_at: NaiveDateTime,
     pub max_attempts: i32,
+    pub idempotency_key: Option<String>,
 }
 
 pub async fn create_job(pool: &PgPool, input: CreateJobInput) -> Result<Uuid, sqlx::Error> {
     let record = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO jobs (tenant_id, project_id, function_id, payload, run_at, max_attempts) \
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+        "INSERT INTO jobs (tenant_id, project_id, function_id, payload, run_at, max_attempts, idempotency_key) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+         ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL \
+         DO UPDATE SET updated_at = jobs.updated_at \
+         RETURNING id",
     )
     .bind(input.tenant_id)
     .bind(input.project_id)
@@ -23,6 +27,7 @@ pub async fn create_job(pool: &PgPool, input: CreateJobInput) -> Result<Uuid, sq
     .bind(input.payload)
     .bind(input.run_at)
     .bind(input.max_attempts)
+    .bind(input.idempotency_key)
     .fetch_one(pool)
     .await?;
 

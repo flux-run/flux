@@ -28,6 +28,11 @@ async fn main() -> anyhow::Result<()> {
         config.poll_interval_ms,
     ));
 
+    tokio::spawn(worker::timeout_recovery::run(
+        pool.clone(),
+        config.job_timeout_check_interval_ms,
+    ));
+
     let app_state = Arc::new(state::AppState::new(pool));
     let app = api::routes::routes(app_state);
 

@@ -13,8 +13,10 @@ pub struct Job {
     pub status: String,
     pub attempts: i32,
     pub max_attempts: i32,
+    pub max_runtime_seconds: i32,
     pub run_at: NaiveDateTime,
     pub locked_at: Option<NaiveDateTime>,
+    pub idempotency_key: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }

@@ -8,5 +8,5 @@ pub async fn init_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
 }
 
 pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
-    sqlx::migrate!("src/db/migrations").run(pool).await
+    sqlx::migrate!("./migrations").run(pool).await
 }

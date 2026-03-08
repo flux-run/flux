@@ -19,6 +19,7 @@ pub async fn handler(
         payload: req.payload,
         run_at,
         max_attempts: 5,
+        idempotency_key: req.idempotency_key,
     };
 
     match job_service::create_job(pool, input).await {

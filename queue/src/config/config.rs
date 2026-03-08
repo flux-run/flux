@@ -9,6 +9,7 @@ pub struct Config {
     pub port: u16,
     pub worker_concurrency: usize,
     pub poll_interval_ms: u64,
+    pub job_timeout_check_interval_ms: u64,
 }
 
 pub fn load() -> Config {
@@ -29,6 +30,10 @@ pub fn load() -> Config {
             .unwrap_or_else(|_| "200".to_string())
             .parse()
             .expect("WORKER_POLL_INTERVAL_MS must be a number"),
+        job_timeout_check_interval_ms: std::env::var("JOB_TIMEOUT_CHECK_INTERVAL_MS")
+            .unwrap_or_else(|_| "30000".to_string())
+            .parse()
+            .expect("JOB_TIMEOUT_CHECK_INTERVAL_MS must be a number"),
     }
 }
 

@@ -154,6 +154,12 @@ pub async fn proxy_handler(
 
     // 4. Forward to Runtime
     let runtime_url = format!("{}/execute", state.runtime_url);
+
+    // Extract Idempotency-Key before req is consumed by into_body().
+    let idempotency_key = req.headers()
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     
     // We need to extract the payload from the original request.
     // For now, we assume it's JSON.
@@ -201,6 +207,7 @@ pub async fn proxy_handler(
             project_id: route.project_id,
             function_id: route.function_id,
             payload,
+            idempotency_key,
         };
 
         let mut response = match state.queue_client.enqueue(enqueue_req).await {
