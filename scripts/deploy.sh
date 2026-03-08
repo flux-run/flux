@@ -37,7 +37,7 @@ deploy_service() {
     fi
 }
 
-SERVICES=("api" "gateway" "runtime" "queue" "dashboard")
+SERVICES=("api" "gateway" "runtime" "fluxbase-queue" "dashboard")
 
 for service in "${SERVICES[@]}"; do
     deploy_service "$service"

@@ -19,21 +19,38 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-SERVICES=("api" "gateway" "runtime" "queue" "cli")
+SERVICES=("api" "gateway" "runtime" "fluxbase-queue" "cli")
 
 build_rust_service() {
     local service=$1
-    echo "Building Rust service: $service..."
+    local dir=$service
+    if [ "$service" == "fluxbase-queue" ]; then
+        dir="queue"
+    fi
+    echo "Building Rust service: $service (in dir $dir)..."
     if [ "$DOCKER_BUILD" = true ]; then
-        if [ -f "$service/Dockerfile" ]; then
+        if [ -f "$dir/Dockerfile" ]; then
             echo "Building Docker image for $service..."
-            docker build -t "fluxbase-$service:latest" -f "$service/Dockerfile" .
+            docker build -t "fluxbase-$service:latest" -f "$dir/Dockerfile" .
         else
-            echo "Warning: No Dockerfile found for $service, skipping Docker build."
-            cargo build --release -p "$service"
+            echo "Warning: No Dockerfile found for $dir, skipping Docker build."
+            SQLX_OFFLINE=true cargo build --release -p "$service"
         fi
     else
-        SQLX_OFFLINE=true cargo build --release -p "$service"
+        # Try to use DATABASE_URL from service's .env if it exists, otherwise use root's if available
+        if [ -f "$dir/.env" ]; then
+            export $(grep DATABASE_URL "$dir/.env" | xargs)
+        elif [ -f "api/.env" ]; then
+            export $(grep DATABASE_URL "api/.env" | xargs)
+        fi
+        
+        if [ -n "$DATABASE_URL" ]; then
+            echo "Building $service with DATABASE_URL..."
+            cargo build --release -p "$service"
+        else
+            echo "Building $service in offline mode..."
+            SQLX_OFFLINE=true cargo build --release -p "$service"
+        fi
     fi
 }
 
