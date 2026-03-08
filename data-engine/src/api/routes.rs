@@ -3,7 +3,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::{
-    api::handlers::{databases, files, hooks, policies, query, relationships, tables},
+    api::handlers::{databases, files, hooks, policies, query, relationships, subscriptions, tables},
     state::AppState,
 };
 
@@ -27,6 +27,9 @@ pub fn build(state: Arc<AppState>) -> Router {
         // ── Relationships ─────────────────────────────────────────────────────
         .route("/db/relationships",     get(relationships::list).post(relationships::create))
         .route("/db/relationships/:id", delete(relationships::delete))
+        // ── Event subscriptions ─────────────────────────────────────────────
+        .route("/db/subscriptions",     get(subscriptions::list).post(subscriptions::create))
+        .route("/db/subscriptions/:id", patch(subscriptions::update).delete(subscriptions::delete))
         // ── File presigned URLs ───────────────────────────────────────────────
         .route("/files/upload-url",   post(files::upload_url))
         .route("/files/download-url", post(files::download_url))

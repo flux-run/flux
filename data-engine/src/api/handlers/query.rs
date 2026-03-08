@@ -135,8 +135,17 @@ pub async fn handler(
     };
 
     // 11. Emit event for mutations (INSERT / UPDATE / DELETE).
-    if let Some(verb) = EventEmitter::verb_for(&req.operation) {
-        EventEmitter::emit(&state.pool, &auth, &req.table, verb, &result).await;
+    if let Some(op) = EventEmitter::verb_for(&req.operation) {
+        let record_id = EventEmitter::extract_record_id(&result);
+        EventEmitter::emit(
+            &state.pool,
+            &auth,
+            &req.table,
+            op,
+            record_id.as_deref(),
+            &result,
+        )
+        .await;
     }
 
     Ok(Json(json!({ "data": result })))

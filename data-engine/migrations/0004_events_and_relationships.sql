@@ -13,14 +13,21 @@ CREATE TABLE IF NOT EXISTS fluxbase_internal.events (
     project_id  UUID NOT NULL,
     event_type  TEXT NOT NULL,    -- "users.inserted", "orders.updated", …
     table_name  TEXT NOT NULL,
+    -- The primary-key value of the mutated row (as text for portability).
+    record_id   TEXT,
+    -- "insert" | "update" | "delete"
+    operation   TEXT NOT NULL DEFAULT 'insert',
     payload     JSONB NOT NULL DEFAULT '{}',
+    -- Set by the event worker once all subscriptions have been dispatched.
+    delivered_at TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Workers will poll with WHERE delivered_at IS NULL ORDER BY created_at.
+-- Workers poll: WHERE delivered_at IS NULL ORDER BY created_at FOR UPDATE SKIP LOCKED.
+-- Partial index keeps the hot set small as history accumulates.
 CREATE INDEX IF NOT EXISTS idx_events_undelivered
     ON fluxbase_internal.events (tenant_id, project_id, created_at)
-    WHERE created_at > now() - INTERVAL '7 days';
+    WHERE delivered_at IS NULL;
 
 -- ─── Relationships registry ───────────────────────────────────────────────────
 --

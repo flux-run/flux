@@ -4,4 +4,5 @@ pub mod hooks;
 pub mod policies;
 pub mod query;
 pub mod relationships;
+pub mod subscriptions;
 pub mod tables;

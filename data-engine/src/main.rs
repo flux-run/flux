@@ -25,7 +25,17 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("running migrations...");
     sqlx::migrate!("./migrations").run(&pool).await?;
 
-    let app_state = Arc::new(state::AppState::new(pool, &cfg).await);
+    let app_state = Arc::new(state::AppState::new(pool.clone(), &cfg).await);
+
+    // Spawn the event worker as a background task — it shares the pool but
+    // runs independently of the HTTP server.
+    let worker_pool = Arc::new(pool);
+    let worker_http = Arc::new(app_state.http_client.clone());
+    let worker_runtime_url = cfg.runtime_url.clone();
+    tokio::spawn(async move {
+        events::worker::run(worker_pool, worker_http, worker_runtime_url).await;
+    });
+
     let app = api::routes::build(app_state);
 
     let addr = format!("0.0.0.0:{}", cfg.port);

@@ -27,3 +27,4 @@ aws-config  = { version = "1", features = ["behavior-version-latest"] }
 aws-smithy-types = { version = "1" }
 sha2 = "0.10"
 hex  = "0.4"
+hmac = "0.12"
