@@ -16,6 +16,7 @@ const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 const AUTH_TYPES = [
   { value: 'none', label: 'None (Public)' },
   { value: 'api_key', label: 'API Key' },
+  { value: 'jwt', label: 'JWT (Auth0/Clerk/Firebase)' },
 ]
 
 export default function RoutesPage() {
@@ -32,6 +33,12 @@ export default function RoutesPage() {
   const [authType, setAuthType] = useState('none')
   const [rateLimit, setRateLimit] = useState('100')
   const [corsEnabled, setCorsEnabled] = useState(false)
+  const [corsOrigins, setCorsOrigins] = useState('')
+  const [corsHeaders, setCorsHeaders] = useState('')
+  const [jwksUrl, setJwksUrl] = useState('')
+  const [jwtAudience, setJwtAudience] = useState('')
+  const [jwtIssuer, setJwtIssuer] = useState('')
+  const [jsonSchema, setJsonSchema] = useState('')
 
   // Fetch routes
   const { data: routes, isLoading: routesLoading } = useQuery({
@@ -77,7 +84,13 @@ export default function RoutesPage() {
         function_id: functionId,
         auth_type: authType,
         cors_enabled: corsEnabled,
-        rate_limit: rateLimit ? parseInt(rateLimit) : null
+        rate_limit: rateLimit ? parseInt(rateLimit) : null,
+        jwks_url: authType === 'jwt' && jwksUrl ? jwksUrl : null,
+        jwt_audience: authType === 'jwt' && jwtAudience ? jwtAudience : null,
+        jwt_issuer: authType === 'jwt' && jwtIssuer ? jwtIssuer : null,
+        cors_origins: corsEnabled && corsOrigins ? corsOrigins.split(',').map(s => s.trim()) : null,
+        cors_headers: corsEnabled && corsHeaders ? corsHeaders.split(',').map(s => s.trim()) : null,
+        json_schema: jsonSchema ? JSON.parse(jsonSchema) : null,
       }
       
       if (editingId) {
@@ -115,6 +128,12 @@ export default function RoutesPage() {
     setAuthType('none')
     setRateLimit('100')
     setCorsEnabled(false)
+    setCorsOrigins('')
+    setCorsHeaders('')
+    setJwksUrl('')
+    setJwtAudience('')
+    setJwtIssuer('')
+    setJsonSchema('')
     setEditingId(null)
   }
 
@@ -124,7 +143,13 @@ export default function RoutesPage() {
     setFunctionId(route.function_id)
     setAuthType(route.auth_type)
     setRateLimit(route.rate_limit?.toString() || '')
-    setCorsEnabled(route.cors_enabled)
+    setCorsEnabled(route.cors_enabled || false)
+    setCorsOrigins(route.cors_origins?.join(', ') || '')
+    setCorsHeaders(route.cors_headers?.join(', ') || '')
+    setJwksUrl(route.jwks_url || '')
+    setJwtAudience(route.jwt_audience || '')
+    setJwtIssuer(route.jwt_issuer || '')
+    setJsonSchema(route.json_schema ? JSON.stringify(route.json_schema, null, 2) : '')
     setEditingId(route.id)
     setCreateOpen(true)
   }
@@ -215,7 +240,7 @@ export default function RoutesPage() {
                           variant={route.auth_type === 'none' ? 'secondary' : 'default'}
                           className="capitalize text-[10px] py-0"
                         >
-                          {route.auth_type === 'none' ? 'Public' : 'API Key'}
+                          {route.auth_type === 'none' ? 'Public' : route.auth_type.replace('_', ' ')}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground text-xs font-mono">
@@ -349,6 +374,30 @@ export default function RoutesPage() {
               </div>
             </div>
 
+            {authType === 'jwt' && (
+              <div className="bg-muted/30 p-4 rounded-lg space-y-4 text-sm border">
+                <div className="font-semibold text-xs uppercase tracking-wider text-muted-foreground mb-2">JWT Configuration</div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label className="text-right text-xs">JWKS URL *</Label>
+                  <div className="col-span-3">
+                    <Input placeholder="https://YOUR_DOMAIN/.well-known/jwks.json" value={jwksUrl} onChange={(e) => setJwksUrl(e.target.value)} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label className="text-right text-xs">Audience</Label>
+                  <div className="col-span-3">
+                    <Input placeholder="Optional API Audience" value={jwtAudience} onChange={(e) => setJwtAudience(e.target.value)} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label className="text-right text-xs">Issuer</Label>
+                  <div className="col-span-3">
+                    <Input placeholder="Optional Token Issuer" value={jwtIssuer} onChange={(e) => setJwtIssuer(e.target.value)} />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-4 items-center gap-4">
               <Label className="text-right">Rate Limit</Label>
               <div className="col-span-3 flex items-center gap-3">
@@ -363,6 +412,51 @@ export default function RoutesPage() {
               </div>
             </div>
 
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label className="text-right">CORS</Label>
+              <div className="col-span-3 flex items-center space-x-2">
+                <input 
+                  type="checkbox" 
+                  id="cors" 
+                  className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
+                  checked={corsEnabled}
+                  onChange={(e) => setCorsEnabled(e.target.checked)}
+                />
+                <label htmlFor="cors" className="text-sm font-medium leading-none">
+                  Enable Advanced CORS Handling
+                </label>
+              </div>
+            </div>
+
+            {corsEnabled && (
+               <div className="bg-muted/30 p-4 rounded-lg space-y-4 text-sm border">
+               <div className="grid grid-cols-4 items-center gap-4">
+                 <Label className="text-right text-xs">Origins</Label>
+                 <div className="col-span-3">
+                   <Input placeholder="https://app.acme.com (comma separated)" value={corsOrigins} onChange={(e) => setCorsOrigins(e.target.value)} />
+                 </div>
+               </div>
+               <div className="grid grid-cols-4 items-center gap-4">
+                 <Label className="text-right text-xs">Headers</Label>
+                 <div className="col-span-3">
+                   <Input placeholder="Content-Type, Authorization" value={corsHeaders} onChange={(e) => setCorsHeaders(e.target.value)} />
+                 </div>
+               </div>
+             </div>
+            )}
+
+            <div className="grid grid-cols-4 items-start gap-4">
+              <Label className="text-right mt-2">Zod Schema <br/><span className="text-[10px] text-muted-foreground font-normal">(JSON Schema)</span></Label>
+              <div className="col-span-3">
+                <textarea 
+                  className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 font-mono"
+                  placeholder='{"type": "object", "properties": {"email": {"type": "string"}}}'
+                  value={jsonSchema}
+                  onChange={e => setJsonSchema(e.target.value)}
+                />
+              </div>
+            </div>
+
             <div className="bg-muted/50 p-4 rounded-lg border space-y-2">
               <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
                 <Globe className="w-3 h-3" />
@@ -374,6 +468,11 @@ export default function RoutesPage() {
               {authType === 'api_key' && (
                 <div className="text-[10px] text-muted-foreground flex items-center gap-1">
                   <Info className="w-3 h-3" /> Requires X-API-Key header
+                </div>
+              )}
+              {authType === 'jwt' && (
+                <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                  <Info className="w-3 h-3" /> Requires Bearer Token
                 </div>
               )}
             </div>
