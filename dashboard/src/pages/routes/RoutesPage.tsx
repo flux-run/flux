@@ -37,8 +37,8 @@ export default function RoutesPage() {
   const { data: routes, isLoading: routesLoading } = useQuery({
     queryKey: ['projects', projectId, 'routes'],
     queryFn: async () => {
-      const resp = await apiFetch<any>(`/routes?project_id=${projectId}`)
-      return resp.data as any[]
+      const resp = await apiFetch<any[]>(`/routes?project_id=${projectId}`)
+      return resp
     },
     enabled: !!projectId
   })
@@ -48,7 +48,7 @@ export default function RoutesPage() {
     queryKey: ['projects', projectId, 'detail'],
     queryFn: async () => {
       const resp = await apiFetch<any>(`/projects/${projectId}`)
-      return resp.data as any
+      return resp
     },
     enabled: !!projectId
   })
