@@ -83,6 +83,44 @@ impl DbRouter {
         }
         Ok(())
     }
+
+    /// Verify a table exists within `schema` and reject system catalog access.
+    ///
+    /// User-owned schemas always start with `t_`; anything else is blocked as a
+    /// defence-in-depth measure even if identifier validation already passed.
+    pub async fn assert_table_exists(
+        pool: &PgPool,
+        schema: &str,
+        table: &str,
+    ) -> Result<(), EngineError> {
+        validate_identifier(schema)?;
+        validate_identifier(table)?;
+
+        if !schema.starts_with("t_") {
+            return Err(EngineError::AccessDenied {
+                role: "any".into(),
+                table: table.into(),
+                operation: "any".into(),
+            });
+        }
+
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(\
+               SELECT 1 FROM information_schema.tables \
+               WHERE table_schema = $1 AND table_name = $2 AND table_type = 'BASE TABLE')",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_one(pool)
+        .await?;
+
+        if !exists {
+            return Err(EngineError::DatabaseNotFound(
+                format!("table '{}' not found in schema '{}'", table, schema),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Validate a PostgreSQL identifier: [a-zA-Z_][a-zA-Z0-9_]*, max 63 chars.

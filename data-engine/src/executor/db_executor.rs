@@ -4,15 +4,19 @@ use sqlx::{Arguments, PgPool, Row};
 use crate::compiler::CompiledQuery;
 use crate::engine::error::EngineError;
 
-/// Execute a `CompiledQuery` and return the results as a JSON array.
+/// Execute a `CompiledQuery` inside an explicit transaction and return the
+/// results as a JSON array.
 ///
 /// All operations (SELECT / INSERT RETURNING / UPDATE RETURNING / DELETE RETURNING)
-/// are wrapped in a CTE so the output is always uniform:
+/// are wrapped in a CTE so the output is always a uniform JSON array:
 ///
 ///   `[{ "col": val, ... }, ...]`
 ///
-/// An empty result set returns `[]`.
+/// Running even SELECT inside a transaction ensures repeatable reads and provides
+/// a clean hook for future before/after trigger logic.
 pub async fn execute(pool: &PgPool, query: &CompiledQuery) -> Result<serde_json::Value, EngineError> {
+    let mut tx = pool.begin().await.map_err(EngineError::Db)?;
+
     let mut args = PgArguments::default();
     for param in &query.params {
         bind_value(&mut args, param).map_err(EngineError::Internal)?;
@@ -25,9 +29,11 @@ pub async fn execute(pool: &PgPool, query: &CompiledQuery) -> Result<serde_json:
     );
 
     let row = sqlx::query_with(&outer, args)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(EngineError::Db)?;
+
+    tx.commit().await.map_err(EngineError::Db)?;
 
     let result: serde_json::Value = row.get(0);
     Ok(result)

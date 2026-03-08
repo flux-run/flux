@@ -4,6 +4,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 pub struct Config {
     pub database_url: String,
     pub port: u16,
+    /// Hard cap on rows returned from SELECT when the caller omits a LIMIT.
+    pub default_query_limit: i64,
 }
 
 pub fn load() -> Config {
@@ -14,6 +16,10 @@ pub fn load() -> Config {
             .unwrap_or_else(|_| "8084".to_string())
             .parse()
             .expect("PORT must be a number"),
+        default_query_limit: std::env::var("DEFAULT_QUERY_LIMIT")
+            .unwrap_or_else(|_| "1000".to_string())
+            .parse()
+            .expect("DEFAULT_QUERY_LIMIT must be a positive integer"),
     }
 }
 

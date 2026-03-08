@@ -1,7 +1,13 @@
+use std::collections::HashMap;
 use sqlx::{FromRow, PgPool};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 use crate::engine::auth_context::AuthContext;
 use crate::engine::error::EngineError;
+
+/// In-process policy cache.
+/// Key: "<tenant_id>:<project_id>:<table>:<role>:<operation>"
+pub type PolicyCache = RwLock<HashMap<String, PolicyResult>>;
 
 /// A row from `fluxbase_internal.policies`.
 #[derive(FromRow, Clone)]
@@ -24,6 +30,45 @@ pub struct PolicyResult {
 pub struct PolicyEngine;
 
 impl PolicyEngine {
+    /// Build the cache key for a given (tenant, project, table, role, operation).
+    pub fn cache_key(
+        tenant_id: Uuid,
+        project_id: Uuid,
+        table: &str,
+        role: &str,
+        operation: &str,
+    ) -> String {
+        format!("{}:{}:{}:{}:{}", tenant_id, project_id, table, role, operation)
+    }
+
+    /// Evaluate policy, using `cache` as a read-through in-process cache.
+    pub async fn evaluate_cached(
+        pool: &PgPool,
+        auth: &AuthContext,
+        table: &str,
+        operation: &str,
+        cache: &PolicyCache,
+    ) -> Result<PolicyResult, EngineError> {
+        let key = Self::cache_key(auth.tenant_id, auth.project_id, table, &auth.role, operation);
+
+        // Fast path — read lock only.
+        {
+            let guard = cache.read().await;
+            if let Some(hit) = guard.get(&key) {
+                tracing::debug!(key = %key, "policy cache hit");
+                return Ok(hit.clone());
+            }
+        }
+
+        // Slow path — load from DB, then write to cache.
+        let result = Self::evaluate(pool, auth, table, operation).await?;
+        {
+            let mut guard = cache.write().await;
+            guard.insert(key, result.clone());
+        }
+        Ok(result)
+    }
+
     /// Load and evaluate the policy for (`role`, `table`, `operation`).
     ///
     /// Evaluation order:

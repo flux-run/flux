@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("running migrations...");
     sqlx::migrate!("./migrations").run(&pool).await?;
 
-    let app_state = Arc::new(state::AppState::new(pool));
+    let app_state = Arc::new(state::AppState::new(pool, &cfg));
     let app = api::routes::build(app_state);
 
     let addr = format!("0.0.0.0:{}", cfg.port);

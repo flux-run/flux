@@ -1,2 +1,2 @@
 pub mod engine;
-pub use engine::{PolicyEngine, PolicyResult};
+pub use engine::{PolicyCache, PolicyEngine, PolicyResult};

@@ -39,6 +39,19 @@ pub struct CompiledQuery {
     pub params: Vec<serde_json::Value>,
 }
 
+/// Compilation-time options supplied by the caller (sourced from `AppState`).
+#[derive(Debug, Clone, Copy)]
+pub struct CompilerOptions {
+    /// Rows returned per query when the caller omits a LIMIT.
+    pub default_limit: i64,
+}
+
+impl Default for CompilerOptions {
+    fn default() -> Self {
+        Self { default_limit: 1000 }
+    }
+}
+
 // ─── Compiler ────────────────────────────────────────────────────────────────
 
 pub struct QueryCompiler;
@@ -50,6 +63,7 @@ impl QueryCompiler {
         req: &QueryRequest,
         policy: &PolicyResult,
         schema: &str,
+        opts: &CompilerOptions,
     ) -> Result<CompiledQuery, EngineError> {
         validate_identifier(schema)?;
         validate_identifier(&req.table)?;
@@ -63,7 +77,7 @@ impl QueryCompiler {
         let mut next_param = params.len() + 1; // 1-based
 
         match req.operation.as_str() {
-            "select" => compile_select(req, schema, &cols, policy, &mut params, &mut next_param),
+            "select" => compile_select(req, schema, &cols, policy, &mut params, &mut next_param, opts.default_limit),
             "insert" => compile_insert(req, schema, &cols, &mut params, &mut next_param),
             "update" => compile_update(req, schema, &cols, policy, &mut params, &mut next_param),
             "delete" => compile_delete(req, schema, policy, &mut params, &mut next_param),
@@ -81,6 +95,7 @@ fn compile_select(
     policy: &PolicyResult,
     params: &mut Vec<serde_json::Value>,
     next: &mut usize,
+    default_limit: i64,
 ) -> Result<CompiledQuery, EngineError> {
     let col_list = if cols.is_empty() {
         "*".to_string()
@@ -102,6 +117,11 @@ fn compile_select(
 
     if let Some(limit) = req.limit {
         params.push(serde_json::Value::Number(limit.into()));
+        sql.push_str(&format!(" LIMIT ${}", *next));
+        *next += 1;
+    } else {
+        // Enforce a hard cap when the caller omits LIMIT to protect large tables.
+        params.push(serde_json::Value::Number(default_limit.into()));
         sql.push_str(&format!(" LIMIT ${}", *next));
         *next += 1;
     }
