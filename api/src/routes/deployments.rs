@@ -153,10 +153,13 @@ pub async fn activate_deployment(
 }
 
 pub async fn deploy_function_cli(
-    State(pool): State<PgPool>,
+    State(state): State<crate::AppState>,
     Extension(context): Extension<RequestContext>,
     mut multipart: axum::extract::Multipart,
 ) -> ApiResult<serde_json::Value> {
+    let pool = state.pool;
+    let storage = state.storage;
+    
     let project_id = context
         .project_id
         .ok_or(ApiError::bad_request("missing_project"))?;
@@ -257,7 +260,7 @@ pub async fn deploy_function_cli(
     let storage_key = format!("deployments/{}_{}.js", function_id, deployment_id);
 
     // Convert bundle bytes to UTF-8 string for inline storage
-    let bundle_code = String::from_utf8(bundle_bytes)
+    let bundle_code = String::from_utf8(bundle_bytes.clone())
         .map_err(|_| ApiError::bad_request("bundle_not_valid_utf8"))?;
 
     // Evaluate next deployment version
@@ -274,6 +277,14 @@ pub async fn deploy_function_cli(
 
     let next_version = row.max.unwrap_or(0) + 1;
 
+    // Upload bundle to R2/S3
+    let s3_key = format!("bundles/{}/{}/{}.js", tenant_id, project_id, deployment_id);
+    storage.put_object(&s3_key, bundle_bytes.clone(), "application/javascript")
+        .await
+        .map_err(|e| ApiError::internal(&format!("storage_upload_failed: {}", e)))?;
+        
+    let bundle_url = s3_key;
+
     let mut tx = pool.begin().await.map_err(|_| db_err())?;
     
     sqlx::query(
@@ -284,14 +295,15 @@ pub async fn deploy_function_cli(
     .await
     .map_err(|_| db_err())?;
 
-    // Insert new deployment with actual bundle code stored inline
+    // Insert new deployment with bundle_url stored, we keep the raw bundle_code for fallback as requested
     sqlx::query(
-        "INSERT INTO deployments (id, function_id, storage_key, bundle_code, version, status, is_active) VALUES ($1, $2, $3, $4, $5, 'ready', true)"
+        "INSERT INTO deployments (id, function_id, storage_key, bundle_code, bundle_url, version, status, is_active) VALUES ($1, $2, $3, $4, $5, $6, 'ready', true)"
     )
     .bind(deployment_id)
     .bind(function_id)
     .bind(storage_key)
     .bind(&bundle_code)
+    .bind(&bundle_url)
     .bind(next_version)
     .execute(&mut *tx)
     .await
@@ -318,16 +330,19 @@ pub struct BundleQuery {
 }
 
 pub async fn get_internal_bundle(
-    State(pool): State<PgPool>,
+    State(state): State<crate::AppState>,
     Query(params): Query<BundleQuery>,
 ) -> Result<ApiResponse<serde_json::Value>, ApiError> {
+    let pool = state.pool;
+    let storage = state.storage;
+
     #[derive(sqlx::FromRow)]
-    struct BundleRow { bundle_code: Option<String> }
+    struct BundleRow { bundle_code: Option<String>, bundle_url: Option<String> }
 
     // Try to parse as UUID first; if that fails, treat as function name
     let row = if let Ok(fid) = params.function_id.parse::<Uuid>() {
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.bundle_code FROM deployments d \
+            "SELECT d.bundle_code, d.bundle_url FROM deployments d \
              WHERE d.function_id = $1 AND d.is_active = true \
              ORDER BY d.version DESC LIMIT 1"
         )
@@ -338,7 +353,7 @@ pub async fn get_internal_bundle(
     } else {
         // Look up by function name via JOIN
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.bundle_code FROM deployments d \
+            "SELECT d.bundle_code, d.bundle_url FROM deployments d \
              JOIN functions f ON f.id = d.function_id \
              WHERE f.name = $1 AND d.is_active = true \
              ORDER BY d.version DESC LIMIT 1"
@@ -351,9 +366,15 @@ pub async fn get_internal_bundle(
 
     match row {
         Some(r) => {
-            match r.bundle_code {
-                Some(code) => Ok(ApiResponse::new(serde_json::json!({ "code": code }))),
-                None => Err(ApiError::not_found("no_bundle_found")),
+            if let Some(s3_key) = r.bundle_url {
+                let url = storage.presigned_get_object(&s3_key, std::time::Duration::from_secs(300))
+                    .await
+                    .map_err(|e| ApiError::internal(&format!("s3_presign_failed: {}", e)))?;
+                Ok(ApiResponse::new(serde_json::json!({ "url": url })))
+            } else if let Some(code) = r.bundle_code {
+                Ok(ApiResponse::new(serde_json::json!({ "code": code })))
+            } else {
+                Err(ApiError::not_found("no_bundle_found"))
             }
         }
         None => Err(ApiError::not_found("no_bundle_found")),

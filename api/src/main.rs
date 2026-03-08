@@ -27,6 +27,7 @@ use axum::http::{HeaderValue, Method, header};
 pub struct AppState {
     pub pool: sqlx::PgPool,
     pub firebase_auth: Arc<FirebaseAuth>,
+    pub storage: services::storage::StorageService,
 }
 
 impl axum::extract::FromRef<AppState> for sqlx::PgPool {
@@ -172,10 +173,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = db::connection::init_pool().await?;
     let firebase_project_id = std::env::var("FIREBASE_PROJECT_ID").expect("FIREBASE_PROJECT_ID required");
     let firebase_auth = Arc::new(FirebaseAuth::new(&firebase_project_id).await);
+    let storage = services::storage::StorageService::new().await;
     
     let state = AppState {
         pool,
         firebase_auth,
+        storage,
     };
     
     let app = create_app(state);
@@ -216,11 +219,12 @@ mod tests {
             .await
             .unwrap();
             
-        // We inject a mock firebase_auth during tests
         let firebase_auth = Arc::new(FirebaseAuth::new("mock-project").await);
+        let storage = services::storage::StorageService::new().await;
         let state = AppState {
             pool: pool.clone(),
             firebase_auth,
+            storage,
         };
         (create_app(state), pool)
     }

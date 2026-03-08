@@ -104,17 +104,45 @@ pub async fn execute_handler(
                     ).into_response();
                 }
             };
-            match json.get("data").and_then(|d| d.get("code")).and_then(|c| c.as_str()) {
-                Some(code_str) => code_str.to_string(),
-                None => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "error": "no_bundle_found",
-                            "message": "Bundle response did not contain code field"
-                        })),
-                    ).into_response();
+            // First check if a pre-signed URL was returned
+            if let Some(url) = json.get("data").and_then(|d| d.get("url")).and_then(|u| u.as_str()) {
+                let s3_resp = http_client.get(url).send().await;
+                match s3_resp {
+                    Ok(res) if res.status().is_success() => {
+                        res.text().await.unwrap_or_default()
+                    }
+                    Ok(res) => {
+                        let status = res.status().as_u16();
+                        let body = res.text().await.unwrap_or_default();
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": "S3FetchError",
+                                "message": format!("S3 returned HTTP {}: {}", status, body)
+                            })),
+                        ).into_response();
+                    }
+                    Err(e) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": "S3FetchError",
+                                "message": format!("Failed to download bundle from R2/S3 presigned URL: {}", e)
+                            })),
+                        ).into_response();
+                    }
                 }
+            } else if let Some(code_str) = json.get("data").and_then(|d| d.get("code")).and_then(|c| c.as_str()) {
+                // Fallback to inline database storage
+                code_str.to_string()
+            } else {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "no_bundle_found",
+                        "message": "Bundle response did not contain url or code field"
+                    })),
+                ).into_response();
             }
         }
     };
