@@ -29,3 +29,4 @@ sha2 = "0.10"
 hex  = "0.4"
 hmac = "0.12"
 cron = "0.12"
+moka = { version = "0.12.14", features = ["sync"] }

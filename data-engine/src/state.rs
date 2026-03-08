@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use sqlx::PgPool;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::cache::{PlanCache, SchemaCache, schema_key, tenant_prefix};
+use crate::cache::{build_plan_cache, build_schema_cache, PlanCache, SchemaCache, schema_key, tenant_prefix};
 use crate::config::Config;
 use crate::file_engine::FileEngine;
 use crate::policy::PolicyCache;
@@ -20,9 +19,9 @@ pub struct AppState {
     /// None when S3_BUCKET is not configured (file uploads disabled).
     pub file_engine: Option<Arc<FileEngine>>,
     /// Layer-1 cache: schema metadata (col_meta + relationships) per table.
-    pub schema_cache: Arc<SchemaCache>,
+    pub schema_cache: SchemaCache,
     /// Layer-2 cache: compiled SELECT SQL templates keyed by request shape.
-    pub plan_cache: Arc<PlanCache>,
+    pub plan_cache: PlanCache,
 }
 
 impl AppState {
@@ -44,8 +43,8 @@ impl AppState {
             http_client: reqwest::Client::new(),
             policy_cache: Arc::new(PolicyCache::new(HashMap::new())),
             file_engine,
-            schema_cache: Arc::new(RwLock::new(HashMap::new())),
-            plan_cache: Arc::new(RwLock::new(HashMap::new())),
+            schema_cache: build_schema_cache(),
+            plan_cache: build_plan_cache(),
         }
     }
 
@@ -60,24 +59,23 @@ impl AppState {
     /// Called after `CREATE TABLE`, `ALTER TABLE`, or `DROP TABLE`.
     pub async fn invalidate_table(&self, tenant_id: Uuid, project_id: Uuid, schema: &str, table: &str) {
         let key = schema_key(tenant_id, project_id, schema, table);
-        self.schema_cache.write().await.remove(&key);
-        self.plan_cache.write().await.retain(|k, _| {
-            !(k.tenant_id == tenant_id
-                && k.project_id == project_id
-                && k.schema == schema
-                && k.table == table)
-        });
+        self.schema_cache.invalidate(&key);
+        let s = schema.to_owned();
+        let t = table.to_owned();
+        self.plan_cache.invalidate_entries_if(move |k, _| {
+            k.tenant_id == tenant_id && k.project_id == project_id
+                && k.schema == s && k.table == t
+        }).ok();
     }
 
-    /// Broad invalidation: evict all schema + plan cache entries for a tenant+project.
-    /// Called after relationship or hook changes where the table name is not
-    /// readily available without an extra DB query.
+    /// Broad invalidation: evict all schema + plan entries for a tenant+project.
+    /// Called after policy, relationship, or hook changes.
     pub async fn invalidate_tenant_schema(&self, tenant_id: Uuid, project_id: Uuid) {
         let prefix = tenant_prefix(tenant_id, project_id);
-        self.schema_cache.write().await.retain(|k, _| !k.starts_with(&prefix));
-        self.plan_cache.write().await.retain(|k, _| {
-            !(k.tenant_id == tenant_id && k.project_id == project_id)
-        });
+        self.schema_cache.invalidate_entries_if(move |k: &String, _| k.starts_with(&prefix)).ok();
+        self.plan_cache.invalidate_entries_if(move |k, _| {
+            k.tenant_id == tenant_id && k.project_id == project_id
+        }).ok();
     }
 }
 

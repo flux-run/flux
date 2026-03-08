@@ -23,10 +23,9 @@
 //! With both caches warm, steps 1-2 become an in-memory HashMap lookup and
 //! step 3 becomes a filter-list walk to collect bind values.
 
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use tokio::sync::RwLock;
+use moka::sync::Cache;
 use uuid::Uuid;
 
 use crate::compiler::relational::{parse_selectors, ColumnSelector, RelationshipDef};
@@ -41,10 +40,10 @@ use crate::transform::ColumnMeta;
 /// those cases and the TTL acts as a safety net.
 pub const SCHEMA_TTL: Duration = Duration::from_secs(60);
 
-/// Compiled SQL templates live for 5 min.  They are pure functions of the
-/// request shape + policy, so they're safe to cache indefinitely; the TTL
-/// prevents unbounded memory growth for one-off query shapes.
+/// Compiled SQL templates live for 5 min.
 pub const PLAN_TTL: Duration = Duration::from_secs(300);
+
+const CACHE_MAX_CAPACITY: u64 = 10_000;
 
 // ─── Schema cache ─────────────────────────────────────────────────────────────
 
@@ -52,18 +51,18 @@ pub const PLAN_TTL: Duration = Duration::from_secs(300);
 pub struct SchemaCacheEntry {
     pub col_meta: Vec<ColumnMeta>,
     pub relationships: Vec<RelationshipDef>,
-    pub inserted_at: Instant,
 }
 
-impl SchemaCacheEntry {
-    /// Returns `true` when the entry is still within its TTL.
-    pub fn is_fresh(&self) -> bool {
-        self.inserted_at.elapsed() < SCHEMA_TTL
-    }
-}
+/// Moka LRU cache keyed by `"{tenant_id}:{project_id}:{schema}:{table}"`.
+pub type SchemaCache = Cache<String, SchemaCacheEntry>;
 
-/// `RwLock<HashMap<key, entry>>` — same pattern as `PolicyCache`.
-pub type SchemaCache = RwLock<HashMap<String, SchemaCacheEntry>>;
+/// Construct a fresh [`SchemaCache`] with the standard TTL and capacity.
+pub fn build_schema_cache() -> SchemaCache {
+    Cache::builder()
+        .max_capacity(CACHE_MAX_CAPACITY)
+        .time_to_live(SCHEMA_TTL)
+        .build()
+}
 
 /// Build the string key for one specific table.
 ///
@@ -109,34 +108,30 @@ pub struct PlanKey {
     pub policy_fingerprint: String,
 }
 
-#[derive(Clone)]
-pub struct CachedPlan {
-    pub sql: String,
-    pub inserted_at: Instant,
-}
+/// Moka LRU cache: plan key → compiled SQL template string.
+/// Bind values are reconstructed by [`extract_select_params`] on every hit.
+pub type PlanCache = Cache<PlanKey, String>;
 
-impl CachedPlan {
-    pub fn is_fresh(&self) -> bool {
-        self.inserted_at.elapsed() < PLAN_TTL
-    }
+/// Construct a fresh [`PlanCache`] with the standard TTL and capacity.
+pub fn build_plan_cache() -> PlanCache {
+    Cache::builder()
+        .max_capacity(CACHE_MAX_CAPACITY)
+        .time_to_live(PLAN_TTL)
+        .build()
 }
-
-pub type PlanCache = RwLock<HashMap<PlanKey, CachedPlan>>;
 
 // ─── Key builders ─────────────────────────────────────────────────────────────
 
-/// Build a `PlanKey` from a SELECT request and its evaluated policy.
+/// Build a [`PlanKey`] from a SELECT request and its evaluated policy.
 ///
-/// Called on every SELECT request.  The result is used for cache lookup before
-/// the compiler runs, and for cache insertion after a compile miss.
+/// Called on every SELECT — used for cache lookup before compilation and for
+/// cache insertion after a compile miss.
 pub fn build_plan_key(
     tenant_id: Uuid,
     project_id: Uuid,
     schema: &str,
     req: &QueryRequest,
     policy: &PolicyResult,
-    _default_limit: i64,
-    _max_limit: i64,
 ) -> PlanKey {
     // Split user columns into flat names and nested-selector aliases.
     let (mut flat, mut aliases) = (Vec::<String>::new(), Vec::<String>::new());

@@ -102,8 +102,9 @@ pub async fn create(
 
     let id: Uuid = row.get("id");
 
-    // Invalidate any cached policies for this tenant+project.
+    // Invalidate policy cache + plan cache (plans embed policy fingerprint).
     state.invalidate_policy_cache(auth.tenant_id, auth.project_id).await;
+    state.invalidate_tenant_schema(auth.tenant_id, auth.project_id).await;
 
     Ok(Json(json!({
         "id":     id,
@@ -136,8 +137,9 @@ pub async fn delete(
         return Err(EngineError::DatabaseNotFound(format!("policy {id}")));
     }
 
-    // Invalidate any cached policies for this tenant+project.
+    // Invalidate policy cache + plan cache (plans embed policy fingerprint).
     state.invalidate_policy_cache(auth.tenant_id, auth.project_id).await;
+    state.invalidate_tenant_schema(auth.tenant_id, auth.project_id).await;
 
     Ok(Json(json!({ "id": id, "status": "deleted" })))
 }
