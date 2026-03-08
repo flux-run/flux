@@ -6,7 +6,6 @@ use axum::{
 };
 use axum::body::Body;
 use crate::state::SharedState;
-use crate::services::route_lookup::lookup_route;
 use serde_json::Value;
 
 pub async fn proxy_handler(
@@ -17,6 +16,7 @@ pub async fn proxy_handler(
 ) -> Response {
     let full_path = format!("/{}", path);
     let method_str = method.to_string();
+    let start_time = std::time::Instant::now();
 
     // 0. Extract Resolved Identity
     let (tenant_id, tenant_slug) = match req.extensions().get::<crate::middleware::identity_resolver::ResolvedIdentity>() {
@@ -29,34 +29,49 @@ pub async fn proxy_handler(
         }
     };
 
-    // 1. Resolve Route
-    let cache_key = (tenant_id, full_path.clone(), method_str.clone());
+    // 1. Resolve Route from memory snapshot
+    let snapshot_data = state.snapshot.get_data().await;
+    let cache_key = (tenant_id, method_str.clone(), full_path.clone());
     
-    let route = if let Some(r) = state.route_cache.get(&cache_key) {
+    let route = if let Some(r) = snapshot_data.routes.get(&cache_key) {
         tracing::debug!("Route cache hit: {} {}", method_str, full_path);
         r.clone()
     } else {
-        match lookup_route(&state.db_pool, tenant_id, &full_path, &method_str).await {
-            Ok(Some(r)) => {
-                state.route_cache.insert(cache_key, r.clone());
-                r
-            },
-            Ok(None) => {
-                return (
-                    axum::http::StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({ "error": "route_not_found", "message": format!("No route for {} {}", method_str, full_path) }))
-                ).into_response();
-            }
-            Err(e) => {
-                return (
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "internal_error", "message": e.to_string() }))
-                ).into_response();
-            }
-        }
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "route_not_found", "message": format!("No route for {} {}", method_str, full_path) }))
+        ).into_response();
     };
 
+    // 1.5 CORS Preflight Fast-Path
+    if method == Method::OPTIONS && route.cors_enabled {
+        let mut response = (axum::http::StatusCode::NO_CONTENT, Json(serde_json::json!({}))).into_response();
+        let headers = response.headers_mut();
+        
+        let origin_str = route.cors_origins
+            .as_ref()
+            .and_then(|o| if o.is_empty() { None } else { Some(o.join(", ")) })
+            .unwrap_or_else(|| "*".to_string());
+            
+        let allowed_headers = route.cors_headers
+            .as_ref()
+            .and_then(|h| if h.is_empty() { None } else { Some(h.join(", ")) })
+            .unwrap_or_else(|| "Content-Type, Authorization, X-API-Key".to_string());
+            
+        if let Ok(val) = origin_str.parse() {
+            headers.insert("Access-Control-Allow-Origin", val);
+        }
+        headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+        if let Ok(val) = allowed_headers.parse() {
+            headers.insert("Access-Control-Allow-Headers", val);
+        }
+        return response;
+    }
+
     // 2. Authenticate
+    let mut fwd_user_id: Option<String> = None;
+    let mut fwd_jwt_claims: Option<String> = None;
+
     if route.auth_type == "api_key" {
         let api_key = req.headers().get("X-API-Key")
             .and_then(|h| h.to_str().ok());
@@ -83,6 +98,39 @@ pub async fn proxy_handler(
                 return (
                     axum::http::StatusCode::UNAUTHORIZED,
                     Json(serde_json::json!({ "error": "missing_api_key", "message": "X-API-Key header is required for this route" }))
+                ).into_response();
+            }
+        }
+    } else if route.auth_type == "jwt" {
+        let jwks_url = match &route.jwks_url {
+            Some(u) => u,
+            None => {
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "auth_config_error", "message": "Route requires JWT but no JWKS URL configured" }))
+                ).into_response();
+            }
+        };
+
+        match crate::middleware::jwt_auth::verify_jwt(
+            req.headers(),
+            jwks_url,
+            route.jwt_audience.as_deref(),
+            route.jwt_issuer.as_deref(),
+            &state.jwks_cache
+        ).await {
+            Ok(claims) => {
+                if let Some(uid) = claims.user_id.or(claims.sub.clone()) {
+                    fwd_user_id = Some(uid);
+                }
+                if let Ok(claims_str) = serde_json::to_string(&claims.custom) {
+                    fwd_jwt_claims = Some(claims_str);
+                }
+            }
+            Err(e) => {
+                return (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({ "error": "invalid_jwt", "message": e }))
                 ).into_response();
             }
         }
@@ -120,6 +168,32 @@ pub async fn proxy_handler(
 
     let payload: Value = serde_json::from_slice(&body_bytes).unwrap_or(serde_json::json!({}));
 
+    // 3.5 Schema Validation
+    if let Some(schema_val) = &route.json_schema {
+        match jsonschema::validator_for(schema_val) {
+            Ok(compiled) => {
+                if let Err(error) = compiled.validate(&payload) {
+                    let err_msgs = vec![error.to_string()];
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": "validation_failed",
+                            "message": "Request payload failed schema validation",
+                            "details": err_msgs
+                        }))
+                    ).into_response();
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to compile JSON schema for route {}: {:?}", route.id, e);
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "schema_config_error", "message": "Invalid JSON Schema configured for route" }))
+                ).into_response();
+            }
+        }
+    }
+
     let forward_payload = serde_json::json!({
         "function_id": route.function_id.to_string(),
         "tenant_id": route.tenant_id.to_string(),
@@ -127,14 +201,21 @@ pub async fn proxy_handler(
         "payload": payload
     });
 
-    let runtime_resp = state.http_client
+    let mut req_builder = state.http_client
         .post(&runtime_url)
         .header("X-Service-Token", &state.internal_service_token)
         .header("X-Tenant-Id", tenant_id.to_string())
         .header("X-Tenant-Slug", &tenant_slug)
-        .json(&forward_payload)
-        .send()
-        .await;
+        .json(&forward_payload);
+
+    if let Some(uid) = fwd_user_id {
+        req_builder = req_builder.header("X-User-Id", uid);
+    }
+    if let Some(claims) = fwd_jwt_claims {
+        req_builder = req_builder.header("X-JWT-Claims", claims);
+    }
+
+    let runtime_resp = req_builder.send().await;
 
     // 5. Build Response & Apply CORS
     let mut response = match runtime_resp {
@@ -152,12 +233,38 @@ pub async fn proxy_handler(
     };
 
 
+    // 4.5. Apply CORS
     if route.cors_enabled {
         let headers = response.headers_mut();
-        headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+        
+        let origin_str = route.cors_origins
+            .as_ref()
+            .and_then(|o| if o.is_empty() { None } else { Some(o.join(", ")) })
+            .unwrap_or_else(|| "*".to_string());
+            
+        let allowed_headers = route.cors_headers
+            .as_ref()
+            .and_then(|h| if h.is_empty() { None } else { Some(h.join(", ")) })
+            .unwrap_or_else(|| "Content-Type, Authorization, X-API-Key".to_string());
+            
+        if let Ok(val) = origin_str.parse() {
+            headers.insert("Access-Control-Allow-Origin", val);
+        }
         headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
-        headers.insert("Access-Control-Allow-Headers", "Content-Type, X-API-Key".parse().unwrap());
+        if let Ok(val) = allowed_headers.parse() {
+            headers.insert("Access-Control-Allow-Headers", val);
+        }
     }
+
+    // 6. Asynchronous Analytics
+    let status = response.status().as_u16();
+    crate::middleware::analytics::log_request(
+        state.db_pool.clone(),
+        route.id,
+        tenant_id,
+        status,
+        start_time.elapsed().as_millis() as i64,
+    );
 
     response
 }

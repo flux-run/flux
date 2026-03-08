@@ -1,5 +1,6 @@
 mod config;
 mod state;
+mod cache;
 mod router;
 mod routes;
 mod services;
@@ -28,14 +29,26 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Gateway connected to database");
 
+    // Initialize snapshot cache
+    let snapshot = cache::snapshot::GatewaySnapshot::new(db_pool.clone());
+    // Initial fetch to populate caches synchronously before starting server
+    if let Err(e) = snapshot.refresh().await {
+        tracing::error!("Initial snapshot fetch failed: {:?}", e);
+    }
+    // Start periodic background refresh
+    cache::snapshot::GatewaySnapshot::start_background_refresh(snapshot.clone());
+
     // Initialize state
+    let http_client = reqwest::Client::new();
+    let jwks_cache = cache::jwks::JwksCache::new(http_client.clone());
+
     let state = Arc::new(state::GatewayState {
         db_pool,
-        http_client: reqwest::Client::new(),
+        http_client,
         runtime_url: config.runtime_url,
         internal_service_token: config.internal_service_token,
-        tenant_cache: dashmap::DashMap::new(),
-        route_cache: dashmap::DashMap::new(),
+        snapshot,
+        jwks_cache,
     });
 
     // Build router
