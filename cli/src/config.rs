@@ -7,6 +7,7 @@ pub struct Config {
     pub api_url: String,
     pub token: Option<String>,
     pub tenant_id: Option<String>,
+    pub tenant_slug: Option<String>,
     pub project_id: Option<String>,
 }
 
@@ -16,6 +17,7 @@ impl Default for Config {
             api_url: "https://api.fluxbase.co".to_string(),
             token: None,
             tenant_id: None,
+            tenant_slug: None,
             project_id: None,
         }
     }

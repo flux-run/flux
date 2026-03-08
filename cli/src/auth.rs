@@ -31,10 +31,13 @@ pub async fn execute() -> anyhow::Result<()> {
 
     config.token = Some(token);
 
-    // API key logins return tenant_id/project_id directly in the response
+    // API key logins return tenant_id, tenant_slug, and project_id directly in the response
     if let Some(tid) = data.get("tenant_id").and_then(|v| v.as_str()) {
         config.tenant_id = Some(tid.to_string());
         println!("Auto-selected tenant: {}", tid);
+    }
+    if let Some(slug) = data.get("tenant_slug").and_then(|v| v.as_str()) {
+        config.tenant_slug = Some(slug.to_string());
     }
     if let Some(pid) = data.get("project_id").and_then(|v| v.as_str()) {
         config.project_id = Some(pid.to_string());

@@ -130,8 +130,8 @@ export default function RoutesPage() {
   }
 
   const getBaseDomain = () => {
-    if (!project) return 'api.fluxbase.co'
-    return `${project.tenant_slug}.api.fluxbase.co`
+    if (!project || !project.tenant_slug) return 'fluxbase.co'
+    return `${project.tenant_slug}.fluxbase.co`
   }
 
   const getFullUrl = (routePath: string) => {
@@ -257,7 +257,7 @@ export default function RoutesPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card className="bg-muted/30">
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium">Gateway Endpoint</CardTitle>
+            <CardTitle className="text-sm font-medium">Public Endpoint</CardTitle>
             <CardDescription>Public base URL for this project.</CardDescription>
           </CardHeader>
           <CardContent>

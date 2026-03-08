@@ -57,6 +57,8 @@ enum Commands {
     /// Invoke function
     Invoke {
         name: String,
+        #[arg(long)]
+        tenant: Option<String>,
     },
     /// Fetch function logs
     Logs {
@@ -87,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Secrets { command } => secrets::execute(command).await?,
         Commands::Dev => dev::execute().await?,
         Commands::Deploy { name, runtime } => deploy::execute(name, runtime).await?,
-        Commands::Invoke { name } => invoke::execute(&name).await?,
+        Commands::Invoke { name, tenant } => invoke::execute(&name, tenant).await?,
         Commands::Logs { name } => logs::execute(&name).await?,
         Commands::Deployments { command } => deployments::execute_deployments(command).await?,
         Commands::Rollback { name, version } => deployments::execute_rollback(&name, version).await?,
