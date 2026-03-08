@@ -1,2 +1,2 @@
 pub mod query_compiler;
-pub use query_compiler::{CompiledQuery, CompilerOptions};
+pub use query_compiler::{CompiledQuery, CompilerOptions, ComputedCol};

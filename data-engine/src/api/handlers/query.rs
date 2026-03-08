@@ -4,15 +4,17 @@ use std::sync::Arc;
 
 use crate::{
     compiler::{
-        query_compiler::{QueryCompiler, QueryRequest},
+        query_compiler::{ComputedCol, QueryCompiler, QueryRequest},
         CompilerOptions,
     },
     engine::{auth_context::AuthContext, error::EngineError},
+    events::EventEmitter,
     executor,
     hooks::{HookEngine, HookEvent},
     policy::PolicyEngine,
     router::DbRouter,
     state::AppState,
+    transform::TransformEngine,
 };
 
 /// Map operation string to the before/after hook event pair.
@@ -52,16 +54,39 @@ pub async fn handler(
     )
     .await?;
 
-    // 5. Compile (CLS + RLS + limit enforcement).
+    // 5. Load column metadata (computed cols, file cols).
+    let col_meta = TransformEngine::load_columns(
+        &state.pool,
+        auth.tenant_id,
+        auth.project_id,
+        &schema,
+        &req.table,
+    )
+    .await?;
+
+    // Build computed col list for the compiler.
+    let computed_cols: Vec<ComputedCol> = col_meta
+        .iter()
+        .filter(|c| c.fb_type == "computed")
+        .filter_map(|c| {
+            c.computed_expr.as_ref().map(|expr| ComputedCol {
+                name: c.name.clone(),
+                expr: expr.clone(),
+            })
+        })
+        .collect();
+
+    // 6. Compile (CLS + RLS + limit enforcement + computed cols).
     let opts = CompilerOptions {
         default_limit: state.default_query_limit,
         max_limit: state.max_query_limit,
+        computed_cols,
     };
     let compiled = QueryCompiler::compile(&req, &policy, &schema, &opts)?;
 
     tracing::debug!(sql = %compiled.sql, "executing compiled query");
 
-    // 6. Before hook (runs before the SQL; can abort the operation).
+    // 7. Before hook (runs before the SQL; can abort the operation).
     let hook_events = hook_events(&req.operation);
     if let Some((before, _)) = hook_events {
         HookEngine::run(
@@ -76,12 +101,12 @@ pub async fn handler(
         .await?;
     }
 
-    // 7. Execute inside a transaction.
+    // 8. Execute inside a transaction.
     let result = executor::execute(&state.pool, &compiled).await?;
 
-    // 8. After hook (non-fatal: errors are logged, response still returns data).
+    // 9. After hook (non-fatal: errors are logged, response still returns data).
     if let Some((_, after)) = hook_events {
-        HookEngine::run(
+        if let Err(e) = HookEngine::run(
             &state.pool,
             &state.http_client,
             &state.runtime_url,
@@ -90,7 +115,28 @@ pub async fn handler(
             after,
             &result,
         )
-        .await?;
+        .await
+        {
+            tracing::warn!(error = %e, "after-hook failed (non-fatal)");
+        }
+    }
+
+    // 10. Transform: replace S3 file keys with presigned URLs (SELECT only).
+    let result = if req.operation == "select" {
+        TransformEngine::apply(
+            result,
+            &col_meta,
+            state.file_engine.as_deref(),
+            &auth,
+        )
+        .await?
+    } else {
+        result
+    };
+
+    // 11. Emit event for mutations (INSERT / UPDATE / DELETE).
+    if let Some(verb) = EventEmitter::verb_for(&req.operation) {
+        EventEmitter::emit(&state.pool, &auth, &req.table, verb, &result).await;
     }
 
     Ok(Json(json!({ "data": result })))

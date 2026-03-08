@@ -1240,12 +1240,17 @@ name = "data-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-smithy-types",
  "axum",
  "chrono",
  "dotenvy",
+ "hex",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",

@@ -39,20 +39,33 @@ pub struct CompiledQuery {
     pub params: Vec<serde_json::Value>,
 }
 
+/// A computed column to be injected into SELECT expressions.
+#[derive(Debug, Clone)]
+pub struct ComputedCol {
+    /// Output column alias in the result set.
+    pub name: String,
+    /// Raw SQL expression, e.g. `"first_name || ' ' || last_name"`.
+    pub expr: String,
+}
+
 /// Compilation-time options supplied by the caller (sourced from `AppState`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default)]
 pub struct CompilerOptions {
     /// Rows returned per query when the caller omits a LIMIT.
     pub default_limit: i64,
     /// Hard ceiling — clamped even if the caller supplies a larger LIMIT.
     pub max_limit: i64,
+    /// Computed columns to inject into SELECT expressions as `expr AS "name"`.
+    /// These are appended after the resolved column list.
+    pub computed_cols: Vec<ComputedCol>,
 }
 
-impl Default for CompilerOptions {
-    fn default() -> Self {
+impl CompilerOptions {
+    pub fn with_limits(default_limit: i64, max_limit: i64) -> Self {
         Self {
-            default_limit: 100,
-            max_limit: 5000,
+            default_limit,
+            max_limit,
+            computed_cols: vec![],
         }
     }
 }
@@ -82,7 +95,7 @@ impl QueryCompiler {
         let mut next_param = params.len() + 1; // 1-based
 
         match req.operation.as_str() {
-            "select" => compile_select(req, schema, &cols, policy, &mut params, &mut next_param, opts.default_limit, opts.max_limit),
+            "select" => compile_select(req, schema, &cols, policy, &mut params, &mut next_param, opts),
             "insert" => compile_insert(req, schema, &cols, &mut params, &mut next_param),
             "update" => compile_update(req, schema, &cols, policy, &mut params, &mut next_param),
             "delete" => compile_delete(req, schema, policy, &mut params, &mut next_param),
@@ -100,14 +113,28 @@ fn compile_select(
     policy: &PolicyResult,
     params: &mut Vec<serde_json::Value>,
     next: &mut usize,
-    default_limit: i64,
-    max_limit: i64,
+    opts: &CompilerOptions,
 ) -> Result<CompiledQuery, EngineError> {
-    let col_list = if cols.is_empty() {
-        "*".to_string()
+    // Base column list from policy + user request.
+    let mut col_parts: Vec<String> = if cols.is_empty() {
+        vec!["*".to_string()]
     } else {
-        cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ")
+        cols.iter().map(|c| quote_ident(c)).collect()
     };
+
+    // Inject computed columns — appended so they don't disturb * semantics.
+    // If cols is "*", switch away from * so both sets are visible.
+    if !opts.computed_cols.is_empty() {
+        if col_parts == ["*".to_string()] {
+            col_parts = vec!["*".to_string()]; // keep * but also append computeds below
+        }
+        for cc in &opts.computed_cols {
+            // expr AS "alias" — expression is trusted (admin-authored), not user input.
+            col_parts.push(format!("{} AS {}", cc.expr, quote_ident(&cc.name)));
+        }
+    }
+
+    let col_list = col_parts.join(", ");
 
     let mut sql = format!(
         "SELECT {} FROM {}.{}",
@@ -124,8 +151,8 @@ fn compile_select(
     // Enforce LIMIT: clamp caller value to max_limit; inject default when omitted.
     {
         let effective_limit = match req.limit {
-            Some(l) => l.min(max_limit).max(1),
-            None => default_limit,
+            Some(l) => l.min(opts.max_limit).max(1),
+            None => opts.default_limit,
         };
         params.push(serde_json::Value::Number(effective_limit.into()));
         sql.push_str(&format!(" LIMIT ${}", *next));

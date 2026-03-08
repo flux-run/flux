@@ -10,6 +10,12 @@ pub struct Config {
     pub max_query_limit: i64,
     /// Base URL of the runtime service, used by the hooks engine.
     pub runtime_url: String,
+    /// S3 bucket name for file storage. None = file engine disabled.
+    pub s3_bucket: Option<String>,
+    /// AWS region (default: us-east-1).
+    pub s3_region: String,
+    /// Optional custom endpoint for MinIO / Localstack.
+    pub s3_endpoint: Option<String>,
 }
 
 pub fn load() -> Config {
@@ -30,6 +36,10 @@ pub fn load() -> Config {
             .expect("MAX_QUERY_LIMIT must be a positive integer"),
         runtime_url: std::env::var("RUNTIME_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
+        s3_bucket: std::env::var("S3_BUCKET").ok(),
+        s3_region: std::env::var("S3_REGION")
+            .unwrap_or_else(|_| "us-east-1".to_string()),
+        s3_endpoint: std::env::var("S3_ENDPOINT").ok(),
     }
 }
 
