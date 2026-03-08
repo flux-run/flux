@@ -131,7 +131,7 @@ export default function RoutesPage() {
 
   const getBaseDomain = () => {
     if (!project) return 'api.fluxbase.co'
-    return `${project.slug}.${project.tenant_slug}.api.fluxbase.co`
+    return `${project.tenant_slug}.api.fluxbase.co`
   }
 
   const getFullUrl = (routePath: string) => {

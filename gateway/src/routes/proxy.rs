@@ -30,7 +30,7 @@ pub async fn proxy_handler(
     };
 
     // 1. Resolve Route
-    let route = match lookup_route(&state.db_pool, identity.project_id, &full_path, &method_str).await {
+    let route = match lookup_route(&state.db_pool, identity.tenant_id, &full_path, &method_str).await {
         Ok(Some(r)) => r,
         Ok(None) => {
             return (

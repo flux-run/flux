@@ -17,7 +17,7 @@ pub struct RouteRecord {
 
 pub async fn lookup_route(
     pool: &PgPool,
-    project_id: Uuid,
+    tenant_id: Uuid,
     path: &str,
     method: &str,
 ) -> anyhow::Result<Option<RouteRecord>> {
@@ -25,9 +25,9 @@ pub async fn lookup_route(
         "SELECT r.id, r.project_id, p.tenant_id, r.path, r.method, r.function_id, r.auth_type, r.cors_enabled, r.rate_limit \
          FROM routes r \
          JOIN projects p ON p.id = r.project_id \
-         WHERE r.project_id = $1 AND r.path = $2 AND r.method = $3 LIMIT 1"
+         WHERE p.tenant_id = $1 AND r.path = $2 AND r.method = $3 LIMIT 1"
     )
-    .bind(project_id)
+    .bind(tenant_id)
     .bind(path)
     .bind(method)
     .fetch_optional(pool)
