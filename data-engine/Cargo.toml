@@ -28,3 +28,4 @@ aws-smithy-types = { version = "1" }
 sha2 = "0.10"
 hex  = "0.4"
 hmac = "0.12"
+cron = "0.12"

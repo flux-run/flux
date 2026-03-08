@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::{
     compiler::{
         query_compiler::{ComputedCol, QueryCompiler, QueryRequest},
+        relational::load_relationships,
         CompilerOptions,
     },
     engine::{auth_context::AuthContext, error::EngineError},
@@ -76,11 +77,21 @@ pub async fn handler(
         })
         .collect();
 
-    // 6. Compile (CLS + RLS + limit enforcement + computed cols).
+    // 6. Compile (CLS + RLS + limit enforcement + computed cols + nested selectors).
+    let relationships = load_relationships(
+        &state.pool,
+        auth.tenant_id,
+        auth.project_id,
+        &schema,
+        &req.table,
+    )
+    .await?;
+
     let opts = CompilerOptions {
         default_limit: state.default_query_limit,
         max_limit: state.max_query_limit,
         computed_cols,
+        relationships,
     };
     let compiled = QueryCompiler::compile(&req, &policy, &schema, &opts)?;
 

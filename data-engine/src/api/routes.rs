@@ -3,7 +3,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::{
-    api::handlers::{databases, files, hooks, policies, query, relationships, subscriptions, tables},
+    api::handlers::{cron, databases, files, hooks, policies, query, relationships, schema, subscriptions, tables, workflows},
     state::AppState,
 };
 
@@ -29,8 +29,15 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route("/db/relationships/:id", delete(relationships::delete))
         // ── Event subscriptions ─────────────────────────────────────────────
         .route("/db/subscriptions",     get(subscriptions::list).post(subscriptions::create))
-        .route("/db/subscriptions/:id", patch(subscriptions::update).delete(subscriptions::delete))
-        // ── File presigned URLs ───────────────────────────────────────────────
+        .route("/db/subscriptions/:id", patch(subscriptions::update).delete(subscriptions::delete))        // ── Workflows ────────────────────────────────────────────────────────────
+        .route("/db/workflows",           get(workflows::list).post(workflows::create))
+        .route("/db/workflows/:id",       delete(workflows::delete))
+        .route("/db/workflows/:id/steps", post(workflows::add_step))
+        // ── Cron jobs ──────────────────────────────────────────────────────────
+        .route("/db/cron",    get(cron::list).post(cron::create))
+        .route("/db/cron/:id", patch(cron::update).delete(cron::delete))
+        // ── Schema introspection ───────────────────────────────────────────────
+        .route("/db/schema", get(schema::introspect))        // ── File presigned URLs ───────────────────────────────────────────────
         .route("/files/upload-url",   post(files::upload_url))
         .route("/files/download-url", post(files::download_url))
         // ── Health ────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::engine::error::EngineError;
 use crate::policy::PolicyResult;
 use crate::router::db_router::{validate_identifier, quote_ident};
+use crate::compiler::relational::{parse_selectors, expand_nested, ColumnSelector, RelationshipDef};
 
 // ─── Public request / response types ─────────────────────────────────────────
 
@@ -58,6 +59,8 @@ pub struct CompilerOptions {
     /// Computed columns to inject into SELECT expressions as `expr AS "name"`.
     /// These are appended after the resolved column list.
     pub computed_cols: Vec<ComputedCol>,
+    /// Relationships for this table — used to expand nested selectors like `posts(id,title)`.
+    pub relationships: Vec<RelationshipDef>,
 }
 
 impl CompilerOptions {
@@ -66,6 +69,7 @@ impl CompilerOptions {
             default_limit,
             max_limit,
             computed_cols: vec![],
+            relationships: vec![],
         }
     }
 }
@@ -86,8 +90,35 @@ impl QueryCompiler {
         validate_identifier(schema)?;
         validate_identifier(&req.table)?;
 
-        // Columns to operate on: intersect request columns with policy-allowed columns.
-        let cols = resolve_columns(req.columns.as_deref(), &policy.allowed_columns)?;
+        // Split user-supplied columns into flat names and nested selectors.
+        // Nested selectors (e.g. "posts(id,title)") must not pass through
+        // validate_identifier, so we extract them before resolve_columns.
+        let (flat_user_cols, nested_sels): (Vec<String>, Vec<_>) =
+            if let Some(ref user_cols) = req.columns {
+                let parsed = parse_selectors(user_cols);
+                let mut flat = vec![];
+                let mut nested = vec![];
+                for sel in parsed {
+                    match sel {
+                        ColumnSelector::Flat(c) => flat.push(c),
+                        ColumnSelector::Nested { alias, cols } => nested.push((alias, cols)),
+                    }
+                }
+                (flat, nested)
+            } else {
+                (vec![], vec![])
+            };
+
+        // Columns to operate on: intersect flat request columns with policy-allowed columns.
+        let flat_opt = if flat_user_cols.is_empty() && req.columns.is_some() {
+            // User sent only nested selectors with no flat cols → select *
+            None
+        } else if flat_user_cols.is_empty() {
+            None
+        } else {
+            Some(flat_user_cols.as_slice())
+        };
+        let cols = resolve_columns(flat_opt, &policy.allowed_columns)?;
 
         // Accumulated params — row_condition params come first so their $N indices
         // are stable; filter params are appended after.
@@ -95,7 +126,7 @@ impl QueryCompiler {
         let mut next_param = params.len() + 1; // 1-based
 
         match req.operation.as_str() {
-            "select" => compile_select(req, schema, &cols, policy, &mut params, &mut next_param, opts),
+            "select" => compile_select(req, schema, &cols, &nested_sels, policy, &mut params, &mut next_param, opts),
             "insert" => compile_insert(req, schema, &cols, &mut params, &mut next_param),
             "update" => compile_update(req, schema, &cols, policy, &mut params, &mut next_param),
             "delete" => compile_delete(req, schema, policy, &mut params, &mut next_param),
@@ -110,6 +141,7 @@ fn compile_select(
     req: &QueryRequest,
     schema: &str,
     cols: &[String],
+    nested_sels: &[(String, Vec<String>)],  // (alias, inner_cols) from nested selectors
     policy: &PolicyResult,
     params: &mut Vec<serde_json::Value>,
     next: &mut usize,
@@ -117,27 +149,31 @@ fn compile_select(
 ) -> Result<CompiledQuery, EngineError> {
     // Base column list from policy + user request.
     let mut col_parts: Vec<String> = if cols.is_empty() {
-        vec!["*".to_string()]
+        vec!["t.*".to_string()] // use alias so nested subqueries can reference outer cols by alias
     } else {
-        cols.iter().map(|c| quote_ident(c)).collect()
+        cols.iter().map(|c| format!("t.{}", quote_ident(c))).collect()
     };
 
     // Inject computed columns — appended so they don't disturb * semantics.
-    // If cols is "*", switch away from * so both sets are visible.
-    if !opts.computed_cols.is_empty() {
-        if col_parts == ["*".to_string()] {
-            col_parts = vec!["*".to_string()]; // keep * but also append computeds below
-        }
-        for cc in &opts.computed_cols {
-            // expr AS "alias" — expression is trusted (admin-authored), not user input.
-            col_parts.push(format!("{} AS {}", cc.expr, quote_ident(&cc.name)));
+    for cc in &opts.computed_cols {
+        col_parts.push(format!("{} AS {}", cc.expr, quote_ident(&cc.name)));
+    }
+
+    // Expand nested selectors into lateral subqueries using the relationships registry.
+    for (alias, inner_cols) in nested_sels {
+        // Look up the relationship by its alias.
+        if let Some(rel) = opts.relationships.iter().find(|r| &r.alias == alias) {
+            let subquery = expand_nested(schema, "t", rel, inner_cols);
+            col_parts.push(subquery);
+        } else {
+            tracing::warn!(alias = %alias, "nested selector has no matching relationship — skipped");
         }
     }
 
     let col_list = col_parts.join(", ");
 
     let mut sql = format!(
-        "SELECT {} FROM {}.{}",
+        "SELECT {} FROM {}.{} t",
         col_list,
         quote_ident(schema),
         quote_ident(&req.table),
@@ -299,7 +335,7 @@ fn build_where(
     // User-supplied filters.
     for f in filters.unwrap_or(&[]) {
         validate_identifier(&f.column)?;
-        let col = quote_ident(&f.column);
+        let col = format!("t.{}", quote_ident(&f.column));
         let fragment = match f.op.as_str() {
             "eq"       => { push_param(params, next, &f.value); format!("{} = ${}", col, *next - 1) }
             "neq"      => { push_param(params, next, &f.value); format!("{} != ${}", col, *next - 1) }
