@@ -17,6 +17,10 @@ pub async fn verify_auth(
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    if req.method() == axum::http::Method::OPTIONS {
+        return Ok(next.run(req).await);
+    }
+
     let auth_header = req
         .headers()
         .get("Authorization")

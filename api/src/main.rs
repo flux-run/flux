@@ -67,14 +67,21 @@ pub fn build_cors() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(move |origin, _parts| {
             let Ok(origin_str) = origin.to_str() else { return false };
+            let origin_lc = origin_str.to_lowercase();
             
-            // Check explicit list
             if origins_list.iter().any(|o| o == origin) {
                 return true;
             }
 
-            // Allow any subdomain of fluxbase.co
-            origin_str.ends_with(".fluxbase.co") || origin_str == "https://fluxbase.co"
+            // More inclusive check for production domains
+            let allowed = origin_lc.ends_with(".fluxbase.co") 
+                || origin_lc == "https://fluxbase.co" 
+                || origin_lc == "http://fluxbase.co";
+            
+            if !allowed {
+                tracing::warn!("CORS origin denied: {}", origin_str);
+            }
+            allowed
         }))
         .allow_methods([
             Method::GET,
@@ -180,6 +187,10 @@ pub fn create_app(state: AppState) -> Router {
         .merge(authenticated_api)
         .nest("/internal", internal_routes)
         .route("/health", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
+        .fallback(|req: axum::extract::Request| async move {
+            tracing::warn!("404 Route Not Found: {} {}", req.method(), req.uri().path());
+            (axum::http::StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not_found", "path": req.uri().path().to_string() })))
+        })
         .layer(build_cors())
         .with_state(state)
 }
