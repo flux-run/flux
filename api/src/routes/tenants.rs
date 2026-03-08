@@ -11,18 +11,23 @@ use crate::types::context::RequestContext;
 
 // ── Row structs (module level to satisfy Rust type inference) ──────────────
 
+#[derive(sqlx::FromRow)]
 struct TenantRow {
     id: Uuid,
     name: String,
+    slug: String,
     role: String,
 }
 
+#[derive(sqlx::FromRow)]
 struct TenantDetailRow {
     id: Uuid,
     name: String,
+    slug: String,
     created_at: chrono::NaiveDateTime,
 }
 
+#[derive(sqlx::FromRow)]
 struct MemberRow {
     id: Uuid,
     email: String,
@@ -60,13 +65,15 @@ pub async fn create_tenant(
     Json(payload): Json<CreateTenantPayload>,
 ) -> ApiResult<serde_json::Value> {
     let tenant_id = Uuid::new_v4();
+    let slug = crate::services::slug_service::generate_slug(&payload.name);
 
-    sqlx::query!(
-        "INSERT INTO tenants (id, name, owner_id) VALUES ($1, $2, $3)",
-        tenant_id,
-        payload.name,
-        context.user_id
+    sqlx::query(
+        "INSERT INTO tenants (id, name, slug, owner_id) VALUES ($1, $2, $3, $4)"
     )
+    .bind(tenant_id)
+    .bind(payload.name)
+    .bind(&slug)
+    .bind(context.user_id)
     .execute(&pool)
     .await
     .map_err(|_| db_err())?;
@@ -80,31 +87,33 @@ pub async fn create_tenant(
     .await
     .map_err(|_| db_err())?;
 
-    Ok(ApiResponse::new(serde_json::json!({ "tenant_id": tenant_id })))
+    Ok(ApiResponse::new(serde_json::json!({ 
+        "tenant_id": tenant_id,
+        "slug": slug
+    })))
 }
 
 pub async fn get_tenants(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    let records = sqlx::query_as_unchecked!(
-        TenantRow,
+    let records = sqlx::query_as::<_, TenantRow>(
         r#"
-        SELECT t.id, t.name, tm.role
+        SELECT t.id, t.name, t.slug, tm.role
         FROM tenants t
         JOIN tenant_members tm ON t.id = tm.tenant_id
         WHERE tm.user_id = $1
         ORDER BY t.created_at DESC
         "#,
-        context.user_id
     )
+    .bind(context.user_id)
     .fetch_all(&pool)
     .await
     .map_err(|_| db_err())?;
 
     let tenants: Vec<_> = records
         .into_iter()
-        .map(|r| serde_json::json!({ "id": r.id, "name": r.name, "role": r.role }))
+        .map(|r| serde_json::json!({ "id": r.id, "name": r.name, "slug": r.slug, "role": r.role }))
         .collect();
 
     Ok(ApiResponse::new(serde_json::json!({ "tenants": tenants })))
@@ -115,11 +124,10 @@ pub async fn get_tenant(
     State(pool): State<PgPool>,
     Extension(_context): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    let record = sqlx::query_as_unchecked!(
-        TenantDetailRow,
-        "SELECT id, name, created_at FROM tenants WHERE id = $1",
-        id
+    let record = sqlx::query_as::<_, TenantDetailRow>(
+        "SELECT id, name, slug, created_at FROM tenants WHERE id = $1",
     )
+    .bind(id)
     .fetch_optional(&pool)
     .await
     .map_err(|_| db_err())?
@@ -128,6 +136,7 @@ pub async fn get_tenant(
     Ok(ApiResponse::new(serde_json::json!({
         "id": record.id,
         "name": record.name,
+        "slug": record.slug,
         "created_at": record.created_at.to_string()
     })))
 }

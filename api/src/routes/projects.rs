@@ -11,14 +11,19 @@ use crate::types::context::RequestContext;
 
 // ── Row structs ────────────────────────────────────────────────────────────
 
+#[derive(sqlx::FromRow)]
 struct ProjectRow {
     id: Uuid,
     name: String,
+    slug: String,
 }
 
+#[derive(sqlx::FromRow)]
 struct ProjectDetailRow {
     id: Uuid,
     name: String,
+    slug: String,
+    tenant_slug: String,
     created_at: chrono::NaiveDateTime,
 }
 
@@ -50,18 +55,23 @@ pub async fn create_project(
 ) -> ApiResult<serde_json::Value> {
     let tenant_id = context.tenant_id.ok_or_else(missing_tenant)?;
     let project_id = Uuid::new_v4();
+    let slug = crate::services::slug_service::generate_slug(&payload.name);
 
-    sqlx::query!(
-        "INSERT INTO projects (id, tenant_id, name) VALUES ($1, $2, $3)",
-        project_id,
-        tenant_id,
-        payload.name
+    sqlx::query(
+        "INSERT INTO projects (id, tenant_id, name, slug) VALUES ($1, $2, $3, $4)"
     )
+    .bind(project_id)
+    .bind(tenant_id)
+    .bind(payload.name)
+    .bind(&slug)
     .execute(&pool)
     .await
     .map_err(|_| db_err())?;
 
-    Ok(ApiResponse::new(serde_json::json!({ "project_id": project_id })))
+    Ok(ApiResponse::new(serde_json::json!({ 
+        "project_id": project_id,
+        "slug": slug
+    })))
 }
 
 pub async fn get_projects(
@@ -70,18 +80,17 @@ pub async fn get_projects(
 ) -> ApiResult<serde_json::Value> {
     let tenant_id = context.tenant_id.ok_or_else(missing_tenant)?;
 
-    let records = sqlx::query_as_unchecked!(
-        ProjectRow,
-        "SELECT id, name FROM projects WHERE tenant_id = $1 ORDER BY created_at DESC",
-        tenant_id
+    let records = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id, name, slug FROM projects WHERE tenant_id = $1 ORDER BY created_at DESC",
     )
+    .bind(tenant_id)
     .fetch_all(&pool)
     .await
     .map_err(|_| db_err())?;
 
     let projects: Vec<_> = records
         .into_iter()
-        .map(|r| serde_json::json!({ "id": r.id, "name": r.name }))
+        .map(|r| serde_json::json!({ "id": r.id, "name": r.name, "slug": r.slug }))
         .collect();
 
     Ok(ApiResponse::new(serde_json::json!({ "projects": projects })))
@@ -94,12 +103,14 @@ pub async fn get_project(
 ) -> ApiResult<serde_json::Value> {
     let tenant_id = context.tenant_id.ok_or_else(missing_tenant)?;
 
-    let record = sqlx::query_as_unchecked!(
-        ProjectDetailRow,
-        "SELECT id, name, created_at FROM projects WHERE id = $1 AND tenant_id = $2",
-        id,
-        tenant_id
+    let record = sqlx::query_as::<_, ProjectDetailRow>(
+        "SELECT p.id, p.name, p.slug, t.slug as tenant_slug, p.created_at \
+         FROM projects p \
+         JOIN tenants t ON p.tenant_id = t.id \
+         WHERE p.id = $1 AND p.tenant_id = $2",
     )
+    .bind(id)
+    .bind(tenant_id)
     .fetch_optional(&pool)
     .await
     .map_err(|_| db_err())?
@@ -108,6 +119,8 @@ pub async fn get_project(
     Ok(ApiResponse::new(serde_json::json!({
         "id": record.id,
         "name": record.name,
+        "slug": record.slug,
+        "tenant_slug": record.tenant_slug,
         "created_at": record.created_at.to_string()
     })))
 }

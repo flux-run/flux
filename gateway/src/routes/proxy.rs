@@ -18,8 +18,19 @@ pub async fn proxy_handler(
     let full_path = format!("/{}", path);
     let method_str = method.to_string();
 
+    // 0. Extract Resolved Identity
+    let identity = match req.extensions().get::<crate::middleware::identity_resolver::ResolvedIdentity>() {
+        Some(id) => id,
+        None => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "identity_resolution_failed", "message": "Could not resolve project/tenant identity from host" }))
+            ).into_response();
+        }
+    };
+
     // 1. Resolve Route
-    let route = match lookup_route(&state.db_pool, &full_path, &method_str).await {
+    let route = match lookup_route(&state.db_pool, identity.project_id, &full_path, &method_str).await {
         Ok(Some(r)) => r,
         Ok(None) => {
             return (

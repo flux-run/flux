@@ -34,7 +34,7 @@ export default function RoutesPage() {
   const [corsEnabled, setCorsEnabled] = useState(false)
 
   // Fetch routes
-  const { data: routes, isLoading } = useQuery({
+  const { data: routes, isLoading: routesLoading } = useQuery({
     queryKey: ['projects', projectId, 'routes'],
     queryFn: async () => {
       const resp = await apiFetch<any>(`/routes?project_id=${projectId}`)
@@ -42,6 +42,18 @@ export default function RoutesPage() {
     },
     enabled: !!projectId
   })
+
+  // Fetch project details for slugs
+  const { data: project, isLoading: projectLoading } = useQuery({
+    queryKey: ['projects', projectId, 'detail'],
+    queryFn: async () => {
+      const resp = await apiFetch<any>(`/projects/${projectId}`)
+      return resp.data as any
+    },
+    enabled: !!projectId
+  })
+
+  const isLoading = routesLoading || projectLoading
 
   // Fetch functions for the dropdown
   const { data: functionsData } = useQuery({
@@ -117,7 +129,17 @@ export default function RoutesPage() {
     setCreateOpen(true)
   }
 
-  const publicUrl = `https://api.fluxbase.co${path.startsWith('/') ? path : `/${path}`}`
+  const getBaseDomain = () => {
+    if (!project) return 'api.fluxbase.co'
+    return `${project.slug}.${project.tenant_slug}.api.fluxbase.co`
+  }
+
+  const getFullUrl = (routePath: string) => {
+    const cleanPath = routePath.startsWith('/') ? routePath : `/${routePath}`
+    return `https://${getBaseDomain()}${cleanPath}`
+  }
+
+  const publicUrl = getFullUrl(path)
 
   if (isLoading) return <div className="p-8 animate-pulse text-muted-foreground">Loading routes...</div>
 
@@ -169,7 +191,7 @@ export default function RoutesPage() {
                           <span className="text-muted-foreground/50">/</span>
                           {route.path.replace(/^\//, '')}
                           <button 
-                            onClick={() => copyToClipboard(`https://api.fluxbase.co${route.path}`, route.id)}
+                            onClick={() => copyToClipboard(getFullUrl(route.path), route.id)}
                             className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-white/5 rounded"
                             title="Copy Public URL"
                           >
@@ -241,8 +263,8 @@ export default function RoutesPage() {
           <CardContent>
             <div className="flex items-center gap-2 p-3 bg-background rounded-lg border font-mono text-xs overflow-hidden">
               <span className="text-primary shrink-0">https://</span>
-              <span className="truncate">api.fluxbase.co</span>
-              <Button variant="ghost" size="icon" className="ml-auto h-7 w-7 shrink-0" onClick={() => copyToClipboard('https://api.fluxbase.co', 'base')}>
+              <span className="truncate">{getBaseDomain()}</span>
+              <Button variant="ghost" size="icon" className="ml-auto h-7 w-7 shrink-0" onClick={() => copyToClipboard(`https://${getBaseDomain()}`, 'base')}>
                 <Copy className="w-3.5 h-3.5" />
               </Button>
             </div>
