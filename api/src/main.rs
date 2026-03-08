@@ -12,6 +12,7 @@ mod logs;
 use axum::{
     middleware as axum_middleware,
     routing::{delete, get, post, put},
+    Json,
     Router,
 };
 use std::net::SocketAddr;
