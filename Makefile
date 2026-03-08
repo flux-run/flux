@@ -1,4 +1,4 @@
-.PHONY: dev api dashboard build migrate install clean
+.PHONY: dev api dashboard build migrate install clean test-async-wiring
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API + dashboard in parallel, printing labelled output.
@@ -50,3 +50,9 @@ install:
 clean:
 	cd api && cargo clean
 	cd dashboard && rm -rf dist node_modules/.vite
+
+# ── Async Wiring Test ───────────────────────────────────────────────────────
+# Runs deterministic staging wiring test for Gateway -> Queue -> Worker -> Runtime.
+# Required env vars are documented in scripts/test_async_wiring.sh
+test-async-wiring:
+	./scripts/test_async_wiring.sh
