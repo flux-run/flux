@@ -39,7 +39,7 @@ pub async fn execute(pool: &PgPool, query: &CompiledQuery) -> Result<serde_json:
     Ok(result)
 }
 
-fn bind_value(args: &mut PgArguments, val: &serde_json::Value) -> Result<(), anyhow::Error> {
+pub(crate) fn bind_value(args: &mut PgArguments, val: &serde_json::Value) -> Result<(), anyhow::Error> {
     match val {
         serde_json::Value::String(s) => {
             args.add(s.clone()).map_err(|e| anyhow!("{e}"))?;

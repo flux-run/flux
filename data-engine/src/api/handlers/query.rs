@@ -6,8 +6,8 @@ use crate::{
     cache,
     cache::{SchemaCacheEntry, QueryPlan},
     compiler::{
-        query_compiler::{CompiledQuery, ComputedCol, QueryCompiler, QueryRequest},
-        relational::load_all_relationships,
+        query_compiler::{CompileResult, CompiledQuery, ComputedCol, QueryCompiler, QueryRequest},
+        relational::{load_all_relationships, parse_selectors, build_batched_plan, ColumnSelector},
         CompilerOptions,
     },
     engine::{auth_context::AuthContext, error::EngineError},
@@ -94,15 +94,28 @@ pub async fn handler(
 
     // 6. Compile — plan cache (L2) for SELECT, full compile otherwise.
     //
-    //    Cache hit: reconstruct bind params only (O(filters) walk).
-    //    Cache miss: compile, store SQL template, return full CompiledQuery.
+    //    Cache hit:  reconstruct bind params only (O(filters) walk).
     let opts = CompilerOptions {
         default_limit: state.default_query_limit,
         max_limit: state.max_query_limit,
         computed_cols,
         relationships,
     };
-    let compiled = if req.operation == "select" {
+
+    //    Parse nested selectors once; needed both for cache-hit BatchedPlan
+    // reconstruction and for the batched-path depth decision in the compiler.
+    let nested_sels_for_plan: Vec<ColumnSelector> = req
+        .columns
+        .as_ref()
+        .map(|cols| {
+            parse_selectors(cols)
+                .into_iter()
+                .filter(|s| matches!(s, ColumnSelector::Nested { .. }))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let compile_result: CompileResult = if req.operation == "select" {
         let plan_key = cache::build_plan_key(
             auth.tenant_id, auth.project_id, &schema, &req, &policy,
         );
@@ -112,23 +125,35 @@ pub async fn handler(
                 let params = cache::extract_select_params(
                     &req, &policy, opts.default_limit, opts.max_limit,
                 );
-                CompiledQuery { sql: plan.sql, params }
+                let root_cq = CompiledQuery { sql: plan.sql, params };
+                if plan.is_batched {
+                    // Rebuild BatchedPlan from schema-cached relationships.
+                    let batched_plan = build_batched_plan(
+                        &schema, &req.table, &nested_sels_for_plan, &opts.relationships,
+                    );
+                    CompileResult::Batched { root: root_cq, plan: batched_plan }
+                } else {
+                    CompileResult::Single(root_cq)
+                }
             }
             None => {
-                let cq = QueryCompiler::compile(&req, &policy, &schema, &opts)?;
+                let cr = QueryCompiler::compile(&req, &policy, &schema, &opts)?;
                 let has_file_cols = col_meta.iter().any(|c| c.fb_type == "file");
+                let (cache_sql, is_batched) = match &cr {
+                    CompileResult::Single(cq)          => (cq.sql.clone(),   false),
+                    CompileResult::Batched { root, .. } => (root.sql.clone(), true),
+                };
                 state.plan_cache.insert(plan_key, QueryPlan {
-                    sql: cq.sql.clone(),
+                    sql: cache_sql,
                     has_file_cols,
+                    is_batched,
                 });
-                cq
+                cr
             }
         }
     } else {
         QueryCompiler::compile(&req, &policy, &schema, &opts)?
     };
-
-    tracing::debug!(sql = %compiled.sql, "executing compiled query");
 
     // 7. Before hook (runs before the SQL; can abort the operation).
     let hook_events = hook_events(&req.operation);
@@ -145,8 +170,20 @@ pub async fn handler(
         .await?;
     }
 
-    // 8. Execute inside a transaction.
-    let result = executor::execute(&state.pool, &compiled).await?;
+    // 8. Execute — single SQL or batched per-level fetches.
+    let result = match compile_result {
+        CompileResult::Single(ref cq) => {
+            tracing::debug!(sql = %cq.sql, "executing compiled query");
+            executor::execute(&state.pool, cq).await?
+        }
+        CompileResult::Batched { ref root, ref plan } => {
+            tracing::debug!(sql = %root.sql, levels = plan.stages.len(), "executing batched query");
+            let root_result = executor::execute(&state.pool, root).await?;
+            let mut rows = root_result.as_array().cloned().unwrap_or_default();
+            executor::execute_batched(&state.pool, &mut rows, &plan.stages).await?;
+            serde_json::Value::Array(rows)
+        }
+    };
 
     // 9. After hook (non-fatal: errors are logged, response still returns data).
     if let Some((_, after)) = hook_events {

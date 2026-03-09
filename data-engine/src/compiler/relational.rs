@@ -392,6 +392,7 @@ fn build_cte_subtree(
     parent_table_name: &str,
     all_rels: &[RelationshipDef],
 ) -> Option<CteSubtreeInfo> {
+
     let ColumnSelector::Nested { alias, cols } = sel else {
         return None;
     };
@@ -548,3 +549,123 @@ fn build_cte_subtree(
     })
 }
 
+// ─── Batched execution plan (depth ≥ BATCH_DEPTH_THRESHOLD) ──────────────────
+//
+// For very deep selector trees (users → posts → comments → likes → reactions),
+// the CTE plan grows large and PostgreSQL's planner starts spending meaningful
+// time on the query itself.  The batched plan splits the query into one
+// standalone SQL statement per nesting level:
+//
+//   1. Root SELECT (flat cols only)   → [{id:1,…}, {id:2,…}]
+//   2. Level 1: SELECT … WHERE fk IN ($1,$2,…)  (one scan of `posts`)
+//   3. Level 2: SELECT … WHERE fk IN ($1,$2,…)  (one scan of `comments`)
+//   …
+//
+// Results are assembled in Rust: group child rows by FK, attach to parents.
+// Complexity: O(root) + O(level1) + O(level2) + …  — strictly additive.
+// Each level uses an index seek on the FK column (one lookup per level, not
+// one lookup per parent row).
+
+/// Nesting depth at which the compiler switches from CTE aggregation to
+/// the batched execution plan.
+pub const BATCH_DEPTH_THRESHOLD: usize = 4;
+
+/// Return the maximum nesting depth of a selector tree.
+///
+/// A [`ColumnSelector::Flat`] node has depth 0.
+/// A [`ColumnSelector::Nested`] node has depth `1 + max(child depths)`.
+pub fn selector_depth(sel: &ColumnSelector) -> usize {
+    match sel {
+        ColumnSelector::Flat(_) => 0,
+        ColumnSelector::Nested { cols, .. } => {
+            1 + cols.iter().map(selector_depth).max().unwrap_or(0)
+        }
+    }
+}
+
+/// One level in a [`BatchedPlan`].
+#[derive(Debug, Clone)]
+pub struct BatchStage {
+    /// User-facing alias — the key written into the output JSON.
+    pub alias: String,
+    /// Postgres schema that owns [`Self::table`].
+    pub schema: String,
+    /// Table to query at this level.
+    pub table: String,
+    /// Column in *this* table filtered on the parent IDs (FK side).
+    /// e.g. `posts.author_id` when joining `users → posts`.
+    pub fk_col: String,
+    /// Column in the *parent* rows whose values feed the `IN (…)` list.
+    /// e.g. `users.id`.
+    pub parent_col: String,
+    /// Flat columns to `SELECT`.  Empty → `SELECT *`.
+    pub cols: Vec<String>,
+    /// `true` for has_many / many_to_many (result key holds a JSON array).
+    /// `false` for has_one / belongs_to (result key holds a single object).
+    pub is_array: bool,
+    /// Child stages nested below this level; attached recursively.
+    pub children: Vec<BatchStage>,
+}
+
+/// A fully resolved batched execution plan for a query whose nested-selector
+/// depth is ≥ [`BATCH_DEPTH_THRESHOLD`].
+#[derive(Debug, Clone)]
+pub struct BatchedPlan {
+    /// Top-level child stages (direct children of the root table).
+    pub stages: Vec<BatchStage>,
+}
+
+/// Build a [`BatchedPlan`] for the nested selectors at the root of a query.
+///
+/// `from_table` is the table name of the outer (root) `SELECT`.
+/// `all_rels` must be the *complete* schema relationship registry.
+pub fn build_batched_plan(
+    schema: &str,
+    from_table: &str,
+    nested_sels: &[ColumnSelector],
+    all_rels: &[RelationshipDef],
+) -> BatchedPlan {
+    let stages = nested_sels
+        .iter()
+        .filter_map(|sel| build_batch_stage(sel, schema, from_table, all_rels))
+        .collect();
+    BatchedPlan { stages }
+}
+
+fn build_batch_stage(
+    sel: &ColumnSelector,
+    schema: &str,
+    parent_table: &str,
+    all_rels: &[RelationshipDef],
+) -> Option<BatchStage> {
+    let ColumnSelector::Nested { alias, cols } = sel else {
+        return None;
+    };
+    let rel = all_rels
+        .iter()
+        .find(|r| r.from_table == parent_table && &r.alias == alias)?;
+
+    let flat_cols: Vec<String> = cols
+        .iter()
+        .filter_map(|s| {
+            if let ColumnSelector::Flat(c) = s { Some(c.clone()) } else { None }
+        })
+        .collect();
+
+    let children: Vec<BatchStage> = cols
+        .iter()
+        .filter(|s| matches!(s, ColumnSelector::Nested { .. }))
+        .filter_map(|s| build_batch_stage(s, schema, &rel.to_table, all_rels))
+        .collect();
+
+    Some(BatchStage {
+        alias: alias.clone(),
+        schema: schema.to_owned(),
+        table: rel.to_table.clone(),
+        fk_col: rel.to_column.clone(),
+        parent_col: rel.from_column.clone(),
+        cols: flat_cols,
+        is_array: rel.is_array(),
+        children,
+    })
+}

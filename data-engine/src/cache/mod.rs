@@ -43,6 +43,10 @@ pub struct QueryPlan {
     /// `true` if any column in this table has `fb_type = "file"`.
     /// When `false`, the transform engine can be bypassed entirely on cache hits.
     pub has_file_cols: bool,
+    /// `true` when this plan was compiled as a batched execution (depth ≥
+    /// [`BATCH_DEPTH_THRESHOLD`]).  On a cache hit the handler reconstructs
+    /// the [`BatchedPlan`] from the in-memory schema cache and executes it.
+    pub is_batched: bool,
 }
 
 // ─── TTLs ─────────────────────────────────────────────────────────────────────

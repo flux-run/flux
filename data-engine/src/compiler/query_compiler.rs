@@ -2,7 +2,34 @@ use serde::{Deserialize, Serialize};
 use crate::engine::error::EngineError;
 use crate::policy::PolicyResult;
 use crate::router::db_router::{validate_identifier, quote_ident};
-use crate::compiler::relational::{parse_selectors, expand_nested_deep, build_nested_ctes, ColumnSelector, RelationshipDef};
+use crate::compiler::relational::{
+    parse_selectors, expand_nested_deep, build_nested_ctes,
+    selector_depth, build_batched_plan, BatchedPlan, BATCH_DEPTH_THRESHOLD,
+    ColumnSelector, RelationshipDef,
+};
+
+// ─── Compile result ────────────────────────────────────────────────────────────
+
+/// The output of [`QueryCompiler::compile`].
+///
+/// For non-SELECT operations and shallow nested queries the result is a single
+/// SQL template ready for direct execution ([`CompileResult::Single`]).
+///
+/// For SELECT queries whose nested-selector depth is ≥
+/// [`BATCH_DEPTH_THRESHOLD`], the result is a flat root query plus a
+/// [`BatchedPlan`] that the executor uses to fetch each child level
+/// independently ([`CompileResult::Batched`]).
+pub enum CompileResult {
+    /// A single compiled SQL statement — the normal path.
+    Single(CompiledQuery),
+    /// Root flat SELECT + a per-level child fetch plan (deep nesting path).
+    Batched {
+        /// The root SELECT (flat columns only, no nested expansion).
+        root: CompiledQuery,
+        /// Plan describing each child level to fetch and join in Rust.
+        plan: BatchedPlan,
+    },
+}
 
 // ─── Public request / response types ─────────────────────────────────────────
 
@@ -86,7 +113,7 @@ impl QueryCompiler {
         policy: &PolicyResult,
         schema: &str,
         opts: &CompilerOptions,
-    ) -> Result<CompiledQuery, EngineError> {
+    ) -> Result<CompileResult, EngineError> {
         validate_identifier(schema)?;
         validate_identifier(&req.table)?;
 
@@ -127,9 +154,9 @@ impl QueryCompiler {
 
         match req.operation.as_str() {
             "select" => compile_select(req, schema, &cols, &nested_sels, policy, &mut params, &mut next_param, opts),
-            "insert" => compile_insert(req, schema, &cols, &mut params, &mut next_param),
-            "update" => compile_update(req, schema, &cols, policy, &mut params, &mut next_param),
-            "delete" => compile_delete(req, schema, policy, &mut params, &mut next_param),
+            "insert" => compile_insert(req, schema, &cols, &mut params, &mut next_param).map(CompileResult::Single),
+            "update" => compile_update(req, schema, &cols, policy, &mut params, &mut next_param).map(CompileResult::Single),
+            "delete" => compile_delete(req, schema, policy, &mut params, &mut next_param).map(CompileResult::Single),
             op => Err(EngineError::UnsupportedOperation(op.to_string())),
         }
     }
@@ -146,7 +173,70 @@ fn compile_select(
     params: &mut Vec<serde_json::Value>,
     next: &mut usize,
     opts: &CompilerOptions,
-) -> Result<CompiledQuery, EngineError> {
+) -> Result<CompileResult, EngineError> {
+    // ── Batched execution path (depth ≥ BATCH_DEPTH_THRESHOLD) ─────────────
+    //
+    // When the selector tree is deeper than the CTE threshold, PostgreSQL's
+    // planner struggles with the large CTE graph.  Instead:
+    //   1. Compile a flat root SELECT (no nested expansion in SQL).
+    //   2. Return a BatchedPlan describing per-level child fetches.
+    //   3. The executor runs each level as a standalone ANY($…) query and
+    //      assembles the JSON tree in Rust.
+    let max_depth = nested_sels.iter().map(selector_depth).max().unwrap_or(0);
+    if max_depth >= BATCH_DEPTH_THRESHOLD {
+        // Root SELECT: flat columns + the join-key column for each nested
+        // selector's relationship (needed for Rust-side child attachment).
+        let mut col_parts: Vec<String> = if cols.is_empty() {
+            vec!["t.*".to_string()]
+        } else {
+            let mut c: Vec<String> =
+                cols.iter().map(|c| format!("t.{}", quote_ident(c))).collect();
+            for sel in nested_sels {
+                if let ColumnSelector::Nested { alias, .. } = sel {
+                    if let Some(rel) = opts.relationships.iter().find(|r| {
+                        r.from_table == req.table && &r.alias == alias
+                    }) {
+                        let fc = format!("t.{}", quote_ident(&rel.from_column));
+                        if !c.contains(&fc) {
+                            c.push(fc);
+                        }
+                    }
+                }
+            }
+            c
+        };
+        for cc in &opts.computed_cols {
+            col_parts.push(format!("{} AS {}", cc.expr, quote_ident(&cc.name)));
+        }
+        let col_list = col_parts.join(", ");
+        let mut sql = format!(
+            "SELECT {} FROM {}.{} t",
+            col_list, quote_ident(schema), quote_ident(&req.table),
+        );
+        let where_parts = build_where(policy, req.filters.as_deref(), params, next)?;
+        if !where_parts.is_empty() {
+            sql.push_str(&format!(" WHERE {}", where_parts.join(" AND ")));
+        }
+        let effective_limit = match req.limit {
+            Some(l) => l.min(opts.max_limit).max(1),
+            None    => opts.default_limit,
+        };
+        params.push(serde_json::Value::Number(effective_limit.into()));
+        sql.push_str(&format!(" LIMIT ${}", *next));
+        *next += 1;
+        if let Some(offset) = req.offset {
+            params.push(serde_json::Value::Number(offset.into()));
+            sql.push_str(&format!(" OFFSET ${}", *next));
+            *next += 1;
+        }
+        let batched_plan =
+            build_batched_plan(schema, &req.table, nested_sels, &opts.relationships);
+        return Ok(CompileResult::Batched {
+            root: CompiledQuery { sql, params: params.clone() },
+            plan: batched_plan,
+        });
+    }
+
     // Base column list from policy + user request.
     let mut col_parts: Vec<String> = if cols.is_empty() {
         vec!["t.*".to_string()] // use alias so nested subqueries can reference outer cols by alias
@@ -260,7 +350,7 @@ fn compile_select(
         *next += 1;
     }
 
-    Ok(CompiledQuery { sql, params: params.clone() })
+    Ok(CompileResult::Single(CompiledQuery { sql, params: params.clone() }))
 }
 
 fn compile_insert(
