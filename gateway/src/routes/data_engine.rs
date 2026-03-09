@@ -29,7 +29,7 @@ use crate::state::SharedState;
 const CORS_ORIGIN:  &str = "*";
 const CORS_METHODS: &str = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 const CORS_HEADERS: &str =
-    "Authorization, Content-Type, Accept, X-Fluxbase-Tenant, X-Fluxbase-Project";
+    "Authorization, Content-Type, Accept, X-Fluxbase-Tenant, X-Fluxbase-Project, X-Tenant-Id, X-Project-Id, X-Tenant-Slug, X-Project-Slug, X-User-Id, X-User-Role";
 
 fn cors_headers() -> HeaderMap {
     let mut m = HeaderMap::new();
@@ -145,6 +145,12 @@ pub async fn proxy_handler(
                     | "accept"
                     | "x-fluxbase-tenant"
                     | "x-fluxbase-project"
+                    | "x-tenant-id"
+                    | "x-project-id"
+                    | "x-tenant-slug"
+                    | "x-project-slug"
+                    | "x-user-id"
+                    | "x-user-role"
             )
         })
         .filter_map(|(n, v)| v.to_str().ok().map(|v| (n.to_string(), v.to_string())))

@@ -13,5 +13,12 @@ pub fn routes(state: Arc<AppState>) -> Router {
         )
         .route("/jobs/{id}/retry", post(crate::api::handlers::retry_job::handler))
         .route("/health", get(|| async { axum::Json(serde_json::json!({ "status": "ok" })) }))
+        .route("/version", get(|| async {
+            axum::Json(serde_json::json!({
+                "service": "queue",
+                "commit": std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".to_string()),
+                "build_time": std::env::var("BUILD_TIME").unwrap_or_else(|_| "unknown".to_string())
+            }))
+        }))
         .with_state(state)
 }

@@ -223,6 +223,13 @@ pub fn create_app(state: AppState) -> Router {
         .merge(authenticated_api)
         .nest("/internal", internal_routes)
         .route("/health", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
+        .route("/version", get(|| async {
+            Json(serde_json::json!({
+                "service": "api",
+                "commit": std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".to_string()),
+                "build_time": std::env::var("BUILD_TIME").unwrap_or_else(|_| "unknown".to_string())
+            }))
+        }))
         .fallback(|req: axum::extract::Request| async move {
             tracing::warn!("404 Route Not Found: {} {}", req.method(), req.uri().path());
             (axum::http::StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not_found", "path": req.uri().path().to_string() })))

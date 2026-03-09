@@ -1,4 +1,4 @@
-.PHONY: dev api dashboard build migrate install clean test-async-wiring
+.PHONY: dev api dashboard build migrate install clean test-async-wiring test-platform
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API + dashboard in parallel, printing labelled output.
@@ -62,3 +62,6 @@ clean:
 # Required env vars are documented in scripts/test_async_wiring.sh
 test-async-wiring:
 	./scripts/test_async_wiring.sh
+
+test-platform:
+	./scripts/platform-tests/run_all.sh

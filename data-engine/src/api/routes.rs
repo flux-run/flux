@@ -46,5 +46,12 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route("/files/download-url", post(files::download_url))
         // ── Health ────────────────────────────────────────────────────────────
         .route("/health", get(|| async { Json(json!({ "status": "ok" })) }))
+        .route("/version", get(|| async {
+            Json(json!({
+                "service": "data-engine",
+                "commit": std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".to_string()),
+                "build_time": std::env::var("BUILD_TIME").unwrap_or_else(|_| "unknown".to_string())
+            }))
+        }))
         .with_state(state)
 }

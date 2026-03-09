@@ -47,6 +47,7 @@ pub async fn introspect(
         "columns":       columns,
         "relationships": relationships,
         "policies":      policies,
+        "functions":     [],
     })))
 }
 

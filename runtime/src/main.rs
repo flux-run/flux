@@ -33,6 +33,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/health", get(health_check))
+        .route("/version", get(|| async {
+            axum::Json(serde_json::json!({
+                "service": "runtime",
+                "commit": std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".to_string()),
+                "build_time": std::env::var("BUILD_TIME").unwrap_or_else(|_| "unknown".to_string())
+            }))
+        }))
         .route("/execute", post(execute_handler))
         .with_state(state);
 
