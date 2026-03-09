@@ -109,6 +109,14 @@ pub async fn graph(
         .await
         .map_err(|e| ApiError::internal(&format!("data_engine_unreachable: {}", e)))?;
 
+    // Guard: surface Data Engine errors clearly rather than failing at JSON parse.
+    if !de_resp.status().is_success() {
+        let status = de_resp.status().as_u16();
+        let body = de_resp.text().await.unwrap_or_default();
+        tracing::error!(status, body = %body, "data_engine returned error");
+        return Err(ApiError::internal(&format!("data_engine_error({status}): {body}")));
+    }
+
     let db_schema: Value = de_resp
         .json()
         .await
