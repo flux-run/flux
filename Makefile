@@ -32,7 +32,9 @@ deploy:
 	./scripts/deploy.sh --env production $(if $(SERVICE),--service $(SERVICE))
 
 deploy-gcp:
-	./scripts/deploy.sh --env production --project fluxbase-app --region asia-south1 $(if $(SERVICE),--service $(SERVICE))
+	TAG=$$(git rev-parse --short HEAD); \
+	./scripts/build.sh --docker --platform linux/amd64 --registry asia-south1-docker.pkg.dev/fluxbase-app/fluxbase --tag $$TAG $(if $(SERVICE),--service $(SERVICE)); \
+	./scripts/deploy.sh --env production --project fluxbase-app --region asia-south1 --platform linux/amd64 --tag $$TAG $(if $(SERVICE),--service $(SERVICE))
 
 # Deploys with a dry-run.
 deploy-dry-run:

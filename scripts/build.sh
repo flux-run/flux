@@ -56,18 +56,25 @@ build_rust_service() {
                     image_tag="$local_tag"
                 fi
                 
-                PLATFORM_ARG=""
-                if [ -n "$PLATFORM" ]; then
-                    PLATFORM_ARG="--platform $PLATFORM"
-                fi
-                
                 PACKAGE_NAME=$(package_name_for_service "$service")
-                
-                docker build $PLATFORM_ARG \
-                    -t "$local_tag" \
-                    -f "$dir/Dockerfile" \
-                    --build-arg PACKAGE_NAME="$PACKAGE_NAME" \
-                    .
+
+                if [ -n "$PLATFORM" ]; then
+                    # Use buildx with --load for deterministic single-platform local images
+                    # (avoids OCI index surprises on Cloud Run deployments).
+                    docker buildx build \
+                        --platform "$PLATFORM" \
+                        --load \
+                        -t "$local_tag" \
+                        -f "$dir/Dockerfile" \
+                        --build-arg PACKAGE_NAME="$PACKAGE_NAME" \
+                        .
+                else
+                    docker build \
+                        -t "$local_tag" \
+                        -f "$dir/Dockerfile" \
+                        --build-arg PACKAGE_NAME="$PACKAGE_NAME" \
+                        .
+                fi
 
                 if [ -n "$REGISTRY" ]; then
                     docker tag "$local_tag" "$image_tag"

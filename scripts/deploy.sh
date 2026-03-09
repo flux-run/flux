@@ -13,6 +13,7 @@ REGION="asia-south1"
 REGISTRY=""
 SERVICE_NAME="all"
 TAG="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
+PLATFORM="linux/amd64"
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -23,6 +24,7 @@ while [[ "$#" -gt 0 ]]; do
         --region) REGION="$2"; shift ;;
         --service) SERVICE_NAME="$2"; shift ;;
         --tag) TAG="$2"; shift ;;
+        --platform) PLATFORM="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
     shift
@@ -35,23 +37,49 @@ fi
 
 REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/fluxbase"
 
-echo "Deploying to $ENV environment (GCP Project: $PROJECT_ID, Region: $REGION, Tag: $TAG)..."
+echo "Deploying to $ENV environment (GCP Project: $PROJECT_ID, Region: $REGION, Tag: $TAG, Platform: $PLATFORM)..."
+
+package_name_for_service() {
+    local service=$1
+    if [ "$service" == "queue" ]; then
+        echo "fluxbase-queue"
+    else
+        echo "$service"
+    fi
+}
+
+ensure_pushed_image() {
+    local service=$1
+    local image_tag=$2
+    local dir=$service
+    local package_name
+    package_name=$(package_name_for_service "$service")
+
+    # First try push directly (image might already exist locally under registry tag)
+    if docker push "$image_tag"; then
+        return 0
+    fi
+
+    echo "Push failed for $image_tag. Building and pushing $PLATFORM image via buildx..."
+    docker buildx build \
+        --platform "$PLATFORM" \
+        -t "$image_tag" \
+        -f "$dir/Dockerfile" \
+        --build-arg PACKAGE_NAME="$package_name" \
+        --push \
+        .
+}
 
 deploy_cloud_run() {
     local service=$1
     local image_tag="${REGISTRY}/${service}:${TAG}"
-    local local_tag="fluxbase-${service}:${TAG}"
     
     echo "Pushing image $image_tag to Artifact Registry..."
     if [ "$DRY_RUN" = true ]; then
         echo "[DRY-RUN] Would run: docker push $image_tag"
+        echo "[DRY-RUN] If missing, would run: docker buildx build --platform $PLATFORM -t $image_tag -f $service/Dockerfile --build-arg PACKAGE_NAME=$(package_name_for_service "$service") --push ."
     else
-        # Try to push; if local image exists under local_tag, tag it for registry and push.
-        docker push "$image_tag" || {
-            echo "Push failed. Re-tagging from $local_tag and retrying..."
-            docker tag "$local_tag" "$image_tag"
-            docker push "$image_tag"
-        }
+        ensure_pushed_image "$service" "$image_tag"
     fi
 
     echo "Deploying $service to Cloud Run..."
