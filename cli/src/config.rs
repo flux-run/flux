@@ -14,6 +14,10 @@ pub struct Config {
     /// Gateway URL — used by `flux subscribe` / SDK realtime features.
     #[serde(default)]
     pub gateway_url: String,
+    /// Runtime URL — used by `flux invoke` to call the function execution engine.
+    /// Env: FLUXBASE_RUNTIME_URL  Default: http://localhost:8083
+    #[serde(default)]
+    pub runtime_url: String,
 }
 
 impl Default for Config {
@@ -25,6 +29,7 @@ impl Default for Config {
             tenant_slug: None,
             project_id: None,
             gateway_url: "https://gateway.fluxbase.co".to_string(),
+            runtime_url: "http://localhost:8083".to_string(),
         }
     }
 }
@@ -54,6 +59,9 @@ impl Config {
         if let Ok(url) = std::env::var("FLUXBASE_GATEWAY_URL") {
             config.gateway_url = url;
         }
+        if let Ok(url) = std::env::var("FLUXBASE_RUNTIME_URL") {
+            config.runtime_url = url;
+        }
         if let Ok(v) = std::env::var("FLUXBASE_PROJECT_ID") {
             config.project_id = Some(v);
         }
@@ -72,6 +80,9 @@ impl Config {
             }
             if let Some(url) = proj.gateway_url {
                 config.gateway_url = url;
+            }
+            if let Some(url) = proj.runtime_url {
+                config.runtime_url = url;
             }
         }
 
@@ -119,6 +130,9 @@ pub struct ProjectConfig {
     /// Override the Fluxbase Gateway URL for this project (e.g. local dev instance).
     /// Used by SDK `subscribe()` for SSE streams.
     pub gateway_url: Option<String>,
+    /// Override the Fluxbase Runtime URL for this project (e.g. local dev instance).
+    /// Used by `flux invoke` to call the function execution engine.
+    pub runtime_url: Option<String>,
 }
 
 impl ProjectConfig {

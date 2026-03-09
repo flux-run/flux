@@ -124,15 +124,22 @@ pub async fn execute_follow(name: Option<String>, limit: u64) -> anyhow::Result<
         print_log_entries(&ordered);
     }
 
-    // Poll loop
+    // Poll loop with adaptive interval:
+    //   logs arriving → reset to 1.5 s
+    //   idle          → double interval up to 10 s
+    const MIN_POLL_MS: u64 = 1_500;
+    const MAX_POLL_MS: u64 = 10_000;
+    let mut poll_ms = MIN_POLL_MS;
+
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(1_500)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(poll_ms)).await;
 
         let since = last_timestamp.as_deref();
         let new_entries = match fetch_logs(&client, name.as_deref(), 200, since).await {
             Ok(e) => e,
             Err(_) => {
-                // Silently retry on transient errors
+                // Silently retry on transient errors (network blip, etc.)
+                poll_ms = (poll_ms * 2).min(MAX_POLL_MS);
                 continue;
             }
         };
@@ -145,6 +152,11 @@ pub async fn execute_follow(name: Option<String>, limit: u64) -> anyhow::Result<
                 }
             }
             print_log_entries(&new_entries);
+            // Reset to fast polling once logs are arriving
+            poll_ms = MIN_POLL_MS;
+        } else {
+            // No new logs — back off gradually
+            poll_ms = (poll_ms * 2).min(MAX_POLL_MS);
         }
     }
 }

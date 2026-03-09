@@ -23,6 +23,7 @@ pub async fn execute(
     interval:    Option<u64>,
     api_url:     Option<String>,
     gateway_url: Option<String>,
+    runtime_url: Option<String>,
 ) -> anyhow::Result<()> {
     // Fallback: read project_id from global config if not supplied as a flag.
     let project_id = match project {
@@ -39,6 +40,7 @@ pub async fn execute(
         watch_interval: interval,
         api_url:        api_url.clone(),
         gateway_url:    gateway_url.clone(),
+        runtime_url:    runtime_url.clone(),
     };
 
     let path = proj.save().await?;

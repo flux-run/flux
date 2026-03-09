@@ -62,10 +62,14 @@ enum Commands {
         #[arg(long)]
         runtime: Option<String>,
     },
-    /// Invoke function
+    /// Invoke a deployed function
     Invoke {
+        /// Function name to invoke
         name: String,
-        #[arg(long)]
+        /// JSON payload to pass to the function (e.g. '{"a":1}')
+        #[arg(long, value_name = "JSON")]
+        payload: Option<String>,
+        #[arg(long, hide = true)]
         tenant: Option<String>,
     },
     /// Tail or stream function logs
@@ -130,6 +134,9 @@ enum Commands {
         /// Override Gateway URL for this project (e.g. http://localhost:8081)
         #[arg(long, value_name = "URL")]
         gateway_url: Option<String>,
+        /// Override Runtime URL for this project (e.g. http://localhost:8083)
+        #[arg(long, value_name = "URL")]
+        runtime_url: Option<String>,
     },
     /// Manage the local Fluxbase development stack (all services via Docker)
     Stack {
@@ -179,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Secrets { command } => secrets::execute(command).await?,
         Commands::Dev => dev::execute().await?,
         Commands::Deploy { name, runtime } => deploy::execute(name, runtime).await?,
-        Commands::Invoke { name, tenant } => invoke::execute(&name, tenant).await?,
+        Commands::Invoke { name, tenant, payload } => invoke::execute(&name, tenant, payload).await?,
         Commands::Logs { name, follow, limit } => {
             if follow {
                 logs::execute_follow(name, limit).await?
@@ -193,7 +200,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Watch { output, interval } => sdk::execute_watch(output, interval).await?,
         Commands::Status { sdk } => sdk::execute_status(sdk).await?,
         Commands::Doctor => doctor::execute().await?,
-        Commands::Init { project, output, interval, api_url, gateway_url } => init::execute(project, output, interval, api_url, gateway_url).await?,
+        Commands::Init { project, output, interval, api_url, gateway_url, runtime_url } => init::execute(project, output, interval, api_url, gateway_url, runtime_url).await?,
         Commands::Stack { command } => match command {
             StackCommand::Up   { build, foreground }  => stack::execute_up(build, !foreground).await?,
             StackCommand::Down { volumes }             => stack::execute_down(volumes).await?,

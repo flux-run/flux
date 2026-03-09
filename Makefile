@@ -23,7 +23,7 @@ build-docker:
 	./scripts/build.sh --docker $(if $(SERVICE),--service $(SERVICE))
 
 build-gcp:
-	./scripts/build.sh --docker --platform linux/amd64 --registry asia-south1-docker.pkg.dev/fluxbase-app/fluxbase $(if $(SERVICE),--service $(SERVICE))
+	./scripts/build.sh --docker --platform linux/amd64 --registry asia-south1-docker.pkg.dev/fluxbase-app/fluxbase $(if $(SERVICE),--service $(SERVICE)) --parallel
 
 # ── Deploy ──────────────────────────────────────────────────────────────────
 # Deploys all services to the specified environment.
