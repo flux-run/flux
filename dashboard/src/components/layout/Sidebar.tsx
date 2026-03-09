@@ -80,12 +80,12 @@ export function Sidebar() {
             {navItem(`/dashboard/projects/${projectId}/overview`,  LayoutDashboard, 'Overview')}
             {navItem(`/dashboard/projects/${projectId}/data`,       Database,        'Data')}
             {navItem(`/dashboard/projects/${projectId}/storage`,    HardDrive,       'Storage')}
+            {navItem(`/dashboard/projects/${projectId}/query`,      Terminal,        'Query Explorer')}
             {navItem(`/dashboard/projects/${projectId}/functions`,  Code2,           'Functions')}
             {navItem(`/dashboard/projects/${projectId}/routes`,     Globe,           'Routes')}
             {navItem(`/dashboard/projects/${projectId}/events`,     Bell,            'Events')}
             {navItem(`/dashboard/projects/${projectId}/workflows`,  GitBranch,       'Workflows')}
             {navItem(`/dashboard/projects/${projectId}/cron`,       Clock,           'Cron')}
-            {navItem(`/dashboard/projects/${projectId}/query`,      Terminal,        'Query Explorer')}
             {navItem(`/dashboard/projects/${projectId}/secrets`,    ShieldCheck,     'Secrets')}
             {navItem(`/dashboard/projects/${projectId}/api-keys`,   KeyRound,        'API Keys')}
             {navItem(`/dashboard/projects/${projectId}/logs`,       ScrollText,      'Logs')}

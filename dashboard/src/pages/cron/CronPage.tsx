@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { Clock, Plus, Trash2 } from 'lucide-react'
+import { Clock, Plus, Trash2, Play } from 'lucide-react'
 import { dbFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -83,6 +83,11 @@ export default function CronPage() {
     },
   })
 
+  const runNowMutation = useMutation({
+    mutationFn: (id: string) => dbFetch(`/db/cron/${id}/trigger`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cron'] }),
+  })
+
   const jobs = data?.cron ?? []
 
   return (
@@ -118,7 +123,7 @@ export default function CronPage() {
         </div>
       ) : (
         <div className="rounded-xl border overflow-hidden bg-card">
-          <div className="grid grid-cols-[1fr_160px_140px_140px_80px] gap-4 px-5 py-2.5 bg-muted/30 border-b">
+          <div className="grid grid-cols-[1fr_160px_140px_140px_120px] gap-4 px-5 py-2.5 bg-muted/30 border-b">
             {['Name / Schedule', 'Action', 'Last run', 'Next run', 'Status'].map((h) => (
               <p key={h} className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">{h}</p>
             ))}
@@ -126,7 +131,7 @@ export default function CronPage() {
           {jobs.map((job) => (
             <div
               key={job.id}
-              className="group grid grid-cols-[1fr_160px_140px_140px_80px] gap-4 px-5 py-3.5 border-b last:border-0 items-center hover:bg-muted/20 transition-colors"
+              className="group grid grid-cols-[1fr_160px_140px_140px_120px] gap-4 px-5 py-3.5 border-b last:border-0 items-center hover:bg-muted/20 transition-colors"
             >
               <div>
                 <p className="font-medium text-sm">{job.name}</p>
@@ -142,6 +147,14 @@ export default function CronPage() {
                 >
                   <span className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${job.enabled ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
                 </button>
+                <Button
+                  variant="ghost" size="icon" className="w-6 h-6 opacity-0 group-hover:opacity-100 transition-opacity text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10"
+                  onClick={() => runNowMutation.mutate(job.id)}
+                  title="Run now"
+                  disabled={runNowMutation.isPending}
+                >
+                  <Play className="w-3 h-3" />
+                </Button>
                 <Button
                   variant="ghost" size="icon" className="w-6 h-6 opacity-0 group-hover:opacity-100 transition-opacity"
                   onClick={() => deleteMutation.mutate(job.id)}

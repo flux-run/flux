@@ -34,8 +34,9 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route("/db/workflows/:id",       delete(workflows::delete))
         .route("/db/workflows/:id/steps", post(workflows::add_step))
         // ── Cron jobs ──────────────────────────────────────────────────────────
-        .route("/db/cron",    get(cron::list).post(cron::create))
-        .route("/db/cron/:id", patch(cron::update).delete(cron::delete))
+        .route("/db/cron",             get(cron::list).post(cron::create))
+        .route("/db/cron/:id",         patch(cron::update).delete(cron::delete))
+        .route("/db/cron/:id/trigger", post(cron::trigger))
         // ── Schema introspection ───────────────────────────────────────────────
         .route("/db/schema", get(schema::introspect))        // ── File presigned URLs ───────────────────────────────────────────────
         .route("/files/upload-url",   post(files::upload_url))

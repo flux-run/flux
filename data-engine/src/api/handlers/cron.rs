@@ -64,7 +64,7 @@ pub async fn list(
         }))
         .collect();
 
-    Ok(Json(json!({ "data": data })))
+    Ok(Json(json!({ "cron": data })))
 }
 
 // ─── POST /db/cron ────────────────────────────────────────────────────────────
@@ -154,6 +154,35 @@ pub async fn delete(
         return Err(EngineError::DatabaseNotFound(format!("cron job {}", id)));
     }
     Ok(Json(json!({ "deleted": true })))
+}
+
+// ─── POST /db/cron/:id/trigger ───────────────────────────────────────────────────
+
+/// Mark a cron job for immediate execution by setting `next_run_at = NOW()`.
+/// The cron worker will pick it up on its next poll cycle.
+pub async fn trigger(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, EngineError> {
+    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+
+    let r = sqlx::query(
+        "UPDATE fluxbase_internal.cron_jobs \
+         SET next_run_at = NOW() \
+         WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+    )
+    .bind(id)
+    .bind(auth.tenant_id)
+    .bind(auth.project_id)
+    .execute(&state.pool)
+    .await
+    .map_err(EngineError::Db)?;
+
+    if r.rows_affected() == 0 {
+        return Err(EngineError::DatabaseNotFound(format!("cron job {}", id)));
+    }
+    Ok(Json(json!({ "triggered": true })))
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

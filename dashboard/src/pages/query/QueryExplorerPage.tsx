@@ -18,8 +18,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator'
 import {
   Play, Plus, Trash2, RefreshCw, Table2, Braces,
-  ChevronRight, AlertCircle,
+  ChevronRight, AlertCircle, Download, Code2, Check,
 } from 'lucide-react'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -52,6 +55,19 @@ const OP_COLORS: Record<Operation, string> = {
   delete: 'bg-red-500/15 text-red-400 border-red-500/20',
 }
 
+const STRATEGY_COLORS: Record<string, string> = {
+  single:  'bg-white/5 text-muted-foreground border-white/10',
+  batched: 'bg-purple-500/15 text-purple-400 border-purple-500/20',
+}
+
+interface QueryMeta {
+  strategy: string
+  complexity: number
+  elapsed_ms: number
+  rows: number
+  sql: string
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function safeParseJson(s: string): { ok: boolean; value: unknown; error?: string } {
@@ -62,7 +78,59 @@ function safeParseJson(s: string): { ok: boolean; value: unknown; error?: string
   }
 }
 
+function exportCsv(rows: Record<string, unknown>[], filename = 'query-results.csv') {
+  if (rows.length === 0) return
+  const cols = Object.keys(rows[0])
+  const escape = (v: unknown) => {
+    if (v === null || v === undefined) return ''
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v)
+    return `"${s.replace(/"/g, '""')}"`
+  }
+  const csv = [cols.join(','), ...rows.map((r) => cols.map((c) => escape(r[c])).join(','))].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = Object.assign(document.createElement('a'), { href: url, download: filename })
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function parseQueryError(msg: string): { title: string; detail: string; type: 'complexity' | 'timeout' | 'generic' } {
+  if (/query too complex/i.test(msg)) {
+    const m = msg.match(/score (\d+) exceeds limit (\d+)/)
+    return {
+      title: 'Query Too Complex',
+      detail: m
+        ? `Complexity score ${m[1]} exceeds the configured limit of ${m[2]}. Simplify filters or reduce nested selectors.`
+        : msg,
+      type: 'complexity',
+    }
+  }
+  if (/timed out/i.test(msg)) {
+    return {
+      title: 'Query Timed Out',
+      detail: 'Execution exceeded the time limit. Add an index on the filtered column or reduce the result set with more specific filters.',
+      type: 'timeout',
+    }
+  }
+  return { title: 'Query Error', detail: msg, type: 'generic' }
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
+
+function JsonExpandDialog({ value, onClose }: { value: unknown; onClose: () => void }) {
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-2xl max-h-[70vh] overflow-auto">
+        <DialogHeader>
+          <DialogTitle className="text-sm font-mono">JSON Value</DialogTitle>
+        </DialogHeader>
+        <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap mt-2">
+          {JSON.stringify(value, null, 2)}
+        </pre>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 function FilterRow({
   filter,
@@ -116,17 +184,45 @@ function FilterRow({
   )
 }
 
-function ResultTable({ rows }: { rows: Record<string, unknown>[] }) {
+function ResultTable({ rows, onExpand }: { rows: Record<string, unknown>[]; onExpand: (v: unknown) => void }) {
+  const [copiedCell, setCopiedCell] = useState<string | null>(null)
+
+  const copyValue = (cellId: string, v: unknown) => {
+    const text = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v ?? '')
+    navigator.clipboard.writeText(text).catch(() => {})
+    setCopiedCell(cellId)
+    setTimeout(() => setCopiedCell((p) => (p === cellId ? null : p)), 1500)
+  }
+
   const columns: ColumnDef<Record<string, unknown>>[] = rows.length === 0 ? [] :
     Object.keys(rows[0]).map((key) => ({
       id: key,
       accessorKey: key,
       header: key,
-      cell: ({ getValue }) => {
+      cell: ({ getValue, row }) => {
         const v = getValue()
+        const cellId = `${row.id}-${key}`
+        const copied = copiedCell === cellId
         if (v === null || v === undefined) return <span className="text-muted-foreground/40 text-xs italic">null</span>
-        if (typeof v === 'object') return <span className="text-purple-400 text-xs font-mono">{JSON.stringify(v)}</span>
-        return <span className="text-xs font-mono">{String(v)}</span>
+        if (typeof v === 'object') return (
+          <button
+            className="text-purple-400 text-xs font-mono hover:text-purple-300 cursor-pointer flex items-center gap-0.5 max-w-xs truncate"
+            onClick={() => onExpand(v)}
+            title="Click to expand JSON"
+          >
+            {'{'}&hellip;{'}'}
+          </button>
+        )
+        return (
+          <button
+            className={cn('text-xs font-mono text-left max-w-xs truncate cursor-pointer hover:text-foreground transition-colors flex items-center gap-1', copied ? 'text-emerald-400' : '')}
+            onClick={() => copyValue(cellId, v)}
+            title={copied ? 'Copied!' : 'Click to copy'}
+          >
+            {copied && <Check className="w-3 h-3 shrink-0" />}
+            {String(v)}
+          </button>
+        )
       },
     }))
 
@@ -199,8 +295,10 @@ export default function QueryExplorerPage() {
   /* Results */
   const [rows, setRows] = useState<Record<string, unknown>[]>([])
   const [resultView, setResultView] = useState<'table' | 'json'>('table')
-  const [execMeta, setExecMeta] = useState<{ ms: number; count: number } | null>(null)
+  const [execMeta, setExecMeta] = useState<QueryMeta | null>(null)
   const [execError, setExecError] = useState<string | null>(null)
+  const [showSql, setShowSql] = useState(false)
+  const [expandedJson, setExpandedJson] = useState<unknown>(null)
 
   /* Data fetching */
   const { data: dbData } = useQuery({
@@ -265,19 +363,18 @@ export default function QueryExplorerPage() {
         }
       }
 
-      const t0 = performance.now()
-      const result = await dbFetch<unknown>('/db/query', {
+      const result = await dbFetch<{ data: unknown; meta: QueryMeta }>('/db/query', {
         method: 'POST',
         body: JSON.stringify(req),
       })
-      const ms = Math.round(performance.now() - t0)
 
-      const resultRows = Array.isArray(result) ? result as Record<string, unknown>[] : []
-      return { rows: resultRows, ms, raw: result }
+      const resultRows = Array.isArray(result.data) ? result.data as Record<string, unknown>[] : []
+      return { rows: resultRows, meta: result.meta }
     },
-    onSuccess: ({ rows: r, ms }) => {
+    onSuccess: ({ rows: r, meta }) => {
       setRows(r)
-      setExecMeta({ ms, count: r.length })
+      setExecMeta(meta)
+      setShowSql(false)
     },
     onError: (err: Error) => {
       setExecError(err.message)
@@ -493,12 +590,12 @@ export default function QueryExplorerPage() {
       {/* Right panel — Results */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Result header */}
-        <div className="flex items-center gap-4 px-5 py-3 border-b border-white/5 shrink-0">
+        <div className="flex items-center gap-2 px-5 py-2.5 border-b border-white/5 shrink-0 flex-wrap">
           {/* Breadcrumb */}
-          <div className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
-            {database && <span className="truncate">{database}</span>}
-            {database && table && <ChevronRight className="w-3.5 h-3.5 shrink-0" />}
-            {table && <span className="truncate text-foreground">{table}</span>}
+          <div className="flex items-center gap-1.5 text-muted-foreground min-w-0 mr-1">
+            {database && <span className="text-xs truncate">{database}</span>}
+            {database && table && <ChevronRight className="w-3 h-3 shrink-0" />}
+            {table && <span className="text-xs truncate text-foreground">{table}</span>}
             {table && (
               <Badge variant="outline" className={cn('text-[10px] ml-1 border font-mono', OP_COLORS[operation])}>
                 {operation.toUpperCase()}
@@ -507,39 +604,103 @@ export default function QueryExplorerPage() {
           </div>
 
           {execMeta && (
-            <div className="ml-auto flex items-center gap-3 shrink-0">
-              <span className="text-xs text-emerald-400">{execMeta.count} row{execMeta.count !== 1 ? 's' : ''}</span>
-              <span className="text-xs text-muted-foreground">{execMeta.ms} ms</span>
-            </div>
+            <>
+              <Badge variant="outline" className="text-[10px] border-emerald-500/20 bg-emerald-500/10 text-emerald-400">
+                {execMeta.rows} row{execMeta.rows !== 1 ? 's' : ''}
+              </Badge>
+              <Badge variant="outline" className="text-[10px] border-white/10 bg-white/5 text-muted-foreground">
+                {execMeta.elapsed_ms} ms
+              </Badge>
+              <Badge
+                variant="outline"
+                className={cn('text-[10px] border font-mono', STRATEGY_COLORS[execMeta.strategy] ?? STRATEGY_COLORS.single)}
+                title={`Execution strategy: ${execMeta.strategy}`}
+              >
+                {execMeta.strategy}
+              </Badge>
+              <Badge
+                variant="outline"
+                className="text-[10px] border-white/10 bg-white/5 text-muted-foreground"
+                title={`Complexity score: ${execMeta.complexity} (max 500)`}
+              >
+                ⚡ {execMeta.complexity}
+              </Badge>
+            </>
           )}
 
-          {rows.length > 0 && (
-            <Tabs value={resultView} onValueChange={(v: string) => setResultView(v as 'table' | 'json')} className="ml-auto">
-              <TabsList className="h-7">
-                <TabsTrigger value="table" className="text-xs h-6 px-2.5 gap-1.5">
-                  <Table2 className="w-3 h-3" /> Table
-                </TabsTrigger>
-                <TabsTrigger value="json" className="text-xs h-6 px-2.5 gap-1.5">
-                  <Braces className="w-3 h-3" /> JSON
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          )}
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            {execMeta?.sql && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className={cn('h-7 px-2.5 text-xs gap-1.5', showSql ? 'text-sky-400 bg-sky-500/10' : 'text-muted-foreground')}
+                onClick={() => setShowSql((s) => !s)}
+              >
+                <Code2 className="w-3.5 h-3.5" /> SQL
+              </Button>
+            )}
+            {rows.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2.5 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+                onClick={() => exportCsv(rows, `${table}-query.csv`)}
+              >
+                <Download className="w-3.5 h-3.5" /> CSV
+              </Button>
+            )}
+            {rows.length > 0 && (
+              <Tabs value={resultView} onValueChange={(v: string) => setResultView(v as 'table' | 'json')}>
+                <TabsList className="h-7">
+                  <TabsTrigger value="table" className="text-xs h-6 px-2.5 gap-1.5">
+                    <Table2 className="w-3 h-3" /> Table
+                  </TabsTrigger>
+                  <TabsTrigger value="json" className="text-xs h-6 px-2.5 gap-1.5">
+                    <Braces className="w-3 h-3" /> JSON
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+            )}
+          </div>
         </div>
+
+        {/* View SQL panel */}
+        {showSql && execMeta?.sql && (
+          <div className="px-5 py-3 border-b border-white/5 bg-black/20 shrink-0 max-h-52 overflow-auto">
+            <p className="text-[10px] text-muted-foreground/50 uppercase tracking-widest mb-1.5 font-semibold">Compiled SQL</p>
+            <pre className="text-xs font-mono text-sky-300 whitespace-pre-wrap break-all">{execMeta.sql}</pre>
+          </div>
+        )}
 
         {/* Result body */}
         <div className="flex-1 overflow-hidden flex flex-col">
-          {execError && (
-            <div className="m-5 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3">
-              <div className="flex items-start gap-2.5">
-                <AlertCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-destructive mb-0.5">Query Error</p>
-                  <p className="text-xs text-destructive/80 font-mono break-all">{execError}</p>
+          {execError && (() => {
+            const { title, detail, type } = parseQueryError(execError)
+            const isComplexity = type === 'complexity'
+            const isTimeout = type === 'timeout'
+            return (
+              <div className={cn(
+                'm-5 rounded-lg border px-4 py-3',
+                isComplexity ? 'border-amber-500/30 bg-amber-500/10' :
+                isTimeout ? 'border-orange-500/30 bg-orange-500/10' :
+                'border-destructive/30 bg-destructive/10'
+              )}>
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className={cn('w-4 h-4 mt-0.5 shrink-0',
+                    isComplexity ? 'text-amber-400' : isTimeout ? 'text-orange-400' : 'text-destructive'
+                  )} />
+                  <div>
+                    <p className={cn('text-sm font-medium mb-0.5',
+                      isComplexity ? 'text-amber-400' : isTimeout ? 'text-orange-400' : 'text-destructive'
+                    )}>{title}</p>
+                    <p className={cn('text-xs font-mono break-all',
+                      isComplexity ? 'text-amber-400/70' : isTimeout ? 'text-orange-400/70' : 'text-destructive/80'
+                    )}>{detail}</p>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )
+          })()}
 
           {!execError && !execMeta && !executeMutation.isPending && (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
@@ -568,7 +729,7 @@ export default function QueryExplorerPage() {
 
           {!execError && execMeta && !executeMutation.isPending && (
             resultView === 'table'
-              ? <ResultTable rows={rows} />
+              ? <ResultTable rows={rows} onExpand={setExpandedJson} />
               : (
                 <div className="flex-1 overflow-auto p-4">
                   <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-all">
@@ -579,6 +740,10 @@ export default function QueryExplorerPage() {
           )}
         </div>
       </main>
+
+      {expandedJson !== null && (
+        <JsonExpandDialog value={expandedJson} onClose={() => setExpandedJson(null)} />
+      )}
     </div>
   )
 }

@@ -196,6 +196,10 @@ pub async fn handler(
         CompileResult::Single(_)           => "single",
         CompileResult::Batched { .. }      => "batched",
     };
+    let compiled_sql = match &compile_result {
+        CompileResult::Single(cq)          => cq.sql.clone(),
+        CompileResult::Batched { root, .. } => root.sql.clone(),
+    };
     let rows_returned = result.as_array().map_or(0, |a| a.len());
     tracing::info!(
         op    = %req.operation,
@@ -251,5 +255,14 @@ pub async fn handler(
         .await;
     }
 
-    Ok(Json(json!({ "data": result })))
+    Ok(Json(json!({
+        "data": result,
+        "meta": {
+            "strategy": strategy,
+            "complexity": complexity,
+            "elapsed_ms": elapsed_ms,
+            "rows": rows_returned,
+            "sql": compiled_sql,
+        }
+    })))
 }
