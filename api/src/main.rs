@@ -11,7 +11,7 @@ mod logs;
 
 use axum::{
     middleware as axum_middleware,
-    routing::{delete, get, post, put},
+    routing::{any, delete, get, post, put},
     Json,
     Router,
 };
@@ -29,6 +29,8 @@ pub struct AppState {
     pub pool: sqlx::PgPool,
     pub firebase_auth: Arc<FirebaseAuth>,
     pub storage: services::storage::StorageService,
+    pub http_client: reqwest::Client,
+    pub data_engine_url: String,
 }
 
 impl axum::extract::FromRef<AppState> for sqlx::PgPool {
@@ -155,6 +157,11 @@ pub fn create_app(state: AppState) -> Router {
         // Gateway Routes
         .route("/routes", get(routes::gateway_routes::list_gateway_routes).post(routes::gateway_routes::create_gateway_route))
         .route("/routes/{id}", axum::routing::patch(routes::gateway_routes::update_gateway_route).delete(routes::gateway_routes::delete_gateway_route))
+        // Data Engine management proxy — CRUD for databases, tables, schema,
+        // relationships, policies, hooks, subscriptions, workflows, cron.
+        // Execution traffic (POST /db/query) is routed to the gateway instead.
+        .route("/db/{*path}",    any(routes::data_engine::proxy_handler))
+        .route("/files/{*path}", any(routes::data_engine::proxy_handler))
         .layer(axum_middleware::from_fn(|req, next| {
             middleware::scope::require_scope(Scope::Project, req, next)
         }));
@@ -207,6 +214,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool,
         firebase_auth,
         storage,
+        http_client: reqwest::Client::new(),
+        data_engine_url: std::env::var("DATA_ENGINE_URL")
+            .unwrap_or_else(|_| "http://localhost:8082".to_string()),
     };
     
     let app = create_app(state);

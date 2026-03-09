@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Database, Plus, Trash2, ChevronRight, Table2 } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -28,7 +28,7 @@ export default function DatabasesPage() {
   // --- list databases
   const { data, isLoading } = useQuery({
     queryKey: ['databases', projectId],
-    queryFn: () => dbFetch<DbList>('/db/databases'),
+    queryFn: () => apiFetch<DbList>('/db/databases'),
     enabled: !!projectId,
   })
 
@@ -41,7 +41,7 @@ export default function DatabasesPage() {
       await Promise.all(
         dbNames.map(async (db) => {
           try {
-            const r = await dbFetch<TablesResponse>(`/db/tables/${db}`)
+            const r = await apiFetch<TablesResponse>(`/db/tables/${db}`)
             counts[db] = r.tables?.length ?? 0
           } catch {
             counts[db] = 0
@@ -54,7 +54,7 @@ export default function DatabasesPage() {
   })
 
   const createMutation = useMutation({
-    mutationFn: () => dbFetch('/db/databases', { method: 'POST', body: JSON.stringify({ name: dbName }) }),
+    mutationFn: () => apiFetch('/db/databases', { method: 'POST', body: JSON.stringify({ name: dbName }) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['databases'] })
       setDbName('')
@@ -63,7 +63,7 @@ export default function DatabasesPage() {
   })
 
   const dropMutation = useMutation({
-    mutationFn: (name: string) => dbFetch(`/db/databases/${name}`, { method: 'DELETE' }),
+    mutationFn: (name: string) => apiFetch(`/db/databases/${name}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['databases'] }),
   })
 

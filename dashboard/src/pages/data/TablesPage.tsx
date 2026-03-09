@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { Database, Table2, Plus, Trash2, ChevronRight, ChevronLeft, FileText, Cpu } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -50,13 +50,13 @@ export default function TablesPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['tables', projectId, database],
-    queryFn: () => dbFetch<TablesResponse>(`/db/tables/${database}`),
+    queryFn: () => apiFetch<TablesResponse>(`/db/tables/${database}`),
     enabled: !!database,
   })
 
   const createMutation = useMutation({
     mutationFn: () =>
-      dbFetch('/db/tables', {
+      apiFetch('/db/tables', {
         method: 'POST',
         body: JSON.stringify({ database, name: tableName, columns: cols }),
       }),
@@ -68,7 +68,7 @@ export default function TablesPage() {
   })
 
   const dropMutation = useMutation({
-    mutationFn: (table: string) => dbFetch(`/db/tables/${database}/${table}`, { method: 'DELETE' }),
+    mutationFn: (table: string) => apiFetch(`/db/tables/${database}/${table}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tables'] }),
   })
 

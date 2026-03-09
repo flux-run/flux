@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         http_client,
         runtime_url: config.runtime_url,
         queue_client,
+        data_engine_url: config.data_engine_url,
         internal_service_token: config.internal_service_token,
         snapshot,
         jwks_cache,

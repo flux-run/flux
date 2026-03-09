@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { Webhook, Plus, Trash2, AlertCircle } from 'lucide-react'
-import { dbFetch, apiFetch } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import {
@@ -44,7 +44,7 @@ export default function TableHooksView({ table }: Props) {
 
   const hooksQ = useQuery({
     queryKey: ['hooks', projectId],
-    queryFn: () => dbFetch<HookResponse>('/db/hooks'),
+    queryFn: () => apiFetch<HookResponse>('/db/hooks'),
     enabled: !!projectId,
   })
 
@@ -66,13 +66,13 @@ export default function TableHooksView({ table }: Props) {
   }, [fnsQ.data])
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => dbFetch(`/db/hooks/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: string) => apiFetch(`/db/hooks/${id}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['hooks'] }),
   })
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      dbFetch(`/db/hooks/${id}`, {
+      apiFetch(`/db/hooks/${id}`, {
         method: 'PATCH',
         body: JSON.stringify({ enabled }),
       }),
@@ -81,7 +81,7 @@ export default function TableHooksView({ table }: Props) {
 
   const createMutation = useMutation({
     mutationFn: () =>
-      dbFetch('/db/hooks', {
+      apiFetch('/db/hooks', {
         method: 'POST',
         body: JSON.stringify({ table_name: table, event, function_id: fnId }),
       }),

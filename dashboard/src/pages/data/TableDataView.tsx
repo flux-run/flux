@@ -8,7 +8,7 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import { FileText, Cpu, Link as LinkIcon, RefreshCw, AlertCircle } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { apiFetch, gatewayFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 
 interface SchemaColumn {
@@ -47,7 +47,7 @@ export default function TableDataView({ database, table }: TableDataViewProps) {
   // Schema (for column type annotations)
   const schemaQ = useQuery({
     queryKey: ['schema-cols', projectId, database, table],
-    queryFn: () => dbFetch<SchemaResponse>(`/db/schema?database=${database}`),
+    queryFn: () => apiFetch<SchemaResponse>(`/db/schema?database=${database}`),
     enabled: !!database,
   })
 
@@ -63,7 +63,7 @@ export default function TableDataView({ database, table }: TableDataViewProps) {
   const dataQ = useQuery({
     queryKey: ['table-data', projectId, database, table, limit],
     queryFn: () =>
-      dbFetch<unknown[]>('/db/query', {
+      gatewayFetch<unknown[]>('/db/query', {
         method: 'POST',
         body: JSON.stringify({ database, table, operation: 'select', limit }),
       }),

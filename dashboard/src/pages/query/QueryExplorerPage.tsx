@@ -6,7 +6,7 @@ import {
   flexRender,
   type ColumnDef,
 } from '@tanstack/react-table'
-import { dbFetch } from '@/lib/api'
+import { apiFetch, gatewayFetch } from '@/lib/api'
 import { useStore } from '@/state/tenantStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -303,13 +303,13 @@ export default function QueryExplorerPage() {
   /* Data fetching */
   const { data: dbData } = useQuery({
     queryKey: ['databases', projectId],
-    queryFn: () => dbFetch<{ databases: string[] }>('/db/databases'),
+    queryFn: () => apiFetch<{ databases: string[] }>('/db/databases'),
     enabled: !!projectId,
   })
 
   const { data: tablesData } = useQuery({
     queryKey: ['tables', projectId, database],
-    queryFn: () => dbFetch<{ database: string; tables: { name: string; columns: { name: string }[] }[] }>(`/db/tables/${database}`),
+    queryFn: () => apiFetch<{ database: string; tables: { name: string; columns: { name: string }[] }[] }>(`/db/tables/${database}`),
     enabled: !!database,
   })
 
@@ -363,7 +363,7 @@ export default function QueryExplorerPage() {
         }
       }
 
-      const result = await dbFetch<{ data: unknown; meta: QueryMeta }>('/db/query', {
+      const result = await gatewayFetch<{ data: unknown; meta: QueryMeta }>('/db/query', {
         method: 'POST',
         body: JSON.stringify(req),
       })

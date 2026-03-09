@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { ShieldCheck, Plus, Trash2, AlertCircle } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -45,7 +45,7 @@ export default function TablePoliciesView({ database, table }: Props) {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['policies', projectId],
-    queryFn: () => dbFetch<PolicyResponse>('/db/policies'),
+    queryFn: () => apiFetch<PolicyResponse>('/db/policies'),
     enabled: !!projectId,
   })
 
@@ -55,13 +55,13 @@ export default function TablePoliciesView({ database, table }: Props) {
   )
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => dbFetch(`/db/policies/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: string) => apiFetch(`/db/policies/${id}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['policies'] }),
   })
 
   const createMutation = useMutation({
     mutationFn: () =>
-      dbFetch('/db/policies', {
+      apiFetch('/db/policies', {
         method: 'POST',
         body: JSON.stringify({
           database,

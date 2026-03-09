@@ -56,13 +56,14 @@ export async function apiFetch<T = unknown>(
   return json as T;
 }
 
-// ─── Data Engine client ───────────────────────────────────────────────────────
-// Calls the separate Fluxbase Data Engine service (VITE_DB_URL).
-// Auth headers are identical; the data engine uses the same tenant/project ctx.
+// ─── Gateway client (execution plane) ────────────────────────────────────────
+// Routes execution traffic (POST /db/query, cron triggers, file ops) through
+// the gateway, which proxies internally to the Data Engine.
+// CONFIGURATION calls (CRUD) go via apiFetch → API service instead.
 
-const DB_BASE = import.meta.env.VITE_DB_URL ?? "http://localhost:8082";
+const GATEWAY_BASE = import.meta.env.VITE_GATEWAY_URL ?? "http://localhost:8081";
 
-export async function dbFetch<T = unknown>(
+export async function gatewayFetch<T = unknown>(
   path: string,
   options: FetchOptions = {},
 ): Promise<T> {
@@ -86,7 +87,7 @@ export async function dbFetch<T = unknown>(
     ...(options.headers as Record<string, string>),
   };
 
-  const res = await fetch(`${DB_BASE}${path}`, { ...options, headers });
+  const res = await fetch(`${GATEWAY_BASE}${path}`, { ...options, headers });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "unknown_error" }));

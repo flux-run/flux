@@ -12,7 +12,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Plus, Trash2, AlertCircle } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -68,18 +68,18 @@ export default function TableRelationshipsView({ database, table }: Props) {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['relationships', projectId, database, table],
-    queryFn: () => dbFetch<RelResponse>('/db/relationships'),
+    queryFn: () => apiFetch<RelResponse>('/db/relationships'),
     enabled: !!projectId,
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => dbFetch(`/db/relationships/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: string) => apiFetch(`/db/relationships/${id}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['relationships'] }),
   })
 
   const createMutation = useMutation({
     mutationFn: () =>
-      dbFetch('/db/relationships', {
+      apiFetch('/db/relationships', {
         method: 'POST',
         body: JSON.stringify({ database, from_table: table, ...form }),
       }),

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { Bell, Plus, Trash2, Radio } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -40,18 +40,18 @@ export default function EventsPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['subscriptions', projectId],
-    queryFn: () => dbFetch<SubResponse>('/db/subscriptions'),
+    queryFn: () => apiFetch<SubResponse>('/db/subscriptions'),
     enabled: !!projectId,
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => dbFetch(`/db/subscriptions/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: string) => apiFetch(`/db/subscriptions/${id}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['subscriptions'] }),
   })
 
   const createMutation = useMutation({
     mutationFn: () =>
-      dbFetch('/db/subscriptions', {
+      apiFetch('/db/subscriptions', {
         method: 'POST',
         body: JSON.stringify({
           event_pattern: form.event_pattern,

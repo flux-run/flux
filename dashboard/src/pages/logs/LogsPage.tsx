@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { apiFetch, dbFetch } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { useStore } from '@/state/tenantStore'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -257,7 +257,7 @@ function WorkflowsTab() {
 
   const { data, isFetching, refetch } = useQuery({
     queryKey: ['workflows-log', projectId],
-    queryFn: () => dbFetch<{ workflows: Workflow[] }>('/db/workflows'),
+    queryFn: () => apiFetch<{ workflows: Workflow[] }>('/db/workflows'),
     enabled: !!projectId,
   })
 
@@ -314,7 +314,7 @@ function CronTab() {
 
   const { data, isFetching, refetch } = useQuery({
     queryKey: ['cron-log', projectId],
-    queryFn: () => dbFetch<{ cron: CronJob[] }>('/db/cron'),
+    queryFn: () => apiFetch<{ cron: CronJob[] }>('/db/cron'),
     enabled: !!projectId,
   })
 

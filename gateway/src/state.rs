@@ -9,6 +9,7 @@ pub struct GatewayState {
     pub http_client: reqwest::Client,
     pub runtime_url: String,
     pub queue_client: QueueClient,
+    pub data_engine_url: String,
     pub internal_service_token: String,
     pub snapshot: GatewaySnapshot,
     pub jwks_cache: crate::cache::jwks::JwksCache,

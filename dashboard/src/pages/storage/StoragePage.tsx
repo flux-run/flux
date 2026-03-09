@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { HardDrive, FileText, Lock, Globe, Info } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { gatewayFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -25,7 +25,7 @@ export default function StoragePage() {
     setError(null)
     setResult(null)
     try {
-      const r = await dbFetch<UploadUrlResponse>('/files/upload-url', {
+      const r = await gatewayFetch<UploadUrlResponse>('/files/upload-url', {
         method: 'POST',
         body: JSON.stringify({ table, column, row_id: rowId }),
       })

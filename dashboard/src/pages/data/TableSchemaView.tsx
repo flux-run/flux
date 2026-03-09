@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { FileText, Cpu, Link as LinkIcon, AlertCircle } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 
 interface SchemaColumn {
@@ -36,7 +36,7 @@ export default function TableSchemaView({ database, table }: Props) {
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['schema', projectId, database],
-    queryFn: () => dbFetch<SchemaResponse>(`/db/schema?database=${database}`),
+    queryFn: () => apiFetch<SchemaResponse>(`/db/schema?database=${database}`),
     enabled: !!database,
   })
 

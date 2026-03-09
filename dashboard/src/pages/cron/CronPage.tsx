@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { Clock, Plus, Trash2, Play } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { apiFetch, gatewayFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -48,25 +48,25 @@ export default function CronPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['cron', projectId],
-    queryFn: () => dbFetch<CronResponse>('/db/cron'),
+    queryFn: () => apiFetch<CronResponse>('/db/cron'),
     enabled: !!projectId,
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => dbFetch(`/db/cron/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: string) => apiFetch(`/db/cron/${id}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cron'] }),
   })
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      dbFetch(`/db/cron/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+      apiFetch(`/db/cron/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cron'] }),
   })
 
   const createMutation = useMutation({
     mutationFn: () => {
       const schedule = preset === '__custom__' ? customSchedule : preset
-      return dbFetch('/db/cron', {
+      return apiFetch('/db/cron', {
         method: 'POST',
         body: JSON.stringify({
           name: form.name,
@@ -84,7 +84,7 @@ export default function CronPage() {
   })
 
   const runNowMutation = useMutation({
-    mutationFn: (id: string) => dbFetch(`/db/cron/${id}/trigger`, { method: 'POST' }),
+    mutationFn: (id: string) => gatewayFetch(`/db/cron/${id}/trigger`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cron'] }),
   })
 

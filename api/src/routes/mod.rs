@@ -6,3 +6,4 @@ pub mod deployments;
 pub mod platform;
 pub mod system;
 pub mod gateway_routes;
+pub mod data_engine;

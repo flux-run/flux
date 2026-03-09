@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import { GitBranch, Plus, Trash2, ChevronDown, ChevronUp, Zap } from 'lucide-react'
-import { dbFetch } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -45,18 +45,18 @@ export default function WorkflowsPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['workflows', projectId],
-    queryFn: () => dbFetch<WfResponse>('/db/workflows'),
+    queryFn: () => apiFetch<WfResponse>('/db/workflows'),
     enabled: !!projectId,
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => dbFetch(`/db/workflows/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: string) => apiFetch(`/db/workflows/${id}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
   })
 
   const createMutation = useMutation({
     mutationFn: () =>
-      dbFetch('/db/workflows', {
+      apiFetch('/db/workflows', {
         method: 'POST',
         body: JSON.stringify(form),
       }),
