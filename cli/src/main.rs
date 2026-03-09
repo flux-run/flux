@@ -51,10 +51,14 @@ enum Commands {
     },
     /// Run function locally
     Dev,
-    /// Deploy function from current directory (requires flux.json)
+    /// Deploy to Fluxbase.
+    /// In a function directory (has flux.json): deploys that single function.
+    /// At the project root: discovers and deploys all function sub-directories.
     Deploy {
+        /// Override function name (single-function mode only)
         #[arg(long)]
         name: Option<String>,
+        /// Override runtime (single-function mode only)
         #[arg(long)]
         runtime: Option<String>,
     },
