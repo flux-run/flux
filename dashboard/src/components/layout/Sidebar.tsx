@@ -2,7 +2,7 @@ import { NavLink, useParams } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { Zap, FolderOpen, Settings, LayoutDashboard,
   Code2, KeyRound, ShieldCheck, ScrollText, Globe,
-  Database, HardDrive, Bell, GitBranch, Clock,
+  Database, HardDrive, Bell, GitBranch, Clock, Terminal,
 } from 'lucide-react'
 import { TenantSwitcher } from '@/components/TenantSwitcher'
 import { useAuth } from '@/hooks/useAuth'
@@ -85,6 +85,7 @@ export function Sidebar() {
             {navItem(`/dashboard/projects/${projectId}/events`,     Bell,            'Events')}
             {navItem(`/dashboard/projects/${projectId}/workflows`,  GitBranch,       'Workflows')}
             {navItem(`/dashboard/projects/${projectId}/cron`,       Clock,           'Cron')}
+            {navItem(`/dashboard/projects/${projectId}/query`,      Terminal,        'Query Explorer')}
             {navItem(`/dashboard/projects/${projectId}/secrets`,    ShieldCheck,     'Secrets')}
             {navItem(`/dashboard/projects/${projectId}/api-keys`,   KeyRound,        'API Keys')}
             {navItem(`/dashboard/projects/${projectId}/logs`,       ScrollText,      'Logs')}

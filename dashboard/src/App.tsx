@@ -21,6 +21,7 @@ import StoragePage from '@/pages/storage/StoragePage'
 import EventsPage from '@/pages/events/EventsPage'
 import WorkflowsPage from '@/pages/workflows/WorkflowsPage'
 import CronPage from '@/pages/cron/CronPage'
+import QueryExplorerPage from '@/pages/query/QueryExplorerPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -56,6 +57,7 @@ export default function App() {
               <Route path="events" element={<EventsPage />} />
               <Route path="workflows" element={<WorkflowsPage />} />
               <Route path="cron" element={<CronPage />} />
+              <Route path="query" element={<QueryExplorerPage />} />
               {/* Serverless */}
               <Route path="functions" element={<FunctionsPage />} />
               <Route path="functions/:functionId" element={<FunctionDetailPage />} />
