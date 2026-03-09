@@ -1,4 +1,4 @@
-.PHONY: dev api dashboard build migrate install clean test-async-wiring test-platform
+.PHONY: dev api dashboard build migrate install clean test-async-wiring test-platform deploy-with-migrate
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API + dashboard in parallel, printing labelled output.
@@ -32,11 +32,16 @@ deploy:
 	./scripts/deploy.sh --env production $(if $(SERVICE),--service $(SERVICE))
 
 deploy-gcp:
-	@echo "→ Running migrations before deploy…"
-	$(MAKE) migrate
 	TAG=$$(git rev-parse --short HEAD); \
 	./scripts/build.sh --docker --platform linux/amd64 --registry asia-south1-docker.pkg.dev/fluxbase-app/fluxbase --tag $$TAG $(if $(SERVICE),--service $(SERVICE)); \
 	./scripts/deploy.sh --env production --project fluxbase-app --region asia-south1 --platform linux/amd64 --tag $$TAG $(if $(SERVICE),--service $(SERVICE))
+
+# Full deploy workflow: migrate DB first, then build + push + deploy.
+# Use this whenever your commit includes new migration files.
+# Usage: make deploy-with-migrate SERVICE=api
+deploy-with-migrate:
+	$(MAKE) migrate
+	$(MAKE) deploy-gcp SERVICE=$(SERVICE)
 
 # Deploys with a dry-run.
 deploy-dry-run:
