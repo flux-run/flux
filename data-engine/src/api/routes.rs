@@ -13,30 +13,30 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route("/db/query",                   post(query::handler))
         // ── Database management ───────────────────────────────────────────────
         .route("/db/databases",               post(databases::create).get(databases::list))
-        .route("/db/databases/:name",         delete(databases::drop_db))
+        .route("/db/databases/{name}",         delete(databases::drop_db))
         // ── Table management ──────────────────────────────────────────────────
         .route("/db/tables",                  post(tables::create))
-        .route("/db/tables/:database",        get(tables::list))
-        .route("/db/tables/:database/:table", delete(tables::drop_table))
+        .route("/db/tables/{database}",        get(tables::list))
+        .route("/db/tables/{database}/{table}", delete(tables::drop_table))
         // ── Policy management ─────────────────────────────────────────────────
         .route("/db/policies",               get(policies::list).post(policies::create))
-        .route("/db/policies/:id",           delete(policies::delete))
+        .route("/db/policies/{id}",           delete(policies::delete))
         // ── Hook management ───────────────────────────────────────────────────
         .route("/db/hooks",     get(hooks::list).post(hooks::create))
-        .route("/db/hooks/:id", patch(hooks::update).delete(hooks::delete))
+        .route("/db/hooks/{id}", patch(hooks::update).delete(hooks::delete))
         // ── Relationships ─────────────────────────────────────────────────────
         .route("/db/relationships",     get(relationships::list).post(relationships::create))
-        .route("/db/relationships/:id", delete(relationships::delete))
+        .route("/db/relationships/{id}", delete(relationships::delete))
         // ── Event subscriptions ─────────────────────────────────────────────
         .route("/db/subscriptions",     get(subscriptions::list).post(subscriptions::create))
-        .route("/db/subscriptions/:id", patch(subscriptions::update).delete(subscriptions::delete))        // ── Workflows ────────────────────────────────────────────────────────────
+        .route("/db/subscriptions/{id}", patch(subscriptions::update).delete(subscriptions::delete))        // ── Workflows ────────────────────────────────────────────────────────────
         .route("/db/workflows",           get(workflows::list).post(workflows::create))
-        .route("/db/workflows/:id",       delete(workflows::delete))
-        .route("/db/workflows/:id/steps", post(workflows::add_step))
+        .route("/db/workflows/{id}",       delete(workflows::delete))
+        .route("/db/workflows/{id}/steps", post(workflows::add_step))
         // ── Cron jobs ──────────────────────────────────────────────────────────
         .route("/db/cron",             get(cron::list).post(cron::create))
-        .route("/db/cron/:id",         patch(cron::update).delete(cron::delete))
-        .route("/db/cron/:id/trigger", post(cron::trigger))
+        .route("/db/cron/{id}",         patch(cron::update).delete(cron::delete))
+        .route("/db/cron/{id}/trigger", post(cron::trigger))
         // ── Schema introspection ───────────────────────────────────────────────
         .route("/db/schema", get(schema::introspect))        // ── File presigned URLs ───────────────────────────────────────────────
         .route("/files/upload-url",   post(files::upload_url))

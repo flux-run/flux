@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = config::config::load();
     let pool = db::connection::init_pool(&config.database_url).await?;
-    db::connection::migrate(&pool).await?;
+    // db::connection::migrate(&pool).await?;
 
     tokio::spawn(worker::worker::start(
         pool.clone(),

@@ -26,8 +26,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("connecting to database...");
     let pool = db::connection::init_pool(&cfg.database_url).await;
 
-    tracing::info!("running migrations...");
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    // tracing::info!("running migrations...");
+    // sqlx::migrate!("./migrations").run(&pool).await?;
 
     let app_state = Arc::new(state::AppState::new(pool.clone(), &cfg).await);
 

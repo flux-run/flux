@@ -31,7 +31,7 @@ pub fn load() -> Config {
         database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL required"),
         port: std::env::var("PORT")
             .or_else(|_| std::env::var("DATA_ENGINE_PORT"))
-            .unwrap_or_else(|_| "8084".to_string())
+            .unwrap_or_else(|_| "8080".to_string())
             .parse()
             .expect("PORT must be a number"),
         default_query_limit: std::env::var("DEFAULT_QUERY_LIMIT")

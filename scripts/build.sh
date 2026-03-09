@@ -9,6 +9,7 @@ set -e
 DOCKER_BUILD=false
 SERVICE_NAME="all"
 REGISTRY=""
+PLATFORM=""
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -16,19 +17,17 @@ while [[ "$#" -gt 0 ]]; do
         --docker) DOCKER_BUILD=true ;;
         --service) SERVICE_NAME="$2"; shift ;;
         --registry) REGISTRY="$2"; shift ;;
+        --platform) PLATFORM="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
     shift
 done
 
-SERVICES=("api" "gateway" "runtime" "fluxbase-queue" "data-engine" "cli")
+SERVICES=("api" "gateway" "runtime" "queue" "data-engine" "cli")
 
 build_rust_service() {
     local service=$1
     local dir=$service
-    if [ "$service" == "fluxbase-queue" ]; then
-        dir="queue"
-    fi
     echo "Building Rust service: $service (in dir $dir)..."
     if [ "$DOCKER_BUILD" = true ]; then
         if [ -f "$dir/Dockerfile" ]; then
@@ -36,8 +35,21 @@ build_rust_service() {
             if [ -n "$REGISTRY" ]; then
                 TAG="$REGISTRY/$service:latest"
             fi
-            echo "Building Docker image for $service with tag $TAG..."
-            docker build -t "$TAG" -f "$dir/Dockerfile" .
+            
+            PLATFORM_ARG=""
+            if [ -n "$PLATFORM" ]; then
+                PLATFORM_ARG="--platform $PLATFORM"
+                echo "Building Docker image for $service with platform $PLATFORM..."
+            else
+                echo "Building Docker image for $service..."
+            fi
+            
+            PACKAGE_NAME=$service
+            if [ "$service" == "queue" ]; then
+                PACKAGE_NAME="fluxbase-queue"
+            fi
+            
+            docker build $PLATFORM_ARG -t "$TAG" -f "$dir/Dockerfile" --build-arg PACKAGE_NAME=$PACKAGE_NAME .
         else
             echo "Warning: No Dockerfile found for $dir, skipping Docker build."
             SQLX_OFFLINE=true cargo build --release -p "$service"

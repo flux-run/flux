@@ -19,7 +19,7 @@ pub fn load() -> Config {
             .unwrap_or_else(|_| "http://localhost:3002".to_string()),
         port: std::env::var("PORT")
             .or_else(|_| std::env::var("QUEUE_PORT"))
-            .unwrap_or_else(|_| "8083".to_string())
+            .unwrap_or_else(|_| "8080".to_string())
             .parse()
             .expect("PORT must be a number"),
         worker_concurrency: std::env::var("WORKER_CONCURRENCY")

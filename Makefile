@@ -16,23 +16,23 @@ dashboard:
 # ── Build (production artefacts) ────────────────────────────────────────────
 # Builds all services using the new build script.
 build:
-	./scripts/build.sh
+	./scripts/build.sh $(if $(SERVICE),--service $(SERVICE))
 
 # Builds all services as Docker images.
 build-docker:
-	./scripts/build.sh --docker
+	./scripts/build.sh --docker $(if $(SERVICE),--service $(SERVICE))
 
 build-gcp:
-	./scripts/build.sh --docker --registry asia-south1-docker.pkg.dev/fluxbase-app/fluxbase
+	./scripts/build.sh --docker --platform linux/amd64 --registry asia-south1-docker.pkg.dev/fluxbase-app/fluxbase $(if $(SERVICE),--service $(SERVICE))
 
 # ── Deploy ──────────────────────────────────────────────────────────────────
 # Deploys all services to the specified environment.
 # Usage: make deploy ENV=staging
 deploy:
-	./scripts/deploy.sh --env production
+	./scripts/deploy.sh --env production $(if $(SERVICE),--service $(SERVICE))
 
 deploy-gcp:
-	./scripts/deploy.sh --env production --project fluxbase-app --region asia-south1
+	./scripts/deploy.sh --env production --project fluxbase-app --region asia-south1 $(if $(SERVICE),--service $(SERVICE))
 
 # Deploys with a dry-run.
 deploy-dry-run:

@@ -11,6 +11,7 @@ DRY_RUN=false
 PROJECT_ID="fluxbase-app"
 REGION="asia-south1"
 REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/fluxbase"
+SERVICE_NAME="all"
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -19,6 +20,7 @@ while [[ "$#" -gt 0 ]]; do
         --dry-run) DRY_RUN=true ;;
         --project) PROJECT_ID="$2"; shift ;;
         --region) REGION="$2"; shift ;;
+        --service) SERVICE_NAME="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
     shift
@@ -48,10 +50,14 @@ deploy_cloud_run() {
     fi
 
     echo "Deploying $service to Cloud Run..."
-    local deploy_name="fluxbase-${service}-${ENV}"
+    local deploy_name="fluxbase-${service}"
+    
+    # Special case for queue naming if needed, but since we renamed service to 'queue', 
+    # fluxbase-queue is correct.
+    
     # Match the specific directory for env.yaml
     local dir=$service
-    if [ "$service" == "fluxbase-queue" ]; then dir="queue"; fi
+    # Service name is 'queue', dir is also 'queue' (mapped in SERVICES)
     
     local env_file="$dir/env.yaml"
     local env_vars=""
@@ -60,22 +66,33 @@ deploy_cloud_run() {
     fi
 
     if [ "$DRY_RUN" = true ]; then
-        echo "[DRY-RUN] Would run: gcloud run deploy $deploy_name --image $image_tag --region $REGION --project $PROJECT_ID --platform managed --allow-unauthenticated $env_vars"
+        echo "[DRY-RUN] Would run: gcloud run deploy $deploy_name --image $image_tag --region $REGION --project $PROJECT_ID --platform managed --memory 1Gi --cpu 1 --allow-unauthenticated $env_vars"
     else
         gcloud run deploy "$deploy_name" \
             --image "$image_tag" \
             --region "$REGION" \
             --project "$PROJECT_ID" \
             --platform managed \
+            --memory 1Gi \
+            --cpu 1 \
             --allow-unauthenticated \
             $env_vars
     fi
 }
 
-SERVICES=("api" "gateway" "runtime" "fluxbase-queue" "data-engine")
+SERVICES=("api" "gateway" "runtime" "queue" "data-engine")
 
-for service in "${SERVICES[@]}"; do
-    deploy_cloud_run "$service"
-done
+if [ "$SERVICE_NAME" == "all" ]; then
+    for service in "${SERVICES[@]}"; do
+        deploy_cloud_run "$service"
+    done
+else
+    if [[ " ${SERVICES[@]} " =~ " ${SERVICE_NAME} " ]]; then
+        deploy_cloud_run "$SERVICE_NAME"
+    else
+        echo "Error: Unknown service $SERVICE_NAME"
+        exit 1
+    fi
+fi
 
 echo "Deployment to $ENV complete!"
