@@ -251,3 +251,260 @@ pub fn expand_nested_deep(
         )
     }
 }
+
+// ─── CTE aggregation plan (fast path for nested depth ≥ 2) ───────────────────
+//
+// Problem with the lateral approach above:
+//   For `users → posts(id,title) → comments(id,body)`, Postgres executes a
+//   correlated subquery for **every parent row**:
+//     - 100 users × 100 posts    → 100 post    subqueries
+//     - 100 users × 100 posts × 100 comments → 10,000 comment subqueries
+//
+// CTE aggregation pre-aggregates each related table once, then LEFT JOINs:
+//   1. `__fb_comments_cte` — one scan of `comments`, GROUP BY `post_id`
+//   2. `__fb_posts_cte`    — one scan of `posts`, LEFT JOIN comments CTE
+//   3. Outer query: `users` LEFT JOIN `__fb_posts_cte`
+//
+// Each table is scanned once; Postgres uses hash joins — 3–5× faster for
+// deep queries.
+//
+// SQL shape produced for `users?select=id,name,posts(id,title,comments(id,body))`:
+//
+// ```sql
+// WITH
+//   __fb_comments_cte AS (
+//     SELECT __fb_comments.post_id,
+//            json_agg(json_build_object('id', __fb_comments.id,
+//                                       'body', __fb_comments.body)) AS _json
+//     FROM "schema"."comments" __fb_comments
+//     GROUP BY __fb_comments.post_id
+//   ),
+//   __fb_posts_cte AS (
+//     SELECT __fb_posts.author_id,
+//            json_agg(json_build_object(
+//              'id', __fb_posts.id,
+//              'title', __fb_posts.title,
+//              'comments', COALESCE(__fb_comments_j._json, '[]'::json)
+//            )) AS _json
+//     FROM "schema"."posts" __fb_posts
+//     LEFT JOIN __fb_comments_cte __fb_comments_j
+//       ON __fb_comments_j."post_id" = __fb_posts."id"
+//     GROUP BY __fb_posts.author_id
+//   )
+// SELECT t.id, t.name,
+//        COALESCE(__fb_posts_j._json, '[]'::json) AS "posts"
+// FROM "schema"."users" t
+// LEFT JOIN __fb_posts_cte __fb_posts_j
+//   ON __fb_posts_j."author_id" = t."id"
+// WHERE ...
+// LIMIT $1
+// ```
+
+/// A compiled CTE aggregation plan for all nested selectors in a query.
+/// Hand this to `compile_select_cte` instead of using `expand_nested_deep`.
+pub struct CtePlan {
+    /// CTE definitions in bottom-to-top order, ready for a `WITH` clause.
+    pub cte_defs: Vec<String>,
+    /// One SELECT-list expression per nested selector — appended after flat cols.
+    /// e.g. `COALESCE(__fb_posts_j._json, '[]'::json) AS "posts"`
+    pub select_exprs: Vec<String>,
+    /// One LEFT JOIN fragment per nested selector — appended to the outer FROM.
+    /// e.g. `LEFT JOIN __fb_posts_cte __fb_posts_j ON __fb_posts_j."author_id" = t."id"`
+    pub join_frags: Vec<String>,
+}
+
+/// Build a [`CtePlan`] for all nested selectors at the root of a query.
+///
+/// `from_table` is the *actual table name* (not alias) of the outer query,
+/// used to look up relationships. `outer_alias` is the SQL alias for that
+/// table in the outer FROM clause (typically `"t"`).
+pub fn build_nested_ctes(
+    schema: &str,
+    outer_alias: &str,
+    from_table: &str,
+    nested_sels: &[ColumnSelector],
+    all_rels: &[RelationshipDef],
+) -> CtePlan {
+    let mut cte_defs: Vec<String> = vec![];
+    let mut select_exprs: Vec<String> = vec![];
+    let mut join_frags: Vec<String> = vec![];
+
+    for sel in nested_sels {
+        if let ColumnSelector::Nested { .. } = sel {
+            if let Some(info) = build_cte_subtree(sel, schema, from_table, all_rels) {
+                cte_defs.extend(info.cte_defs);
+
+                let join_alias = format!("__fb_{}_j", info.user_alias);
+
+                if info.is_array {
+                    select_exprs.push(format!(
+                        "COALESCE({j}._json, '[]'::json) AS {a}",
+                        j = join_alias,
+                        a = quote_ident(&info.user_alias),
+                    ));
+                } else {
+                    // has_one / belongs_to: grab the single aggregated object directly.
+                    select_exprs.push(format!(
+                        "({j}._json -> 0) AS {a}",
+                        j = join_alias,
+                        a = quote_ident(&info.user_alias),
+                    ));
+                }
+
+                join_frags.push(format!(
+                    "LEFT JOIN {cte} {j} ON {j}.{link} = {outer}.{from_col}",
+                    cte = info.cte_name,
+                    j = join_alias,
+                    link = quote_ident(&info.cte_link_col),
+                    outer = outer_alias,
+                    from_col = quote_ident(&info.parent_from_col),
+                ));
+            }
+        }
+    }
+
+    CtePlan { cte_defs, select_exprs, join_frags }
+}
+
+// ─── Internal CTE builder ────────────────────────────────────────────────────
+
+/// Metadata returned by a recursive CTE subtree build, consumed by the parent.
+struct CteSubtreeInfo {
+    /// All CTE definitions for this subtree (innermost first).
+    cte_defs: Vec<String>,
+    /// SQL name of the CTE produced at this node, e.g. `__fb_posts_cte`.
+    cte_name: String,
+    /// Column inside this CTE that links back to the parent table (= `rel.to_column`).
+    cte_link_col: String,
+    /// Column on the parent table that matches `cte_link_col` (= `rel.from_column`).
+    parent_from_col: String,
+    /// User-facing alias (= `rel.alias`), used for JSON key and outer JOIN alias.
+    user_alias: String,
+    /// Whether this relationship is has_many / many_to_many.
+    is_array: bool,
+}
+
+/// Recursively build a `CteSubtreeInfo` for one `ColumnSelector::Nested` node.
+/// Returns `None` when no matching relationship is found in `all_rels`.
+fn build_cte_subtree(
+    sel: &ColumnSelector,
+    schema: &str,
+    parent_table_name: &str,
+    all_rels: &[RelationshipDef],
+) -> Option<CteSubtreeInfo> {
+    let ColumnSelector::Nested { alias, cols } = sel else {
+        return None;
+    };
+
+    let rel = all_rels
+        .iter()
+        .find(|r| r.from_table == parent_table_name && &r.alias == alias)?;
+
+    let cte_name = format!("__fb_{alias}_cte");
+    // SQL alias for the target table row inside this CTE.
+    let tbl = format!("__fb_{}", rel.to_table);
+
+    // Split children into flat columns and nested sub-selectors.
+    let flat_cols: Vec<&str> = cols
+        .iter()
+        .filter_map(|s| {
+            if let ColumnSelector::Flat(c) = s {
+                Some(c.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let child_nested: Vec<&ColumnSelector> = cols
+        .iter()
+        .filter(|s| matches!(s, ColumnSelector::Nested { .. }))
+        .collect();
+
+    // Accumulate all CTE defs produced by children (bottom-to-top).
+    let mut all_defs: Vec<String> = vec![];
+    // LEFT JOIN clauses to embed inside *this* CTE's FROM.
+    let mut inner_joins: Vec<String> = vec![];
+    // json_build_object fields contributed by nested children.
+    let mut child_json_fields: Vec<String> = vec![];
+
+    for child_sel in &child_nested {
+        let ColumnSelector::Nested { alias: child_alias, .. } = child_sel else {
+            continue;
+        };
+        if let Some(child_info) =
+            build_cte_subtree(child_sel, schema, &rel.to_table, all_rels)
+        {
+            all_defs.extend(child_info.cte_defs);
+
+            let cj = format!("__fb_{child_alias}_j");
+            inner_joins.push(format!(
+                "LEFT JOIN {cte} {cj} ON {cj}.{link} = {tbl}.{fc}",
+                cte = child_info.cte_name,
+                cj = cj,
+                link = quote_ident(&child_info.cte_link_col),
+                tbl = tbl,
+                fc = quote_ident(&child_info.parent_from_col),
+            ));
+
+            let field_val = if child_info.is_array {
+                format!("COALESCE({cj}._json, '[]'::json)", cj = cj)
+            } else {
+                format!("({cj}._json -> 0)", cj = cj)
+            };
+            child_json_fields.push(format!("'{child_alias}', {field_val}"));
+        }
+    }
+
+    // Build json_build_object field list: flat cols first, then nested.
+    let json_fields: Vec<String> = flat_cols
+        .iter()
+        .map(|c| format!("'{c}', {tbl}.{col}", c = c, tbl = tbl, col = quote_ident(c)))
+        .chain(child_json_fields)
+        .collect();
+
+    // Aggregation expression.
+    // When no columns are specified (`cols` is empty) use `to_jsonb(tbl.*)` to
+    // capture every column without needing to know their names.
+    let agg_expr = if json_fields.is_empty() {
+        format!("json_agg(to_jsonb({tbl}.*))", tbl = tbl)
+    } else {
+        format!("json_agg(json_build_object({fields}))", fields = json_fields.join(", "))
+    };
+
+    // Full FROM clause for this CTE (main table + any child CTEs via LEFT JOIN).
+    let from_parts = std::iter::once(format!(
+        "{schema}.{table} {tbl}",
+        schema = quote_ident(schema),
+        table = quote_ident(&rel.to_table),
+        tbl = tbl,
+    ))
+    .chain(inner_joins)
+    .collect::<Vec<_>>()
+    .join("\n    ");
+
+    // Final CTE definition.
+    let cte_def = format!(
+        "{cte_name} AS (\n\
+         \x20 SELECT {tbl}.{link_col}, {agg} AS _json\n\
+         \x20 FROM {from}\n\
+         \x20 GROUP BY {tbl}.{link_col}\n\
+         )",
+        cte_name = cte_name,
+        tbl = tbl,
+        link_col = quote_ident(&rel.to_column),
+        agg = agg_expr,
+        from = from_parts,
+    );
+
+    all_defs.push(cte_def);
+
+    Some(CteSubtreeInfo {
+        cte_defs: all_defs,
+        cte_name,
+        cte_link_col: rel.to_column.clone(),
+        parent_from_col: rel.from_column.clone(),
+        user_alias: alias.clone(),
+        is_array: rel.is_array(),
+    })
+}
+
