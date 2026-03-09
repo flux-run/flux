@@ -11,6 +11,7 @@ import type {
   OrderBy,
   QueryArgs,
   SelectFields,
+  SelectResult,
   TableClient,
 } from "./types.js";
 
@@ -86,24 +87,28 @@ export function buildTableClient<
 ): TableClient<T, TInsert, TUpdate> {
   return {
     // ── findMany ────────────────────────────────────────────────────────────
-    async findMany(args?: QueryArgs<T>): Promise<T[]> {
-      const body = JSON.stringify(buildSelect(table, args));
+    async findMany<TSelect extends SelectFields<T> | undefined = undefined>(
+      args?: Omit<QueryArgs<T>, "select"> & { select?: TSelect },
+    ): Promise<Array<SelectResult<T, TSelect>>> {
+      const body = JSON.stringify(buildSelect(table, args as QueryArgs<T>));
       const res = (await fetcher("/db/query", {
         method: "POST",
         body,
-      })) as QueryResponse<T>;
-      return res.data ?? [];
+      })) as QueryResponse<unknown>;
+      return (res.data ?? []) as unknown as Array<SelectResult<T, TSelect>>;
     },
 
     // ── findOne ─────────────────────────────────────────────────────────────
-    async findOne(args?: QueryArgs<T>): Promise<T | null> {
-      const payload = buildSelect(table, { ...args, limit: 1 });
+    async findOne<TSelect extends SelectFields<T> | undefined = undefined>(
+      args?: Omit<QueryArgs<T>, "select"> & { select?: TSelect },
+    ): Promise<SelectResult<T, TSelect> | null> {
+      const payload = buildSelect(table, { ...(args as QueryArgs<T>), limit: 1 });
       const body = JSON.stringify(payload);
       const res = (await fetcher("/db/query", {
         method: "POST",
         body,
-      })) as QueryResponse<T>;
-      return (res.data ?? [])[0] ?? null;
+      })) as QueryResponse<unknown>;
+      return ((res.data ?? [])[0] ?? null) as SelectResult<T, TSelect> | null;
     },
 
     // ── insert ──────────────────────────────────────────────────────────────

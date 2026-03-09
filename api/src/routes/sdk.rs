@@ -1,19 +1,7 @@
-/// TypeScript SDK generator.
+/// SDK endpoints.
 ///
-/// GET /sdk/typescript
-///
-/// Introspects the current project's schema graph (tables + columns +
-/// relationships + functions) and emits a `.ts` source file that:
-///
-///   1.  Declares a TypeScript interface per table (`User`, `Post`, …)
-///   2.  Derives `Insert<T>` and `Update<T>` utility types
-///   3.  Declares typed input/output interfaces per function
-///   4.  Augments the `@fluxbase/sdk` module so the `flux.db.*` and
-///       `flux.functions.*` proxies are fully typed
-///   5.  Re-exports `createClient` for convenience
-///
-/// The generated file can be committed or included in a build step — no
-/// separate code-gen CLI is required.
+/// GET /sdk/schema      — machine-readable unified schema graph (tables + functions + hash)
+/// GET /sdk/typescript  — on-demand TypeScript SDK file, cached by schema hash
 use axum::{
     extract::{Extension, State},
     http::{header, HeaderMap},
@@ -23,40 +11,47 @@ use serde_json::Value;
 use sqlx::Row;
 
 use crate::{
-    types::{context::RequestContext, response::ApiError},
+    types::{
+        context::RequestContext,
+        response::{ApiError, ApiResponse},
+    },
     AppState,
 };
 
 use super::schema::forward_headers;
 
-// ─── Handler ─────────────────────────────────────────────────────────────────
+type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
-/// GET /sdk/typescript
-pub async fn typescript(
-    State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    let project_id = ctx
-        .project_id
-        .ok_or_else(|| ApiError::bad_request("missing_project"))?;
+// ─── Utilities ────────────────────────────────────────────────────────────────
 
-    // ── Fetch DB schema from Data Engine ──────────────────────────────────
+/// Compute a stable hex-encoded SHA-256 hash of any string.
+/// Used to produce the schema hash that keys the SDK cache.
+fn compute_hash(data: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(data.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// Fetch the schema graph from the Data Engine + function definitions from DB.
+/// Returns `(db_schema, func_values, schema_hash)`.
+async fn fetch_schema_graph(
+    state: &AppState,
+    project_id: uuid::Uuid,
+    headers: &HeaderMap,
+) -> Result<(Value, Vec<Value>, String), ApiError> {
     let de_url = format!("{}/db/schema", state.data_engine_url);
-    let de_resp = state
+    let db_schema: Value = state
         .http_client
         .get(&de_url)
-        .headers(forward_headers(&headers))
+        .headers(forward_headers(headers))
         .send()
         .await
-        .map_err(|e| ApiError::internal(&format!("data_engine_unreachable: {}", e)))?;
-
-    let db_schema: Value = de_resp
+        .map_err(|e| ApiError::internal(&format!("data_engine_unreachable: {}", e)))?
         .json()
         .await
         .map_err(|e| ApiError::internal(&format!("data_engine_parse: {}", e)))?;
 
-    // ── Fetch function definitions ─────────────────────────────────────────
     let funcs = sqlx::query(
         "SELECT name, description, input_schema, output_schema \
          FROM functions WHERE project_id = $1 ORDER BY name",
@@ -78,10 +73,116 @@ pub async fn typescript(
         })
         .collect();
 
-    let sdk = generate_sdk(&db_schema, &func_values);
+    // Hash the raw schema bytes — any change to tables/columns/functions
+    // produces a different hash and invalidates the SDK cache.
+    let raw = serde_json::to_string(&serde_json::json!({
+        "schema": db_schema,
+        "functions": func_values,
+    }))
+    .unwrap_or_default();
+    let schema_hash = compute_hash(&raw);
+
+    Ok((db_schema, func_values, schema_hash))
+}
+
+// ─── Handlers ─────────────────────────────────────────────────────────────────
+
+/// GET /sdk/schema
+///
+/// Returns the machine-readable unified schema graph (tables, columns,
+/// relationships, policies, functions) together with a `schema_hash` field
+/// that can be used to detect staleness and skip regenerating the TypeScript
+/// SDK when the schema hasn't changed.
+///
+/// Suitable for IDE plugins, CLI tools, and future GraphQL gateways.
+pub async fn schema(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<RequestContext>,
+    headers: HeaderMap,
+) -> ApiResult<Value> {
+    let project_id = ctx
+        .project_id
+        .ok_or_else(|| ApiError::bad_request("missing_project"))?;
+
+    let (db_schema, func_values, schema_hash) =
+        fetch_schema_graph(&state, project_id, &headers).await?;
+
+    Ok(ApiResponse::new(serde_json::json!({
+        "schema_hash":   schema_hash,
+        "tables":        db_schema.get("tables").cloned().unwrap_or(serde_json::json!([])),
+        "columns":       db_schema.get("columns").cloned().unwrap_or(serde_json::json!([])),
+        "relationships": db_schema.get("relationships").cloned().unwrap_or(serde_json::json!([])),
+        "policies":      db_schema.get("policies").cloned().unwrap_or(serde_json::json!([])),
+        "functions":     func_values,
+    })))
+}
+
+/// GET /sdk/typescript
+///
+/// Returns a TypeScript source file (Content-Type: application/typescript)
+/// containing fully-typed interfaces, Insert/Update utility types, function
+/// I/O types, and a module augmentation for `@fluxbase/sdk`.
+///
+/// The file is cached in memory keyed by `{project_id}:{schema_hash}` — if the
+/// schema hasn't changed since last call the response is served from memory in
+/// <1 ms.  The current `schema_hash` is echoed in the `X-Schema-Hash` header
+/// and inside the generated file as a comment, making stale-detection trivial.
+pub async fn typescript(
+    State(state): State<AppState>,
+    Extension(ctx): Extension<RequestContext>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let project_id = ctx
+        .project_id
+        .ok_or_else(|| ApiError::bad_request("missing_project"))?;
+
+    let (db_schema, func_values, schema_hash) =
+        fetch_schema_graph(&state, project_id, &headers).await?;
+
+    let cache_key = format!("{}:{}", project_id, schema_hash);
+
+    // ── Cache read ─────────────────────────────────────────────────────────
+    {
+        let cache = state.sdk_cache.read().await;
+        if let Some(cached) = cache.get(&cache_key) {
+            return Ok((
+                [
+                    (header::CONTENT_TYPE, "application/typescript; charset=utf-8"),
+                    (header::CACHE_CONTROL, "public, max-age=3600"),
+                ],
+                [(
+                    axum::http::HeaderName::from_static("x-schema-hash"),
+                    axum::http::HeaderValue::from_str(&schema_hash)
+                        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("-")),
+                )],
+                cached.clone(),
+            )
+                .into_response());
+        }
+    }
+
+    // ── Generate ───────────────────────────────────────────────────────────
+    let sdk = generate_sdk(&db_schema, &func_values, &schema_hash);
+
+    // ── Cache write ────────────────────────────────────────────────────────
+    // Keep at most 1 entry per project — evict old hash entries for the same
+    // project so the map doesn't grow unboundedly.
+    {
+        let mut cache = state.sdk_cache.write().await;
+        cache.retain(|k, _| !k.starts_with(&format!("{}:", project_id)));
+        cache.insert(cache_key, sdk.clone());
+    }
 
     Ok((
-        [(header::CONTENT_TYPE, "application/typescript; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE, "application/typescript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        [(
+            axum::http::HeaderName::from_static("x-schema-hash"),
+            axum::http::HeaderValue::from_str(&schema_hash)
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("-")),
+        )],
         sdk,
     )
         .into_response())
@@ -209,7 +310,7 @@ fn json_schema_to_ts(schema: &Value, depth: usize) -> String {
 
 /// Core generation function. Accepts the raw schema graph values and produces
 /// the complete TypeScript SDK source string.
-fn generate_sdk(db_schema: &Value, functions: &[Value]) -> String {
+fn generate_sdk(db_schema: &Value, functions: &[Value], schema_hash: &str) -> String {
     let empty = Value::Array(vec![]);
     let tables = db_schema.get("tables").unwrap_or(&empty);
     let columns = db_schema.get("columns").unwrap_or(&empty);
@@ -218,12 +319,11 @@ fn generate_sdk(db_schema: &Value, functions: &[Value]) -> String {
     let mut out = String::with_capacity(8192);
 
     // ── File header ───────────────────────────────────────────────────────
-    out.push_str(
-        "// Auto-generated by Fluxbase SDK Generator — do not edit manually.\n\
-         // Regenerate: GET /sdk/typescript\n\
-         // prettier-ignore-start\n\
-         /* eslint-disable */\n\n",
-    );
+    out.push_str("// Auto-generated by Fluxbase SDK Generator — do not edit manually.\n");
+    out.push_str("// Regenerate: GET /sdk/typescript\n");
+    out.push_str(&format!("// Schema hash: {}\n", schema_hash));
+    out.push_str("// prettier-ignore-start\n");
+    out.push_str("/* eslint-disable */\n\n");
 
     // ── FluxFile primitive ────────────────────────────────────────────────
     out.push_str("export type FluxFile = {\n");
@@ -266,9 +366,20 @@ fn generate_sdk(db_schema: &Value, functions: &[Value]) -> String {
         }
     }
 
-    // ── Build relationship map: table → [(alias, to_table, kind)] ─────────
+    // ── Build relationship maps ────────────────────────────────────────────
+    //
+    // `rels`         — read interface fields (all directions, for the SELECT type)
+    //                  from_table → [(alias, to_table, kind)]
+    //
+    // `outgoing_fks` — Insert/Update connect helpers.
+    //                  Only "many_to_one" / "one_to_one" where from_table owns the FK.
+    //                  from_table → [(alias, to_table, to_column)]
     let mut rels: std::collections::BTreeMap<String, Vec<(String, String, String)>> =
         std::collections::BTreeMap::new();
+    let mut outgoing_fks: std::collections::BTreeMap<
+        String,
+        Vec<(String, String, String)>, // (alias, to_table, to_column)
+    > = std::collections::BTreeMap::new();
 
     if let Some(rel_arr) = relationships.as_array() {
         for rel in rel_arr {
@@ -287,13 +398,27 @@ fn generate_sdk(db_schema: &Value, functions: &[Value]) -> String {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            let to_col = rel
+                .get("to_column")
+                .and_then(|v| v.as_str())
+                .unwrap_or("id")
+                .to_string();
             let kind = rel
                 .get("relationship")
                 .and_then(|v| v.as_str())
                 .unwrap_or("one_to_many")
                 .to_string();
             if !from.is_empty() && !alias.is_empty() {
-                rels.entry(from).or_default().push((alias, to, kind));
+                rels.entry(from.clone())
+                    .or_default()
+                    .push((alias.clone(), to.clone(), kind.clone()));
+                // FK is on `from_table` when the relation is many_to_one / one_to_one
+                if kind == "many_to_one" || kind == "one_to_one" {
+                    outgoing_fks
+                        .entry(from)
+                        .or_default()
+                        .push((alias, to, to_col));
+                }
             }
         }
     }
@@ -319,11 +444,12 @@ fn generate_sdk(db_schema: &Value, functions: &[Value]) -> String {
                     out.push_str(&format!("  {}{}{};\n", col, sep, ts));
                 }
             }
-            // Relationship fields (optional nested objects)
+            // Relationship fields (optional nested objects, for SELECT result type)
             if let Some(table_rels) = rels.get(name) {
                 for (alias, to_table, kind) in table_rels {
                     let rel_iface = to_pascal(to_table);
-                    let ts = if kind.contains("many") {
+                    // one_to_many / many_to_many → array; everything else → single object
+                    let ts = if kind == "one_to_many" || kind == "many_to_many" {
                         format!("{}[]", rel_iface)
                     } else {
                         rel_iface.clone()
@@ -333,11 +459,31 @@ fn generate_sdk(db_schema: &Value, functions: &[Value]) -> String {
             }
             out.push_str("}\n\n");
 
-            // Insert / Update utility types
-            out.push_str(&format!(
-                "export type Insert{} = Omit<{}, \"id\" | \"created_at\" | \"updated_at\" | \"deleted_at\">;\n",
-                iface, iface
-            ));
+            // Insert utility type — base columns + nested connect helpers for outgoing FKs.
+            // e.g. InsertPost = Omit<Post, auto_fields> & { author?: { connect: { id: string } } }
+            let base_omit = format!(
+                "Omit<{}, \"id\" | \"created_at\" | \"updated_at\" | \"deleted_at\">",
+                iface
+            );
+            if let Some(fks) = outgoing_fks.get(name) {
+                let connect_lines: Vec<String> = fks
+                    .iter()
+                    .map(|(alias, to_table, to_col)| {
+                        let to_col_ts = table_cols
+                            .get(to_table.as_str())
+                            .and_then(|cols| cols.iter().find(|(c, _)| c == to_col))
+                            .map(|(_, fb_t)| fb_type_to_ts(fb_t))
+                            .unwrap_or("string");
+                        format!("  {}?: {{ connect: {{ {}: {} }} }};", alias, to_col, to_col_ts)
+                    })
+                    .collect();
+                out.push_str(&format!(
+                    "export type Insert{} = {} & {{\n{}\n}};\n",
+                    iface, base_omit, connect_lines.join("\n")
+                ));
+            } else {
+                out.push_str(&format!("export type Insert{} = {};\n", iface, base_omit));
+            }
             out.push_str(&format!(
                 "export type Update{} = Partial<Insert{}>;\n\n",
                 iface, iface

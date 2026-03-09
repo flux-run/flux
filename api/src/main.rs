@@ -31,6 +31,11 @@ pub struct AppState {
     pub storage: services::storage::StorageService,
     pub http_client: reqwest::Client,
     pub data_engine_url: String,
+    /// In-memory SDK generation cache.
+    /// Key:   "{project_id}:{schema_hash}"
+    /// Value: generated TypeScript source
+    /// Invalidated automatically when the schema changes (new hash ≠ cached key).
+    pub sdk_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
 }
 
 impl axum::extract::FromRef<AppState> for sqlx::PgPool {
@@ -159,7 +164,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/routes/{id}", axum::routing::patch(routes::gateway_routes::update_gateway_route).delete(routes::gateway_routes::delete_gateway_route))
         // Schema graph — unified table + function metadata for code generation.
         .route("/schema/graph",    get(routes::schema::graph))
-        // TypeScript SDK generator — returns a typed .ts source file on demand.
+        // SDK endpoints — raw schema graph + on-demand TypeScript SDK generation.
+        .route("/sdk/schema",      get(routes::sdk::schema))
         .route("/sdk/typescript",  get(routes::sdk::typescript))
         // Data Engine management proxy — CRUD for databases, tables, schema,
         // relationships, policies, hooks, subscriptions, workflows, cron.
@@ -221,6 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client: reqwest::Client::new(),
         data_engine_url: std::env::var("DATA_ENGINE_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
+        sdk_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
     
     let app = create_app(state);

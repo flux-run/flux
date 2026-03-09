@@ -74,29 +74,121 @@ export interface QueryArgs<T> {
   order_by?: OrderBy<T>;
 }
 
+// ─── Phase 5: Select result inference ────────────────────────────────────────
+
+/** Extract the element type from an array type (or the type itself if not an array). */
+type ArrayItem<T> = T extends ReadonlyArray<infer U> ? U : T;
+
+/**
+ * Infer the return type from a select shape — just like Prisma's select.
+ *
+ * - If `S` is `undefined` (no select provided), returns `T` unchanged.
+ * - If `S` names specific fields, returns an object with *only* those fields.
+ * - Nested selects recurse into relationship arrays and single objects.
+ *
+ * @example
+ * // flux.db.users.findMany({ select: { id: true, email: true } })
+ * // → Promise<Array<{ id: string; email: string }>>
+ *
+ * @example
+ * // flux.db.posts.findMany({
+ * //   select: { title: true, author: { select: { email: true } } }
+ * // })
+ * // → Promise<Array<{ title: string; author?: { email: string } }>>
+ */
+export type SelectResult<
+  T,
+  S extends SelectFields<T> | undefined = undefined,
+> = [S] extends [undefined]
+  ? T
+  : {
+      [K in Extract<keyof NonNullable<S>, keyof T>]-?: NonNullable<S>[K] extends true
+        ? T[K]
+        : NonNullable<T[K]> extends ReadonlyArray<unknown>
+        ? NonNullable<S>[K] extends SelectFields<ArrayItem<NonNullable<T[K]>>>
+          ? Array<
+              SelectResult<
+                ArrayItem<NonNullable<T[K]>>,
+                NonNullable<S>[K] & SelectFields<ArrayItem<NonNullable<T[K]>>>
+              >
+            >
+            | (T[K] extends null ? null : never)
+            | (T[K] extends undefined ? undefined : never)
+          : T[K]
+        : NonNullable<S>[K] extends SelectFields<NonNullable<T[K]>>
+        ? SelectResult<
+            NonNullable<T[K]>,
+            NonNullable<S>[K] & SelectFields<NonNullable<T[K]>>
+          >
+          | (T[K] extends null ? null : never)
+          | (T[K] extends undefined ? undefined : never)
+        : T[K];
+    };
+
+// ─── Nested relation helpers ──────────────────────────────────────────────────
+
+/**
+ * Relation connect helper — mirrors Prisma's `{ connect: { id } }` pattern.
+ * Used in generated `Insert<T>` types for outgoing foreign-key relationships.
+ *
+ * The generated SDK file produces:
+ * ```ts
+ * export type InsertPost = Omit<Post, "id" | "created_at"> & {
+ *   author?: Connect<User, "id">;   //  { connect: { id: string } }
+ * };
+ * ```
+ */
+export type Connect<T, K extends keyof T = "id" extends keyof T ? "id" : keyof T> = {
+  connect: Pick<T, K>;
+};
+
 // ─── Table client ─────────────────────────────────────────────────────────────
 
 /**
  * Typed table client interface.
  *
  * `T`       — full row type (all columns)
- * `TInsert` — insert payload (typically Omit<T, auto fields>)
+ * `TInsert` — insert payload (Omit<T, auto_fields> & connect helpers)
  * `TUpdate` — update payload (typically Partial<TInsert>)
+ *
+ * The `findMany` and `findOne` methods are generic on `TSelect` so that
+ * TypeScript narrows the return type to exactly the requested fields.
  */
 export interface TableClient<T, TInsert = Partial<T>, TUpdate = Partial<T>> {
-  /** Return multiple rows matching `args`. */
-  findMany(args?: QueryArgs<T>): Promise<T[]>;
-  /** Return the first matching row or null. */
-  findOne(args?: QueryArgs<T>): Promise<T | null>;
-  /** Insert one or many rows; returns the inserted rows. */
+  /** Return rows matching `args`. Return type is narrowed to `select` shape. */
+  findMany<TSelect extends SelectFields<T> | undefined = undefined>(
+    args?: Omit<QueryArgs<T>, "select"> & { select?: TSelect },
+  ): Promise<Array<SelectResult<T, TSelect>>>;
+
+  /** Return the first matching row or null. Return type is narrowed to `select` shape. */
+  findOne<TSelect extends SelectFields<T> | undefined = undefined>(
+    args?: Omit<QueryArgs<T>, "select"> & { select?: TSelect },
+  ): Promise<SelectResult<T, TSelect> | null>;
+
+  /** Insert one or many rows; returns the inserted rows (full type). */
   insert(data: TInsert | TInsert[]): Promise<T[]>;
-  /** Update rows matching `where`; returns the updated rows. */
+
+  /** Update rows matching `where`; returns the updated rows (full type). */
   update(where: Filter<T>, data: TUpdate): Promise<T[]>;
+
   /** Delete rows matching `where`. */
   delete(where: Filter<T>): Promise<{ deleted: number }>;
+
   /** Count rows matching `where`. */
   count(args?: Pick<QueryArgs<T>, "where">): Promise<number>;
 }
+
+// ─── Convenience type aliases ─────────────────────────────────────────────────
+// Match naming conventions familiar from Prisma / tRPC.
+
+/** Convenience alias for `QueryArgs<T>`. */
+export type FindManyArgs<T> = QueryArgs<T>;
+/** Convenience alias for `Filter<T>` — the `where` clause shape. */
+export type Where<T> = Filter<T>;
+/** Convenience alias for `SelectFields<T>`. */
+export type Select<T> = SelectFields<T>;
+/** Convenience alias for `OrderBy<T>`. */
+export type OrderArgs<T> = OrderBy<T>;
 
 // ─── Module-augmentation interfaces ──────────────────────────────────────────
 // These are empty on purpose — they are augmented by the generated SDK file.

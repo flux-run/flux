@@ -65,6 +65,15 @@ export type {
   FilterOp,
   OrderBy,
   SelectFields,
+  // Phase 5: select result inference
+  SelectResult,
+  // Nested insert helpers
+  Connect,
+  // Convenience aliases (Prisma-familiar naming)
+  FindManyArgs,
+  Where,
+  Select,
+  OrderArgs,
 } from "./types.js";
 
 // ─── createClient ─────────────────────────────────────────────────────────────
