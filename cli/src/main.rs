@@ -91,6 +91,12 @@ enum Commands {
         #[arg(long, default_value = "5", value_name = "SECS")]
         interval: u64,
     },
+    /// Show local vs remote schema version status
+    Status {
+        /// Path to the generated SDK file (default: fluxbase.generated.ts)
+        #[arg(long, short, value_name = "FILE")]
+        sdk: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -111,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Rollback { name, version } => deployments::execute_rollback(&name, version).await?,
         Commands::Pull { output } => sdk::execute_pull(output).await?,
         Commands::Watch { output, interval } => sdk::execute_watch(output, interval).await?,
+        Commands::Status { sdk } => sdk::execute_status(sdk).await?,
     }
 
     Ok(())

@@ -80,6 +80,48 @@ async fn fetch_typescript_sdk(client: &ApiClient) -> anyhow::Result<String> {
     res.text().await.context("Failed to read SDK response body")
 }
 
+// ─── Metadata banner ─────────────────────────────────────────────────────────
+
+/// Prepend a structured comment header to the generated SDK source.
+/// This makes it trivial to inspect which schema version is baked in,
+/// and `flux status` can parse it back out without a network call.
+fn prepend_header(
+    sdk_source: &str,
+    project_id: &str,
+    version: i64,
+    hash: &str,
+) -> String {
+    let ts = iso_now();
+    format!(
+        "/**\n\
+         * @generated Fluxbase SDK\n\
+         * Project:        {project_id}\n\
+         * Schema version: v{version}\n\
+         * Schema hash:    {hash}\n\
+         * Generated:      {ts}\n\
+         *\n\
+         * DO NOT EDIT — regenerate with: flux pull\n\
+         */\n\n{sdk_source}"
+    )
+}
+
+/// Parse the schema version embedded in a previously generated SDK file.
+/// Returns `None` if the file doesn't contain a recognized header.
+pub fn parse_local_version(source: &str) -> Option<(i64, String)> {
+    let mut version = None;
+    let mut hash    = None;
+    for line in source.lines().take(15) {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("* Schema version: v") {
+            version = rest.trim().parse::<i64>().ok();
+        }
+        if let Some(rest) = line.strip_prefix("* Schema hash:    ") {
+            hash = Some(rest.trim().to_string());
+        }
+    }
+    version.zip(hash)
+}
+
 // ─── Write helper ─────────────────────────────────────────────────────────────
 
 async fn write_sdk(sdk_source: &str, output_path: &Path) -> anyhow::Result<()> {
@@ -99,18 +141,52 @@ fn short_hash(hash: &str) -> &str {
     &hash[..hash.len().min(8)]
 }
 
-fn now_hms() -> String {
-    // Use a simple epoch-based approximation since we avoid pulling in chrono.
-    // In practice tokio's clock is fine for display purposes.
+/// Return current UTC time as an ISO 8601 string (seconds precision).
+fn iso_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let h = (secs / 3600) % 24;
-    let m = (secs / 60) % 60;
-    let s = secs % 60;
-    format!("{h:02}:{m:02}:{s:02}")
+    // Decompose epoch seconds into Y-M-D H:M:S (no external crate needed).
+    let (y, mo, d, h, mi, s) = epoch_to_ymd_hms(secs);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+}
+
+fn now_hms() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let (_, _, _, h, mi, s) = epoch_to_ymd_hms(secs);
+    format!("{h:02}:{mi:02}:{s:02}")
+}
+
+/// Minimal epoch → (year, month, day, hour, min, sec) converter.
+fn epoch_to_ymd_hms(mut t: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let s  = t % 60; t /= 60;
+    let mi = t % 60; t /= 60;
+    let h  = t % 24; t /= 24;
+    // Days since 1970-01-01
+    let mut days = t;
+    let mut y = 1970u64;
+    loop {
+        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let days_in_year = if leap { 366 } else { 365 };
+        if days < days_in_year { break; }
+        days -= days_in_year;
+        y += 1;
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let month_days: [u64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut mo = 1u64;
+    for &md in &month_days {
+        if days < md { break; }
+        days -= md;
+        mo += 1;
+    }
+    (y, mo, days + 1, h, mi, s)
 }
 
 // ─── flux pull ────────────────────────────────────────────────────────────────
@@ -154,7 +230,13 @@ pub async fn execute_pull(output: Option<String>) -> anyhow::Result<()> {
 
     // Fetch the TypeScript SDK source.
     print!("{} Generating SDK… ", "◆".blue());
-    let sdk_source = fetch_typescript_sdk(&client).await?;
+    let sdk_source_raw = fetch_typescript_sdk(&client).await?;
+    let sdk_source = prepend_header(
+        &sdk_source_raw,
+        project_id,
+        version,
+        &schema.schema_hash,
+    );
     println!("\r{}                    ", " ".repeat(20)); // clear the spinner line
 
     // Write to disk.
@@ -188,6 +270,7 @@ pub async fn execute_pull(output: Option<String>) -> anyhow::Result<()> {
 pub async fn execute_watch(output: Option<String>, interval: u64) -> anyhow::Result<()> {
     let output_path = PathBuf::from(output.unwrap_or_else(|| "fluxbase.generated.ts".into()));
     let client = ApiClient::new().await?;
+    let project_id = client.config.project_id.clone().unwrap_or_else(|| "(no project)".into());
     let mut last_hash = String::new();
 
     println!(
@@ -238,22 +321,115 @@ pub async fn execute_watch(output: Option<String>, interval: u64) -> anyhow::Res
             Err(e) => {
                 eprintln!("  [{}] {} Failed to fetch SDK: {}", ts, "✖".red(), e);
             }
-            Ok(sdk_source) => match write_sdk(&sdk_source, &output_path).await {
+            Ok(sdk_source_raw) => match write_sdk(
+                    &prepend_header(&sdk_source_raw, &project_id, version, &hash),
+                    &output_path,
+                ).await {
                 Err(e) => eprintln!("  [{}] {} Failed to write SDK: {}", ts, "✖".red(), e),
                 Ok(()) => {
-                    last_hash = hash;
-                    let n_tables = schema.tables.as_ref().map(|t| t.len()).unwrap_or(0);
-                    let n_funcs  = schema.functions.as_ref().map(|f| f.len()).unwrap_or(0);
-                    println!(
-                        "  [{}] {} SDK written → {}  ({} tables, {} functions)",
-                        ts,
-                        "✔".green().bold(),
-                        output_path.display().to_string().cyan(),
-                        n_tables.to_string().cyan(),
-                        n_funcs.to_string().cyan(),
-                    );
-                }
-            },
+                        last_hash = hash;
+                        let n_tables = schema.tables.as_ref().map(|t| t.len()).unwrap_or(0);
+                        let n_funcs  = schema.functions.as_ref().map(|f| f.len()).unwrap_or(0);
+                        println!(
+                            "  [{}] {} SDK written → {}  ({} tables, {} functions)",
+                            ts,
+                            "✔".green().bold(),
+                            output_path.display().to_string().cyan(),
+                            n_tables.to_string().cyan(),
+                            n_funcs.to_string().cyan(),
+                        );
+                    }
+                },
         }
     }
+}
+// ─── flux status ──────────────────────────────────────────────────────────────
+
+/// Execute `flux status`.
+///
+/// Compares the schema version embedded in the local SDK file against the
+/// live remote schema, and reports whether the file is up-to-date.
+///
+/// `sdk_path` — path to the generated file (defaults to `fluxbase.generated.ts`).
+pub async fn execute_status(sdk_path: Option<String>) -> anyhow::Result<()> {
+    let path = PathBuf::from(sdk_path.unwrap_or_else(|| "fluxbase.generated.ts".into()));
+    let client = ApiClient::new().await?;
+
+    let project_id = client.config.project_id.as_deref().unwrap_or("(none)");
+    println!("{} {}", "Project:".bold(), project_id.cyan());
+
+    // ── Local ─────────────────────────────────────────────────────────────
+    let local = if path.exists() {
+        let src = fs::read_to_string(&path).await.unwrap_or_default();
+        parse_local_version(&src)
+    } else {
+        None
+    };
+
+    match &local {
+        Some((v, h)) => println!(
+            "{} v{}  (hash: {})",
+            "Local SDK:    ".bold(),
+            v.to_string().yellow(),
+            short_hash(h).dimmed(),
+        ),
+        None => println!(
+            "{} {}",
+            "Local SDK:    ".bold(),
+            if path.exists() {
+                "unrecognized format (no header)".yellow().to_string()
+            } else {
+                "not found".red().to_string()
+            },
+        ),
+    }
+
+    // ── Remote ────────────────────────────────────────────────────────────
+    let remote = match fetch_schema(&client).await {
+        Ok(s)  => s,
+        Err(e) => {
+            eprintln!("{} Could not reach API: {}", "✖".red(), e);
+            return Ok(());
+        }
+    };
+    let remote_version = remote.schema_version.unwrap_or(0);
+    println!(
+        "{} v{}  (hash: {})",
+        "Remote schema:".bold(),
+        remote_version.to_string().yellow(),
+        short_hash(&remote.schema_hash).dimmed(),
+    );
+
+    println!();
+
+    // ── Comparison ────────────────────────────────────────────────────────
+    match local {
+        None => {
+            println!("{}", "⚠  No local SDK found.".yellow().bold());
+            println!("   Run: {}", "flux pull".cyan().bold());
+        }
+        Some((local_v, local_h)) => {
+            let hash_match    = local_h == remote.schema_hash;
+            let version_match = local_v == remote_version;
+
+            if hash_match && version_match {
+                println!("{}", "✔  SDK is up to date.".green().bold());
+            } else {
+                println!("{}", "⚠  SDK is out of date.".yellow().bold());
+                if !version_match {
+                    println!(
+                        "   Local v{}  →  Remote v{}",
+                        local_v.to_string().red(),
+                        remote_version.to_string().green(),
+                    );
+                }
+                if !hash_match {
+                    println!("   Schema hash has changed.");
+                }
+                println!("   Run: {}", "flux pull".cyan().bold());
+            }
+        }
+    }
+
+    Ok(())
 }
