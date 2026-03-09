@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use crate::{
     cache,
-    cache::SchemaCacheEntry,
+    cache::{SchemaCacheEntry, QueryPlan},
     compiler::{
         query_compiler::{CompiledQuery, ComputedCol, QueryCompiler, QueryRequest},
-        relational::load_relationships,
+        relational::load_all_relationships,
         CompilerOptions,
     },
     engine::{auth_context::AuthContext, error::EngineError},
@@ -69,8 +69,8 @@ pub async fn handler(
             let cm = TransformEngine::load_columns(
                 &state.pool, auth.tenant_id, auth.project_id, &schema, &req.table,
             ).await?;
-            let rels = load_relationships(
-                &state.pool, auth.tenant_id, auth.project_id, &schema, &req.table,
+            let rels = load_all_relationships(
+                &state.pool, auth.tenant_id, auth.project_id, &schema,
             ).await?;
             state.schema_cache.insert(sk, SchemaCacheEntry {
                 col_meta: cm.clone(),
@@ -107,16 +107,20 @@ pub async fn handler(
             auth.tenant_id, auth.project_id, &schema, &req, &policy,
         );
         match state.plan_cache.get(&plan_key) {
-            Some(sql) => {
+            Some(plan) => {
                 tracing::debug!("plan cache hit");
                 let params = cache::extract_select_params(
                     &req, &policy, opts.default_limit, opts.max_limit,
                 );
-                CompiledQuery { sql, params }
+                CompiledQuery { sql: plan.sql, params }
             }
             None => {
                 let cq = QueryCompiler::compile(&req, &policy, &schema, &opts)?;
-                state.plan_cache.insert(plan_key, cq.sql.clone());
+                let has_file_cols = col_meta.iter().any(|c| c.fb_type == "file");
+                state.plan_cache.insert(plan_key, QueryPlan {
+                    sql: cq.sql.clone(),
+                    has_file_cols,
+                });
                 cq
             }
         }

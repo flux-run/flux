@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::engine::error::EngineError;
 use crate::policy::PolicyResult;
 use crate::router::db_router::{validate_identifier, quote_ident};
-use crate::compiler::relational::{parse_selectors, expand_nested, ColumnSelector, RelationshipDef};
+use crate::compiler::relational::{parse_selectors, expand_nested_deep, ColumnSelector, RelationshipDef};
 
 // ─── Public request / response types ─────────────────────────────────────────
 
@@ -93,15 +93,15 @@ impl QueryCompiler {
         // Split user-supplied columns into flat names and nested selectors.
         // Nested selectors (e.g. "posts(id,title)") must not pass through
         // validate_identifier, so we extract them before resolve_columns.
-        let (flat_user_cols, nested_sels): (Vec<String>, Vec<_>) =
+        let (flat_user_cols, nested_sels): (Vec<String>, Vec<ColumnSelector>) =
             if let Some(ref user_cols) = req.columns {
                 let parsed = parse_selectors(user_cols);
                 let mut flat = vec![];
-                let mut nested = vec![];
+                let mut nested: Vec<ColumnSelector> = vec![];
                 for sel in parsed {
                     match sel {
                         ColumnSelector::Flat(c) => flat.push(c),
-                        ColumnSelector::Nested { alias, cols } => nested.push((alias, cols)),
+                        sel @ ColumnSelector::Nested { .. } => nested.push(sel),
                     }
                 }
                 (flat, nested)
@@ -141,7 +141,7 @@ fn compile_select(
     req: &QueryRequest,
     schema: &str,
     cols: &[String],
-    nested_sels: &[(String, Vec<String>)],  // (alias, inner_cols) from nested selectors
+    nested_sels: &[ColumnSelector],
     policy: &PolicyResult,
     params: &mut Vec<serde_json::Value>,
     next: &mut usize,
@@ -159,14 +159,24 @@ fn compile_select(
         col_parts.push(format!("{} AS {}", cc.expr, quote_ident(&cc.name)));
     }
 
-    // Expand nested selectors into lateral subqueries using the relationships registry.
-    for (alias, inner_cols) in nested_sels {
-        // Look up the relationship by its alias.
-        if let Some(rel) = opts.relationships.iter().find(|r| &r.alias == alias) {
-            let subquery = expand_nested(schema, "t", rel, inner_cols);
-            col_parts.push(subquery);
-        } else {
-            tracing::warn!(alias = %alias, "nested selector has no matching relationship — skipped");
+    // Expand nested selectors into recursive lateral subqueries.
+    for sel in nested_sels {
+        if let ColumnSelector::Nested { alias, cols: inner_sels } = sel {
+            // Match relationship by from_table + alias so that the same alias
+            // name on different tables doesn't collide.
+            if let Some(rel) = opts.relationships.iter().find(|r| {
+                r.from_table == req.table && &r.alias == alias
+            }) {
+                let subquery =
+                    expand_nested_deep(schema, "t", rel, inner_sels, &opts.relationships);
+                col_parts.push(subquery);
+            } else {
+                tracing::warn!(
+                    alias = %alias,
+                    table = %req.table,
+                    "nested selector has no matching relationship — skipped"
+                );
+            }
         }
     }
 

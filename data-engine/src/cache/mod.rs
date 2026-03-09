@@ -33,6 +33,18 @@ use crate::compiler::query_compiler::QueryRequest;
 use crate::policy::PolicyResult;
 use crate::transform::ColumnMeta;
 
+/// A fully compiled SELECT query plan.
+/// The plan cache stores this instead of a bare SQL string so the transform
+/// fast-path can skip the col_meta walk when the table has no file columns.
+#[derive(Clone)]
+pub struct QueryPlan {
+    /// SQL template with `$N` placeholders.
+    pub sql: String,
+    /// `true` if any column in this table has `fb_type = "file"`.
+    /// When `false`, the transform engine can be bypassed entirely on cache hits.
+    pub has_file_cols: bool,
+}
+
 // ─── TTLs ─────────────────────────────────────────────────────────────────────
 
 /// Schema metadata (col_meta + relationships) lives for 60 s.
@@ -108,9 +120,8 @@ pub struct PlanKey {
     pub policy_fingerprint: String,
 }
 
-/// Moka LRU cache: plan key → compiled SQL template string.
-/// Bind values are reconstructed by [`extract_select_params`] on every hit.
-pub type PlanCache = Cache<PlanKey, String>;
+/// Moka LRU cache: plan key → [`QueryPlan`].
+pub type PlanCache = Cache<PlanKey, QueryPlan>;
 
 /// Construct a fresh [`PlanCache`] with the standard TTL and capacity.
 pub fn build_plan_cache() -> PlanCache {
@@ -133,23 +144,23 @@ pub fn build_plan_key(
     req: &QueryRequest,
     policy: &PolicyResult,
 ) -> PlanKey {
-    // Split user columns into flat names and nested-selector aliases.
-    let (mut flat, mut aliases) = (Vec::<String>::new(), Vec::<String>::new());
+    // Single pass: collect flat column names and recursive nested fingerprints.
+    let (mut flat, mut nested_fps) = (Vec::<String>::new(), Vec::<String>::new());
     if let Some(ref cols) = req.columns {
         for sel in parse_selectors(cols) {
             match sel {
                 ColumnSelector::Flat(c) => flat.push(c),
-                ColumnSelector::Nested { alias, .. } => aliases.push(alias),
+                // Use the recursive fingerprint so that
+                // `posts(id,comments(id,body))` ≠ `posts(id)` in the cache.
+                sel @ ColumnSelector::Nested { .. } => nested_fps.push(sel.fingerprint()),
             }
         }
     }
     flat.sort_unstable();
-    aliases.sort_unstable();
+    nested_fps.sort_unstable();
 
     let columns = if flat.is_empty() { "*".to_string() } else { flat.join(",") };
-    let nested_aliases = aliases.join(",");
-
-    // Filter shape: sorted "column:op" pairs.
+    let nested_aliases = nested_fps.join(",");
     let mut pairs: Vec<String> = req
         .filters
         .as_deref()
