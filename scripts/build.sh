@@ -8,18 +8,20 @@ set -e
 # Default values
 DOCKER_BUILD=false
 SERVICE_NAME="all"
+REGISTRY=""
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --docker) DOCKER_BUILD=true ;;
         --service) SERVICE_NAME="$2"; shift ;;
+        --registry) REGISTRY="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
     shift
 done
 
-SERVICES=("api" "gateway" "runtime" "fluxbase-queue" "cli")
+SERVICES=("api" "gateway" "runtime" "fluxbase-queue" "data-engine" "cli")
 
 build_rust_service() {
     local service=$1
@@ -30,8 +32,12 @@ build_rust_service() {
     echo "Building Rust service: $service (in dir $dir)..."
     if [ "$DOCKER_BUILD" = true ]; then
         if [ -f "$dir/Dockerfile" ]; then
-            echo "Building Docker image for $service..."
-            docker build -t "fluxbase-$service:latest" -f "$dir/Dockerfile" .
+            TAG="fluxbase-$service:latest"
+            if [ -n "$REGISTRY" ]; then
+                TAG="$REGISTRY/$service:latest"
+            fi
+            echo "Building Docker image for $service with tag $TAG..."
+            docker build -t "$TAG" -f "$dir/Dockerfile" .
         else
             echo "Warning: No Dockerfile found for $dir, skipping Docker build."
             SQLX_OFFLINE=true cargo build --release -p "$service"

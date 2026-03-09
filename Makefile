@@ -22,11 +22,17 @@ build:
 build-docker:
 	./scripts/build.sh --docker
 
+build-gcp:
+	./scripts/build.sh --docker --registry asia-south1-docker.pkg.dev/fluxbase-app/fluxbase
+
 # ── Deploy ──────────────────────────────────────────────────────────────────
 # Deploys all services to the specified environment.
 # Usage: make deploy ENV=staging
 deploy:
-	./scripts/deploy.sh --env $(ENV)
+	./scripts/deploy.sh --env production
+
+deploy-gcp:
+	./scripts/deploy.sh --env production --project fluxbase-app --region asia-south1
 
 # Deploys with a dry-run.
 deploy-dry-run:
