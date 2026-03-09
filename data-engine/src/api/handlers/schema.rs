@@ -188,11 +188,11 @@ async fn fetch_policies(
     use uuid::Uuid;
 
     let rows = sqlx::query(
-        "SELECT id, table_name, role_name, operation, allowed_columns, \
-                row_condition_sql \
+        "SELECT id, table_name, role AS role_name, operation, allowed_columns, \
+                row_condition AS row_condition_sql \
          FROM fluxbase_internal.policies \
          WHERE tenant_id = $1 AND project_id = $2 \
-         ORDER BY table_name, role_name",
+         ORDER BY table_name, role",
     )
     .bind(auth.tenant_id)
     .bind(auth.project_id)
