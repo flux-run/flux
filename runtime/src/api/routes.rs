@@ -26,6 +26,7 @@ pub struct ExecuteResponse {
 
 pub struct AppState {
     pub secrets_client: SecretsClient,
+    pub http_client: reqwest::Client,
     pub control_plane_url: String,
     pub service_token: String,
     pub bundle_cache: crate::cache::bundle_cache::BundleCache,
@@ -63,8 +64,7 @@ pub async fn execute_handler(
         state.control_plane_url, req.function_id
     );
 
-    let http_client = reqwest::Client::new();
-    let bundle_resp = http_client
+    let bundle_resp = state.http_client
         .get(&bundle_url)
         .header("X-Service-Token", &state.service_token)
         .send()
@@ -130,7 +130,7 @@ pub async fn execute_handler(
             if let Some(c) = final_code {
                 c
             } else if let Some(url) = url_opt {
-                let s3_resp = http_client.get(&url).send().await;
+                let s3_resp = state.http_client.get(&url).send().await;
                 match s3_resp {
                     Ok(res) if res.status().is_success() => {
                         let text = res.text().await.unwrap_or_default();
@@ -218,7 +218,7 @@ pub async fn execute_handler(
         let service_token = state.service_token.clone();
         let function_id = req.function_id.clone();
         let logs = execution.logs;
-        let client = http_client;
+        let client = state.http_client.clone();
 
         tokio::spawn(async move {
             for log in logs {

@@ -23,9 +23,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = settings.port;
 
     let secrets_client = SecretsClient::new(settings.clone());
+    let http_client = reqwest::Client::builder()
+        .pool_max_idle_per_host(4)
+        .connection_verbose(false)
+        .build()
+        .expect("failed to build HTTP client");
     
     let state = Arc::new(AppState {
         secrets_client,
+        http_client,
         control_plane_url: settings.control_plane_url.clone(),
         service_token: settings.service_token.clone(),
         bundle_cache: cache::bundle_cache::BundleCache::new(100),
