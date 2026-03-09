@@ -176,6 +176,22 @@ export interface TableClient<T, TInsert = Partial<T>, TUpdate = Partial<T>> {
 
   /** Count rows matching `where`. */
   count(args?: Pick<QueryArgs<T>, "where">): Promise<number>;
+
+  /**
+   * Start a fluent query builder for this table.
+   *
+   * ```ts
+   * const users = await flux.db.users
+   *   .query()
+   *   .where("active", "eq", true)
+   *   .orderBy("created_at", "desc")
+   *   .limit(10)
+   *   .select({ id: true, email: true })
+   *   .execute();
+   * // → Array<{ id: string; email: string }>
+   * ```
+   */
+  query(): import("./builder.js").FluentQuery<T, undefined>;
 }
 
 // ─── Convenience type aliases ─────────────────────────────────────────────────

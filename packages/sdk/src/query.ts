@@ -14,6 +14,7 @@ import type {
   SelectResult,
   TableClient,
 } from "./types.js";
+import { FluentQuery } from "./builder.js";
 
 // ─── Internal response shapes ─────────────────────────────────────────────────
 
@@ -154,6 +155,11 @@ export function buildTableClient<
         body,
       })) as CountResponse;
       return res.count ?? 0;
+    },
+
+    // ── query (fluent builder) ───────────────────────────────────────────────
+    query(): FluentQuery<T, undefined> {
+      return new FluentQuery<T, undefined>(table, fetcher);
     },
   };
 }

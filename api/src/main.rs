@@ -31,6 +31,8 @@ pub struct AppState {
     pub storage: services::storage::StorageService,
     pub http_client: reqwest::Client,
     pub data_engine_url: String,
+    /// Gateway URL forwarded to OpenAPI spec servers[].
+    pub gateway_url: String,
     /// In-memory SDK generation cache.
     /// Key:   "{project_id}:{schema_hash}"
     /// Value: generated TypeScript source
@@ -167,6 +169,8 @@ pub fn create_app(state: AppState) -> Router {
         // SDK endpoints — raw schema graph + on-demand TypeScript SDK generation.
         .route("/sdk/schema",      get(routes::sdk::schema))
         .route("/sdk/typescript",  get(routes::sdk::typescript))
+        // OpenAPI 3.0 spec — generated from live schema.
+        .route("/openapi.json",    get(routes::openapi::spec))
         // Data Engine management proxy — CRUD for databases, tables, schema,
         // relationships, policies, hooks, subscriptions, workflows, cron.
         // Execution traffic (POST /db/query) is routed to the gateway instead.
@@ -227,6 +231,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client: reqwest::Client::new(),
         data_engine_url: std::env::var("DATA_ENGINE_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
+        gateway_url: std::env::var("GATEWAY_URL")
+            .unwrap_or_else(|_| "http://localhost:8081".to_string()),
         sdk_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     };
     

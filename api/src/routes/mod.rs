@@ -7,5 +7,6 @@ pub mod platform;
 pub mod system;
 pub mod gateway_routes;
 pub mod data_engine;
+pub mod openapi;
 pub mod schema;
 pub mod sdk;

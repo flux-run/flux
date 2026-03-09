@@ -35,7 +35,8 @@ fn compute_hash(data: &str) -> String {
 
 /// Fetch the schema graph from the Data Engine + function definitions from DB.
 /// Returns `(db_schema, func_values, schema_hash)`.
-async fn fetch_schema_graph(
+/// `pub` so the openapi handler can reuse it.
+pub async fn fetch_schema_graph_pub(
     state: &AppState,
     project_id: uuid::Uuid,
     headers: &HeaderMap,
@@ -105,15 +106,40 @@ pub async fn schema(
         .ok_or_else(|| ApiError::bad_request("missing_project"))?;
 
     let (db_schema, func_values, schema_hash) =
-        fetch_schema_graph(&state, project_id, &headers).await?;
+        fetch_schema_graph_pub(&state, project_id, &headers).await?;
+
+    // Upsert a schema version record; return (or create) the version number.
+    let version_number: i32 = sqlx::query(
+        "WITH ins AS ( \
+            INSERT INTO schema_versions (project_id, schema_hash, version_number) \
+            VALUES ($1, $2, \
+                (SELECT COALESCE(MAX(version_number), 0) + 1 \
+                 FROM schema_versions WHERE project_id = $1) \
+            ) \
+            ON CONFLICT (project_id, schema_hash) DO NOTHING \
+            RETURNING version_number \
+         ) \
+         SELECT version_number FROM ins \
+         UNION ALL \
+         SELECT version_number FROM schema_versions \
+         WHERE project_id = $1 AND schema_hash = $2 \
+         LIMIT 1",
+    )
+    .bind(project_id)
+    .bind(&schema_hash)
+    .fetch_one(&state.pool)
+    .await
+    .map(|r| r.get::<i32, _>("version_number"))
+    .unwrap_or(1);
 
     Ok(ApiResponse::new(serde_json::json!({
-        "schema_hash":   schema_hash,
-        "tables":        db_schema.get("tables").cloned().unwrap_or(serde_json::json!([])),
-        "columns":       db_schema.get("columns").cloned().unwrap_or(serde_json::json!([])),
-        "relationships": db_schema.get("relationships").cloned().unwrap_or(serde_json::json!([])),
-        "policies":      db_schema.get("policies").cloned().unwrap_or(serde_json::json!([])),
-        "functions":     func_values,
+        "schema_hash":    schema_hash,
+        "schema_version": version_number,
+        "tables":         db_schema.get("tables").cloned().unwrap_or(serde_json::json!([])),
+        "columns":        db_schema.get("columns").cloned().unwrap_or(serde_json::json!([])),
+        "relationships":  db_schema.get("relationships").cloned().unwrap_or(serde_json::json!([])),
+        "policies":       db_schema.get("policies").cloned().unwrap_or(serde_json::json!([])),
+        "functions":      func_values,
     })))
 }
 
@@ -137,7 +163,7 @@ pub async fn typescript(
         .ok_or_else(|| ApiError::bad_request("missing_project"))?;
 
     let (db_schema, func_values, schema_hash) =
-        fetch_schema_graph(&state, project_id, &headers).await?;
+        fetch_schema_graph_pub(&state, project_id, &headers).await?;
 
     let cache_key = format!("{}:{}", project_id, schema_hash);
 

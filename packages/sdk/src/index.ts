@@ -76,6 +76,10 @@ export type {
   OrderArgs,
 } from "./types.js";
 
+// ─── Fluent query builder ─────────────────────────────────────────────────────
+export { FluentQuery } from "./builder.js";
+export type { FluentQueryBuilder } from "./builder.js";
+
 // ─── createClient ─────────────────────────────────────────────────────────────
 
 /**
