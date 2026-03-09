@@ -43,9 +43,10 @@ pub async fn handler(
     // 2. Schema name.
     let schema = DbRouter::schema_name(&auth.tenant_slug, &auth.project_slug, &req.database)?;
 
-    // 2.5 Complexity guard — fast CPU check before any DB work.
-    //     Rejects unreasonably deep or wide queries immediately.
-    let complexity = state.query_guard.check_complexity(&req)?;
+    // 2.5 Complexity guard + depth guard — fast CPU checks before any DB work.
+    //     Both reject immediately, no schema lookup or compilation.
+    let complexity  = state.query_guard.check_complexity(&req)?;
+    let _nest_depth = state.query_guard.check_depth(&req)?;;
 
     // 3. Schema + table existence (blocks system catalog access).
     DbRouter::assert_exists(&state.pool, &schema).await?;
@@ -201,6 +202,11 @@ pub async fn handler(
         CompileResult::Batched { root, .. } => root.sql.clone(),
     };
     let rows_returned = result.as_array().map_or(0, |a| a.len());
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
     tracing::info!(
         op    = %req.operation,
         table = %req.table,
@@ -208,6 +214,7 @@ pub async fn handler(
         strategy,
         elapsed_ms = %elapsed_ms,
         rows = rows_returned,
+        request_id = %request_id,
         "query executed",
     );
 
@@ -263,6 +270,7 @@ pub async fn handler(
             "elapsed_ms": elapsed_ms,
             "rows": rows_returned,
             "sql": compiled_sql,
+            "request_id": request_id,
         }
     })))
 }

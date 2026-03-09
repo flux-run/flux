@@ -39,7 +39,7 @@
 use std::time::Duration;
 
 use crate::compiler::query_compiler::QueryRequest;
-use crate::compiler::relational::{parse_selectors, ColumnSelector};
+use crate::compiler::relational::{parse_selectors, selector_depth, ColumnSelector};
 use crate::engine::error::EngineError;
 
 // ─── Guard ────────────────────────────────────────────────────────────────────
@@ -47,14 +47,17 @@ use crate::engine::error::EngineError;
 pub struct QueryGuard {
     /// Requests whose complexity score exceeds this ceiling are rejected.
     pub max_complexity: u64,
+    /// Maximum relationship nesting depth. 0 = disabled.
+    pub max_nest_depth: usize,
     /// Maximum time the full execution phase may take before yielding 408.
     pub timeout: Duration,
 }
 
 impl QueryGuard {
-    pub fn new(max_complexity: u64, timeout_ms: u64) -> Self {
+    pub fn new(max_complexity: u64, timeout_ms: u64, max_nest_depth: usize) -> Self {
         Self {
             max_complexity,
+            max_nest_depth,
             timeout: Duration::from_millis(timeout_ms),
         }
     }
@@ -70,6 +73,31 @@ impl QueryGuard {
             });
         }
         Ok(score)
+    }
+
+    /// Check that the nesting depth of the request\'s selector tree does not
+    /// exceed the configured ceiling.  Returns the max depth found.
+    pub fn check_depth(&self, req: &QueryRequest) -> Result<usize, EngineError> {
+        if self.max_nest_depth == 0 {
+            return Ok(0);
+        }
+        let depth = req
+            .columns
+            .as_ref()
+            .map_or(0, |cols| {
+                parse_selectors(cols)
+                    .iter()
+                    .map(selector_depth)
+                    .max()
+                    .unwrap_or(0)
+            });
+        if depth > self.max_nest_depth {
+            return Err(EngineError::NestDepthExceeded {
+                depth,
+                limit: self.max_nest_depth,
+            });
+        }
+        Ok(depth)
     }
 
     /// Wrap a future in the configured timeout.
@@ -184,7 +212,7 @@ mod tests {
 
     #[test]
     fn guard_allows_below_ceiling() {
-        let g = QueryGuard::new(1000, 30_000);
+        let g = QueryGuard::new(1000, 30_000, 6);
         let req = req_with_cols(&["posts(id,comments(id))"]);
         assert!(g.check_complexity(&req).is_ok());
     }
@@ -192,7 +220,7 @@ mod tests {
     #[test]
     fn guard_rejects_above_ceiling() {
         // Set ceiling at 5 — even a depth-1 nested selector (score=10) is rejected.
-        let g = QueryGuard::new(5, 30_000);
+        let g = QueryGuard::new(5, 30_000, 6);
         let req = req_with_cols(&["posts(id)"]);
         assert!(matches!(
             g.check_complexity(&req),

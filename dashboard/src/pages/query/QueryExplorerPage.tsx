@@ -66,6 +66,19 @@ interface QueryMeta {
   elapsed_ms: number
   rows: number
   sql: string
+  request_id?: string
+}
+
+interface EngineDebug {
+  limits: {
+    default_rows: number
+    max_rows: number
+    max_complexity: number
+    max_nest_depth: number
+    timeout_ms: number
+  }
+  cache: { schema_entries: number; plan_entries: number }
+  version: string
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -94,7 +107,7 @@ function exportCsv(rows: Record<string, unknown>[], filename = 'query-results.cs
   URL.revokeObjectURL(url)
 }
 
-function parseQueryError(msg: string): { title: string; detail: string; type: 'complexity' | 'timeout' | 'generic' } {
+function parseQueryError(msg: string): { title: string; detail: string; type: 'complexity' | 'depth' | 'timeout' | 'generic' } {
   if (/query too complex/i.test(msg)) {
     const m = msg.match(/score (\d+) exceeds limit (\d+)/)
     return {
@@ -103,6 +116,16 @@ function parseQueryError(msg: string): { title: string; detail: string; type: 'c
         ? `Complexity score ${m[1]} exceeds the configured limit of ${m[2]}. Simplify filters or reduce nested selectors.`
         : msg,
       type: 'complexity',
+    }
+  }
+  if (/nesting too deep/i.test(msg)) {
+    const m = msg.match(/depth (\d+) exceeds limit (\d+)/)
+    return {
+      title: 'Query Too Deeply Nested',
+      detail: m
+        ? `Relationship depth ${m[1]} exceeds the configured limit of ${m[2]}. Flatten the selector tree or split into separate queries.`
+        : msg,
+      type: 'depth',
     }
   }
   if (/timed out/i.test(msg)) {
@@ -296,6 +319,13 @@ export default function QueryExplorerPage() {
   const [rows, setRows] = useState<Record<string, unknown>[]>([])
   const [resultView, setResultView] = useState<'table' | 'json'>('table')
   const [execMeta, setExecMeta] = useState<QueryMeta | null>(null)
+
+  const debugQ = useQuery({
+    queryKey: ['engine-debug', projectId],
+    queryFn: () => apiFetch<EngineDebug>('/db/debug'),
+    enabled: !!projectId,
+    staleTime: 60_000, // limits rarely change
+  })
   const [execError, setExecError] = useState<string | null>(null)
   const [showSql, setShowSql] = useState(false)
   const [expandedJson, setExpandedJson] = useState<unknown>(null)
@@ -584,6 +614,18 @@ export default function QueryExplorerPage() {
           {operation === 'delete' && filters.length === 0 && (
             <p className="text-[10px] text-amber-400 mt-1.5 text-center">Add a filter to prevent full-table delete</p>
           )}
+          {/* Engine limits — fetched from /db/debug */}
+          {debugQ.data && (
+            <div className="mt-2 rounded border border-white/5 bg-white/[0.02] px-2.5 py-2 space-y-1">
+              <p className="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wide">Engine Limits</p>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground font-mono">
+                <span>Max rows</span>     <span className="text-foreground/70">{debugQ.data.limits.max_rows.toLocaleString()}</span>
+                <span>Max complexity</span><span className="text-foreground/70">{debugQ.data.limits.max_complexity}</span>
+                <span>Max depth</span>    <span className="text-foreground/70">{debugQ.data.limits.max_nest_depth}</span>
+                <span>Timeout</span>      <span className="text-foreground/70">{(debugQ.data.limits.timeout_ms / 1000).toFixed(0)} s</span>
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -621,10 +663,20 @@ export default function QueryExplorerPage() {
               <Badge
                 variant="outline"
                 className="text-[10px] border-white/10 bg-white/5 text-muted-foreground"
-                title={`Complexity score: ${execMeta.complexity} (max 500)`}
+                title={`Complexity score: ${execMeta.complexity} (max ${debugQ.data?.limits.max_complexity ?? 1000})`}
               >
                 ⚡ {execMeta.complexity}
               </Badge>
+              {execMeta.request_id && (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] font-mono border-white/10 bg-white/5 text-muted-foreground cursor-pointer hover:bg-white/10"
+                  title={`Request ID: ${execMeta.request_id} — click to copy`}
+                  onClick={() => navigator.clipboard.writeText(execMeta.request_id!)}
+                >
+                  #{execMeta.request_id.slice(0, 8)}
+                </Badge>
+              )}
             </>
           )}
 
@@ -677,24 +729,26 @@ export default function QueryExplorerPage() {
           {execError && (() => {
             const { title, detail, type } = parseQueryError(execError)
             const isComplexity = type === 'complexity'
+            const isDepth = type === 'depth'
             const isTimeout = type === 'timeout'
             return (
               <div className={cn(
                 'm-5 rounded-lg border px-4 py-3',
                 isComplexity ? 'border-amber-500/30 bg-amber-500/10' :
-                isTimeout ? 'border-orange-500/30 bg-orange-500/10' :
+                isDepth      ? 'border-violet-500/30 bg-violet-500/10' :
+                isTimeout    ? 'border-orange-500/30 bg-orange-500/10' :
                 'border-destructive/30 bg-destructive/10'
               )}>
                 <div className="flex items-start gap-2.5">
                   <AlertCircle className={cn('w-4 h-4 mt-0.5 shrink-0',
-                    isComplexity ? 'text-amber-400' : isTimeout ? 'text-orange-400' : 'text-destructive'
+                    isComplexity ? 'text-amber-400' : isDepth ? 'text-violet-400' : isTimeout ? 'text-orange-400' : 'text-destructive'
                   )} />
                   <div>
                     <p className={cn('text-sm font-medium mb-0.5',
-                      isComplexity ? 'text-amber-400' : isTimeout ? 'text-orange-400' : 'text-destructive'
+                      isComplexity ? 'text-amber-400' : isDepth ? 'text-violet-400' : isTimeout ? 'text-orange-400' : 'text-destructive'
                     )}>{title}</p>
                     <p className={cn('text-xs font-mono break-all',
-                      isComplexity ? 'text-amber-400/70' : isTimeout ? 'text-orange-400/70' : 'text-destructive/80'
+                      isComplexity ? 'text-amber-400/70' : isDepth ? 'text-violet-400/70' : isTimeout ? 'text-orange-400/70' : 'text-destructive/80'
                     )}>{detail}</p>
                   </div>
                 </div>

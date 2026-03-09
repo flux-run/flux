@@ -80,6 +80,14 @@ pub async fn proxy_handler(
 
     req_builder = req_builder.header("x-service-token", &state.internal_service_token);
 
+    // Generate or forward a request-ID so traces correlate across services.
+    let request_id = in_headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    req_builder = req_builder.header("x-request-id", &request_id);
+
     if !body_bytes.is_empty() {
         req_builder = req_builder.body(body_bytes.to_vec());
     }
@@ -103,6 +111,7 @@ pub async fn proxy_handler(
     let mut response = axum::response::Response::builder()
         .status(status)
         .header("content-type", content_type)
+        .header("x-request-id", &request_id)
         .body(axum::body::Body::from(resp_bytes))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

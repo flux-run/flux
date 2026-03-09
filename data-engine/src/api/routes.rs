@@ -3,7 +3,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::{
-    api::handlers::{cron, databases, files, hooks, policies, query, relationships, schema, subscriptions, tables, workflows},
+    api::handlers::{cron, databases, debug, files, hooks, policies, query, relationships, schema, subscriptions, tables, workflows},
     state::AppState,
 };
 
@@ -38,7 +38,10 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route("/db/cron/{id}",         patch(cron::update).delete(cron::delete))
         .route("/db/cron/{id}/trigger", post(cron::trigger))
         // ── Schema introspection ───────────────────────────────────────────────
-        .route("/db/schema", get(schema::introspect))        // ── File presigned URLs ───────────────────────────────────────────────
+        .route("/db/schema", get(schema::introspect))
+        // ── Debug / engine introspection ────────────────────────────────────────
+        .route("/db/debug", get(debug::handler))
+        // ── File presigned URLs ───────────────────────────────────────────────
         .route("/files/upload-url",   post(files::upload_url))
         .route("/files/download-url", post(files::download_url))
         // ── Health ────────────────────────────────────────────────────────────

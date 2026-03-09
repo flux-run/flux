@@ -24,6 +24,9 @@ pub enum EngineError {
     #[error("query too complex: score {score} exceeds limit {limit}")]
     QueryTooComplex { score: u64, limit: u64 },
 
+    #[error("query nesting too deep: depth {depth} exceeds limit {limit}")]
+    NestDepthExceeded { depth: usize, limit: usize },
+
     #[error("query timed out")]
     QueryTimeout,
 
@@ -44,6 +47,7 @@ impl EngineError {
             Self::UnsupportedOperation(_)      => StatusCode::BAD_REQUEST,
             Self::MissingField(_)              => StatusCode::BAD_REQUEST,
             Self::QueryTooComplex { .. }       => StatusCode::BAD_REQUEST,
+            Self::NestDepthExceeded { .. }     => StatusCode::BAD_REQUEST,
             Self::QueryTimeout                 => StatusCode::REQUEST_TIMEOUT,
             Self::Db(_) | Self::Internal(_)    => StatusCode::INTERNAL_SERVER_ERROR,
         }

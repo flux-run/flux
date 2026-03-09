@@ -18,6 +18,11 @@ pub struct Config {
     /// The timer starts after compilation and covers the full execute phase.
     /// Default: 30 000 ms (30 s).
     pub query_timeout_ms: u64,
+    /// Maximum relationship nesting depth in a single query.
+    /// depth=1 is a single join, depth=4+ triggers batched execution.
+    /// Requests deeper than this ceiling are rejected with HTTP 400.
+    /// Default: 6. Set to 0 to disable.
+    pub max_nest_depth: usize,
     /// S3 bucket name for file storage. None = file engine disabled.
     pub s3_bucket: Option<String>,
     /// AWS region (default: us-east-1).
@@ -52,6 +57,10 @@ pub fn load() -> Config {
             .unwrap_or_else(|_| "30000".to_string())
             .parse()
             .expect("QUERY_TIMEOUT_MS must be a non-negative integer"),
+        max_nest_depth: std::env::var("MAX_NEST_DEPTH")
+            .unwrap_or_else(|_| "6".to_string())
+            .parse()
+            .expect("MAX_NEST_DEPTH must be a non-negative integer"),
         s3_bucket: std::env::var("S3_BUCKET").ok(),
         s3_region: std::env::var("S3_REGION")
             .unwrap_or_else(|_| "us-east-1".to_string()),

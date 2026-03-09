@@ -48,7 +48,7 @@ impl AppState {
             file_engine,
             schema_cache: build_schema_cache(),
             plan_cache: build_plan_cache(),
-            query_guard: QueryGuard::new(cfg.max_query_complexity, cfg.query_timeout_ms),
+            query_guard: QueryGuard::new(cfg.max_query_complexity, cfg.query_timeout_ms, cfg.max_nest_depth),
         }
     }
 
