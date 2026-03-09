@@ -15,11 +15,11 @@ use axum::{
 
 /// Axum middleware function — rejects requests missing or carrying the wrong
 /// `x-service-token` header.
-pub async fn require_service_token(req: Request, next: Next) -> Result<Response, Response> {
+pub async fn require_service_token(req: Request, next: Next) -> Response {
     // Health + version endpoints are exempt so load-balancer probes work.
-    let path = req.uri().path();
+    let path = req.uri().path().to_owned();
     if path == "/health" || path == "/version" {
-        return Ok(next.run(req).await);
+        return next.run(req).await;
     }
 
     let expected = std::env::var("INTERNAL_SERVICE_TOKEN")
@@ -29,15 +29,18 @@ pub async fn require_service_token(req: Request, next: Next) -> Result<Response,
         .headers()
         .get("x-service-token")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_owned();
 
     if provided == expected {
-        Ok(next.run(req).await)
+        next.run(req).await
     } else {
-        Err((
+        (
             StatusCode::UNAUTHORIZED,
-            axum::Json(serde_json::json!({ "error": "unauthorized: missing or invalid x-service-token" })),
+            axum::Json(serde_json::json!({
+                "error": "unauthorized: missing or invalid x-service-token"
+            })),
         )
-            .into_response())
+            .into_response()
     }
 }
