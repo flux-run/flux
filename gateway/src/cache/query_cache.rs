@@ -30,22 +30,28 @@ const MAX_ENTRIES: usize = 4_096;
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
-/// Cache key: project scope + content-addressed request body.
+/// Cache key: project scope + role + content-addressed request body.
+///
+/// `role` is extracted from the JWT `role` claim so that two callers with
+/// different RLS / CLS permissions never share a cached response.
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub struct QueryCacheKey {
     /// `X-Fluxbase-Project` header value — isolates tenants.
     pub project_id: String,
+    /// JWT `role` claim — prevents cross-permission cache sharing (RLS/CLS).
+    pub role: String,
     /// SHA-256 of the raw request body bytes.
     pub body_hash: [u8; 32],
 }
 
 impl QueryCacheKey {
-    pub fn new(project_id: &str, body: &[u8]) -> Self {
+    pub fn new(project_id: &str, role: &str, body: &[u8]) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(body);
         let hash: [u8; 32] = hasher.finalize().into();
         Self {
             project_id: project_id.to_string(),
+            role: role.to_string(),
             body_hash: hash,
         }
     }
@@ -214,6 +220,81 @@ pub fn start_eviction_task(cache: QueryCache) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
+
+/// Returns `false` for queries that must never be cached:
+///
+/// - **Paginated** — body has an `"offset"` field: same body at page 2 != page 1
+/// - **Large windows** — `"limit"` > 500: giant payloads waste cache memory
+/// - **Non-deterministic** — `"order"` contains `"random"`: result changes each call
+///
+/// Called *before* the SHA-256 hash is computed, so it also skips the
+/// hashing overhead for bypass paths.
+pub fn is_query_cacheable(body: &[u8]) -> bool {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => return true, // can't parse — proxy as usual, don't cache
+    };
+
+    // Offset-based pagination: page 2+ would return stale page 1 data.
+    if v.get("offset").is_some() {
+        return false;
+    }
+
+    // Very large result sets: don't burn cache memory on bulk reads.
+    const CACHE_MAX_LIMIT: u64 = 500;
+    if let Some(limit) = v.get("limit").and_then(|l| l.as_u64()) {
+        if limit > CACHE_MAX_LIMIT {
+            return false;
+        }
+    }
+
+    // Non-deterministic ORDER BY random() — result differs on every call.
+    if v.get("order")
+        .map(|o| o.to_string().to_lowercase().contains("random"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    true
+}
+
+/// Extract the `role` claim from a Bearer JWT **without re-verifying** the
+/// signature (the auth middleware has already done that upstream).
+///
+/// Falls back to `"anon"` when the header is absent or the token is
+/// malformed, ensuring unauthenticated requests get their own isolated
+/// cache partition (important for RLS / CLS).
+pub fn extract_role_from_jwt(auth_header: Option<&str>) -> String {
+    let token = match auth_header {
+        Some(h) if h.starts_with("Bearer ") => &h[7..],
+        _ => return "anon".to_string(),
+    };
+
+    // JWT = base64url(header).base64url(payload).signature
+    let payload_b64 = match token.split('.').nth(1) {
+        Some(s) => s,
+        None => return "anon".to_string(),
+    };
+
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    let decoded = match URL_SAFE_NO_PAD.decode(payload_b64) {
+        Ok(d) => d,
+        Err(_) => return "anon".to_string(),
+    };
+
+    let claims: serde_json::Value = match serde_json::from_slice(&decoded) {
+        Ok(v) => v,
+        Err(_) => return "anon".to_string(),
+    };
+
+    claims
+        .get("role")
+        .and_then(|r| r.as_str())
+        .unwrap_or("anon")
+        .to_string()
+}
 
 /// Try to extract a `"table"` field from the top-level JSON body.
 /// Used to tag cache entries for per-table invalidation.

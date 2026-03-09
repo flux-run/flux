@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
-use crate::cache::query_cache::{extract_table_hint, QueryCacheKey};
+use crate::cache::query_cache::{extract_role_from_jwt, extract_table_hint, is_query_cacheable, QueryCacheKey};
 use crate::state::SharedState;
 
 const CORS_ORIGIN:  &str = "*";
@@ -64,14 +64,18 @@ pub async fn proxy_handler(
     let path_only = uri.path();
     let cacheable = is_cacheable(&method, path_only);
 
-    if cacheable {
+    if cacheable && is_query_cacheable(&body_bytes) {
         let project_id = in_headers
             .get("x-fluxbase-project")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
+        // Extract role so RLS/CLS users never share a cache partition.
+        let role = extract_role_from_jwt(
+            in_headers.get("authorization").and_then(|v| v.to_str().ok()),
+        );
 
         if !project_id.is_empty() {
-            let cache_key = QueryCacheKey::new(project_id, &body_bytes);
+            let cache_key = QueryCacheKey::new(project_id, &role, &body_bytes);
 
             if let Some(entry) = state.query_cache.get(&cache_key) {
                 // ── Cache HIT ──────────────────────────────────────────────
@@ -146,14 +150,17 @@ pub async fn proxy_handler(
     let resp_bytes = bytes::Bytes::from(resp_bytes.to_vec());
 
     // ── Store in cache on successful read-query ───────────────────────────
-    let cache_header = if cacheable && status.is_success() {
+    let cache_header = if cacheable && is_query_cacheable(&body_bytes) && status.is_success() {
         let project_id = in_headers
             .get("x-fluxbase-project")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
+        let role = extract_role_from_jwt(
+            in_headers.get("authorization").and_then(|v| v.to_str().ok()),
+        );
 
         if !project_id.is_empty() {
-            let cache_key = QueryCacheKey::new(project_id, &body_bytes);
+            let cache_key = QueryCacheKey::new(project_id, &role, &body_bytes);
             let table_hint = extract_table_hint(&body_bytes);
             let entry = state.query_cache.make_entry(
                 resp_bytes.clone(),
