@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Fluxbase Deploy Script
-# Usage: ./scripts/deploy.sh --env <staging|production>
+# Usage: ./scripts/deploy.sh --env <staging|production> [--service <name>] [--tag <tag>] [--project <id>] [--region <region>] [--dry-run]
 
 set -e
 
@@ -10,8 +10,9 @@ ENV=""
 DRY_RUN=false
 PROJECT_ID="fluxbase-app"
 REGION="asia-south1"
-REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/fluxbase"
+REGISTRY=""
 SERVICE_NAME="all"
+TAG="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -21,6 +22,7 @@ while [[ "$#" -gt 0 ]]; do
         --project) PROJECT_ID="$2"; shift ;;
         --region) REGION="$2"; shift ;;
         --service) SERVICE_NAME="$2"; shift ;;
+        --tag) TAG="$2"; shift ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
     shift
@@ -31,20 +33,23 @@ if [ -z "$ENV" ]; then
     exit 1
 fi
 
-echo "Deploying to $ENV environment (GCP Project: $PROJECT_ID, Region: $REGION)..."
+REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/fluxbase"
+
+echo "Deploying to $ENV environment (GCP Project: $PROJECT_ID, Region: $REGION, Tag: $TAG)..."
 
 deploy_cloud_run() {
     local service=$1
-    local image_tag="${REGISTRY}/${service}:latest"
+    local image_tag="${REGISTRY}/${service}:${TAG}"
+    local local_tag="fluxbase-${service}:${TAG}"
     
     echo "Pushing image $image_tag to Artifact Registry..."
     if [ "$DRY_RUN" = true ]; then
         echo "[DRY-RUN] Would run: docker push $image_tag"
     else
-        # Try to push, if it fails because it's not tagged correctly, tag and push
+        # Try to push; if local image exists under local_tag, tag it for registry and push.
         docker push "$image_tag" || {
-            echo "Push failed. Re-tagging and retrying..."
-            docker tag "fluxbase-${service}:latest" "$image_tag"
+            echo "Push failed. Re-tagging from $local_tag and retrying..."
+            docker tag "$local_tag" "$image_tag"
             docker push "$image_tag"
         }
     fi
@@ -77,6 +82,20 @@ deploy_cloud_run() {
             --cpu 1 \
             --allow-unauthenticated \
             $env_vars
+
+        local active_image
+        local active_rev
+        active_image=$(gcloud run services describe "$deploy_name" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --format="value(spec.template.spec.containers[0].image)")
+        active_rev=$(gcloud run services describe "$deploy_name" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --format="value(status.latestReadyRevisionName)")
+
+        echo "✅ $deploy_name revision: $active_rev"
+        echo "   image: $active_image"
     fi
 }
 

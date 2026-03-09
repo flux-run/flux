@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Fluxbase Build Script
-# Usage: ./scripts/build.sh [--docker] [--service <name>]
+# Usage: ./scripts/build.sh [--docker] [--service <name>] [--tag <tag>] [--registry <registry>] [--platform <platform>] [--parallel]
 
 set -e
 
@@ -11,12 +11,14 @@ SERVICE_NAME="all"
 REGISTRY=""
 PLATFORM=""
 PARALLEL=false
+TAG="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --docker) DOCKER_BUILD=true ;;
         --service) SERVICE_NAME="$2"; shift ;;
+        --tag) TAG="$2"; shift ;;
         --registry) REGISTRY="$2"; shift ;;
         --platform) PLATFORM="$2"; shift ;;
         --parallel) PARALLEL=true ;;
@@ -26,6 +28,15 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 SERVICES=("api" "gateway" "runtime" "queue" "data-engine" "cli")
+
+package_name_for_service() {
+    local service=$1
+    if [ "$service" == "queue" ]; then
+        echo "fluxbase-queue"
+    else
+        echo "$service"
+    fi
+}
 
 build_rust_service() {
     local service=$1
@@ -38,9 +49,11 @@ build_rust_service() {
     {
         if [ "$DOCKER_BUILD" = true ]; then
             if [ -f "$dir/Dockerfile" ]; then
-                TAG="fluxbase-$service:latest"
+                local_tag="fluxbase-$service:$TAG"
                 if [ -n "$REGISTRY" ]; then
-                    TAG="$REGISTRY/$service:latest"
+                    image_tag="$REGISTRY/$service:$TAG"
+                else
+                    image_tag="$local_tag"
                 fi
                 
                 PLATFORM_ARG=""
@@ -48,15 +61,24 @@ build_rust_service() {
                     PLATFORM_ARG="--platform $PLATFORM"
                 fi
                 
-                PACKAGE_NAME=$service
-                if [ "$service" == "queue" ]; then
-                    PACKAGE_NAME="fluxbase-queue"
-                fi
+                PACKAGE_NAME=$(package_name_for_service "$service")
                 
-                docker build $PLATFORM_ARG -t "$TAG" -f "$dir/Dockerfile" --build-arg PACKAGE_NAME=$PACKAGE_NAME .
+                docker build $PLATFORM_ARG \
+                    -t "$local_tag" \
+                    -f "$dir/Dockerfile" \
+                    --build-arg PACKAGE_NAME="$PACKAGE_NAME" \
+                    .
+
+                if [ -n "$REGISTRY" ]; then
+                    docker tag "$local_tag" "$image_tag"
+                    echo "Tagged image: $image_tag"
+                else
+                    echo "Built image: $local_tag"
+                fi
             else
                 echo "Warning: No Dockerfile found for $dir, skipping Docker build."
-                SQLX_OFFLINE=true cargo build --release -p "$service"
+                PACKAGE_NAME=$(package_name_for_service "$service")
+                SQLX_OFFLINE=true cargo build --release -p "$PACKAGE_NAME"
             fi
         else
             # Try to use DATABASE_URL from service's .env if it exists, otherwise use root's if available
@@ -66,10 +88,11 @@ build_rust_service() {
                 export $(grep DATABASE_URL "api/.env" | xargs)
             fi
             
-            if [ -n "$DATABASE_URL" ]; then
-                cargo build --release -p "$service"
+            PACKAGE_NAME=$(package_name_for_service "$service")
+            if [ -n "${DATABASE_URL:-}" ]; then
+                cargo build --release -p "$PACKAGE_NAME"
             else
-                SQLX_OFFLINE=true cargo build --release -p "$service"
+                SQLX_OFFLINE=true cargo build --release -p "$PACKAGE_NAME"
             fi
         fi
     } > "$log_file" 2>&1
@@ -125,3 +148,4 @@ else
 fi
 
 echo "All builds complete!"
+echo "Build tag: $TAG"
