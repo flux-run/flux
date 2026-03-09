@@ -37,6 +37,12 @@ pub fn forward_headers(headers: &HeaderMap) -> reqwest::header::HeaderMap {
         "authorization",
         "x-fluxbase-tenant",
         "x-fluxbase-project",
+        "x-tenant-id",
+        "x-project-id",
+        "x-tenant-slug",
+        "x-project-slug",
+        "x-user-id",
+        "x-user-role",
         "content-type",
     ] {
         if let Some(v) = headers.get(*key) {
@@ -47,6 +53,24 @@ pub fn forward_headers(headers: &HeaderMap) -> reqwest::header::HeaderMap {
             }
         }
     }
+
+    // Data Engine contract requires x-tenant-id / x-project-id.
+    // API clients send x-fluxbase-tenant / x-fluxbase-project, so mirror them.
+    if !map.contains_key("x-tenant-id") {
+        if let Some(v) = headers.get("x-fluxbase-tenant") {
+            if let Ok(val) = reqwest::header::HeaderValue::from_bytes(v.as_bytes()) {
+                map.insert("x-tenant-id", val);
+            }
+        }
+    }
+    if !map.contains_key("x-project-id") {
+        if let Some(v) = headers.get("x-fluxbase-project") {
+            if let Ok(val) = reqwest::header::HeaderValue::from_bytes(v.as_bytes()) {
+                map.insert("x-project-id", val);
+            }
+        }
+    }
+
     // Internal service token so the Data Engine trusts the call.
     let token = std::env::var("INTERNAL_SERVICE_TOKEN")
         .unwrap_or_else(|_| "fluxbase_secret_token".to_string());
