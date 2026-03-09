@@ -109,19 +109,10 @@ pub async fn graph(
         .await
         .map_err(|e| ApiError::internal(&format!("data_engine_unreachable: {}", e)))?;
 
-    let de_status = de_resp.status();
-    let de_body_bytes = de_resp
-        .bytes()
+    let db_schema: Value = de_resp
+        .json()
         .await
-        .map_err(|e| ApiError::internal(&format!("data_engine_read: {}", e)))?;
-
-    let db_schema: Value = serde_json::from_slice(&de_body_bytes).map_err(|e| {
-        let body_preview = String::from_utf8_lossy(&de_body_bytes[..de_body_bytes.len().min(300)]).to_string();
-        ApiError::internal(&format!(
-            "data_engine_parse: status={} err={} body={}",
-            de_status, e, body_preview
-        ))
-    })?;
+        .map_err(|e| ApiError::internal(&format!("data_engine_parse: {}", e)))?;
 
     // ── 2. Load function definitions from API DB ──────────────────────────
     let funcs = sqlx::query(
