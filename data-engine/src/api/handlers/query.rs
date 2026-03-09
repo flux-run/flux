@@ -43,6 +43,10 @@ pub async fn handler(
     // 2. Schema name.
     let schema = DbRouter::schema_name(&auth.tenant_slug, &auth.project_slug, &req.database)?;
 
+    // 2.5 Complexity guard — fast CPU check before any DB work.
+    //     Rejects unreasonably deep or wide queries immediately.
+    let complexity = state.query_guard.check_complexity(&req)?;
+
     // 3. Schema + table existence (blocks system catalog access).
     DbRouter::assert_exists(&state.pool, &schema).await?;
     DbRouter::assert_table_exists(&state.pool, &schema, &req.table).await?;
@@ -171,19 +175,37 @@ pub async fn handler(
     }
 
     // 8. Execute — single SQL or batched per-level fetches.
-    let result = match compile_result {
-        CompileResult::Single(ref cq) => {
-            tracing::debug!(sql = %cq.sql, "executing compiled query");
-            executor::execute(&state.pool, cq).await?
+    //    Wrapped in a timeout so runaway queries don't hold connections forever.
+    let t_exec = std::time::Instant::now();
+    let result = state.query_guard.with_timeout(async {
+        match compile_result {
+            CompileResult::Single(ref cq) => {
+                executor::execute(&state.pool, cq).await
+            }
+            CompileResult::Batched { ref root, ref plan } => {
+                let root_result = executor::execute(&state.pool, root).await?;
+                let mut rows = root_result.as_array().cloned().unwrap_or_default();
+                executor::execute_batched(&state.pool, &mut rows, &plan.stages).await?;
+                Ok(serde_json::Value::Array(rows))
+            }
         }
-        CompileResult::Batched { ref root, ref plan } => {
-            tracing::debug!(sql = %root.sql, levels = plan.stages.len(), "executing batched query");
-            let root_result = executor::execute(&state.pool, root).await?;
-            let mut rows = root_result.as_array().cloned().unwrap_or_default();
-            executor::execute_batched(&state.pool, &mut rows, &plan.stages).await?;
-            serde_json::Value::Array(rows)
-        }
+    }).await?;
+
+    let elapsed_ms = t_exec.elapsed().as_millis();
+    let strategy = match &compile_result {
+        CompileResult::Single(_)           => "single",
+        CompileResult::Batched { .. }      => "batched",
     };
+    let rows_returned = result.as_array().map_or(0, |a| a.len());
+    tracing::info!(
+        op    = %req.operation,
+        table = %req.table,
+        complexity,
+        strategy,
+        elapsed_ms = %elapsed_ms,
+        rows = rows_returned,
+        "query executed",
+    );
 
     // 9. After hook (non-fatal: errors are logged, response still returns data).
     if let Some((_, after)) = hook_events {

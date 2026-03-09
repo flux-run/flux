@@ -10,6 +10,7 @@ mod executor;
 mod file_engine;
 mod hooks;
 mod policy;
+mod query_guard;
 mod router;
 mod state;
 mod transform;

@@ -7,6 +7,7 @@ use crate::cache::{build_plan_cache, build_schema_cache, PlanCache, SchemaCache,
 use crate::config::Config;
 use crate::file_engine::FileEngine;
 use crate::policy::PolicyCache;
+use crate::query_guard::QueryGuard;
 
 pub struct AppState {
     pub pool: PgPool,
@@ -22,6 +23,8 @@ pub struct AppState {
     pub schema_cache: SchemaCache,
     /// Layer-2 cache: compiled SELECT SQL templates keyed by request shape.
     pub plan_cache: PlanCache,
+    /// Complexity ceiling + timeout for all query executions.
+    pub query_guard: QueryGuard,
 }
 
 impl AppState {
@@ -45,6 +48,7 @@ impl AppState {
             file_engine,
             schema_cache: build_schema_cache(),
             plan_cache: build_plan_cache(),
+            query_guard: QueryGuard::new(cfg.max_query_complexity, cfg.query_timeout_ms),
         }
     }
 

@@ -10,6 +10,14 @@ pub struct Config {
     pub max_query_limit: i64,
     /// Base URL of the runtime service, used by the hooks engine.
     pub runtime_url: String,
+    /// Maximum query complexity score. Requests exceeding this are rejected
+    /// with HTTP 400 before any database work is performed.
+    /// Default: 1000. Set to 0 to disable the check.
+    pub max_query_complexity: u64,
+    /// Query execution timeout in milliseconds.
+    /// The timer starts after compilation and covers the full execute phase.
+    /// Default: 30 000 ms (30 s).
+    pub query_timeout_ms: u64,
     /// S3 bucket name for file storage. None = file engine disabled.
     pub s3_bucket: Option<String>,
     /// AWS region (default: us-east-1).
@@ -36,6 +44,14 @@ pub fn load() -> Config {
             .expect("MAX_QUERY_LIMIT must be a positive integer"),
         runtime_url: std::env::var("RUNTIME_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
+        max_query_complexity: std::env::var("MAX_QUERY_COMPLEXITY")
+            .unwrap_or_else(|_| "1000".to_string())
+            .parse()
+            .expect("MAX_QUERY_COMPLEXITY must be a non-negative integer"),
+        query_timeout_ms: std::env::var("QUERY_TIMEOUT_MS")
+            .unwrap_or_else(|_| "30000".to_string())
+            .parse()
+            .expect("QUERY_TIMEOUT_MS must be a non-negative integer"),
         s3_bucket: std::env::var("S3_BUCKET").ok(),
         s3_region: std::env::var("S3_REGION")
             .unwrap_or_else(|_| "us-east-1".to_string()),
