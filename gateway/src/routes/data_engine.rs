@@ -1,16 +1,17 @@
 /// Transparent reverse-proxy for Data-Engine execution routes.
 ///
 /// Execution traffic (POST /db/query, cron triggers, file operations) flows:
-///   Browser → Gateway → Data Engine
+///   Browser → Gateway (cache check) → Data Engine
 ///
-/// The gateway validates nothing here beyond forwarding auth headers –
-/// the data-engine enforces tenant/project context itself via
-/// `X-Fluxbase-Tenant` / `X-Fluxbase-Project`.
+/// POST /db/query responses are edge-cached per-project keyed on the SHA-256
+/// of the request body.  Any other path is proxied without caching.
+/// Cache invalidation: POST /internal/cache/invalidate { project_id, table? }
 use axum::{
     extract::{Request, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
+use crate::cache::query_cache::{extract_table_hint, QueryCacheKey};
 use crate::state::SharedState;
 
 const CORS_ORIGIN:  &str = "*";
@@ -23,6 +24,12 @@ fn cors_headers() -> HeaderMap {
     m.insert("access-control-allow-methods", HeaderValue::from_static(CORS_METHODS));
     m.insert("access-control-allow-headers", HeaderValue::from_static(CORS_HEADERS));
     m
+}
+
+/// Returns true when this request should be served from / stored in the edge cache.
+/// Only `POST /db/query` is cacheable — every other path is a write or file op.
+fn is_cacheable(method: &axum::http::Method, path: &str) -> bool {
+    method == axum::http::Method::POST && path.ends_with("/db/query")
 }
 
 pub async fn proxy_handler(
@@ -53,7 +60,36 @@ pub async fn proxy_handler(
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    // Build forwarded request, passing through auth + context headers.
+    // ── Edge cache check ──────────────────────────────────────────────────
+    let path_only = uri.path();
+    let cacheable = is_cacheable(&method, path_only);
+
+    if cacheable {
+        let project_id = in_headers
+            .get("x-fluxbase-project")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        if !project_id.is_empty() {
+            let cache_key = QueryCacheKey::new(project_id, &body_bytes);
+
+            if let Some(entry) = state.query_cache.get(&cache_key) {
+                // ── Cache HIT ──────────────────────────────────────────────
+                tracing::debug!(project_id, "query cache HIT");
+                let mut resp = axum::response::Response::builder()
+                    .status(entry.status)
+                    .header("content-type", &entry.content_type)
+                    .header("x-cache", "HIT")
+                    .header("x-cache-age", entry.age_ms().to_string())
+                    .body(axum::body::Body::from(entry.body))
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                resp.headers_mut().extend(cors_headers());
+                return Ok(resp);
+            }
+        }
+    }
+
+    // ── Build forwarded request ───────────────────────────────────────────
     let mut req_builder = state
         .http_client
         .request(
@@ -107,11 +143,37 @@ pub async fn proxy_handler(
         .unwrap_or("application/json")
         .to_string();
     let resp_bytes = upstream.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let resp_bytes = bytes::Bytes::from(resp_bytes.to_vec());
+
+    // ── Store in cache on successful read-query ───────────────────────────
+    let cache_header = if cacheable && status.is_success() {
+        let project_id = in_headers
+            .get("x-fluxbase-project")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        if !project_id.is_empty() {
+            let cache_key = QueryCacheKey::new(project_id, &body_bytes);
+            let table_hint = extract_table_hint(&body_bytes);
+            let entry = state.query_cache.make_entry(
+                resp_bytes.clone(),
+                status.as_u16(),
+                content_type.clone(),
+                table_hint,
+            );
+            state.query_cache.insert(cache_key, entry);
+            tracing::debug!(project_id, "query cache MISS → stored");
+        }
+        "MISS"
+    } else {
+        "BYPASS"
+    };
 
     let mut response = axum::response::Response::builder()
         .status(status)
-        .header("content-type", content_type)
+        .header("content-type", &content_type)
         .header("x-request-id", &request_id)
+        .header("x-cache", cache_header)
         .body(axum::body::Body::from(resp_bytes))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

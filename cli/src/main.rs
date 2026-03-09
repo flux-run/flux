@@ -69,6 +69,9 @@ enum Commands {
         /// JSON payload to pass to the function (e.g. '{"a":1}')
         #[arg(long, value_name = "JSON")]
         payload: Option<String>,
+        /// Route through the gateway (auth + rate-limiting) instead of calling runtime directly
+        #[arg(long)]
+        gateway: bool,
         #[arg(long, hide = true)]
         tenant: Option<String>,
     },
@@ -186,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Secrets { command } => secrets::execute(command).await?,
         Commands::Dev => dev::execute().await?,
         Commands::Deploy { name, runtime } => deploy::execute(name, runtime).await?,
-        Commands::Invoke { name, tenant, payload } => invoke::execute(&name, tenant, payload).await?,
+        Commands::Invoke { name, tenant, payload, gateway } => invoke::execute(&name, tenant, payload, gateway).await?,
         Commands::Logs { name, follow, limit } => {
             if follow {
                 logs::execute_follow(name, limit).await?

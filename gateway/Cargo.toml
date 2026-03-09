@@ -22,3 +22,5 @@ dotenvy = "0.15.7"
 jsonwebtoken = "10.3.0"
 jsonschema = "0.44.1"
 job_contract = { path = "../shared/job_contract" }
+sha2 = "0.10"
+bytes = "1"

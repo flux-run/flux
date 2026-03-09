@@ -57,6 +57,16 @@ async fn main() -> anyhow::Result<()> {
         snapshot,
         jwks_cache,
         api_url: config.api_url,
+        query_cache: {
+            let cache = cache::query_cache::QueryCache::new(
+                std::env::var("QUERY_CACHE_TTL_SECS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(cache::query_cache::DEFAULT_TTL_SECS),
+            );
+            cache::query_cache::start_eviction_task(cache.clone());
+            cache
+        },
     });
 
     // Build router

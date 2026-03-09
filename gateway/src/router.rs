@@ -1,4 +1,4 @@
-use axum::{routing::any, routing::get, Router};
+use axum::{routing::any, routing::get, routing::post, Router};
 use tower_http::cors::{CorsLayer, Any};
 use crate::state::SharedState;
 use crate::routes::proxy::proxy_handler;
@@ -22,6 +22,11 @@ pub fn create_router(state: SharedState) -> Router {
     let event_routes = Router::new()
         .route("/events/stream", get(crate::routes::events::stream));
 
+    // Internal management routes — service-token protected, not exposed via cors.
+    let internal_routes = Router::new()
+        .route("/internal/cache/invalidate", post(crate::routes::cache::invalidate_handler))
+        .route("/internal/cache/stats",      get(crate::routes::cache::stats_handler));
+
     // Serverless-function invocation routes — existing proxy with identity middleware.
     let fn_routes = Router::new()
         .route("/{*path}", any(proxy_handler))
@@ -36,6 +41,7 @@ pub fn create_router(state: SharedState) -> Router {
         }))
         .merge(engine_routes)
         .merge(event_routes)
+        .merge(internal_routes)
         .merge(fn_routes)
         .layer(cors)
         .with_state(state)

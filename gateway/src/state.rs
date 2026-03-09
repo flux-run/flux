@@ -1,6 +1,7 @@
 use sqlx::PgPool;
 use std::sync::Arc;
 use crate::cache::snapshot::GatewaySnapshot;
+use crate::cache::query_cache::QueryCache;
 use crate::clients::queue_client::QueueClient;
 
 #[derive(Clone)]
@@ -15,6 +16,8 @@ pub struct GatewayState {
     pub jwks_cache: crate::cache::jwks::JwksCache,
     /// Fluxbase API base URL — used to proxy SSE event streams.
     pub api_url: String,
+    /// In-process edge cache for read-only data-engine query responses.
+    pub query_cache: QueryCache,
 }
 
 pub type SharedState = Arc<GatewayState>;
