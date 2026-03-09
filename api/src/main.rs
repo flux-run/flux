@@ -157,6 +157,10 @@ pub fn create_app(state: AppState) -> Router {
         // Gateway Routes
         .route("/routes", get(routes::gateway_routes::list_gateway_routes).post(routes::gateway_routes::create_gateway_route))
         .route("/routes/{id}", axum::routing::patch(routes::gateway_routes::update_gateway_route).delete(routes::gateway_routes::delete_gateway_route))
+        // Schema graph — unified table + function metadata for code generation.
+        .route("/schema/graph",    get(routes::schema::graph))
+        // TypeScript SDK generator — returns a typed .ts source file on demand.
+        .route("/sdk/typescript",  get(routes::sdk::typescript))
         // Data Engine management proxy — CRUD for databases, tables, schema,
         // relationships, policies, hooks, subscriptions, workflows, cron.
         // Execution traffic (POST /db/query) is routed to the gateway instead.
