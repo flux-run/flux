@@ -13,6 +13,8 @@ pub struct GatewayState {
     pub internal_service_token: String,
     pub snapshot: GatewaySnapshot,
     pub jwks_cache: crate::cache::jwks::JwksCache,
+    /// Fluxbase API base URL — used to proxy SSE event streams.
+    pub api_url: String,
 }
 
 pub type SharedState = Arc<GatewayState>;

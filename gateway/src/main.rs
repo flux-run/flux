@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
         internal_service_token: config.internal_service_token,
         snapshot,
         jwks_cache,
+        api_url: config.api_url,
     });
 
     // Build router

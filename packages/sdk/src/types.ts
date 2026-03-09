@@ -142,6 +142,25 @@ export type Connect<T, K extends keyof T = "id" extends keyof T ? "id" : keyof T
   connect: Pick<T, K>;
 };
 
+// ─── Realtime subscriptions ───────────────────────────────────────────────────
+
+/**
+ * A single table-change event delivered to `subscribe()` callbacks.
+ *
+ * @template T — the full row type for the subscribed table.
+ */
+export interface TableChangeEvent<T> {
+  /** Table that was modified. */
+  table:     string;
+  /** The mutation that fired: `"insert"`, `"update"`, or `"delete"`. */
+  operation: "insert" | "update" | "delete";
+  /** The affected row (new values for insert/update; deleted row for delete). */
+  row:       T;
+}
+
+/** Call this function to stop receiving events from a `subscribe()` call. */
+export type UnsubscribeFn = () => void;
+
 // ─── Table client ─────────────────────────────────────────────────────────────
 
 /**
@@ -176,6 +195,30 @@ export interface TableClient<T, TInsert = Partial<T>, TUpdate = Partial<T>> {
 
   /** Count rows matching `where`. */
   count(args?: Pick<QueryArgs<T>, "where">): Promise<number>;
+
+  /**
+   * Subscribe to realtime table-change events.
+   *
+   * Returns an unsubscribe function — call it to detach the listener and
+   * close the underlying SSE connection.
+   *
+   * ```ts
+   * const unsub = flux.db.users.subscribe(
+   *   { operation: "insert" },
+   *   (event) => console.log("New user:", event.row),
+   * );
+   *
+   * // later, stop listening:
+   * unsub();
+   * ```
+   *
+   * @param args.operation  — optionally filter to a single mutation type.
+   * @param callback        — called once per matching event.
+   */
+  subscribe(
+    args:     { operation?: "insert" | "update" | "delete" },
+    callback: (event: TableChangeEvent<T>) => void,
+  ): UnsubscribeFn;
 
   /**
    * Start a fluent query builder for this table.

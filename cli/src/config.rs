@@ -11,6 +11,9 @@ pub struct Config {
     pub tenant_id: Option<String>,
     pub tenant_slug: Option<String>,
     pub project_id: Option<String>,
+    /// Gateway URL — used by `flux subscribe` / SDK realtime features.
+    #[serde(default)]
+    pub gateway_url: String,
 }
 
 impl Default for Config {
@@ -21,6 +24,7 @@ impl Default for Config {
             tenant_id: None,
             tenant_slug: None,
             project_id: None,
+            gateway_url: "https://gateway.fluxbase.co".to_string(),
         }
     }
 }
@@ -47,6 +51,9 @@ impl Config {
         if let Ok(url) = std::env::var("FLUXBASE_API_URL") {
             config.api_url = url;
         }
+        if let Ok(url) = std::env::var("FLUXBASE_GATEWAY_URL") {
+            config.gateway_url = url;
+        }
         if let Ok(v) = std::env::var("FLUXBASE_PROJECT_ID") {
             config.project_id = Some(v);
         }
@@ -54,10 +61,17 @@ impl Config {
             config.tenant_id = Some(v);
         }
 
-        // Per-project config overrides project_id when present.
+        // Per-project config (.fluxbase/config.json) overrides env vars for
+        // project-scoped settings so local dev instances are easy to wire up.
         if let Some(proj) = ProjectConfig::load_sync() {
             if proj.project_id.is_some() {
                 config.project_id = proj.project_id;
+            }
+            if let Some(url) = proj.api_url {
+                config.api_url = url;
+            }
+            if let Some(url) = proj.gateway_url {
+                config.gateway_url = url;
             }
         }
 
@@ -99,6 +113,12 @@ pub struct ProjectConfig {
     pub sdk_output: Option<String>,
     /// Default polling interval (seconds) for `flux watch`.
     pub watch_interval: Option<u64>,
+    /// Override the Fluxbase API URL for this project (e.g. local dev instance).
+    /// Takes precedence over `FLUXBASE_API_URL` env var and global config.
+    pub api_url: Option<String>,
+    /// Override the Fluxbase Gateway URL for this project (e.g. local dev instance).
+    /// Used by SDK `subscribe()` for SSE streams.
+    pub gateway_url: Option<String>,
 }
 
 impl ProjectConfig {

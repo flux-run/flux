@@ -19,7 +19,8 @@
  * extended without mutating the original.
  */
 
-import type { Filter, FilterOp, SelectFields, SelectResult, OrderBy } from "./types.js";
+import type { Filter, FilterOp, SelectFields, SelectResult, OrderBy, TableChangeEvent, UnsubscribeFn } from "./types.js";
+import type { TableStreamer } from "./query.js";
 
 // ─── Internal state ────────────────────────────────────────────────────────────
 
@@ -47,14 +48,18 @@ export class FluentQuery<
   readonly _state: BuilderState<T>;
   /** @internal */
   readonly _fetcher: (path: string, init?: RequestInit) => Promise<unknown>;
+  /** @internal — optional SSE streamer supplied by createClient */
+  readonly _streamer: TableStreamer<T> | undefined;
 
   /** @internal — use `buildTableClient` instead of constructing directly */
   constructor(
     table: string,
     fetcher: (path: string, init?: RequestInit) => Promise<unknown>,
     state?: Partial<BuilderState<T>>,
+    streamer?: TableStreamer<T>,
   ) {
     this._fetcher = fetcher;
+    this._streamer = streamer;
     this._state = {
       table,
       where_:   {},
@@ -74,6 +79,7 @@ export class FluentQuery<
       this._state.table,
       this._fetcher,
       { ...this._state, ...patch },
+      this._streamer as TableStreamer<T> | undefined,
     );
   }
 
@@ -212,6 +218,66 @@ export class FluentQuery<
       body:   JSON.stringify(payload),
     })) as { count?: number };
     return res.count ?? 0;
+  }
+
+  /**
+   * Subscribe to realtime table-change events matching the current `.where()`
+   * constraints (client-side filter applied where possible).
+   *
+   * Returns an unsubscribe function.
+   *
+   * ```ts
+   * const unsub = flux.db.orders
+   *   .query()
+   *   .where("status", "eq", "pending")
+   *   .subscribe({ operation: "insert" }, (event) => {
+   *     console.log("New pending order:", event.row);
+   *   });
+   *
+   * // stop listening:
+   * unsub();
+   * ```
+   *
+   * @note   Row-level `where()` filtering is applied client-side.
+   *         Only `insert`, `update`, and `delete` events for this table are
+   *         forwarded by the server; matching against the accumulated where
+   *         clause is done locally.
+   */
+  subscribe(
+    args:     { operation?: "insert" | "update" | "delete" },
+    callback: (event: TableChangeEvent<T>) => void,
+  ): UnsubscribeFn {
+    if (!this._streamer) {
+      console.warn(
+        `[fluxbase/sdk] subscribe() called on table "${this._state.table}" ` +
+        "but no SSE streamer is configured. " +
+        "Make sure you are using createClient() with a gateway that supports SSE.",
+      );
+      return () => { /* no-op */ };
+    }
+
+    const whereKeys = Object.keys(this._state.where_);
+
+    return this._streamer(args, (event) => {
+      // Client-side where filter — skip rows that don't match.
+      if (whereKeys.length > 0) {
+        const row = event.row as Record<string, unknown>;
+        const match = whereKeys.every((key) => {
+          const filter = (this._state.where_ as Record<string, unknown>)[key];
+          if (filter === null || typeof filter !== "object") {
+            return row[key] === filter;
+          }
+          const f = filter as Record<string, unknown>;
+          if ("eq"  in f) return row[key] === f["eq"];
+          if ("neq" in f) return row[key] !== f["neq"];
+          // Other operators (gt, gte, lt, lte, in, nin…) — pass through
+          // to avoid false negatives; server sends the full row.
+          return true;
+        });
+        if (!match) return;
+      }
+      callback(event);
+    });
   }
 
   /**

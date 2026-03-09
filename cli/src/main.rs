@@ -112,6 +112,12 @@ enum Commands {
         /// Default watch interval in seconds
         #[arg(long, value_name = "SECS")]
         interval: Option<u64>,
+        /// Override API URL for this project (e.g. http://localhost:8080)
+        #[arg(long, value_name = "URL")]
+        api_url: Option<String>,
+        /// Override Gateway URL for this project (e.g. http://localhost:8081)
+        #[arg(long, value_name = "URL")]
+        gateway_url: Option<String>,
     },
 }
 
@@ -135,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Watch { output, interval } => sdk::execute_watch(output, interval).await?,
         Commands::Status { sdk } => sdk::execute_status(sdk).await?,
         Commands::Doctor => doctor::execute().await?,
-        Commands::Init { project, output, interval } => init::execute(project, output, interval).await?,
+        Commands::Init { project, output, interval, api_url, gateway_url } => init::execute(project, output, interval, api_url, gateway_url).await?,
     }
 
     Ok(())

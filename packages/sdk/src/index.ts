@@ -46,9 +46,12 @@ import type {
   FluxbaseFunctions,
   FluxbaseStorage,
   FluxFile,
+  TableChangeEvent,
+  UnsubscribeFn,
 } from "./types.js";
 
 import { buildTableClient } from "./query.js";
+import type { TableStreamer } from "./query.js";
 
 // ─── Public type re-exports ───────────────────────────────────────────────────
 
@@ -74,6 +77,9 @@ export type {
   Where,
   Select,
   OrderArgs,
+  // Realtime subscriptions
+  TableChangeEvent,
+  UnsubscribeFn,
 } from "./types.js";
 
 // ─── Fluent query builder ─────────────────────────────────────────────────────
@@ -129,6 +135,85 @@ export function createClient(options: ClientOptions): FluxbaseClient {
     return JSON.parse(text) as unknown;
   }
 
+  // ── SSE streamer factory ──────────────────────────────────────────────────
+  // Creates a per-table streamer that opens an SSE connection to the gateway
+  // and forwards matching events to the caller's callback.
+  function makeStreamer<T>(table: string): TableStreamer<T> {
+    return (args, callback) => {
+      const params = new URLSearchParams({ table });
+      if (args.operation) params.set("operation", args.operation);
+
+      let closed  = false;
+      let controller: AbortController | undefined;
+
+      const connect = async () => {
+        if (closed) return;
+
+        controller = new AbortController();
+
+        let res: Response;
+        try {
+          res = await fetch(`${url}/events/stream?${params.toString()}`, {
+            headers: baseHeaders,
+            signal:  controller.signal,
+          });
+        } catch {
+          // Network error or abort — retry after 1s unless closed.
+          if (!closed) setTimeout(connect, 1_000);
+          return;
+        }
+
+        if (!res.ok || !res.body) {
+          if (!closed) setTimeout(connect, 3_000);
+          return;
+        }
+
+        const reader  = res.body.getReader();
+        const decoder = new TextDecoder();
+        let   buffer  = "";
+
+        try {
+          while (!closed) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+
+            // SSE messages are separated by double newlines.
+            const chunks = buffer.split("\n\n");
+            buffer = chunks.pop() ?? "";
+
+            for (const chunk of chunks) {
+              const dataLine = chunk
+                .split("\n")
+                .find((l) => l.startsWith("data: "));
+              if (!dataLine) continue;
+              try {
+                const data = JSON.parse(dataLine.slice(6)) as TableChangeEvent<T>;
+                callback(data);
+              } catch {
+                // Ignore malformed JSON (e.g. keepalive comments)
+              }
+            }
+          }
+        } catch {
+          // Stream interrupted — reconnect unless closed.
+        } finally {
+          reader.releaseLock();
+        }
+
+        if (!closed) setTimeout(connect, 1_000);
+      };
+
+      void connect();
+
+      return () => {
+        closed = true;
+        controller?.abort();
+      };
+    };
+  }
+
   // ── db proxy ─────────────────────────────────────────────────────────────
   // Uses a Proxy so accessing any property (e.g. `flux.db.users`) returns a
   // fully-functional TableClient at runtime. TypeScript narrows the type via
@@ -136,7 +221,7 @@ export function createClient(options: ClientOptions): FluxbaseClient {
   const db = new Proxy({} as FluxbaseDB, {
     get(_target, table: string | symbol): unknown {
       if (typeof table !== "string") return undefined;
-      return buildTableClient(table, fetcher);
+      return buildTableClient(table, fetcher, makeStreamer(table));
     },
   });
 

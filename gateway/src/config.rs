@@ -8,6 +8,8 @@ pub struct Config {
     pub data_engine_url: String,
     pub internal_service_token: String,
     pub port: u16,
+    /// Fluxbase API base URL — used to proxy SSE event streams and management calls.
+    pub api_url: String,
 }
 
 impl Config {
@@ -23,6 +25,7 @@ impl Config {
                 .unwrap_or_else(|_| "8081".to_string())
                 .parse()
                 .expect("PORT must be a number"),
+            api_url: env::var("API_URL").unwrap_or_else(|_| "http://localhost:8080".to_string()),
         }
     }
 }

@@ -13,8 +13,23 @@ import type {
   SelectFields,
   SelectResult,
   TableClient,
+  TableChangeEvent,
+  UnsubscribeFn,
 } from "./types.js";
 import { FluentQuery } from "./builder.js";
+
+// ─── Streamer type ────────────────────────────────────────────────────────────
+
+/**
+ * @internal
+ * A function that opens an SSE connection for `table`, optionally filtered
+ * by `operation`, and calls `callback` for each matching event.
+ * Returns an `UnsubscribeFn` that closes the connection.
+ */
+export type TableStreamer<T> = (
+  args:     { operation?: "insert" | "update" | "delete" },
+  callback: (event: TableChangeEvent<T>) => void,
+) => UnsubscribeFn;
 
 // ─── Internal response shapes ─────────────────────────────────────────────────
 
@@ -77,6 +92,10 @@ function normaliseSelect<T>(
  *
  * The `fetcher` is supplied by `createClient` and already has the
  * authentication headers baked in.
+ *
+ * The optional `streamer` is supplied by `createClient` for realtime
+ * subscriptions (`subscribe()`). When omitted, calling `subscribe()` will
+ * log a console warning and return a no-op unsubscribe function.
  */
 export function buildTableClient<
   T,
@@ -85,6 +104,7 @@ export function buildTableClient<
 >(
   table: string,
   fetcher: (path: string, init?: RequestInit) => Promise<unknown>,
+  streamer?: TableStreamer<T>,
 ): TableClient<T, TInsert, TUpdate> {
   return {
     // ── findMany ────────────────────────────────────────────────────────────
@@ -157,9 +177,25 @@ export function buildTableClient<
       return res.count ?? 0;
     },
 
+    // ── subscribe (realtime SSE) ─────────────────────────────────────────────
+    subscribe(
+      args:     { operation?: "insert" | "update" | "delete" },
+      callback: (event: TableChangeEvent<T>) => void,
+    ): UnsubscribeFn {
+      if (!streamer) {
+        console.warn(
+          `[fluxbase/sdk] subscribe() called on table "${table}" but no SSE ` +
+          "streamer is configured. Make sure you are using createClient() " +
+          "with a gateway URL that supports SSE.",
+        );
+        return () => { /* no-op */ };
+      }
+      return streamer(args, callback);
+    },
+
     // ── query (fluent builder) ───────────────────────────────────────────────
     query(): FluentQuery<T, undefined> {
-      return new FluentQuery<T, undefined>(table, fetcher);
+      return new FluentQuery<T, undefined>(table, fetcher, undefined, streamer);
     },
   };
 }

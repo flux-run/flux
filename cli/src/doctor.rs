@@ -188,7 +188,11 @@ pub async fn execute() -> anyhow::Result<()> {
         ));
     }
 
-    // ── 7. SDK file ────────────────────────────────────────────────────────
+    // ── 7. URL overrides ───────────────────────────────────────────────────
+    // Show resolved API + Gateway URLs so developers can confirm which
+    // instance the CLI is pointed at.
+    ok("API URL:        ", &config.api_url);
+    ok("Gateway URL:    ", &config.gateway_url);
     let sdk_path_str = ProjectConfig::resolve_sdk_output(None, proj.as_ref());
     let sdk_path     = PathBuf::from(&sdk_path_str);
 

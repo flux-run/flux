@@ -1,4 +1,4 @@
-use axum::{routing::any, Router};
+use axum::{routing::any, routing::get, Router};
 use tower_http::cors::{CorsLayer, Any};
 use crate::state::SharedState;
 use crate::routes::proxy::proxy_handler;
@@ -18,6 +18,10 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/db/{*path}",    any(data_engine::proxy_handler))
         .route("/files/{*path}", any(data_engine::proxy_handler));
 
+    // Realtime SSE — proxy to the API service.
+    let event_routes = Router::new()
+        .route("/events/stream", get(crate::routes::events::stream));
+
     // Serverless-function invocation routes — existing proxy with identity middleware.
     let fn_routes = Router::new()
         .route("/{*path}", any(proxy_handler))
@@ -31,6 +35,7 @@ pub fn create_router(state: SharedState) -> Router {
             axum::Json(serde_json::json!({ "status": "ok" }))
         }))
         .merge(engine_routes)
+        .merge(event_routes)
         .merge(fn_routes)
         .layer(cors)
         .with_state(state)

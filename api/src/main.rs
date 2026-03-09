@@ -24,6 +24,10 @@ use std::sync::Arc;
 use tower_http::cors::{CorsLayer, AllowOrigin};
 use axum::http::{HeaderValue, Method, header};
 
+/// Capacity of the in-process event broadcast channel.
+/// Lagging receivers simply skip missed messages.
+const EVENT_CHANNEL_CAPACITY: usize = 1_024;
+
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::PgPool,
@@ -38,6 +42,11 @@ pub struct AppState {
     /// Value: generated TypeScript source
     /// Invalidated automatically when the schema changes (new hash ≠ cached key).
     pub sdk_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
+    /// Broadcast channel for real-time table-change events.
+    /// Each message is a JSON string:
+    ///   `{"project_id":"...","table":"users","operation":"insert","row":{...}}`
+    /// SSE handlers subscribe to this and filter by project_id.
+    pub event_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 impl axum::extract::FromRef<AppState> for sqlx::PgPool {
@@ -130,7 +139,9 @@ pub fn create_app(state: AppState) -> Router {
         .route("/secrets", get(secrets::routes::get_internal_runtime_secrets))
         .route("/bundle", get(routes::deployments::get_internal_bundle))
         .route("/logs", post(logs::routes::create_log))
-        .route("/logs", get(logs::routes::list_logs));
+        .route("/logs", get(logs::routes::list_logs))
+        // Emits a table-change event to all connected SSE clients for the project.
+        .route("/events/emit", post(routes::events::emit));
 
     // Tenant Scope routes (X-Fluxbase-Tenant required + membership verified)
     let tenant_routes = Router::new()
@@ -171,6 +182,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/sdk/typescript",  get(routes::sdk::typescript))
         // OpenAPI 3.0 spec — generated from live schema.
         .route("/openapi.json",    get(routes::openapi::spec))
+        // Realtime SSE — subscribe to table-change events.
+        .route("/events/stream",   get(routes::events::stream))
         // Data Engine management proxy — CRUD for databases, tables, schema,
         // relationships, policies, hooks, subscriptions, workflows, cron.
         // Execution traffic (POST /db/query) is routed to the gateway instead.
@@ -224,6 +237,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let firebase_auth = Arc::new(FirebaseAuth::new(&firebase_project_id).await);
     let storage = services::storage::StorageService::new().await;
     
+    let (event_tx, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
+
     let state = AppState {
         pool,
         firebase_auth,
@@ -234,6 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         gateway_url: std::env::var("GATEWAY_URL")
             .unwrap_or_else(|_| "http://localhost:8081".to_string()),
         sdk_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        event_tx,
     };
     
     let app = create_app(state);

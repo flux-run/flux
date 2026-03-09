@@ -18,9 +18,11 @@ use colored::Colorize;
 use crate::config::{Config, ProjectConfig};
 
 pub async fn execute(
-    project:  Option<String>,
-    output:   Option<String>,
-    interval: Option<u64>,
+    project:     Option<String>,
+    output:      Option<String>,
+    interval:    Option<u64>,
+    api_url:     Option<String>,
+    gateway_url: Option<String>,
 ) -> anyhow::Result<()> {
     // Fallback: read project_id from global config if not supplied as a flag.
     let project_id = match project {
@@ -35,6 +37,8 @@ pub async fn execute(
         project_id:     project_id.clone(),
         sdk_output:     output.clone(),
         watch_interval: interval,
+        api_url:        api_url.clone(),
+        gateway_url:    gateway_url.clone(),
     };
 
     let path = proj.save().await?;
@@ -53,6 +57,12 @@ pub async fn execute(
         "watch_interval:".bold(),
         interval.unwrap_or(5).to_string().cyan()
     );
+    if let Some(u) = &api_url {
+        println!("  {}  {}", "api_url:       ".bold(), u.cyan());
+    }
+    if let Some(u) = &gateway_url {
+        println!("  {}  {}", "gateway_url:   ".bold(), u.cyan());
+    }
     println!();
     println!("{}", "Commit .fluxbase/config.json to share settings with your team.".dimmed());
     println!("Run: {}", "flux pull".cyan().bold());
