@@ -1,9 +1,12 @@
-use axum::{routing::{delete, get, patch, post}, Json, Router};
+use axum::{middleware as axum_middleware, routing::{delete, get, patch, post}, Json, Router};
 use serde_json::json;
 use std::sync::Arc;
 
 use crate::{
-    api::handlers::{cron, databases, debug, files, hooks, policies, query, relationships, schema, subscriptions, tables, workflows},
+    api::{
+        handlers::{cron, databases, debug, files, hooks, policies, query, relationships, schema, subscriptions, tables, workflows},
+        middleware::service_auth::require_service_token,
+    },
     state::AppState,
 };
 
@@ -54,4 +57,5 @@ pub fn build(state: Arc<AppState>) -> Router {
             }))
         }))
         .with_state(state)
+        .layer(axum_middleware::from_fn(require_service_token))
 }
