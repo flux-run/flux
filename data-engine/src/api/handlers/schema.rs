@@ -50,14 +50,24 @@ pub async fn introspect(
         None
     };
 
-    let tables = fetch_tables(&state.pool, &auth, schema_filter.as_deref()).await
-        .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_tables failed"); e })?;
-    let columns = fetch_columns(&state.pool, &auth, params.database.as_deref()).await
-        .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_columns failed"); e })?;
-    let relationships = fetch_relationships(&state.pool, &auth, params.database.as_deref()).await
-        .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_relationships failed"); e })?;
-    let policies = fetch_policies(&state.pool, &auth, params.database.as_deref()).await
-        .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_policies failed"); e })?;
+    let (tables, columns, relationships, policies) = tokio::try_join!(
+        async {
+            fetch_tables(&state.pool, &auth, schema_filter.as_deref()).await
+                .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_tables failed"); e })
+        },
+        async {
+            fetch_columns(&state.pool, &auth, params.database.as_deref()).await
+                .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_columns failed"); e })
+        },
+        async {
+            fetch_relationships(&state.pool, &auth, params.database.as_deref()).await
+                .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_relationships failed"); e })
+        },
+        async {
+            fetch_policies(&state.pool, &auth, params.database.as_deref()).await
+                .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_policies failed"); e })
+        },
+    )?;
 
     Ok(Json(json!({
         "tables":        tables,
