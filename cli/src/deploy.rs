@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Instant;
 
 // ── Result type for a single-function deploy ──────────────────────────────
@@ -242,47 +243,55 @@ pub async fn execute_project() -> anyhow::Result<()> {
     }
 
     println!(
-        "\n{} Deploying {} function{} to Fluxbase...\n",
+        "\n{} Deploying {} function{} in parallel...\n",
         "▶".cyan().bold(),
         function_dirs.len().to_string().bold(),
         if function_dirs.len() == 1 { "" } else { "s" }
     );
 
-    let client = ApiClient::new().await?;
+    let client = Arc::new(ApiClient::new().await?);
     let total_t0 = Instant::now();
 
-    let mut results: Vec<DeployResult> = Vec::new();
+    // Spawn all deploys concurrently; track original index for ordered output.
+    let mut set: tokio::task::JoinSet<(usize, anyhow::Result<DeployResult>)> =
+        tokio::task::JoinSet::new();
 
-    for dir in &function_dirs {
-        let fn_name = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "?".to_string());
+    for (idx, dir) in function_dirs.iter().enumerate() {
+        let dir = dir.clone();
+        let c = Arc::clone(&client);
+        set.spawn(async move {
+            let result = deploy_one_dir(&dir, None, None, &c).await;
+            (idx, result)
+        });
+    }
 
-        print!("  {} {}  ", "▸".dimmed(), fn_name.bold());
-        // Flush so the name appears before bundling starts
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
-
-        let result = deploy_one_dir(dir, None, None, &client).await?;
-
-        match &result.error {
-            None => {
-                let ver = result.version.map(|v| format!("v{v}")).unwrap_or_default();
-                println!(
-                    "{} {} ({}ms)",
-                    "✓".green().bold(),
-                    ver.dimmed(),
-                    result.elapsed_ms
-                );
+    // Collect results preserving original (alphabetical) order.
+    let mut indexed: Vec<(usize, DeployResult)> = Vec::with_capacity(function_dirs.len());
+    while let Some(join_result) = set.join_next().await {
+        match join_result {
+            Ok((idx, Ok(deploy_result))) => {
+                indexed.push((idx, deploy_result));
             }
-            Some(err) => {
-                println!("{} {}", "✗".red().bold(), err.red());
+            Ok((idx, Err(e))) => {
+                indexed.push((idx, DeployResult {
+                    name: function_dirs[idx]
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "?".to_string()),
+                    version: None,
+                    url: None,
+                    error: Some(e.to_string()),
+                    elapsed_ms: 0,
+                }));
+            }
+            Err(e) => {
+                // JoinError (task panicked) — very rare
+                eprintln!("  {} task panicked: {e}", "⚠".yellow());
             }
         }
-
-        results.push(result);
     }
+    indexed.sort_by_key(|(i, _)| *i);
+    let results: Vec<DeployResult> = indexed.into_iter().map(|(_, r)| r).collect();
 
     // ── Summary table ──────────────────────────────────────────────────────
     let total_ms = total_t0.elapsed().as_millis();

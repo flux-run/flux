@@ -68,9 +68,16 @@ enum Commands {
         #[arg(long)]
         tenant: Option<String>,
     },
-    /// Fetch function logs
+    /// Tail or stream function logs
     Logs {
-        name: String,
+        /// Function name to filter (omit to show all functions in the project)
+        name: Option<String>,
+        /// Stream live — poll for new lines every 1.5s (Ctrl+C to stop)
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of recent log lines to fetch (default 100)
+        #[arg(long, default_value = "100", value_name = "N")]
+        limit: u64,
     },
     /// Deployment operations
     Deployments {
@@ -173,7 +180,13 @@ async fn main() -> anyhow::Result<()> {
         Commands::Dev => dev::execute().await?,
         Commands::Deploy { name, runtime } => deploy::execute(name, runtime).await?,
         Commands::Invoke { name, tenant } => invoke::execute(&name, tenant).await?,
-        Commands::Logs { name } => logs::execute(&name).await?,
+        Commands::Logs { name, follow, limit } => {
+            if follow {
+                logs::execute_follow(name, limit).await?
+            } else {
+                logs::execute(name, limit).await?
+            }
+        }
         Commands::Deployments { command } => deployments::execute_deployments(command).await?,
         Commands::Rollback { name, version } => deployments::execute_rollback(&name, version).await?,
         Commands::Pull { output } => sdk::execute_pull(output).await?,

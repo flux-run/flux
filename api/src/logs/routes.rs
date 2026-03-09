@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     http::HeaderMap,
     Json,
 };
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 use crate::types::response::{ApiResponse, ApiError};
+use crate::types::context::RequestContext;
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
@@ -139,6 +140,102 @@ pub async fn list_logs(
         "id": r.id,
         "level": r.level,
         "message": r.message,
+        "timestamp": r.timestamp.to_rfc3339(),
+    })).collect();
+
+    Ok(ApiResponse::new(serde_json::json!({ "logs": logs })))
+}
+
+// ── GET /logs  (project-scoped, Firebase auth) ────────────────────────────
+//
+// Query params:
+//   function  — optional function name filter
+//   limit     — max rows (default 100, max 1000)
+//   since     — ISO-8601 timestamp; return only rows newer than this
+//
+// Used by `flux logs` (fetch) and `flux logs --follow` (polled).
+
+#[derive(Deserialize)]
+pub struct ProjectLogQuery {
+    pub function: Option<String>,
+    pub limit: Option<i64>,
+    pub since: Option<String>,   // ISO-8601 e.g. "2026-03-09T10:00:00Z"
+}
+
+pub async fn list_project_logs(
+    State(pool): State<PgPool>,
+    Extension(context): Extension<RequestContext>,
+    Query(params): Query<ProjectLogQuery>,
+) -> ApiResult<serde_json::Value> {
+    let project_id = context
+        .project_id
+        .ok_or(ApiError::bad_request("missing_project"))?;
+
+    let limit = params.limit.unwrap_or(100).min(1_000);
+
+    // Parse optional `since` timestamp
+    let since: Option<chrono::DateTime<chrono::Utc>> = params
+        .since
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    #[derive(sqlx::FromRow)]
+    struct ProjectLogRow {
+        id: Uuid,
+        function_name: String,
+        level: String,
+        message: String,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    }
+
+    let rows: Vec<ProjectLogRow> = match (params.function.as_deref(), since) {
+        (Some(fn_name), Some(since_ts)) => sqlx::query_as(
+            "SELECT l.id, f.name as function_name, l.level, l.message, l.timestamp \
+             FROM function_logs l \
+             JOIN functions f ON f.id = l.function_id \
+             WHERE f.project_id = $1 AND f.name = $2 AND l.timestamp > $3 \
+             ORDER BY l.timestamp ASC LIMIT $4",
+        )
+        .bind(project_id).bind(fn_name).bind(since_ts).bind(limit)
+        .fetch_all(&pool).await.map_err(|_| db_err())?,
+
+        (Some(fn_name), None) => sqlx::query_as(
+            "SELECT l.id, f.name as function_name, l.level, l.message, l.timestamp \
+             FROM function_logs l \
+             JOIN functions f ON f.id = l.function_id \
+             WHERE f.project_id = $1 AND f.name = $2 \
+             ORDER BY l.timestamp DESC LIMIT $3",
+        )
+        .bind(project_id).bind(fn_name).bind(limit)
+        .fetch_all(&pool).await.map_err(|_| db_err())?,
+
+        (None, Some(since_ts)) => sqlx::query_as(
+            "SELECT l.id, f.name as function_name, l.level, l.message, l.timestamp \
+             FROM function_logs l \
+             JOIN functions f ON f.id = l.function_id \
+             WHERE f.project_id = $1 AND l.timestamp > $2 \
+             ORDER BY l.timestamp ASC LIMIT $3",
+        )
+        .bind(project_id).bind(since_ts).bind(limit)
+        .fetch_all(&pool).await.map_err(|_| db_err())?,
+
+        (None, None) => sqlx::query_as(
+            "SELECT l.id, f.name as function_name, l.level, l.message, l.timestamp \
+             FROM function_logs l \
+             JOIN functions f ON f.id = l.function_id \
+             WHERE f.project_id = $1 \
+             ORDER BY l.timestamp DESC LIMIT $2",
+        )
+        .bind(project_id).bind(limit)
+        .fetch_all(&pool).await.map_err(|_| db_err())?,
+    };
+
+    let logs: Vec<_> = rows.iter().map(|r| serde_json::json!({
+        "id":        r.id,
+        "function":  r.function_name,
+        "level":     r.level,
+        "message":   r.message,
         "timestamp": r.timestamp.to_rfc3339(),
     })).collect();
 

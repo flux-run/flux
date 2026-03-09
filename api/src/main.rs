@@ -184,6 +184,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/openapi.json",    get(routes::openapi::spec))
         // Realtime SSE — subscribe to table-change events.
         .route("/events/stream",   get(routes::events::stream))
+        // Function logs — project-scoped, supports ?function=&limit=&since=
+        .route("/logs",            get(logs::routes::list_project_logs))
         // Data Engine management proxy — CRUD for databases, tables, schema,
         // relationships, policies, hooks, subscriptions, workflows, cron.
         // Execution traffic (POST /db/query) is routed to the gateway instead.
