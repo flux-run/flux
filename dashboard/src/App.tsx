@@ -13,6 +13,14 @@ import LogsPage from '@/pages/logs/LogsPage'
 import ProjectSettingsPage from '@/pages/projects/ProjectSettingsPage'
 import RoutesPage from '@/pages/routes/RoutesPage'
 import ProjectLayout from '@/components/layout/ProjectLayout'
+// Data platform
+import DatabasesPage from '@/pages/data/DatabasesPage'
+import TablesPage from '@/pages/data/TablesPage'
+import TableWorkspacePage from '@/pages/data/TableWorkspacePage'
+import StoragePage from '@/pages/storage/StoragePage'
+import EventsPage from '@/pages/events/EventsPage'
+import WorkflowsPage from '@/pages/workflows/WorkflowsPage'
+import CronPage from '@/pages/cron/CronPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,6 +48,15 @@ export default function App() {
             {/* Project level */}
             <Route path="projects/:projectId" element={<ProjectLayout />}>
               <Route path="overview" element={<OverviewPage />} />
+              {/* Data platform */}
+              <Route path="data" element={<DatabasesPage />} />
+              <Route path="data/:database" element={<TablesPage />} />
+              <Route path="data/:database/:table" element={<TableWorkspacePage />} />
+              <Route path="storage" element={<StoragePage />} />
+              <Route path="events" element={<EventsPage />} />
+              <Route path="workflows" element={<WorkflowsPage />} />
+              <Route path="cron" element={<CronPage />} />
+              {/* Serverless */}
               <Route path="functions" element={<FunctionsPage />} />
               <Route path="functions/:functionId" element={<FunctionDetailPage />} />
               <Route path="routes" element={<RoutesPage />} />

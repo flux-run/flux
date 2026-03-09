@@ -55,3 +55,45 @@ export async function apiFetch<T = unknown>(
   }
   return json as T;
 }
+
+// ─── Data Engine client ───────────────────────────────────────────────────────
+// Calls the separate Fluxbase Data Engine service (VITE_DB_URL).
+// Auth headers are identical; the data engine uses the same tenant/project ctx.
+
+const DB_BASE = import.meta.env.VITE_DB_URL ?? "http://localhost:8082";
+
+export async function dbFetch<T = unknown>(
+  path: string,
+  options: FetchOptions = {},
+): Promise<T> {
+  const auth = getAuth();
+  await auth.authStateReady();
+  const user = auth.currentUser;
+  const token = user ? await user.getIdToken() : null;
+
+  const state = useStore.getState();
+  const finalProjectId = options.projectId || state.projectId;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(!options.skipTenant && state.tenantId
+      ? { "X-Fluxbase-Tenant": state.tenantId }
+      : {}),
+    ...(!options.skipProject && finalProjectId
+      ? { "X-Fluxbase-Project": finalProjectId }
+      : {}),
+    ...(options.headers as Record<string, string>),
+  };
+
+  const res = await fetch(`${DB_BASE}${path}`, { ...options, headers });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "unknown_error" }));
+    throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+
+  const text = await res.text();
+  if (!text) return {} as T;
+  return JSON.parse(text) as T;
+}

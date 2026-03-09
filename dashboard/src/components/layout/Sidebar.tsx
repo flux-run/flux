@@ -2,6 +2,7 @@ import { NavLink, useParams } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { Zap, FolderOpen, Settings, LayoutDashboard,
   Code2, KeyRound, ShieldCheck, ScrollText, Globe,
+  Database, HardDrive, Bell, GitBranch, Clock,
 } from 'lucide-react'
 import { TenantSwitcher } from '@/components/TenantSwitcher'
 import { useAuth } from '@/hooks/useAuth'
@@ -76,13 +77,18 @@ export function Sidebar() {
             <p className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/30 mb-1.5 px-2">
               Project
             </p>
-            {navItem(`/dashboard/projects/${projectId}/overview`, LayoutDashboard, 'Overview')}
-            {navItem(`/dashboard/projects/${projectId}/functions`, Code2, 'Functions')}
-            {navItem(`/dashboard/projects/${projectId}/routes`, Globe, 'Routes')}
-            {navItem(`/dashboard/projects/${projectId}/secrets`, ShieldCheck, 'Secrets')}
-            {navItem(`/dashboard/projects/${projectId}/api-keys`, KeyRound, 'API Keys')}
-            {navItem(`/dashboard/projects/${projectId}/logs`, ScrollText, 'Logs')}
-            {navItem(`/dashboard/projects/${projectId}/settings`, Settings, 'Settings')}
+            {navItem(`/dashboard/projects/${projectId}/overview`,  LayoutDashboard, 'Overview')}
+            {navItem(`/dashboard/projects/${projectId}/data`,       Database,        'Data')}
+            {navItem(`/dashboard/projects/${projectId}/storage`,    HardDrive,       'Storage')}
+            {navItem(`/dashboard/projects/${projectId}/functions`,  Code2,           'Functions')}
+            {navItem(`/dashboard/projects/${projectId}/routes`,     Globe,           'Routes')}
+            {navItem(`/dashboard/projects/${projectId}/events`,     Bell,            'Events')}
+            {navItem(`/dashboard/projects/${projectId}/workflows`,  GitBranch,       'Workflows')}
+            {navItem(`/dashboard/projects/${projectId}/cron`,       Clock,           'Cron')}
+            {navItem(`/dashboard/projects/${projectId}/secrets`,    ShieldCheck,     'Secrets')}
+            {navItem(`/dashboard/projects/${projectId}/api-keys`,   KeyRound,        'API Keys')}
+            {navItem(`/dashboard/projects/${projectId}/logs`,       ScrollText,      'Logs')}
+            {navItem(`/dashboard/projects/${projectId}/settings`,   Settings,        'Settings')}
           </div>
         )}
       </nav>
