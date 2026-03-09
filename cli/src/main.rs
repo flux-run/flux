@@ -5,7 +5,9 @@ mod client;
 mod config;
 mod deploy;
 mod dev;
+mod doctor;
 mod functions;
+mod init;
 mod invoke;
 mod logs;
 mod projects;
@@ -97,6 +99,20 @@ enum Commands {
         #[arg(long, short, value_name = "FILE")]
         sdk: Option<String>,
     },
+    /// Diagnose environment, connectivity, and SDK sync
+    Doctor,
+    /// Initialise .fluxbase/config.json for this project
+    Init {
+        /// Fluxbase project ID to store in the config
+        #[arg(long, value_name = "PROJECT_ID")]
+        project: Option<String>,
+        /// Default SDK output path
+        #[arg(long, value_name = "FILE")]
+        output: Option<String>,
+        /// Default watch interval in seconds
+        #[arg(long, value_name = "SECS")]
+        interval: Option<u64>,
+    },
 }
 
 #[tokio::main]
@@ -118,6 +134,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Pull { output } => sdk::execute_pull(output).await?,
         Commands::Watch { output, interval } => sdk::execute_watch(output, interval).await?,
         Commands::Status { sdk } => sdk::execute_status(sdk).await?,
+        Commands::Doctor => doctor::execute().await?,
+        Commands::Init { project, output, interval } => init::execute(project, output, interval).await?,
     }
 
     Ok(())

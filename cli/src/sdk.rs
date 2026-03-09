@@ -34,6 +34,7 @@ use serde::Deserialize;
 use tokio::{fs, time};
 
 use crate::client::ApiClient;
+use crate::config::ProjectConfig;
 
 // ─── Response shapes ──────────────────────────────────────────────────────────
 
@@ -195,7 +196,8 @@ fn epoch_to_ymd_hms(mut t: u64) -> (u64, u64, u64, u64, u64, u64) {
 ///
 /// `output` — destination file path (defaults to `fluxbase.generated.ts`).
 pub async fn execute_pull(output: Option<String>) -> anyhow::Result<()> {
-    let output_path = PathBuf::from(output.unwrap_or_else(|| "fluxbase.generated.ts".into()));
+    let proj = ProjectConfig::load().await;
+    let output_path = PathBuf::from(ProjectConfig::resolve_sdk_output(output, proj.as_ref()));
 
     let client = ApiClient::new().await?;
 
@@ -268,7 +270,9 @@ pub async fn execute_pull(output: Option<String>) -> anyhow::Result<()> {
 /// `output`   — destination file path (defaults to `fluxbase.generated.ts`).
 /// `interval` — polling interval in seconds (defaults to 5).
 pub async fn execute_watch(output: Option<String>, interval: u64) -> anyhow::Result<()> {
-    let output_path = PathBuf::from(output.unwrap_or_else(|| "fluxbase.generated.ts".into()));
+    let proj = ProjectConfig::load().await;
+    let output_path = PathBuf::from(ProjectConfig::resolve_sdk_output(output, proj.as_ref()));
+    let interval    = ProjectConfig::resolve_watch_interval(interval, proj.as_ref());
     let client = ApiClient::new().await?;
     let project_id = client.config.project_id.clone().unwrap_or_else(|| "(no project)".into());
     let mut last_hash = String::new();
@@ -352,7 +356,8 @@ pub async fn execute_watch(output: Option<String>, interval: u64) -> anyhow::Res
 ///
 /// `sdk_path` — path to the generated file (defaults to `fluxbase.generated.ts`).
 pub async fn execute_status(sdk_path: Option<String>) -> anyhow::Result<()> {
-    let path = PathBuf::from(sdk_path.unwrap_or_else(|| "fluxbase.generated.ts".into()));
+    let proj = ProjectConfig::load().await;
+    let path = PathBuf::from(ProjectConfig::resolve_sdk_output(sdk_path, proj.as_ref()));
     let client = ApiClient::new().await?;
 
     let project_id = client.config.project_id.as_deref().unwrap_or("(none)");
