@@ -9,6 +9,7 @@ mod functions;
 mod invoke;
 mod logs;
 mod projects;
+mod sdk;
 mod secrets;
 mod tenant;
 mod deployments;
@@ -75,6 +76,21 @@ enum Commands {
         #[arg(long)]
         version: i32,
     },
+    /// Pull the TypeScript SDK for the current project
+    Pull {
+        /// Output file path (default: fluxbase.generated.ts)
+        #[arg(long, short, value_name = "FILE")]
+        output: Option<String>,
+    },
+    /// Watch schema for changes and auto-regenerate the SDK
+    Watch {
+        /// Output file path (default: fluxbase.generated.ts)
+        #[arg(long, short, value_name = "FILE")]
+        output: Option<String>,
+        /// Polling interval in seconds (default: 5)
+        #[arg(long, default_value = "5", value_name = "SECS")]
+        interval: u64,
+    },
 }
 
 #[tokio::main]
@@ -93,6 +109,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Logs { name } => logs::execute(&name).await?,
         Commands::Deployments { command } => deployments::execute_deployments(command).await?,
         Commands::Rollback { name, version } => deployments::execute_rollback(&name, version).await?,
+        Commands::Pull { output } => sdk::execute_pull(output).await?,
+        Commands::Watch { output, interval } => sdk::execute_watch(output, interval).await?,
     }
 
     Ok(())
