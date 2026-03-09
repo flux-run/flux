@@ -151,9 +151,16 @@ pub async fn proxy_handler(
         .collect();
 
     // ── Cache-eligible path ───────────────────────────────────────────────
+    //
+    // is_query_cacheable() contains a serde_json parse to inspect offset/limit/order.
+    // We intentionally defer it to the MISS storage gate (inside get_or_fetch)
+    // so that cache HITs pay zero JSON-parsing cost:
+    //
+    //   HIT  path: is_cacheable (O(1)) → hash (O(min(n,4K))) → DashMap lookup → return
+    //   MISS path: proxy → is_query_cacheable → maybe store → return
     let cacheable = is_cacheable(&method, uri.path());
 
-    if cacheable && is_query_cacheable(&body_bytes) {
+    if cacheable {
         let project_id = in_headers
             .get("x-fluxbase-project")
             .and_then(|v| v.to_str().ok())
@@ -212,6 +219,12 @@ pub async fn proxy_handler(
 
                         // Only cache successful responses.
                         if !status.is_success() {
+                            return Err(());
+                        }
+
+                        // JSON parse happens here — only on a true backend MISS,
+                        // never on a HIT. Filters out offset / large-limit / random-order.
+                        if !is_query_cacheable(&body_for_hint) {
                             return Err(());
                         }
 
