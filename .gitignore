@@ -10,6 +10,8 @@
 # ── Env files (never commit secrets) ─────────────────────────────────────────
 **/.env
 **/.env.*
+# ...but commit example templates so teammates know what vars to set:
+!**/.env.*.example
 
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store

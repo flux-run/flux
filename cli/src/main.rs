@@ -13,6 +13,7 @@ mod logs;
 mod projects;
 mod sdk;
 mod secrets;
+mod stack;
 mod tenant;
 mod deployments;
 
@@ -119,6 +120,40 @@ enum Commands {
         #[arg(long, value_name = "URL")]
         gateway_url: Option<String>,
     },
+    /// Manage the local Fluxbase development stack (all services via Docker)
+    Stack {
+        #[command(subcommand)]
+        command: StackCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum StackCommand {
+    /// Build and start all services (detached by default)
+    Up {
+        /// Force rebuild of Docker images before starting
+        #[arg(long)]
+        build: bool,
+        /// Run in foreground (default is detached / -d)
+        #[arg(long)]
+        foreground: bool,
+    },
+    /// Stop and remove containers
+    Down {
+        /// Also remove the postgres data volume (destroys all local data)
+        #[arg(short, long)]
+        volumes: bool,
+    },
+    /// List running services and their exposed ports
+    Ps,
+    /// Tail logs for one or all services
+    Logs {
+        /// Service name to tail (omit to tail all)
+        service: Option<String>,
+        /// Number of recent log lines to show
+        #[arg(long, default_value = "100")]
+        tail: u32,
+    },
 }
 
 #[tokio::main]
@@ -142,6 +177,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status { sdk } => sdk::execute_status(sdk).await?,
         Commands::Doctor => doctor::execute().await?,
         Commands::Init { project, output, interval, api_url, gateway_url } => init::execute(project, output, interval, api_url, gateway_url).await?,
+        Commands::Stack { command } => match command {
+            StackCommand::Up   { build, foreground }  => stack::execute_up(build, !foreground).await?,
+            StackCommand::Down { volumes }             => stack::execute_down(volumes).await?,
+            StackCommand::Ps                          => stack::execute_ps().await?,
+            StackCommand::Logs { service, tail }       => stack::execute_logs(service, tail).await?,
+        },
     }
 
     Ok(())

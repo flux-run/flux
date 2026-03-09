@@ -1,0 +1,154 @@
+# Fluxbase local development stack
+#
+# Prerequisites: Docker 24+ with docker compose v2.
+#
+# Usage:
+#   flux stack up        — start all services (builds images if needed)
+#   flux stack down      — stop and remove containers
+#   flux stack ps        — list running services
+#   flux stack logs api  — tail logs for a specific service
+#
+# Required before first run:
+#   Copy .env.dev.example → .env.dev and fill in FIREBASE_PROJECT_ID.
+#   Then: flux stack up --build
+
+version: "3.9"
+
+services:
+
+  # ─── Infrastructure ─────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     flux
+      POSTGRES_PASSWORD: flux
+      POSTGRES_DB:       fluxbase
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flux -d fluxbase"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─── API (management plane, port 8080) ──────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PORT:                    "8080"
+      DATABASE_URL:            "postgresql://flux:flux@db:5432/fluxbase"
+      DATA_ENGINE_URL:         "http://data-engine:8082"
+      GATEWAY_URL:             "http://gateway:8081"
+      INTERNAL_SERVICE_TOKEN:  "fluxbase_local_dev_token"
+      ALLOWED_ORIGINS:         "http://localhost:5173,http://localhost:3000"
+      # Supply via .env.dev or FIREBASE_PROJECT_ID env var:
+      FIREBASE_PROJECT_ID:     "${FIREBASE_PROJECT_ID:-}"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ─── Gateway (execution / public edge, port 8081) ───────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      GATEWAY_PORT:            "8081"
+      DATABASE_URL:            "postgresql://flux:flux@db:5432/fluxbase"
+      RUNTIME_URL:             "http://runtime:8083"
+      DATA_ENGINE_URL:         "http://data-engine:8082"
+      API_URL:                 "http://api:8080"
+      QUEUE_URL:               "http://queue:8084"
+      INTERNAL_SERVICE_TOKEN:  "fluxbase_local_dev_token"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ─── Data Engine (query engine, port 8082) ──────────────────────────────────
+  data-engine:
+    build:
+      context: .
+      dockerfile: data-engine/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      PORT:                    "8082"
+      DATABASE_URL:            "postgresql://flux:flux@db:5432/fluxbase"
+      INTERNAL_SERVICE_TOKEN:  "fluxbase_local_dev_token"
+      RUNTIME_URL:             "http://runtime:8083"
+      MAX_NEST_DEPTH:          "6"
+      MAX_QUERY_LIMIT:         "5000"
+      DEFAULT_QUERY_LIMIT:     "100"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ─── Runtime (serverless executor, port 8083) ───────────────────────────────
+  runtime:
+    build:
+      context: .
+      dockerfile: runtime/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      PORT:                "8083"
+      CONTROL_PLANE_URL:   "http://api:8080"
+      SERVICE_TOKEN:       "fluxbase_local_dev_token"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ─── Queue (async job worker, port 8084) ────────────────────────────────────
+  queue:
+    build:
+      context: .
+      dockerfile: queue/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    environment:
+      QUEUE_PORT:              "8084"
+      DATABASE_URL:            "postgresql://flux:flux@db:5432/fluxbase"
+      RUNTIME_URL:             "http://runtime:8083"
+      INTERNAL_SERVICE_TOKEN:  "fluxbase_local_dev_token"
+      WORKER_CONCURRENCY:      "5"
+      WORKER_POLL_INTERVAL_MS: "500"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ─── Dashboard (React/Vite SPA, port 5173) ──────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL:     "http://localhost:8080"
+        VITE_GATEWAY_URL: "http://localhost:8081"
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+      - gateway
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  default:
+    name: fluxbase_dev

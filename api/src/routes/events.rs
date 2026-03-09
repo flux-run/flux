@@ -20,6 +20,7 @@
 /// ```
 
 use std::convert::Infallible;
+use std::time::Duration;
 
 use axum::{
     extract::{Extension, Query, State},
@@ -31,7 +32,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio_stream::{
+    wrappers::{BroadcastStream, IntervalStream},
+    StreamExt,
+};
 
 use crate::{
     types::{
@@ -97,7 +101,14 @@ pub async fn stream(
     let filter_op    = q.operation;
 
     let rx = state.event_tx.subscribe();
-    let sse_stream = BroadcastStream::new(rx).filter_map(move |msg| {
+
+    // Heartbeat interval — fires every 20 s to keep the connection alive
+    // through proxies (Nginx, Cloudflare, load-balancers) that close idle
+    // connections after ~30 s.
+    let heartbeat = IntervalStream::new(tokio::time::interval(Duration::from_secs(20)))
+        .map(|_| Ok::<Event, Infallible>(Event::default().event("heartbeat").data("{}")));
+
+    let event_stream = BroadcastStream::new(rx).filter_map(move |msg| {
         let project_id    = project_id.clone();
         let filter_table  = filter_table.clone();
         let filter_op     = filter_op.clone();
@@ -139,7 +150,10 @@ pub async fn stream(
         result
     });
 
-    Sse::new(sse_stream)
+    // Merge: real events take priority; heartbeats fill silence.
+    let merged = event_stream.merge(heartbeat);
+
+    Sse::new(merged)
         .keep_alive(KeepAlive::default())
         .into_response()
 }

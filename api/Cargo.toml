@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 axum = { version = "0.8.8", features = ["multipart"] }
-tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-stream = { version = "0.1", features = ["sync", "time"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 dotenvy = "0.15.7"
 firebase-auth = { version = "0.5.1", default-features = false, features = ["rustls"] }
