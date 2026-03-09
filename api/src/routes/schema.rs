@@ -43,6 +43,7 @@ pub fn forward_headers(headers: &HeaderMap) -> reqwest::header::HeaderMap {
         "x-project-slug",
         "x-user-id",
         "x-user-role",
+        "x-request-id",
         "content-type",
     ] {
         if let Some(v) = headers.get(*key) {
@@ -91,6 +92,12 @@ pub async fn graph(
     headers: HeaderMap,
     Query(params): Query<SchemaQuery>,
 ) -> ApiResult<Value> {
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_owned();
+
     let project_id = ctx
         .project_id
         .ok_or_else(|| ApiError::bad_request("missing_project"))?;
@@ -100,6 +107,13 @@ pub async fn graph(
     if let Some(ref db) = params.database {
         de_url.push_str(&format!("?database={}", db));
     }
+
+    tracing::info!(
+        request_id = %request_id,
+        project_id = %project_id,
+        de_url     = %de_url,
+        "calling data-engine",
+    );
 
     let de_resp = state
         .http_client
@@ -113,7 +127,7 @@ pub async fn graph(
     if !de_resp.status().is_success() {
         let status = de_resp.status().as_u16();
         let body = de_resp.text().await.unwrap_or_default();
-        tracing::error!(status, body = %body, "data_engine returned error");
+        tracing::error!(request_id = %request_id, status, body = %body, "data_engine returned error");
         return Err(ApiError::internal(&format!("data_engine_error({status}): {body}")));
     }
 

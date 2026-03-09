@@ -235,6 +235,9 @@ pub fn create_app(state: AppState) -> Router {
             (axum::http::StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not_found", "path": req.uri().path().to_string() })))
         })
         .layer(build_cors())
+        // Outermost layer: assigns / propagates x-request-id and logs every
+        // non-health request with method, path, status, and latency.
+        .layer(axum_middleware::from_fn(middleware::request_id::request_id_middleware))
         .with_state(state)
 }
 

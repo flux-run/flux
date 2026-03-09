@@ -25,6 +25,13 @@ pub async fn require_service_token(req: Request, next: Next) -> Response {
     let expected = std::env::var("INTERNAL_SERVICE_TOKEN")
         .unwrap_or_else(|_| "fluxbase_secret_token".to_string());
 
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_owned();
+
     let provided = req
         .headers()
         .get("x-service-token")
@@ -33,8 +40,10 @@ pub async fn require_service_token(req: Request, next: Next) -> Response {
         .to_owned();
 
     if provided == expected {
+        tracing::debug!(request_id = %request_id, path = %path, "request authenticated");
         next.run(req).await
     } else {
+        tracing::warn!(request_id = %request_id, path = %path, "request rejected: invalid service token");
         (
             StatusCode::UNAUTHORIZED,
             axum::Json(serde_json::json!({

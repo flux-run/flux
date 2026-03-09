@@ -28,7 +28,20 @@ pub async fn introspect(
     headers: HeaderMap,
     Query(params): Query<SchemaQuery>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_owned();
+
     let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+
+    tracing::info!(
+        request_id = %request_id,
+        tenant_id  = %auth.tenant_id,
+        project_id = %auth.project_id,
+        "schema introspect start",
+    );
 
     // Determine schema name (or all schemas for this project).
     let schema_filter: Option<String> = if let Some(ref db) = params.database {
@@ -37,10 +50,14 @@ pub async fn introspect(
         None
     };
 
-    let tables = fetch_tables(&state.pool, &auth, schema_filter.as_deref()).await?;
-    let columns = fetch_columns(&state.pool, &auth, params.database.as_deref()).await?;
-    let relationships = fetch_relationships(&state.pool, &auth, params.database.as_deref()).await?;
-    let policies = fetch_policies(&state.pool, &auth, params.database.as_deref()).await?;
+    let tables = fetch_tables(&state.pool, &auth, schema_filter.as_deref()).await
+        .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_tables failed"); e })?;
+    let columns = fetch_columns(&state.pool, &auth, params.database.as_deref()).await
+        .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_columns failed"); e })?;
+    let relationships = fetch_relationships(&state.pool, &auth, params.database.as_deref()).await
+        .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_relationships failed"); e })?;
+    let policies = fetch_policies(&state.pool, &auth, params.database.as_deref()).await
+        .map_err(|e| { tracing::error!(request_id = %request_id, error = %e, "fetch_policies failed"); e })?;
 
     Ok(Json(json!({
         "tables":        tables,
