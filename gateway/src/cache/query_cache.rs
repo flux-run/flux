@@ -13,6 +13,7 @@
 /// The cache also runs a background task that evicts expired entries every
 /// EVICTION_INTERVAL_SECS to bound memory usage.
 
+use axum::http::{HeaderMap, StatusCode};
 use bytes::Bytes;
 use dashmap::DashMap;
 use futures::future::{BoxFuture, Shared};
@@ -63,17 +64,22 @@ impl QueryCacheKey {
     }
 }
 
-/// A single cached response.
+/// A single cached response — stored once, served to N concurrent readers
+/// without copying body bytes or rebuilding the header map.
+///
+/// * `body`    — `Bytes` is internally `Arc<[u8]>`; `.clone()` is O(1), zero-copy.
+/// * `headers` — `Arc<HeaderMap>` is cloned per hit (pointer bump only).
+///   Sensitive headers (`set-cookie`, `authorization`, `x-request-id`, etc.)
+///   are stripped before storage so they can never leak across requests.
 #[derive(Clone)]
 pub struct CacheEntry {
-    /// Raw response body from the data-engine.
+    /// Raw response body (zero-copy clone — Bytes is Arc<[u8]> + slice info).
     pub body: Bytes,
-    /// HTTP status code (only 2xx responses are stored).
-    pub status: u16,
-    /// `Content-Type` header value.
-    pub content_type: String,
-    /// Optional table hint — if the query body contains `"table":"<name>"`,
-    /// we store it here to enable per-table invalidation.
+    /// Filtered upstream response headers, shared across all hits for this entry.
+    pub headers: Arc<HeaderMap>,
+    /// HTTP status code of the original response.
+    pub status: StatusCode,
+    /// Optional table hint for per-table invalidation.
     pub table_hint: Option<String>,
     /// When this entry was inserted.
     pub cached_at: Instant,
@@ -86,9 +92,26 @@ impl CacheEntry {
         self.cached_at.elapsed() > self.ttl
     }
 
-    /// How old this entry is, in milliseconds — exposed on `X-Cache-Age` header.
+    /// Age in milliseconds — surfaced on the `X-Cache-Age` response header.
     pub fn age_ms(&self) -> u128 {
         self.cached_at.elapsed().as_millis()
+    }
+
+    /// Strip headers that must never be shared across callers or cached.
+    /// Called once in `do_proxy` before the entry is stored.
+    pub fn strip_sensitive(headers: &mut HeaderMap) {
+        for name in &[
+            "set-cookie",
+            "authorization",
+            "x-request-id",
+            "x-cache",
+            "x-cache-age",
+            // Invalid once the body is fully buffered (chunked encoding resolved).
+            "transfer-encoding",
+            "content-length",
+        ] {
+            headers.remove(*name);
+        }
     }
 }
 
