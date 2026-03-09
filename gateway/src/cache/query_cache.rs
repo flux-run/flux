@@ -15,6 +15,8 @@
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use futures::future::{BoxFuture, Shared};
+use futures::FutureExt;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,6 +31,10 @@ const EVICTION_INTERVAL_SECS: u64 = 60;
 const MAX_ENTRIES: usize = 4_096;
 
 // ── Types ─────────────────────────────────────────────────────────────────
+
+/// Shared in-flight future type.
+/// All concurrent requests for the same key await the same backend call.
+type SharedFuture = Shared<BoxFuture<'static, Result<CacheEntry, ()>>>;
 
 /// Cache key: project scope + role + content-addressed request body.
 ///
@@ -92,13 +98,17 @@ impl CacheEntry {
 #[derive(Clone)]
 pub struct QueryCache {
     inner: Arc<DashMap<QueryCacheKey, CacheEntry>>,
-    ttl: Duration,
+    /// In-flight request map: concurrent MISS requests coalesce onto one backend call.
+    inflight: Arc<DashMap<QueryCacheKey, SharedFuture>>,
+    /// Public so closures passed to get_or_fetch can capture the TTL.
+    pub ttl: Duration,
 }
 
 impl QueryCache {
     pub fn new(ttl_secs: u64) -> Self {
         Self {
             inner: Arc::new(DashMap::with_capacity(256)),
+            inflight: Arc::new(DashMap::new()),
             ttl: Duration::from_secs(ttl_secs),
         }
     }
@@ -126,23 +136,71 @@ impl QueryCache {
         self.inner.insert(key, entry);
     }
 
-    /// Build an entry ready for insertion.
-    pub fn make_entry(
+    /// **Single-flight cache fetch.**
+    ///
+    /// 1. Cache HIT  → return immediately.
+    /// 2. Inflight HIT  → await the existing in-flight backend call (coalesced).
+    /// 3. Inflight MISS → create a `Shared` future, insert it atomically into the
+    ///    inflight map, execute the backend call, then populate the cache.
+    ///
+    /// `fetch` must return `Ok(entry)` on success or `Err(())` on failure.
+    /// Timed out or failed fetches are **not** cached.
+    pub async fn get_or_fetch<F>(
         &self,
-        body: Bytes,
-        status: u16,
-        content_type: String,
-        table_hint: Option<String>,
-    ) -> CacheEntry {
-        CacheEntry {
-            body,
-            status,
-            content_type,
-            table_hint,
-            cached_at: Instant::now(),
-            ttl: self.ttl,
+        key: QueryCacheKey,
+        fetch: F,
+    ) -> Result<CacheEntry, ()>
+    where
+        F: FnOnce() -> BoxFuture<'static, Result<CacheEntry, ()>>,
+    {
+        // ── 1. Cache HIT ──────────────────────────────────────────────────
+        if let Some(entry) = self.get(&key) {
+            return Ok(entry);
         }
+
+        // ── 2. Atomic check-or-create in the inflight map ─────────────────
+        //
+        // DashMap::entry() holds the shard lock for the duration of the
+        // match arm, giving us an atomic "check then insert".
+        let shared_fut = {
+            use dashmap::mapref::entry::Entry;
+            match self.inflight.entry(key.clone()) {
+                Entry::Occupied(e) => {
+                    // Another task is already fetching this key — coalesce.
+                    tracing::debug!("query cache: coalescing onto in-flight request");
+                    e.get().clone()
+                }
+                Entry::Vacant(e) => {
+                    // We are the first — create the shared future with a 10s timeout.
+                    let fut = tokio::time::timeout(
+                        Duration::from_secs(10),
+                        fetch(),
+                    )
+                    .map(|r| r.unwrap_or(Err(())))
+                    .boxed()
+                    .shared();
+                    e.insert(fut.clone());
+                    fut
+                }
+            }
+        }; // shard lock released here
+
+        // ── 3. Await (blocks both the originator and any coalesced waiters) ─
+        let result = shared_fut.await;
+
+        // ── 4. Cleanup inflight + populate cache ──────────────────────────
+        //
+        // Multiple waiters may reach this point concurrently; DashMap ops
+        // are idempotent here (duplicate inserts / removes are safe).
+        self.inflight.remove(&key);
+
+        if let Ok(ref entry) = result {
+            self.insert(key, entry.clone());
+        }
+
+        result
     }
+
 
     /// Invalidate all cached entries for a project, optionally filtered to one table.
     pub fn invalidate(&self, project_id: &str, table: Option<&str>) {

@@ -25,3 +25,4 @@ job_contract = { path = "../shared/job_contract" }
 sha2 = "0.10"
 bytes = "1"
 base64 = "0.22"
+futures = "0.3"

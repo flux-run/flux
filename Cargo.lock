@@ -1900,6 +1900,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "dotenvy",
+ "futures",
  "job_contract",
  "jsonschema",
  "jsonwebtoken 10.3.0",
