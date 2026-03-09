@@ -28,12 +28,12 @@ pub async fn create_api_key(
     let tenant_id = ctx.tenant_id.unwrap_or_default();
     let project_id = ctx.project_id.ok_or(ApiError::bad_request("missing_project_id"))?;
     
-    let (_record, plaintext_key) = service::create_api_key(&state.pool, tenant_id, project_id, &payload.name)
+    let (record, plaintext_key) = service::create_api_key(&state.pool, tenant_id, project_id, &payload.name)
         .await
         .map_err(db_err)?;
 
     let response = CreateApiKeyResponse {
-        id: Uuid::new_v4(), // Client doesn't need to know the DB UUID if they only need the token right now, but we can pass it
+        id: record.id,
         key: plaintext_key,
     };
 
