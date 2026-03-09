@@ -20,16 +20,24 @@ pub struct SchemaQuery {
 }
 
 /// Single CTE query that returns tables, columns, relationships, and policies
-/// as four JSON arrays in one round-trip to the database.
+/// as four JSONB arrays in one round-trip to the database.
+///
+/// Design notes:
+/// - NOT MATERIALIZED: prevents Postgres 12+ from fencing CTEs as optimisation
+///   barriers; the planner can inline and optimise each CTE freely.
+/// - jsonb_agg / jsonb_build_object: JSONB is the native binary type; avoids
+///   the internal text→binary conversion that json_agg incurs on the wire.
+/// - COALESCE(..., '[]'::jsonb): guarantees an empty array, never NULL.
 const SCHEMA_GRAPH_SQL: &str = r#"
-WITH tbls AS (
-    SELECT COALESCE(json_agg(
-        json_build_object(
+WITH
+tbls AS NOT MATERIALIZED (
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
             'schema',      t.table_schema,
             'table',       t.table_name,
             'description', COALESCE(m.description, '')
         ) ORDER BY t.table_schema, t.table_name
-    ), '[]'::json) AS data
+    ), '[]'::jsonb) AS data
     FROM information_schema.tables t
     LEFT JOIN fluxbase_internal.table_metadata m
       ON m.schema_name = t.table_schema AND m.table_name = t.table_name
@@ -39,9 +47,9 @@ WITH tbls AS (
             ELSE t.table_schema LIKE $4
           END
 ),
-cols AS (
-    SELECT COALESCE(json_agg(
-        json_build_object(
+cols AS NOT MATERIALIZED (
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
             'schema',          schema_name,
             'table',           table_name,
             'column',          column_name,
@@ -50,14 +58,14 @@ cols AS (
             'computed_expr',   computed_expr,
             'file_visibility', file_visibility
         ) ORDER BY schema_name, table_name, ordinal
-    ), '[]'::json) AS data
+    ), '[]'::jsonb) AS data
     FROM fluxbase_internal.column_metadata
     WHERE tenant_id = $1 AND project_id = $2
       AND ($5::text IS NULL OR schema_name LIKE $5 || '%')
 ),
-rels AS (
-    SELECT COALESCE(json_agg(
-        json_build_object(
+rels AS NOT MATERIALIZED (
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
             'id',           id,
             'schema',       schema_name,
             'from_table',   from_table,
@@ -67,21 +75,21 @@ rels AS (
             'relationship', relationship,
             'alias',        alias
         ) ORDER BY from_table, alias
-    ), '[]'::json) AS data
+    ), '[]'::jsonb) AS data
     FROM fluxbase_internal.relationships
     WHERE tenant_id = $1 AND project_id = $2
 ),
-pols AS (
-    SELECT COALESCE(json_agg(
-        json_build_object(
-            'id',               id,
-            'table',            table_name,
-            'role',             role,
-            'operation',        operation,
-            'allowed_columns',  allowed_columns,
+pols AS NOT MATERIALIZED (
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'id',                id,
+            'table',             table_name,
+            'role',              role,
+            'operation',         operation,
+            'allowed_columns',   allowed_columns,
             'row_condition_sql', row_condition
         ) ORDER BY table_name, role
-    ), '[]'::json) AS data
+    ), '[]'::jsonb) AS data
     FROM fluxbase_internal.policies
     WHERE tenant_id = $1 AND project_id = $2
 )
