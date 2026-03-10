@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::engine::executor::execute_function;
+use crate::engine::pool::IsolatePool;
 use crate::secrets::secrets_client::SecretsClient;
 
 #[derive(Deserialize)]
@@ -30,6 +30,7 @@ pub struct AppState {
     pub control_plane_url: String,
     pub service_token: String,
     pub bundle_cache: crate::cache::bundle_cache::BundleCache,
+    pub isolate_pool: IsolatePool,
 }
 
 #[axum::debug_handler]
@@ -57,7 +58,7 @@ pub async fn execute_handler(
                 Json(serde_json::json!({ "error": "SecretFetchError", "message": e })),
             ).into_response(),
         };
-        let execution = match execute_function(
+        let execution = match state.isolate_pool.execute(
             cached_code,
             secrets,
             req.payload,
@@ -227,7 +228,7 @@ pub async fn execute_handler(
     };
 
     // Execute the function with the new framework-aware executor
-    let execution = match execute_function(
+    let execution = match state.isolate_pool.execute(
         code, 
         secrets, 
         req.payload,

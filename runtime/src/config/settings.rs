@@ -5,6 +5,9 @@ pub struct Settings {
     pub control_plane_url: String,
     pub service_token: String,
     pub port: u16,
+    /// Number of isolate worker threads.  Defaults to 2× logical CPUs (min 2, max 16).
+    /// Override with the `ISOLATE_WORKERS` env var.
+    pub isolate_workers: usize,
 }
 
 impl Settings {
@@ -28,10 +31,19 @@ impl Settings {
             .parse()
             .unwrap_or(8081);
 
+        let default_workers = std::thread::available_parallelism()
+            .map(|n| (n.get() * 2).clamp(2, 16))
+            .unwrap_or(4);
+        let isolate_workers = env::var("ISOLATE_WORKERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default_workers);
+
         Self {
             control_plane_url,
             service_token,
             port,
+            isolate_workers,
         }
     }
 }
