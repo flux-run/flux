@@ -8,6 +8,7 @@ use tokio::time::{timeout, Duration};
 use crate::tools::executor::ToolOpState;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::composio;
+use crate::agent::AgentOpState;
 
 // ── Tool execution Deno op ────────────────────────────────────────────────────
 //
@@ -60,11 +61,44 @@ pub async fn op_execute_tool(
     Ok(response)
 }
 
-/// Build the Fluxbase tools extension manually (avoids extension! macro API drift).
-fn build_tools_extension() -> Extension {
+// ── Agent LLM op ──────────────────────────────────────────────────────────────
+//
+// Deno bridge: JS calls Deno.core.ops.op_agent_llm_call(messages, toolDefs)
+// from inside ctx.agent.run().
+// The op reads AgentOpState (api_key, url, model) from Deno OpState,
+// calls the LLM via agent::llm::call_llm, and returns the action decision.
+
+#[deno_core::op2(async)]
+#[serde]
+pub async fn op_agent_llm_call(
+    state:      Rc<RefCell<OpState>>,
+    #[serde] messages:  serde_json::Value,
+    #[serde] _tool_defs: serde_json::Value,
+) -> Result<serde_json::Value, std::io::Error> {
+    let (llm_key, llm_url, llm_model) = {
+        let s = state.borrow();
+        let ts = s.borrow::<AgentOpState>();
+        (ts.llm_key.clone(), ts.llm_url.clone(), ts.llm_model.clone())
+    };
+
+    let api_key = llm_key.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "agent_not_configured: FLUXBASE_LLM_KEY secret not set. \
+             Add it in your Fluxbase dashboard → Secrets.",
+        )
+    })?;
+
+    crate::agent::llm::call_llm(&api_key, &llm_url, &llm_model, messages)
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+}
+
+/// Build the Fluxbase runtime extension — tools + agent ops.
+fn build_fluxbase_extension() -> Extension {
     Extension {
-        name: "fluxbase_tools",
-        ops: Cow::Owned(vec![op_execute_tool()]),
+        name: "fluxbase",
+        ops: Cow::Owned(vec![op_execute_tool(), op_agent_llm_call()]),
         ..Default::default()
     }
 }
@@ -117,8 +151,8 @@ pub async fn execute_function(
             .unwrap();
 
         let result = tokio_rt.block_on(async move {
-            // Initialize Deno with the tools extension registered
-            let ext = build_tools_extension();
+            // Initialize Deno with the tools + agent extension registered
+            let ext = build_fluxbase_extension();
             let mut rt = JsRuntime::new(RuntimeOptions {
                 extensions: vec![ext],
                 ..Default::default()
@@ -129,6 +163,18 @@ pub async fn execute_function(
                 api_key:   composio_api_key,
                 entity_id: entity_id.clone(),
             });
+
+            // Inject agent LLM state so op_agent_llm_call can read it
+            let llm_key   = secrets.get("FLUXBASE_LLM_KEY").cloned();
+            let llm_url   = secrets
+                .get("FLUXBASE_LLM_URL")
+                .cloned()
+                .unwrap_or_else(|| "https://api.openai.com/v1/chat/completions".to_string());
+            let llm_model = secrets
+                .get("FLUXBASE_LLM_MODEL")
+                .cloned()
+                .unwrap_or_else(|| "gpt-4o-mini".to_string());
+            rt.op_state().borrow_mut().put(AgentOpState { llm_key, llm_url, llm_model });
 
             let secrets_json     = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
             let payload_json     = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
@@ -198,6 +244,120 @@ pub async fn execute_function(
                                     }});
                                     throw new Error(`tool:${{toolName}} failed: ${{e.message}}`);
                                 }}
+                            }},
+                        }},
+
+                        // ── Workflow ─────────────────────────────────────────
+                        // ctx.workflow.run([ {{ name: "step1", fn: async (ctx, prev) => ... }} ])
+                        // ctx.workflow.parallel([ {{ name: "step1", fn: async (ctx) => ... }} ])
+                        workflow: {{
+                            run: async (steps, options) => {{
+                                options = options || {{}};
+                                const outputs = {{}};
+                                for (const step of steps) {{
+                                    const name = step.name || ("step_" + Object.keys(outputs).length);
+                                    const _start = Date.now();
+                                    try {{
+                                        const result = await step.fn(__ctx, outputs);
+                                        const duration = Date.now() - _start;
+                                        __fluxbase_logs.push({{
+                                            level:     "info",
+                                            message:   "workflow:" + name + "  " + duration + "ms",
+                                            span_type: "workflow_step",
+                                            source:    "workflow",
+                                        }});
+                                        outputs[name] = result;
+                                    }} catch (e) {{
+                                        const duration = Date.now() - _start;
+                                        __fluxbase_logs.push({{
+                                            level:     "error",
+                                            message:   "workflow:" + name + "  failed (" + duration + "ms): " + (e && e.message),
+                                            span_type: "workflow_step",
+                                            source:    "workflow",
+                                        }});
+                                        if (options.continueOnError) {{
+                                            outputs[name] = {{ __error: e && e.message }};
+                                        }} else {{
+                                            throw e;
+                                        }}
+                                    }}
+                                }}
+                                return outputs;
+                            }},
+                            parallel: async (steps) => {{
+                                const settled = await Promise.allSettled(steps.map(function(step) {{
+                                    const name = step.name || "step";
+                                    const _start = Date.now();
+                                    return step.fn(__ctx).then(function(result) {{
+                                        const duration = Date.now() - _start;
+                                        __fluxbase_logs.push({{
+                                            level:     "info",
+                                            message:   "workflow:" + name + "  " + duration + "ms (parallel)",
+                                            span_type: "workflow_step",
+                                            source:    "workflow",
+                                        }});
+                                        return result;
+                                    }});
+                                }}));
+                                const outputs = {{}};
+                                settled.forEach(function(r, i) {{
+                                    const name = (steps[i] && steps[i].name) ? steps[i].name : ("step_" + i);
+                                    outputs[name] = r.status === "fulfilled" ? r.value : {{ __error: r.reason && r.reason.message }};
+                                }});
+                                return outputs;
+                            }},
+                        }},
+
+                        // ── Agent ─────────────────────────────────────────────
+                        // ctx.agent.run({{ goal: "...", tools: ["slack.send_message"], maxSteps: 5 }})
+                        // The LLM decides which tool to call next; ctx.tools.run() executes it.
+                        // Single execution layer is preserved: Agent -> tools.run() -> ToolExecutor
+                        agent: {{
+                            run: async (options) => {{
+                                options = options || {{}};
+                                const goal      = options.goal || "Complete the task";
+                                const toolNames = options.tools || [];
+                                const maxSteps  = options.maxSteps || 5;
+                                const toolDefs  = toolNames.map(function(t) {{
+                                    return {{
+                                        type: "function",
+                                        function: {{
+                                            name:        t.replace(".", "_"),
+                                            description: "Execute the " + t + " Fluxbase integration",
+                                            parameters:  {{ type: "object", properties: {{}} }},
+                                        }},
+                                    }};
+                                }});
+                                const messages = [
+                                    {{
+                                        role:    "system",
+                                        content: "You are a Fluxbase automation agent. Goal: " + goal + ". Available tools: " + (toolNames.length > 0 ? toolNames.join(", ") : "none") + ". Respond only with JSON. To call a tool: {{\"done\":false,\"tool\":\"tool.name\",\"input\":{{}}}}. When complete: {{\"done\":true,\"answer\":\"what was done\"}}.",
+                                    }},
+                                    {{ role: "user", content: "Complete this goal: " + goal }},
+                                ];
+                                let lastOutput = null;
+                                for (let step = 0; step < maxSteps; step++) {{
+                                    const _start   = Date.now();
+                                    const decision = await Deno.core.ops.op_agent_llm_call(messages, toolDefs);
+                                    const duration = Date.now() - _start;
+                                    const label    = decision.done ? "[done]" : ("tool=" + (decision.tool || "?"));
+                                    __fluxbase_logs.push({{
+                                        level:     "info",
+                                        message:   "agent:step=" + (step + 1) + "  " + duration + "ms  " + label,
+                                        span_type: "agent_step",
+                                        source:    "agent",
+                                    }});
+                                    if (decision.done) {{
+                                        return {{ answer: decision.answer, steps: step + 1, output: lastOutput }};
+                                    }}
+                                    if (!decision.tool) {{
+                                        throw new Error("agent: LLM returned neither done=true nor a tool name");
+                                    }}
+                                    lastOutput = await __ctx.tools.run(decision.tool, decision.input || {{}});
+                                    messages.push({{ role: "assistant", content: JSON.stringify({{ tool: decision.tool, input: decision.input }}) }});
+                                    messages.push({{ role: "user", content: "Tool " + decision.tool + " returned: " + JSON.stringify(lastOutput) }});
+                                }}
+                                throw new Error("agent: exceeded maxSteps=" + maxSteps);
                             }},
                         }},
                     }};

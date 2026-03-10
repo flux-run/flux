@@ -5,6 +5,8 @@ mod secrets;
 mod cache;
 mod tools;
 mod triggers;
+mod workflow;
+mod agent;
 
 use axum::{
     routing::{get, post},

@@ -62,6 +62,74 @@ export interface FluxTools {
   run(toolName: string, input: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
+/**
+ * Workflow — sequential or parallel step chains.
+ *
+ * Each step receives the full ctx and a map of previous step outputs.
+ *
+ * @example
+ * await ctx.workflow.run([
+ *   { name: "create_user",   fn: async (ctx, prev) => createUser(ctx.payload) },
+ *   { name: "notify_slack",  fn: async (ctx, prev) => ctx.tools.run("slack.send_message", { channel: "#ops", text: `User ${prev.create_user.email} signed up` }) },
+ * ])
+ */
+export interface FluxWorkflow {
+  /** Run steps sequentially; each step receives ctx and all previous outputs. */
+  run(
+    steps: Array<{
+      name: string;
+      fn: (ctx: FluxContext, previous: Record<string, unknown>) => Promise<unknown>;
+    }>,
+    options?: { continueOnError?: boolean }
+  ): Promise<Record<string, unknown>>;
+
+  /** Run steps concurrently; each step receives only ctx. */
+  parallel(
+    steps: Array<{
+      name: string;
+      fn: (ctx: FluxContext) => Promise<unknown>;
+    }>
+  ): Promise<Record<string, unknown>>;
+}
+
+/** Result returned by ctx.agent.run() */
+export interface FluxAgentResult {
+  /** LLM summary of what was accomplished */
+  answer: string;
+  /** Number of reasoning steps taken */
+  steps: number;
+  /** Output from the last tool call */
+  output: Record<string, unknown> | null;
+}
+
+/**
+ * Agent — LLM-driven autonomous tool execution.
+ *
+ * The agent loops: decide which tool to call → call it via ctx.tools.run() → observe result → repeat.
+ * The loop ends when the LLM says the goal is done or maxSteps is reached.
+ *
+ * Requires FLUXBASE_LLM_KEY secret (OpenAI-compatible API key).
+ * Optional: FLUXBASE_LLM_URL (default: OpenAI), FLUXBASE_LLM_MODEL (default: gpt-4o-mini).
+ *
+ * @example
+ * const result = await ctx.agent.run({
+ *   goal: "Create a Linear issue for the bug and notify #dev on Slack",
+ *   tools: ["linear.create_issue", "slack.send_message"],
+ *   maxSteps: 5,
+ * })
+ * // result.answer = "Created Linear issue LIN-123 and posted to #dev"
+ */
+export interface FluxAgent {
+  run(options: {
+    /** What to accomplish */
+    goal: string;
+    /** Tool names the agent is allowed to use */
+    tools?: string[];
+    /** Maximum reasoning iterations (default: 5) */
+    maxSteps?: number;
+  }): Promise<FluxAgentResult>;
+}
+
 /** Context object passed to every function handler */
 export interface FluxContext {
   /** The raw incoming payload (pre-validation) */
@@ -77,6 +145,17 @@ export interface FluxContext {
    * Each call is automatically traced and visible in `flux trace`.
    */
   tools: FluxTools;
+  /**
+   * Workflow — run named steps sequentially or in parallel.
+   * Each step is a JS function that can call ctx.tools, ctx.log, etc.
+   */
+  workflow: FluxWorkflow;
+  /**
+   * Agent — LLM-driven autonomous execution loop.
+   * The agent picks tools and calls them until the goal is achieved.
+   * Requires FLUXBASE_LLM_KEY secret.
+   */
+  agent: FluxAgent;
 }
 
 /** Arguments to the handler function */
