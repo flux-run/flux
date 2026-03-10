@@ -33,6 +33,41 @@ pub struct AppState {
     pub isolate_pool: IsolatePool,
 }
 
+// ── Automatic span helper ─────────────────────────────────────────────────────
+/// Fire-and-forget: post a single structured span to the control-plane log sink.
+fn post_span(
+    client:    &reqwest::Client,
+    log_url:   String,
+    token:     String,
+    fn_id:     String,
+    tenant_id: Uuid,
+    project_id: Option<Uuid>,
+    request_id: Option<String>,
+    source:    &'static str,
+    level:     &'static str,
+    message:   String,
+    span_type: &'static str,
+) {
+    let client = client.clone();
+    tokio::spawn(async move {
+        let _ = client
+            .post(&log_url)
+            .header("X-Service-Token", &token)
+            .json(&serde_json::json!({
+                "source":      source,
+                "resource_id": fn_id,
+                "tenant_id":   tenant_id,
+                "project_id":  project_id,
+                "level":       level,
+                "message":     message,
+                "request_id":  request_id,
+                "span_type":   span_type,
+            }))
+            .send()
+            .await;
+    });
+}
+
 #[axum::debug_handler]
 pub async fn execute_handler(
     State(state): State<Arc<AppState>>,
@@ -54,6 +89,13 @@ pub async fn execute_handler(
     // ── Function-level bundle cache (skips control plane + S3 entirely) ──
     if let Some(cached_code) = state.bundle_cache.get_by_function(&req.function_id) {
         tracing::debug!(function_id = %req.function_id, "bundle cache hit (function-level)");
+
+        // Auto-span: cache hit
+        let log_url = format!("{}/internal/logs", state.control_plane_url);
+        post_span(&state.http_client, log_url.clone(), state.service_token.clone(),
+            req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+            "runtime", "debug", "bundle cache hit — skipping fetch".into(), "event");
+
         let secrets = match state.secrets_client.fetch_secrets(req.tenant_id, req.project_id).await {
             Ok(s) => s,
             Err(e) => return (
@@ -61,6 +103,11 @@ pub async fn execute_handler(
                 Json(serde_json::json!({ "error": "SecretFetchError", "message": e })),
             ).into_response(),
         };
+        // Auto-span: execution start
+        post_span(&state.http_client, log_url.clone(), state.service_token.clone(),
+            req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+            "runtime", "info", "executing function".into(), "start");
+
         let execution = match state.isolate_pool.execute(
             cached_code,
             secrets,
@@ -134,6 +181,12 @@ pub async fn execute_handler(
             ).into_response();
         }
     };
+
+    // Auto-span: cache miss
+    let log_url_nc = format!("{}/internal/logs", state.control_plane_url);
+    post_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
+        req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+        "runtime", "debug", "bundle cache miss — fetching from control plane".into(), "event");
 
     // Fetch real bundle code from the control plane
     let bundle_url = format!(
@@ -213,8 +266,12 @@ pub async fn execute_handler(
                 match s3_resp {
                     Ok(res) if res.status().is_success() => {
                         let text = res.text().await.unwrap_or_default();
+                        let fetch_ms = start_time.elapsed().as_millis();
                         tracing::debug!(function_id = %req.function_id, deployment_id = ?deployment_id, "bundle cache miss — caching");
                         state.bundle_cache.insert_both(req.function_id.clone(), deployment_id, text.clone());
+                        post_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
+                            req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+                            "runtime", "info", format!("bundle fetched from R2 ({}ms)", fetch_ms), "event");
                         text
                     }
                     Ok(res) => {
@@ -254,6 +311,11 @@ pub async fn execute_handler(
             }
         }
     };
+
+    // Auto-span: execution start (non-cache path)
+    post_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
+        req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+        "runtime", "info", "executing function".into(), "start");
 
     // Execute the function with the new framework-aware executor
     let execution = match state.isolate_pool.execute(

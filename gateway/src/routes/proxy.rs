@@ -35,6 +35,13 @@ pub async fn proxy_handler(
     let snapshot_data = state.snapshot.get_data().await;
     let cache_key = (tenant_id, method_str.clone(), full_path.clone());
     
+    // Peek at x-request-id early (headers not yet consumed) so we can log the routing span.
+    let early_rid: String = req.headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
     let route = if let Some(r) = snapshot_data.routes.get(&cache_key) {
         tracing::debug!("Route cache hit: {} {}", method_str, full_path);
         r.clone()
@@ -44,6 +51,32 @@ pub async fn proxy_handler(
             Json(serde_json::json!({ "error": "route_not_found", "message": format!("No route for {} {}", method_str, full_path) }))
         ).into_response();
     };
+
+    // ── Automatic span: gateway routing ──────────────────────────────────────
+    // Fire-and-forget — do not block the hot path.
+    {
+        let pool   = state.db_pool.clone();
+        let tid    = tenant_id;
+        let pid    = route.project_id;
+        let fid    = route.function_id.to_string();
+        let rid    = early_rid.clone();
+        let msg    = format!("route matched: {} {}", method_str, full_path);
+        tokio::spawn(async move {
+            let _ = sqlx::query(
+                "INSERT INTO platform_logs \
+                 (id, tenant_id, project_id, source, resource_id, level, message, request_id, span_type) \
+                 VALUES ($1, $2, $3, 'gateway', $4, 'info', $5, $6, 'start')"
+            )
+            .bind(Uuid::new_v4())
+            .bind(tid)
+            .bind(pid)
+            .bind(fid)
+            .bind(msg)
+            .bind(rid)
+            .execute(&pool)
+            .await;
+        });
+    }
 
     // 1.5 CORS Preflight Fast-Path
     if method == Method::OPTIONS && route.cors_enabled {
@@ -162,12 +195,8 @@ pub async fn proxy_handler(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    // Use caller-supplied x-request-id or generate a fresh one for this request.
-    let incoming_request_id: String = req.headers()
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    // Reuse the request-id we extracted before body consumption.
+    let incoming_request_id: String = early_rid;
     
     // We need to extract the payload from the original request.
     // For now, we assume it's JSON.
@@ -299,7 +328,7 @@ pub async fn proxy_handler(
             let raw = resp.text().await.unwrap_or_default();
             let body: Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
                 tracing::warn!(status = %status, raw_body = %&raw[..raw.len().min(200)], "runtime returned non-JSON");
-                serde_json::json!({ "error": "runtime_response_parse_error", "raw": &raw[..raw.len().min(200)] })
+                serde_json::json!({ "error": "runtime_response_parse_error" })
             });
             (status, Json(body)).into_response()
         }
