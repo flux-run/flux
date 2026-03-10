@@ -1736,9 +1736,10 @@ fn should_sample_envelope(response_status: u16, duration_ms: u64, tenant_id: &UU
 
 **Update to `platform_logs`:**
 
-Add one field:
+Add two fields:
 ```sql
-replay_of UUID NULL  -- if non-NULL, this trace is a replay of another trace
+replay_of UUID NULL               -- if non-NULL, this trace is a replay of another trace
+code_sha TEXT NULL                -- commit SHA / bundle hash of deployed function
 ```
 
 **Why this model:**
@@ -1746,8 +1747,261 @@ replay_of UUID NULL  -- if non-NULL, this trace is a replay of another trace
 - **Storage efficient** — avoids payload duplication across spans
 - **Complete context** — contains everything needed to reconstruct execution
 - **Replay-compatible** — original request can be replayed deterministically
+- **Code provenance** — every span linked to exact code version (enables git-level debugging)
 
-### Replay Mechanics
+---
+
+### Code Provenance: Linking Traces to Git
+
+The most powerful addition to time-travel debugging is **code provenance** — recording which exact commit/bundle version executed each span.
+
+**Schema Update:**
+
+Add to `platform_logs`:
+```sql
+code_sha TEXT NULL  -- commit SHA or bundle hash
+INDEX (code_sha, created_at)  -- query all executions of a specific code version
+```
+
+**How it works:**
+
+When a function is deployed:
+
+```
+1. Bundle code: bundle = tar(function files)
+2. Hash it: code_sha = sha256(bundle)
+3. Store in function_versions table:
+   
+   function_versions
+   ├─ id UUID
+   ├─ function_id UUID
+   ├─ code_sha TEXT  -- a93f42c (truncated SHA)
+   ├─ commit_message TEXT  -- from git
+   ├─ git_commit_sha TEXT  -- full commit hash
+   ├─ author TEXT
+   ├─ created_at TIMESTAMP
+   └─ s3_bundle_uri TEXT  -- where to fetch exact code
+```
+
+When runtime executes:
+
+```
+1. Runtime receives request
+2. Function metadata includes code_sha
+3. Executes with: x-function-sha: a93f42c
+4. Gateway logs code_sha to every span:
+   
+   platform_logs
+   ├─ request_id = 550e8400-...
+   ├─ function_id = acme-create-user
+   ├─ code_sha = a93f42c  ← linked to git commit
+   ├─ span_type = complete
+   └─ duration_ms = 145
+```
+
+**This enables Git-level debugging:**
+
+| Capability | What it answers | How |
+|------------|-----------------|-----|
+| **Blame** | What code caused this? | `flux trace blame <id>` → git commit + diff |
+| **Regression Detection** | Which version broke this? | Compare latency across code_sha values |
+| **Auto-Rollback** | Should we revert this version? | If error_rate(code_sha) > threshold → trigger rollback |
+| **Perfect Replay** | Which exact bundle to run? | `flux trace replay <id>` loads s3://bundles/a93f42c.tar |
+| **Bisect** | Which commit introduced the bug? | `flux trace bisect <function>` runs git bisect on code_sha |
+
+---
+
+### Git Blame for Production: `flux trace blame`
+
+**The killer CLI command:**
+
+```bash
+$ flux trace blame 550e8400-e29b-41d4-a716-446655440000
+
+Execution failed
+
+Function: create_user
+Code version: a93f42c
+
+Commit:
+  SHA: a93f42c123456789...
+  Author: shashi
+  Date: 2026-03-09 14:32
+  Message: add stricter email validation (RFC 5322)
+
+git diff HEAD~1..a93f42c:
+
+  - if (!email.includes("@")) return false;
+  + if (!EMAIL_REGEX.test(email)) return false;
+
+Suggestion:
+  Regression detected in email validation logic
+  Previous version: a82d91a (avg: 0.2% errors)
+  This version: a93f42c (avg: 8.1% errors)
+  
+  Recommendation: rollback to a82d91a
+```
+
+**Workflow:**
+
+1. Customer reports: "Signup broken"
+2. Engineer: `flux trace blame <failed-request-id>`
+3. Instantly see: commit + diff + metrics
+4. Root cause visible in code diff
+5. Decision: rollback or fix forward
+
+---
+
+### Regression Detection by Code Version
+
+```bash
+$ flux trace stats create_user --by code_sha
+
+Version Latency Analysis
+
+a93f42c  (current)
+  •avg: 1200ms ⚠
+  requests: 45,230
+  errors: 3,640 (8.1%)
+  p95: 2100ms
+
+a82d91a  (previous)
+  • avg: 145ms ✓
+  requests: 120,400
+  errors: 24 (0.02%)
+  p95: 280ms
+
+Regression detected: +1055ms avg latency
+Rollback recommended
+```
+
+---
+
+### Automatic Rollback on High Error Rate
+
+With code provenance, the platform can automatically roll back broken deployments:
+
+```rust
+// Policy: if error_rate for specific code_sha > threshold
+fn should_rollback(code_sha: &str) -> bool {
+    let error_rate = query_error_rate(code_sha, last_1_hour);
+    let prev_error_rate = query_error_rate(previous_code_sha, last_7_days);
+    
+    // If error rate jumped >5% vs previous stable version
+    if (error_rate - prev_error_rate) > 0.05 {
+        return true;  // Trigger auto-rollback
+    }
+    false
+}
+```
+
+Example:
+
+```
+create_user v8 (b9f42a) deployed 10 minutes ago
+error_rate_v8: 14%
+error_rate_v7: 0.2%
+
+Δ = +13.8% → triggers auto-rollback to v7
+```
+
+---
+
+---
+
+### Code-Level Debugging: Step-by-Step Time Travel Inside Functions
+
+Beyond code blame and regression detection, code provenance enables something remarkable: **stepping through a past execution line-by-line**, without re-running the code.
+
+**The capability:**
+
+```bash
+$ flux trace debug 550e8400 --function create_user
+
+Step-through debugger for past execution:
+
+(frame 1) create_user entry
+  input: { name: "alice", email: "alice@" }
+  
+(frame 2) validate email
+  > line 12: if (!EMAIL_REGEX.test(email))
+  condition: false (email "@example.com" missing)
+  
+(frame 3) error thrown
+  > line 13: throw new ValidationError("Invalid email");
+  
+Execution halted: ValidationError at create_user.ts:13
+
+Suggestion:
+  The bug was introduced in commit a93f42c
+  Previous version a82d91a accepted partial emails
+  
+  Recommendation:
+    $ git revert a93f42c
+    or fix regex to be less strict
+```
+
+**Why this is sci-fi:**
+
+Normal debuggers require:
+- Reproducing the bug locally (often impossible)
+- Recreating exact state
+- Running code again
+
+Fluxbase can do this with ANY past request:
+
+```bash
+# Customer reported bug 6 hours ago
+# Engineer runs this NOW:
+$ flux trace debug 550e8400  # 6 hour old request
+
+# Inspect the exact execution path in production
+# No repro needed. No state loss. Deterministic.
+```
+
+**Schema addition needed:**
+
+Add to `platform_logs` (one column):
+
+```sql
+code_location TEXT NULL  -- "file.ts:line:function" or full stack trace
+```
+
+Example:
+
+```sql
+platform_logs entry:
+├─ request_id: 550e8400-...
+├─ code_sha: a93f42c
+├─ code_location: "create_user.ts:12:validate_email"  ← exact location
+├─ message: "ValidationError: Invalid email"
+└─ created_at: TIMESTAMP
+```
+
+**How it works in practice:**
+
+1. Function execution emits fine-grained spans with `code_location`
+2. Trace replay reconstructs execution frame-by-frame
+3. CLI shows: file → line → function → local variables → error
+4. Engineers step through past bugs like a debugger, but at any point in time
+
+**Implementation:**
+
+At runtime, for each significant execution checkpoint:
+
+```javascript
+// Runtime hooks into function execution
+ctx.__trace({
+  code_location: "create_user.ts:12:validate_email",
+  span_type: "code_checkpoint",
+  variables: { email, isValid: false },
+  duration_ms: 2
+});
+```
+
+The trace becomes a **complete execution log** — not just performance spans, but every decision point in the code.
+
+---
 
 **CLI Command: Replay a Request**
 
