@@ -1909,97 +1909,284 @@ error_rate_v7: 0.2%
 
 ---
 
-### Code-Level Debugging: Step-by-Step Time Travel Inside Functions
+### Code-Level Debugging: Execution Checkpoints
 
-Beyond code blame and regression detection, code provenance enables something remarkable: **stepping through a past execution line-by-line**, without re-running the code.
+Beyond code blame and regression detection, execution checkpoints enable something remarkable: **inspecting local variable state at any point in a past execution**, without re-running code.
 
-**The capability:**
+**The key insight:** Location alone is not enough. You need execution state.
+
+**What code_location alone gives you:**
+
+```
+create_user.ts:12
+```
+
+What it answers: Where did the code run?
+
+**What execution_state gives you:**
+
+```json
+{
+  "code_location": "create_user.ts:12:validate_email",
+  "checkpoint_type": "branch",
+  "execution_state": {
+    "locals": {
+      "email": "alice@",
+      "regex": "RFC5322",
+      "isValid": false
+    }
+  }
+}
+```
+
+What it answers: **What were the values when the code executed?**
+
+That's the difference between knowing a function failed and understanding **why** it failed.
+
+---
+
+### Schema: Execution Checkpoints
+
+Add to `platform_logs`:
+
+```sql
+code_sha TEXT NULL                    -- commit/bundle hash
+code_location TEXT NULL               -- file.ts:line:function
+checkpoint_type TEXT NULL             -- function_entry, branch, tool_call, db_query, error, return
+execution_state JSONB NULL            -- local variables + branch decisions + state
+```
+
+Example trace with checkpoints:
+
+```sql
+platform_logs entries for request 550e8400:
+
+Entry 1: gateway.receive
+  source: gateway
+  span_type: start
+  request_id: 550e8400-...
+
+Entry 2: runtime.execute_function
+  source: runtime
+  code_sha: a93f42c
+  checkpoint_type: function_entry
+  code_location: create_user.ts:5
+  execution_state: {
+    "locals": {
+      "input": { "name": "Alice", "email": "alice@" }
+    }
+  }
+
+Entry 3: runtime.checkpoint
+  source: runtime
+  code_sha: a93f42c
+  checkpoint_type: branch
+  code_location: create_user.ts:12
+  execution_state: {
+    "locals": {
+      "email": "alice@",
+      "regex": "RFC5322",
+      "isValid": false
+    },
+    "branch_taken": "email_validation_failed"
+  }
+
+Entry 4: runtime.error
+  source: runtime
+  code_sha: a93f42c
+  checkpoint_type: error
+  code_location: create_user.ts:13
+  execution_state: {
+    "error": "ValidationError",
+    "locals": {
+      "message": "Invalid email format"
+    }
+  }
+```
+
+---
+
+### The Time-Travel Debugger CLI: `flux trace debug`
+
+With execution checkpoints, the CLI becomes a full debugger for past execution:
 
 ```bash
-$ flux trace debug 550e8400 --function create_user
+$ flux trace debug 550e8400
 
-Step-through debugger for past execution:
+Debugging request 550e8400
+Function: create_user (v a93f42c)
 
-(frame 1) create_user entry
-  input: { name: "alice", email: "alice@" }
-  
-(frame 2) validate email
-  > line 12: if (!EMAIL_REGEX.test(email))
-  condition: false (email "@example.com" missing)
-  
-(frame 3) error thrown
-  > line 13: throw new ValidationError("Invalid email");
-  
-Execution halted: ValidationError at create_user.ts:13
+Frame 1: function_entry
+  Location: create_user.ts:5
+  Locals:
+    input.name = "Alice"
+    input.email = "alice@"
+
+Frame 2: branch
+  Location: create_user.ts:12
+  Code: if (!EMAIL_REGEX.test(email))
+  Condition: true (email invalid)
+  Locals:
+    email = "alice@"
+    regex = "RFC5322"
+    isValid = false
+
+Frame 3: error
+  Location: create_user.ts:13
+  Code: throw new ValidationError(...)
+  Error: ValidationError("Invalid email format")
 
 Suggestion:
-  The bug was introduced in commit a93f42c
-  Previous version a82d91a accepted partial emails
+  The regex requires complete email format.
+  Previous version a82d91a accepted partial emails.
   
   Recommendation:
-    $ git revert a93f42c
-    or fix regex to be less strict
+    $ git show a93f42c --  create_user.ts | grep EMAIL_REGEX
 ```
 
-**Why this is sci-fi:**
+**Key advantage over traditional debugging:**
 
-Normal debuggers require:
-- Reproducing the bug locally (often impossible)
-- Recreating exact state
-- Running code again
+No reproduction needed. No staging environment. No local setup. Just inspect the exact state that existed in production at that moment.
 
-Fluxbase can do this with ANY past request:
+---
 
-```bash
-# Customer reported bug 6 hours ago
-# Engineer runs this NOW:
-$ flux trace debug 550e8400  # 6 hour old request
+### Storage Efficiency
 
-# Inspect the exact execution path in production
-# No repro needed. No state loss. Deterministic.
-```
+The overhead is minimal because:
 
-**Schema addition needed:**
+1. **Checkpoints are selective** — Not every line, only logical decisions:
+   - Function entry/return
+   - Branch decisions  
+   - External tool calls
+   - Database queries
+   - Error states
 
-Add to `platform_logs` (one column):
+2. **Typical function:**
+   ```
+   create_user()
+   ├─ checkpoint: function_entry (5 local variables)
+   ├─ checkpoint: validate_email branch (3 variables)
+   ├─ checkpoint: db.insert call (2 variables)
+   ├─ checkpoint: gmail.send branch (1 variable)
+   └─ checkpoint: return (1 variable)
+   
+   Total: ~5-10 checkpoints per function
+   Payload: 2-5 KB per request
+   ```
 
-```sql
-code_location TEXT NULL  -- "file.ts:line:function" or full stack trace
-```
+3. **Sampling strategy:**
+   With 100% sampling for errors + slow requests (>200ms) + 10% success rate:
+   ```
+   100M req/day × 10% sample × 5 KB extra per request
+   ≈ 50 GB/day (negligible vs 152 TB without sampling)
+   ```
 
-Example:
+---
 
-```sql
-platform_logs entry:
-├─ request_id: 550e8400-...
-├─ code_sha: a93f42c
-├─ code_location: "create_user.ts:12:validate_email"  ← exact location
-├─ message: "ValidationError: Invalid email"
-└─ created_at: TIMESTAMP
-```
+### Checkpoint Types
 
-**How it works in practice:**
+Standard checkpoint types for UI categorization:
 
-1. Function execution emits fine-grained spans with `code_location`
-2. Trace replay reconstructs execution frame-by-frame
-3. CLI shows: file → line → function → local variables → error
-4. Engineers step through past bugs like a debugger, but at any point in time
+| Type | When | Captures |
+|------|------|----------|
+| `function_entry` | Function called | Input parameters |
+| `branch` | If/switch decision | Condition, branch taken |
+| `tool_call` | External API called | Tool name, arguments |
+| `db_query` | Database operation | Query, parameters |
+| `workflow_invoke` | Nested function call | Called function, arguments |
+| `error` | Exception thrown | Error type, message, locals |
+| `return` | Function returns | Return value, locals |
 
-**Implementation:**
+---
 
-At runtime, for each significant execution checkpoint:
+### Runtime Implementation
+
+In runtime, emit checkpoints at key moments:
 
 ```javascript
-// Runtime hooks into function execution
-ctx.__trace({
-  code_location: "create_user.ts:12:validate_email",
-  span_type: "code_checkpoint",
-  variables: { email, isValid: false },
-  duration_ms: 2
+// Function entry
+ctx.__trace.checkpoint({
+  checkpoint_type: "function_entry",
+  code_location: "create_user.ts:5",
+  locals: { input }
 });
+
+// Branch decision
+if (!EMAIL_REGEX.test(email)) {
+  ctx.__trace.checkpoint({
+    checkpoint_type: "branch",
+    code_location: "create_user.ts:12",
+    locals: { email, regex: "RFC5322", isValid: false },
+    branch_taken: "email_validation_failed"
+  });
+  
+  throw new ValidationError("Invalid email");
+}
+
+// Tool call
+ctx.__trace.checkpoint({
+  checkpoint_type: "tool_call",
+  code_location: "create_user.ts:20",
+  locals: { email },
+  tool: "gmail.send"
+});
+await ctx.tool.gmail.send_email({ to: email });
+
+// Return
+ctx.__trace.checkpoint({
+  checkpoint_type: "return",
+  code_location: "create_user.ts:35",
+  locals: { result }
+});
+return result;
 ```
 
-The trace becomes a **complete execution log** — not just performance spans, but every decision point in the code.
+Each checkpoint is stored as a platform_logs entry with `execution_state JSONB`.
+
+---
+
+### The Complete Feature Stack
+
+Your system now supports:
+
+| Command | What it does | Mode |
+|---------|--------------|------|
+| `flux trace <id>` | View complete trace tree | Read-only |
+| `flux trace replay <id>` | Re-execute with same inputs | Execute |
+| `flux trace diff <a> <b>` | Compare two traces | Read-only |
+| `flux trace blame <id>` | Link to git commit + diff | Read-only |
+| `flux trace debug <id>` | Step through past execution | Read-only |
+
+This is:
+- **Git** (blame, history, diff)
+- **+ Debugger** (step, inspect locals, breakpoints/checkpoints)
+- **+ APM** (traces, metrics, performance)
+
+For backend execution.
+
+---
+
+### Why This Is Unique
+
+Traditional platforms (Datadog, Honeycomb, New Relic) capture:
+- Span duration
+- Error messages
+- Custom attributes
+
+But they cannot:
+- Inspect local variable state
+- See execution branching logic
+- Replay with same inputs
+- Link to source code commits
+
+Fluxbase can do all of these because:
+
+1. You control the **gateway** (entry point, creates tracing root)
+2. You control the **runtime** (can instrument checkpoint emission)
+3. You control the **database schema** (can store execution_state)
+4. You own **both** code and execution (can link code_sha to git commits)
+
+No other serverless platform has this combination.
 
 ---
 
