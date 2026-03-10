@@ -75,10 +75,20 @@ enum Commands {
         #[arg(long, hide = true)]
         tenant: Option<String>,
     },
-    /// Tail or stream function logs
+    /// Tail or stream platform logs (functions, databases, workflows, …)
+    ///
+    /// Examples:
+    ///   flux logs                     — all logs in project
+    ///   flux logs function echo       — function/echo logs
+    ///   flux logs db users            — db/users logs
+    ///   flux logs workflow wf_123     — workflow logs
+    ///   flux logs echo                — backward compat → function/echo
     Logs {
-        /// Function name to filter (omit to show all functions in the project)
-        name: Option<String>,
+        /// Source subsystem: function | db | workflow | event | queue | system
+        /// (omit to show all; single non-subsystem word treated as function name)
+        source: Option<String>,
+        /// Resource name within the source (function name, db name, etc.)
+        resource: Option<String>,
         /// Stream live — poll for new lines every 1.5s (Ctrl+C to stop)
         #[arg(short, long)]
         follow: bool,
@@ -190,11 +200,19 @@ async fn main() -> anyhow::Result<()> {
         Commands::Dev => dev::execute().await?,
         Commands::Deploy { name, runtime } => deploy::execute(name, runtime).await?,
         Commands::Invoke { name, tenant, payload, gateway } => invoke::execute(&name, tenant, payload, gateway).await?,
-        Commands::Logs { name, follow, limit } => {
+        Commands::Logs { source, resource, follow, limit } => {
+            // Backward compat: single positional that isn't a known subsystem
+            // is treated as a resource_id under "function".
+            const SOURCES: &[&str] = &["function", "db", "workflow", "event", "queue", "system"];
+            let (resolved_source, resolved_resource) = match (source, resource) {
+                (Some(s), r) if SOURCES.contains(&s.as_str()) => (Some(s), r),
+                (Some(s), None)  => (Some("function".to_string()), Some(s)),
+                other => other,
+            };
             if follow {
-                logs::execute_follow(name, limit).await?
+                logs::execute_follow(resolved_source, resolved_resource, limit).await?
             } else {
-                logs::execute(name, limit).await?
+                logs::execute(resolved_source, resolved_resource, limit).await?
             }
         }
         Commands::Deployments { command } => deployments::execute_deployments(command).await?,

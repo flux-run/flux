@@ -149,6 +149,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "firebase-auth",
+ "flate2",
  "hex",
  "jsonwebtoken 10.3.0",
  "rand 0.8.5",

@@ -80,15 +80,24 @@ pub async fn execute_handler(
         };
         let duration_ms = start_time.elapsed().as_millis() as u64;
         if !execution.logs.is_empty() {
-            let log_url      = format!("{}/internal/logs", state.control_plane_url);
+            let log_url       = format!("{}/internal/logs", state.control_plane_url);
             let service_token = state.service_token.clone();
-            let function_id  = req.function_id.clone();
-            let logs         = execution.logs;
-            let client       = state.http_client.clone();
+            let function_id   = req.function_id.clone();
+            let tenant_id     = req.tenant_id;
+            let project_id    = req.project_id;
+            let logs          = execution.logs;
+            let client        = state.http_client.clone();
             tokio::spawn(async move {
                 for log in logs {
                     let _ = client.post(&log_url).header("X-Service-Token", &service_token)
-                        .json(&serde_json::json!({ "function_id": function_id, "level": log.level, "message": log.message }))
+                        .json(&serde_json::json!({
+                            "source":      "function",
+                            "resource_id": function_id,
+                            "tenant_id":   tenant_id,
+                            "project_id":  project_id,
+                            "level":       log.level,
+                            "message":     log.message,
+                        }))
                         .send().await;
                 }
             });
@@ -262,11 +271,13 @@ pub async fn execute_handler(
 
     // Fire-and-forget: forward ctx.log() lines to /internal/logs
     if !execution.logs.is_empty() {
-        let log_url = format!("{}/internal/logs", state.control_plane_url);
-        let service_token = state.service_token.clone();
-        let function_id = req.function_id.clone();
-        let logs = execution.logs;
-        let client = state.http_client.clone();
+        let log_url        = format!("{}/internal/logs", state.control_plane_url);
+        let service_token  = state.service_token.clone();
+        let function_id    = req.function_id.clone();
+        let tenant_id      = req.tenant_id;
+        let project_id     = req.project_id;
+        let logs           = execution.logs;
+        let client         = state.http_client.clone();
 
         tokio::spawn(async move {
             for log in logs {
@@ -274,9 +285,12 @@ pub async fn execute_handler(
                     .post(&log_url)
                     .header("X-Service-Token", &service_token)
                     .json(&serde_json::json!({
-                        "function_id": function_id,
-                        "level": log.level,
-                        "message": log.message,
+                        "source":      "function",
+                        "resource_id": function_id,
+                        "tenant_id":   tenant_id,
+                        "project_id":  project_id,
+                        "level":       log.level,
+                        "message":     log.message,
                     }))
                     .send()
                     .await;

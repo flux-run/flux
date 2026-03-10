@@ -1,7 +1,20 @@
+/// Unified platform log ingestion and query handlers.
+///
+/// # Write path
+///
+/// `POST /internal/logs` — called by the runtime (functions) and other internal
+/// services.  Accepts the unified log envelope; looks up `tenant_id`/`project_id`
+/// from the `function_id` for backwards-compat callers that only send a UUID.
+///
+/// # Read path
+///
+/// `GET /logs` — project-scoped, Firebase-auth.  Filters by `source`, `resource`,
+/// `level`, `since`, and `limit`.  When `since` reaches back past the hot window
+/// the call is transparently enriched with archived NDJSON from R2/S3.
+
 use axum::{
     extract::{Extension, Query, State},
     http::HeaderMap,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -11,84 +24,102 @@ use crate::types::context::RequestContext;
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
-fn db_err() -> ApiError {
-    ApiError::internal("database_error")
-}
+fn db_err() -> ApiError { ApiError::internal("database_error") }
 
 fn validate_service_token(headers: &HeaderMap) -> Result<(), ApiError> {
-    let token = headers
-        .get("X-Service-Token")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
+    let token = headers.get("X-Service-Token").and_then(|h| h.to_str().ok()).unwrap_or("");
     let expected = std::env::var("INTERNAL_SERVICE_TOKEN")
         .unwrap_or_else(|_| "stub_token".to_string());
-    if token != expected {
-        return Err(ApiError::unauth("invalid_service_token"));
-    }
+    if token != expected { return Err(ApiError::unauth("invalid_service_token")); }
     Ok(())
 }
 
-// ── POST /internal/logs ────────────────────────────────────────────────────
+// ─── POST /internal/logs ──────────────────────────────────────────────────────
+//
+// Accepts both:
+//   1. New unified format:
+//      { "source": "function", "resource_id": "echo", "tenant_id": "...",
+//        "project_id": "...", "level": "info", "message": "...",
+//        "request_id": "...", "metadata": {} }
+//
+//   2. Legacy runtime format (backward compat):
+//      { "function_id": "...", "level": "info", "message": "..." }
+//      tenant_id/project_id resolved via DB lookup on function.
 
 #[derive(Deserialize)]
 pub struct LogEntry {
-    pub function_id: String,
-    pub level: Option<String>,
-    pub message: String,
-    pub timestamp: Option<String>,
+    // ── Unified fields ────────────────────────────────────────────────────
+    pub source:      Option<String>,
+    pub resource_id: Option<String>,
+    pub tenant_id:   Option<Uuid>,
+    pub project_id:  Option<Uuid>,
+    pub request_id:  Option<String>,
+    pub metadata:    Option<serde_json::Value>,
+    // ── Shared fields ─────────────────────────────────────────────────────
+    pub level:       Option<String>,
+    pub message:     String,
+    // ── Legacy compat ─────────────────────────────────────────────────────
+    pub function_id: Option<String>,
+    #[allow(dead_code)]
+    pub timestamp:   Option<String>,
 }
 
 pub async fn create_log(
     headers: HeaderMap,
     State(pool): State<PgPool>,
-    Json(entry): Json<LogEntry>,
+    axum::Json(entry): axum::Json<LogEntry>,
 ) -> ApiResult<serde_json::Value> {
     validate_service_token(&headers)?;
 
-    // Accept both UUID and function name — try UUID first
-    let function_id: Option<Uuid> = entry.function_id.parse().ok();
-    let level = entry.level.as_deref().unwrap_or("info");
+    let level  = entry.level.as_deref().unwrap_or("info");
+    let source = entry.source.as_deref().unwrap_or("function");
 
-    if let Some(fid) = function_id {
-        sqlx::query(
-            "INSERT INTO function_logs (function_id, level, message) VALUES ($1, $2, $3)"
-        )
-        .bind(fid)
-        .bind(level)
-        .bind(&entry.message)
-        .execute(&pool)
-        .await
-        .map_err(|_| db_err())?;
-    } else {
-        // Look up function by name (across all tenants for internal use)
+    // ── Resolve tenant_id / project_id / resource_id ──────────────────────
+    let (tenant_id, project_id, resource_id) = if let Some(tid) = entry.tenant_id {
+        (tid, entry.project_id, entry.resource_id.clone().unwrap_or_default())
+    } else if let Some(fid_str) = &entry.function_id {
         #[derive(sqlx::FromRow)]
-        struct FnId { id: Uuid }
-        let fn_row = sqlx::query_as::<_, FnId>(
-            "SELECT id FROM functions WHERE name = $1 LIMIT 1"
-        )
-        .bind(&entry.function_id)
-        .fetch_optional(&pool)
-        .await
-        .map_err(|_| db_err())?;
-
-        if let Some(f) = fn_row {
-            sqlx::query(
-                "INSERT INTO function_logs (function_id, level, message) VALUES ($1, $2, $3)"
-            )
-            .bind(f.id)
-            .bind(level)
-            .bind(&entry.message)
-            .execute(&pool)
-            .await
-            .map_err(|_| db_err())?;
+        struct FnCtx { tenant_id: Uuid, project_id: Uuid, name: String }
+        let fn_ctx = if let Ok(fid) = fid_str.parse::<Uuid>() {
+            sqlx::query_as::<_, FnCtx>(
+                "SELECT t.id AS tenant_id, f.project_id, f.name \
+                 FROM functions f \
+                 JOIN projects p ON p.id = f.project_id \
+                 JOIN tenants  t ON t.id = p.tenant_id \
+                 WHERE f.id = $1 LIMIT 1",
+            ).bind(fid).fetch_optional(&pool).await.map_err(|_| db_err())?
+        } else {
+            sqlx::query_as::<_, FnCtx>(
+                "SELECT t.id AS tenant_id, f.project_id, f.name \
+                 FROM functions f \
+                 JOIN projects p ON p.id = f.project_id \
+                 JOIN tenants  t ON t.id = p.tenant_id \
+                 WHERE f.name = $1 LIMIT 1",
+            ).bind(fid_str).fetch_optional(&pool).await.map_err(|_| db_err())?
+        };
+        if let Some(ctx) = fn_ctx {
+            let res = entry.resource_id.clone().unwrap_or(ctx.name);
+            (ctx.tenant_id, Some(ctx.project_id), res)
+        } else {
+            return Ok(ApiResponse::new(serde_json::json!({ "logged": false, "reason": "function_not_found" })));
         }
-        // Silently ignore if function not found (log best-effort)
-    }
+    } else {
+        return Ok(ApiResponse::new(serde_json::json!({ "logged": false, "reason": "missing_context" })));
+    };
+
+    sqlx::query(
+        "INSERT INTO platform_logs \
+         (tenant_id, project_id, source, resource_id, level, message, request_id, metadata) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(tenant_id).bind(project_id).bind(source).bind(&resource_id)
+    .bind(level).bind(&entry.message).bind(&entry.request_id).bind(&entry.metadata)
+    .execute(&pool).await.map_err(|_| db_err())?;
 
     Ok(ApiResponse::new(serde_json::json!({ "logged": true })))
 }
 
-// ── GET /internal/logs?function_id= ───────────────────────────────────────
+// ─── GET /internal/logs (legacy — internal tooling only) ─────────────────────
 
 #[derive(Deserialize)]
 pub struct LogQuery {
@@ -98,9 +129,9 @@ pub struct LogQuery {
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct LogRow {
-    pub id: Uuid,
-    pub level: String,
-    pub message: String,
+    pub id:        Uuid,
+    pub level:     String,
+    pub message:   String,
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
@@ -110,60 +141,54 @@ pub async fn list_logs(
     Query(params): Query<LogQuery>,
 ) -> ApiResult<serde_json::Value> {
     validate_service_token(&headers)?;
-
     let limit = params.limit.unwrap_or(100).min(1000);
 
-    let rows = if let Ok(fid) = params.function_id.parse::<Uuid>() {
-        sqlx::query_as::<_, LogRow>(
-            "SELECT id, level, message, timestamp FROM function_logs \
-             WHERE function_id = $1 ORDER BY timestamp DESC LIMIT $2"
-        )
-        .bind(fid)
-        .bind(limit)
-        .fetch_all(&pool)
-        .await
-        .map_err(|_| db_err())?
+    // Resolve function UUID → name.
+    let resource_id = if let Ok(fid) = params.function_id.parse::<Uuid>() {
+        #[derive(sqlx::FromRow)] struct FnName { name: String }
+        sqlx::query_as::<_, FnName>("SELECT name FROM functions WHERE id = $1 LIMIT 1")
+            .bind(fid).fetch_optional(&pool).await.unwrap_or(None)
+            .map(|f| f.name).unwrap_or(params.function_id.clone())
     } else {
-        sqlx::query_as::<_, LogRow>(
-            "SELECT l.id, l.level, l.message, l.timestamp FROM function_logs l \
-             JOIN functions f ON f.id = l.function_id \
-             WHERE f.name = $1 ORDER BY l.timestamp DESC LIMIT $2"
-        )
-        .bind(&params.function_id)
-        .bind(limit)
-        .fetch_all(&pool)
-        .await
-        .map_err(|_| db_err())?
+        params.function_id.clone()
     };
 
+    let rows = sqlx::query_as::<_, LogRow>(
+        "SELECT id, level, message, timestamp FROM platform_logs \
+         WHERE resource_id = $1 AND source = 'function' \
+         ORDER BY timestamp DESC LIMIT $2",
+    )
+    .bind(&resource_id).bind(limit)
+    .fetch_all(&pool).await.map_err(|_| db_err())?;
+
     let logs: Vec<_> = rows.into_iter().map(|r| serde_json::json!({
-        "id": r.id,
-        "level": r.level,
-        "message": r.message,
+        "id": r.id, "level": r.level, "message": r.message,
         "timestamp": r.timestamp.to_rfc3339(),
     })).collect();
-
     Ok(ApiResponse::new(serde_json::json!({ "logs": logs })))
 }
 
-// ── GET /logs  (project-scoped, Firebase auth) ────────────────────────────
+// ─── GET /logs  (project-scoped, Firebase auth) ───────────────────────────────
 //
 // Query params:
-//   function  — optional function name filter
-//   limit     — max rows (default 100, max 1000)
-//   since     — ISO-8601 timestamp; return only rows newer than this
+//   source   — subsystem: function | db | workflow | event | queue | system
+//   resource — resource_id (function name, db name, workflow id, etc.)
+//   function — legacy alias for ?source=function&resource=<name>
+//   level    — error | warn | info | debug
+//   limit    — max rows (default 100, max 1000)
+//   since    — ISO-8601 timestamp; return only rows newer than this
 //
-// Hot path (since within LOG_HOT_DAYS): Postgres only.
-// Cold path (since older than LOG_HOT_DAYS or no since but old data needed):
-//   Postgres results are merged with archived NDJSON files from R2/S3.
-//
-// Used by `flux logs` (fetch) and `flux logs --follow` (polled).
+// Hot path  (since within LOG_HOT_DAYS): Postgres only.
+// Cold path (since older than LOG_HOT_DAYS): Postgres + R2/S3 archive merge.
 
 #[derive(Deserialize)]
 pub struct ProjectLogQuery {
-    pub function: Option<String>,
-    pub limit: Option<i64>,
-    pub since: Option<String>,   // ISO-8601 e.g. "2026-03-09T10:00:00Z"
+    pub source:   Option<String>,
+    pub resource: Option<String>,
+    pub function: Option<String>,  // legacy alias
+    pub level:    Option<String>,
+    pub limit:    Option<i64>,
+    pub since:    Option<String>,
 }
 
 pub async fn list_project_logs(
@@ -171,135 +196,122 @@ pub async fn list_project_logs(
     Extension(context): Extension<RequestContext>,
     Query(params): Query<ProjectLogQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context
-        .project_id
-        .ok_or(ApiError::bad_request("missing_project"))?;
+    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let pool       = &state.pool;
+    let limit      = params.limit.unwrap_or(100).min(1_000);
+    let limit_us   = limit as usize;
 
-    let pool  = &state.pool;
-    let limit = params.limit.unwrap_or(100).min(1_000) as usize;
-    let limit_i64 = limit as i64;
+    // Backward compat: ?function=echo → source=function, resource=echo.
+    let source   = params.source.as_deref()
+        .or_else(|| params.function.as_ref().map(|_| "function"));
+    let resource = params.resource.as_deref()
+        .or(params.function.as_deref());
+    let level    = params.level.as_deref();
 
-    // Parse optional `since` timestamp.
-    let since: Option<chrono::DateTime<chrono::Utc>> = params
-        .since
-        .as_deref()
+    let since: Option<chrono::DateTime<chrono::Utc>> = params.since.as_deref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
 
     #[derive(sqlx::FromRow)]
-    struct ProjectLogRow {
-        id:            Uuid,
-        function_name: String,
-        level:         String,
-        message:       String,
-        timestamp:     chrono::DateTime<chrono::Utc>,
+    struct PlatformLogRow {
+        id:          Uuid,
+        source:      String,
+        resource_id: String,
+        level:       String,
+        message:     String,
+        request_id:  Option<String>,
+        metadata:    Option<serde_json::Value>,
+        timestamp:   chrono::DateTime<chrono::Utc>,
     }
 
-    // ── Hot tier: Postgres ─────────────────────────────────────────────────
-    let rows: Vec<ProjectLogRow> = match (params.function.as_deref(), since) {
-        (Some(fn_name), Some(since_ts)) => sqlx::query_as(
-            "SELECT l.id, f.name as function_name, l.level, l.message, l.timestamp \
-             FROM function_logs l \
-             JOIN functions f ON f.id = l.function_id \
-             WHERE f.project_id = $1 AND f.name = $2 AND l.timestamp > $3 \
-             ORDER BY l.timestamp ASC LIMIT $4",
-        )
-        .bind(project_id).bind(fn_name).bind(since_ts).bind(limit_i64)
-        .fetch_all(pool).await.map_err(|_| db_err())?,
+    // ── Build dynamic SQL query ───────────────────────────────────────────
+    let mut conditions: Vec<String> = vec!["l.project_id = $1".to_string()];
+    let mut bind_idx = 2usize;
 
-        (Some(fn_name), None) => sqlx::query_as(
-            "SELECT l.id, f.name as function_name, l.level, l.message, l.timestamp \
-             FROM function_logs l \
-             JOIN functions f ON f.id = l.function_id \
-             WHERE f.project_id = $1 AND f.name = $2 \
-             ORDER BY l.timestamp DESC LIMIT $3",
-        )
-        .bind(project_id).bind(fn_name).bind(limit_i64)
-        .fetch_all(pool).await.map_err(|_| db_err())?,
+    if source.is_some()   { conditions.push(format!("l.source = ${bind_idx}"));      bind_idx += 1; }
+    if resource.is_some() { conditions.push(format!("l.resource_id = ${bind_idx}")); bind_idx += 1; }
+    if level.is_some()    { conditions.push(format!("l.level = ${bind_idx}"));        bind_idx += 1; }
 
-        (None, Some(since_ts)) => sqlx::query_as(
-            "SELECT l.id, f.name as function_name, l.level, l.message, l.timestamp \
-             FROM function_logs l \
-             JOIN functions f ON f.id = l.function_id \
-             WHERE f.project_id = $1 AND l.timestamp > $2 \
-             ORDER BY l.timestamp ASC LIMIT $3",
-        )
-        .bind(project_id).bind(since_ts).bind(limit_i64)
-        .fetch_all(pool).await.map_err(|_| db_err())?,
-
-        (None, None) => sqlx::query_as(
-            "SELECT l.id, f.name as function_name, l.level, l.message, l.timestamp \
-             FROM function_logs l \
-             JOIN functions f ON f.id = l.function_id \
-             WHERE f.project_id = $1 \
-             ORDER BY l.timestamp DESC LIMIT $2",
-        )
-        .bind(project_id).bind(limit_i64)
-        .fetch_all(pool).await.map_err(|_| db_err())?,
+    let (time_cond, time_order) = match since {
+        Some(_) => (format!("l.timestamp > ${bind_idx}"), "ASC"),
+        None    => ("1=1".to_string(),                     "DESC"),
     };
+    if since.is_some() { bind_idx += 1; }
+    conditions.push(time_cond);
+
+    let sql = format!(
+        "SELECT l.id, l.source, l.resource_id, l.level, l.message, \
+                l.request_id, l.metadata, l.timestamp \
+         FROM platform_logs l \
+         WHERE {} \
+         ORDER BY l.timestamp {} LIMIT ${}",
+        conditions.join(" AND "), time_order, bind_idx
+    );
+
+    let mut q = sqlx::query_as::<_, PlatformLogRow>(&sql).bind(project_id);
+    if let Some(s)  = source   { q = q.bind(s); }
+    if let Some(r)  = resource { q = q.bind(r); }
+    if let Some(l)  = level    { q = q.bind(l); }
+    if let Some(ts) = since    { q = q.bind(ts); }
+    q = q.bind(limit);
+
+    let rows = q.fetch_all(pool).await.map_err(|_| db_err())?;
 
     let mut logs: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
-        "id":        r.id,
-        "function":  r.function_name,
-        "level":     r.level,
-        "message":   r.message,
-        "timestamp": r.timestamp.to_rfc3339(),
-        "source":    "hot",
+        "id":         r.id,
+        "source":     r.source,
+        "resource":   r.resource_id,
+        // legacy "function" field for old CLI versions
+        "function":   if r.source == "function" { &r.resource_id as &str } else { "" },
+        "level":      r.level,
+        "message":    r.message,
+        "request_id": r.request_id,
+        "metadata":   r.metadata,
+        "timestamp":  r.timestamp.to_rfc3339(),
+        "tier":       "hot",
     })).collect();
 
-    // ── Cold tier: R2/S3 archive ───────────────────────────────────────────
-    //
-    // Only triggered when the caller explicitly reaches back past the hot
-    // window (i.e. `since` is older than `NOW() - LOG_HOT_DAYS`).
-    // Typical `flux logs` calls (showing the last N lines) never hit this path.
-    let hot_cutoff = chrono::Utc::now()
-        - chrono::Duration::days(state.log_archiver.hot_days);
+    // ── Archive read (cold path) ──────────────────────────────────────────
+    let hot_cutoff = chrono::Utc::now() - chrono::Duration::days(state.log_archiver.hot_days);
 
     if let Some(since_ts) = since {
         if since_ts < hot_cutoff {
-            // Resolve function UUIDs (needed to address archive objects by key).
-            #[derive(sqlx::FromRow)]
-            struct FnInfo { id: Uuid, name: String }
+            #[derive(sqlx::FromRow)] struct TenantId { tenant_id: Uuid }
+            let t = sqlx::query_as::<_, TenantId>(
+                "SELECT tenant_id FROM projects WHERE id = $1 LIMIT 1",
+            ).bind(project_id).fetch_optional(pool).await.unwrap_or(None);
 
-            let fns: Vec<FnInfo> = if let Some(fn_name) = params.function.as_deref() {
-                sqlx::query_as(
-                    "SELECT id, name FROM functions WHERE project_id = $1 AND name = $2",
-                )
-                .bind(project_id).bind(fn_name)
-                .fetch_all(pool).await.unwrap_or_default()
-            } else {
-                sqlx::query_as(
-                    "SELECT id, name FROM functions WHERE project_id = $1",
-                )
-                .bind(project_id)
-                .fetch_all(pool).await.unwrap_or_default()
-            };
-
-            // Remaining budget for archive rows (always fetch up to `limit`
-            // archive rows per function so callers get full coverage).
-            let per_fn_limit = limit.max(1);
-
-            for fn_info in &fns {
-                // Fetch only the archived portion: [since_ts, hot_cutoff).
+            if let Some(t) = t {
+                let s = source.unwrap_or("function");
+                let r = resource.unwrap_or("");
                 let archived = state.log_archiver
-                    .fetch_archived(fn_info.id, since_ts, hot_cutoff, per_fn_limit)
+                    .fetch_archived(t.tenant_id, s, r, since_ts, hot_cutoff, limit_us)
                     .await;
 
                 for mut entry in archived {
+                    if let Some(lf) = level {
+                        if entry.get("level").and_then(|l| l.as_str()) != Some(lf) { continue; }
+                    }
                     if let Some(obj) = entry.as_object_mut() {
-                        obj.insert("function".into(), serde_json::json!(fn_info.name));
-                        obj.insert("source".into(),   serde_json::json!("archive"));
+                        if let Some(rid) = obj.get("resource_id").cloned() {
+                            let src_str = obj.get("source")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string();  // owned — avoids borrow conflict
+                            obj.insert("resource".into(), rid.clone());
+                            obj.insert("function".into(), if src_str == "function" { rid } else { serde_json::json!("") });
+                        }
+                        obj.insert("tier".into(), serde_json::json!("archive"));
                     }
                     logs.push(entry);
                 }
-            }
 
-            // Re-sort the merged set by timestamp ascending and cap at limit.
-            logs.sort_by(|a, b| {
-                a.get("timestamp").and_then(|t| t.as_str()).unwrap_or("")
-                    .cmp(b.get("timestamp").and_then(|t| t.as_str()).unwrap_or(""))
-            });
-            logs.truncate(limit);
+                logs.sort_by(|a, b| {
+                    a.get("timestamp").and_then(|t| t.as_str()).unwrap_or("")
+                        .cmp(b.get("timestamp").and_then(|t| t.as_str()).unwrap_or(""))
+                });
+                logs.truncate(limit_us);
+            }
         }
     }
 
