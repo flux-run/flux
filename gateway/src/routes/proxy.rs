@@ -8,6 +8,7 @@ use axum::body::Body;
 use crate::state::SharedState;
 use job_contract::job::CreateJobRequest;
 use serde_json::Value;
+use uuid::Uuid;
 
 pub async fn proxy_handler(
     State(state): State<SharedState>,
@@ -161,10 +162,12 @@ pub async fn proxy_handler(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    let incoming_request_id = req.headers()
+    // Use caller-supplied x-request-id or generate a fresh one for this request.
+    let incoming_request_id: String = req.headers()
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     
     // We need to extract the payload from the original request.
     // For now, we assume it's JSON.
@@ -284,13 +287,12 @@ pub async fn proxy_handler(
     if let Some(claims) = fwd_jwt_claims {
         req_builder = req_builder.header("X-JWT-Claims", claims);
     }
-    if let Some(ref rid) = incoming_request_id {
-        req_builder = req_builder.header("x-request-id", rid);
-    }
+    req_builder = req_builder.header("x-request-id", &incoming_request_id);
 
     let runtime_resp = req_builder.send().await;
 
     // 5. Build Response & Apply CORS
+    // Always echo x-request-id back so callers can run `flux trace <id>`.
     let mut response = match runtime_resp {
         Ok(resp) => {
             let status = resp.status();
@@ -307,6 +309,10 @@ pub async fn proxy_handler(
 
 
     // 4.5. Apply CORS
+    // Inject x-request-id into response so CLI/clients can run `flux trace <id>`.
+    if let Ok(val) = incoming_request_id.parse() {
+        response.headers_mut().insert("x-request-id", val);
+    }
     if route.cors_enabled {
         let headers = response.headers_mut();
         
