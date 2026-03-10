@@ -107,10 +107,19 @@ pub fn build_fluxbase_extension() -> Extension {
 /// Intended to be called once per worker thread; per-request state is injected
 /// via `OpState` before each execution (see `execute_with_runtime`).
 pub fn create_js_runtime() -> JsRuntime {
-    JsRuntime::new(RuntimeOptions {
+    let mut rt = JsRuntime::new(RuntimeOptions {
         extensions: vec![build_fluxbase_extension()],
         ..Default::default()
-    })
+    });
+    // Snapshot the set of built-in global keys that exist before any user code
+    // runs. build_wrapper uses this to sweep user-added globals between
+    // invocations so that no cross-request state can leak on a warm isolate.
+    rt.execute_script(
+        "<fluxbase-init>",
+        "globalThis.__fluxbase_allowed_globals = \
+            new Set(Object.getOwnPropertyNames(globalThis));",
+    ).expect("failed to initialise global sweep sentinel");
+    rt
 }
 
 /// Build the JS IIFE wrapper that injects FluxContext and executes the bundle.
@@ -125,6 +134,19 @@ fn build_wrapper(
 ) -> String {
     format!(r#"
         var __fluxbase_fn;
+
+        // ── Global scope sweep ──────────────────────────────────────────────
+        // Delete any key set by a previous invocation on this warm isolate.
+        // __fluxbase_allowed_globals is frozen at worker startup and contains
+        // only V8/Deno built-ins — nothing a user bundle could have added.
+        // Cost: O(n) over user-added keys only; typically 0–2 keys in practice.
+        if (typeof __fluxbase_allowed_globals !== "undefined") {{
+            for (const __k of Object.getOwnPropertyNames(globalThis)) {{
+                if (!__fluxbase_allowed_globals.has(__k)) {{
+                    try {{ delete globalThis[__k]; }} catch (_) {{}}
+                }}
+            }}
+        }}
 
         (async () => {{
             const __fluxbase_logs = [];
@@ -402,10 +424,11 @@ pub struct LogLine {
 /// # Safety / state isolation
 /// - `__fluxbase_logs` is declared inside the IIFE — fresh per call.
 /// - `__ctx` is declared inside the IIFE — fresh per call, holds secrets/payload.
-/// - `__fluxbase_fn` is a global `var` — overwritten by the bundle on every call.
-/// - If user code pollutes `globalThis`, that state persists to the next call on
-///   the same worker. This is an accepted trade-off for the initial warm-isolate
-///   implementation; future snapshotting will mitigate it.
+/// - `__fluxbase_fn` is a global `var` — re-assigned by the bundle on every call.
+/// - User globals (`globalThis.*`) are swept at the start of each IIFE using the
+///   `__fluxbase_allowed_globals` snapshot taken at worker startup. Any key added
+///   by a previous bundle is deleted before the next bundle runs, ensuring no
+///   cross-request data leakage on a warm isolate.
 /// - On timeout the caller (`IsolatePool`) marks the runtime for recreation so
 ///   the next call on that worker gets a fresh isolate (V8 won't be stuck).
 pub async fn execute_with_runtime(

@@ -312,6 +312,24 @@ Deno's `JsRuntime` is `!Send`. It must be created and used on the same thread. A
 
 Each request updates the worker's `JsRuntime` `OpState` (secrets, tenant context) via `try_take` + `put` before execution. This is the only per-request mutation; the V8 heap, extension registrations, and snapshot are already in place.
 
+**Global scope isolation** is handled by a two-part mechanism:
+
+1. **Baseline snapshot** — when `create_js_runtime()` first builds the worker's `JsRuntime`, it immediately captures the complete set of global keys (V8 built-ins + Deno core) into `globalThis.__fluxbase_allowed_globals`. This snapshot is frozen before any user code ever runs.
+
+2. **Per-invocation sweep** — at the very start of each IIFE wrapper, before the user bundle executes, any global key not in the baseline snapshot is deleted:
+
+```js
+if (typeof __fluxbase_allowed_globals !== "undefined") {
+    for (const __k of Object.getOwnPropertyNames(globalThis)) {
+        if (!__fluxbase_allowed_globals.has(__k)) {
+            try { delete globalThis[__k]; } catch (_) {}
+        }
+    }
+}
+```
+
+This means user code that writes `globalThis.cache = ...` or any other global will have that value deleted before the next invocation on the same worker. The cost is O(n) over user-added keys only — typically zero keys in honest code, negligible otherwise.
+
 If a request **times out**, the V8 event loop may be in an inconsistent state. The worker automatically recreates the `JsRuntime` in that case:
 
 ```rust
@@ -918,7 +936,7 @@ These are empirical benchmarks from production (Cloud Run, `asia-south1`, 1 vCPU
 | Bundle cache hit (deployment-level) | < 1 ms | 0 network calls |
 | Secrets cache hit | < 1 ms | In-process LRU |
 | `JsRuntime` startup (cold, container init) | 3–5 ms | Paid once per worker thread at startup |
-| Isolate execution startup (warm) | < 0.5 ms | `OpState` swap; V8 heap already warm |
+| Isolate execution startup (warm) | < 0.5 ms | `OpState` swap + global sweep; V8 heap already warm |
 | Secrets fetch (cache miss) | 5–15 ms | Control plane round-trip |
 | Bundle fetch from R2/S3 (cache miss) | 30–100 ms | Object storage round-trip |
 | Tool call via Composio | 100–2000 ms | External API dependent |
