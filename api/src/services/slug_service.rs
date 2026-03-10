@@ -14,10 +14,10 @@ pub fn generate_slug(name: &str) -> String {
         .join("-");
 
     if trimmed.is_empty() {
-        return generate_random_suffix(8);
+        return format!("{}-org", generate_random_suffix(8));
     }
 
-    format!("{}-{}", trimmed, generate_random_suffix(6))
+    format!("{}-{}-org", trimmed, generate_random_suffix(6))
 }
 
 fn generate_random_suffix(len: usize) -> String {
