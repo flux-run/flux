@@ -191,6 +191,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/events/stream",   get(routes::events::stream))
         // Function logs — project-scoped, supports ?function=&limit=&since=
         .route("/logs",            get(logs::routes::list_project_logs))
+        // Full request trace — all log spans for a given request_id across services
+        .route("/traces/{request_id}", get(logs::routes::get_trace))
         // Data Engine management proxy — CRUD for databases, tables, schema,
         // relationships, policies, hooks, subscriptions, workflows, cron.
         // Execution traffic (POST /db/query) is routed to the gateway instead.

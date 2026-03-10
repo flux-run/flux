@@ -155,9 +155,14 @@ pub async fn proxy_handler(
     // 4. Forward to Runtime
     let runtime_url = format!("{}/execute", state.runtime_url);
 
-    // Extract Idempotency-Key before req is consumed by into_body().
+    // Extract Idempotency-Key and x-request-id before req is consumed by into_body().
     let idempotency_key = req.headers()
         .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let incoming_request_id = req.headers()
+        .get("x-request-id")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
     
@@ -278,6 +283,9 @@ pub async fn proxy_handler(
     }
     if let Some(claims) = fwd_jwt_claims {
         req_builder = req_builder.header("X-JWT-Claims", claims);
+    }
+    if let Some(ref rid) = incoming_request_id {
+        req_builder = req_builder.header("x-request-id", rid);
     }
 
     let runtime_resp = req_builder.send().await;

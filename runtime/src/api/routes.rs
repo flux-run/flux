@@ -45,6 +45,9 @@ pub async fn execute_handler(
     let tenant_slug_header = headers.get("X-Tenant-Slug")
         .and_then(|h| h.to_str().ok())
         .unwrap_or_else(|| "unknown");
+    let request_id = headers.get("x-request-id")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
 
     let start_time = std::time::Instant::now();
 
@@ -87,6 +90,7 @@ pub async fn execute_handler(
             let project_id    = req.project_id;
             let logs          = execution.logs;
             let client        = state.http_client.clone();
+            let request_id_log = request_id.clone();
             tokio::spawn(async move {
                 for log in logs {
                     let _ = client.post(&log_url).header("X-Service-Token", &service_token)
@@ -97,6 +101,7 @@ pub async fn execute_handler(
                             "project_id":  project_id,
                             "level":       log.level,
                             "message":     log.message,
+                            "request_id":  request_id_log,
                         }))
                         .send().await;
                 }
@@ -278,6 +283,7 @@ pub async fn execute_handler(
         let project_id     = req.project_id;
         let logs           = execution.logs;
         let client         = state.http_client.clone();
+        let request_id_log = request_id.clone();
 
         tokio::spawn(async move {
             for log in logs {
@@ -291,6 +297,7 @@ pub async fn execute_handler(
                         "project_id":  project_id,
                         "level":       log.level,
                         "message":     log.message,
+                        "request_id":  request_id_log,
                     }))
                     .send()
                     .await;

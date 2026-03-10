@@ -16,6 +16,7 @@ mod secrets;
 mod stack;
 mod tenant;
 mod deployments;
+mod trace;
 
 #[derive(Parser)]
 #[command(name = "flux")]
@@ -130,6 +131,14 @@ enum Commands {
     },
     /// Diagnose environment, connectivity, and SDK sync
     Doctor,
+    /// Show the full cross-service request trace for a given request ID
+    ///
+    /// Example:
+    ///   flux trace abc123-def456
+    Trace {
+        /// Request ID to look up (returned as x-request-id in API responses)
+        request_id: String,
+    },
     /// Initialise .fluxbase/config.json for this project
     Init {
         /// Fluxbase project ID to store in the config
@@ -221,6 +230,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Watch { output, interval } => sdk::execute_watch(output, interval).await?,
         Commands::Status { sdk } => sdk::execute_status(sdk).await?,
         Commands::Doctor => doctor::execute().await?,
+        Commands::Trace { request_id } => trace::execute(request_id).await?,
         Commands::Init { project, output, interval, api_url, gateway_url, runtime_url } => init::execute(project, output, interval, api_url, gateway_url, runtime_url).await?,
         Commands::Stack { command } => match command {
             StackCommand::Up   { build, foreground }  => stack::execute_up(build, !foreground).await?,

@@ -13,7 +13,7 @@
 /// the call is transparently enriched with archived NDJSON from R2/S3.
 
 use axum::{
-    extract::{Extension, Query, State},
+    extract::{Extension, Path, Query, State},
     http::HeaderMap,
 };
 use serde::{Deserialize, Serialize};
@@ -316,4 +316,67 @@ pub async fn list_project_logs(
     }
 
     Ok(ApiResponse::new(serde_json::json!({ "logs": logs })))
+}
+
+// ─── GET /traces/{request_id}  (project-scoped, Firebase auth) ───────────────
+//
+// Returns all log spans that share the same request_id in ascending timestamp
+// order, giving a full cross-service request trace:
+//   gateway → api middleware → function logs emitted by the runtime
+
+pub async fn get_trace(
+    axum::extract::State(state): axum::extract::State<crate::AppState>,
+    Extension(context): Extension<RequestContext>,
+    Path(request_id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let pool = &state.pool;
+
+    #[derive(sqlx::FromRow)]
+    struct TraceRow {
+        id:          Uuid,
+        source:      String,
+        resource_id: String,
+        level:       String,
+        message:     String,
+        metadata:    Option<serde_json::Value>,
+        timestamp:   chrono::DateTime<chrono::Utc>,
+    }
+
+    let rows = sqlx::query_as::<_, TraceRow>(
+        "SELECT l.id, l.source, l.resource_id, l.level, l.message, l.metadata, l.timestamp \
+         FROM platform_logs l \
+         WHERE l.project_id = $1 AND l.request_id = $2 \
+         ORDER BY l.timestamp ASC",
+    )
+    .bind(project_id)
+    .bind(&request_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| db_err())?;
+
+    if rows.is_empty() {
+        return Ok(ApiResponse::new(serde_json::json!({
+            "request_id": request_id,
+            "spans":      [],
+            "span_count": 0,
+        })));
+    }
+
+    let spans: Vec<serde_json::Value> = rows.into_iter().map(|r| serde_json::json!({
+        "id":        r.id,
+        "source":    r.source,
+        "resource":  r.resource_id,
+        "level":     r.level,
+        "message":   r.message,
+        "metadata":  r.metadata,
+        "timestamp": r.timestamp.to_rfc3339(),
+    })).collect();
+
+    let span_count = spans.len();
+    Ok(ApiResponse::new(serde_json::json!({
+        "request_id": request_id,
+        "spans":      spans,
+        "span_count": span_count,
+    })))
 }
