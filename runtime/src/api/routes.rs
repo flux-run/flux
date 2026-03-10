@@ -47,6 +47,54 @@ pub async fn execute_handler(
 
     let start_time = std::time::Instant::now();
 
+    // ── Function-level bundle cache (skips control plane + S3 entirely) ──
+    if let Some(cached_code) = state.bundle_cache.get_by_function(&req.function_id) {
+        tracing::debug!(function_id = %req.function_id, "bundle cache hit (function-level)");
+        let secrets = match state.secrets_client.fetch_secrets(req.tenant_id, req.project_id).await {
+            Ok(s) => s,
+            Err(e) => return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "SecretFetchError", "message": e })),
+            ).into_response(),
+        };
+        let execution = match execute_function(
+            cached_code,
+            secrets,
+            req.payload,
+            tenant_id_header.to_string(),
+            tenant_slug_header.to_string(),
+        ).await {
+            Ok(r) => r,
+            Err(e) => {
+                let (err_code, message) = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&e) {
+                    let code = parsed.get("code").and_then(|c| c.as_str()).unwrap_or("FunctionExecutionError").to_string();
+                    let msg  = parsed.get("message").and_then(|m| m.as_str()).unwrap_or(&e).to_string();
+                    (code, msg)
+                } else {
+                    ("FunctionExecutionError".to_string(), e)
+                };
+                let status = if err_code == "INPUT_VALIDATION_ERROR" { StatusCode::BAD_REQUEST } else { StatusCode::INTERNAL_SERVER_ERROR };
+                return (status, Json(serde_json::json!({ "error": err_code, "message": message }))).into_response();
+            }
+        };
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        if !execution.logs.is_empty() {
+            let log_url      = format!("{}/internal/logs", state.control_plane_url);
+            let service_token = state.service_token.clone();
+            let function_id  = req.function_id.clone();
+            let logs         = execution.logs;
+            let client       = state.http_client.clone();
+            tokio::spawn(async move {
+                for log in logs {
+                    let _ = client.post(&log_url).header("X-Service-Token", &service_token)
+                        .json(&serde_json::json!({ "function_id": function_id, "level": log.level, "message": log.message }))
+                        .send().await;
+                }
+            });
+        }
+        return (StatusCode::OK, Json(ExecuteResponse { result: execution.output, duration_ms })).into_response();
+    }
+
     // Fetch secrets from the control plane
     let secrets = match state.secrets_client.fetch_secrets(req.tenant_id, req.project_id).await {
         Ok(s) => s,
@@ -122,8 +170,10 @@ pub async fn execute_handler(
 
             let final_code = if let Some(d_id) = deployment_id.clone() {
                 if let Some(cached_code) = state.bundle_cache.get(&d_id) {
-                    println!("[CACHE HIT] Bundle {}", d_id);
-                     Some(cached_code)
+                    tracing::debug!(function_id = %req.function_id, deployment_id = %d_id, "bundle cache hit (deployment-level) — re-warming function cache");
+                    // Re-warm the function-level cache so the next call skips the control plane.
+                    state.bundle_cache.insert_both(req.function_id.clone(), Some(d_id), cached_code.clone());
+                    Some(cached_code)
                 } else { None }
             } else { None };
 
@@ -134,10 +184,8 @@ pub async fn execute_handler(
                 match s3_resp {
                     Ok(res) if res.status().is_success() => {
                         let text = res.text().await.unwrap_or_default();
-                        if let Some(d_id) = deployment_id {
-                            println!("[CACHE MISS] Downloaded bundle {}", d_id);
-                            state.bundle_cache.insert(d_id, text.clone());
-                        }
+                        tracing::debug!(function_id = %req.function_id, deployment_id = ?deployment_id, "bundle cache miss — caching");
+                        state.bundle_cache.insert_both(req.function_id.clone(), deployment_id, text.clone());
                         text
                     }
                     Ok(res) => {
@@ -163,9 +211,8 @@ pub async fn execute_handler(
                 }
             } else if let Some(code_str) = code_opt {
                 // Fallback to inline database storage
-                if let Some(d_id) = deployment_id {
-                    state.bundle_cache.insert(d_id, code_str.clone());
-                }
+                tracing::debug!(function_id = %req.function_id, "bundle cache miss (inline) — caching");
+                state.bundle_cache.insert_both(req.function_id.clone(), deployment_id, code_str.clone());
                 code_str
             } else {
                 return (
