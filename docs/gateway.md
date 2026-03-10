@@ -330,10 +330,12 @@ When a request arrives at the gateway:
 2. **Create Root Span**
    ```sql
    INSERT INTO platform_logs
-   (id, tenant_id, project_id, source, resource_id, request_id, span_type, level, message)
+   (id, parent_span_id, request_id, tenant_id, project_id, source, span_type, level, message)
    VALUES
-   (<uuid>, <tenant_id>, <project_id>, 'gateway', <function_id>, <request_id>, 'start', 'info', 'gateway.receive')
+   (<uuid>, NULL, <request_id::uuid>, <tenant_id>, <project_id>, 'gateway', 'start', 'info', 'gateway.receive')
    ```
+   
+   **Note**: `parent_span_id` is NULL for the root. Child spans set `parent_span_id = <gateway_root_span_id>` to create hierarchy.
 
 3. **Propagate Request ID**
    - Forward `x-request-id` to every downstream service (Runtime, Data-Engine, API)
@@ -407,15 +409,22 @@ Request IDs are the golden thread of observability. The gateway enforces a stric
 **Incoming Request Processing**:
 
 1. **If `x-request-id` header is present**:
-   - Validate it is a properly formatted UUID
+   - Validate it is a properly formatted UUID (uuid::Error parsing)
    - Reject malformed values with 400 Bad Request
+   - Parse as `UUID` type (not String)
    - Use as the authoritative request_id
    - Forward unchanged to all downstream services
 
 2. **If `x-request-id` header is absent**:
-   - Generate a new UUID v7
-   - Attach as `x-request-id` header to request
-   - Inject into all downstream context
+   - Generate a new UUID v7 (use `uuid::Uuid::now_v7()`)
+   - Convert to String for HTTP transmission
+   - Parse back to `UUID` for database operations
+   - Inject into all downstream context as header
+
+**Schema Enforcement**: `request_id UUID NOT NULL` in platform_logs **prevents invalid IDs at the database level**. Text-based request IDs create:
+- Slower index lookups (string comparisons vs UUID binary comparison)
+- Risk of storage of invalid values like "hello" or partial UUIDs
+- Larger index footprint (UUID = 16 bytes, random strings = variable)
 
 **Security Guarantee**: The gateway-provided `x-request-id` is **authoritative**. Downstream services must never replace it with a value from a nested call. This prevents:
 - Malicious clients spoofing request IDs to access unrelated traces
@@ -435,10 +444,25 @@ ORDER BY created_at ASC
 
 **Reconstruction**: The **Fluxbase API** service rebuilds trace trees by:
 1. Querying all spans for a request_id
-2. Ordering by creation timestamp
-3. Building a tree based on span parent/child relationships
-4. Computing cumulative latencies and critical path analysis
-5. Computing resource attribution per service
+2. Finding the root span (where `parent_span_id IS NULL`)
+3. Building a tree by following `parent_span_id` pointers (child spans reference parent via this ID)
+4. Computing cumulative latencies and critical path analysis per branch
+5. Computing resource attribution per service and tool call
+
+**Example**: For request_id=550e8400-..., the tree reconstruction uses:
+
+```
+gateway.receive (id=span-1, parent_span_id=NULL) [ROOT]
+  ├─ gateway.auth_passed (id=span-2, parent_span_id=span-1)
+  ├─ runtime.execute_function (id=span-3, parent_span_id=span-1)
+     ├─ data_engine.db.insert (id=span-4, parent_span_id=span-3)
+     │   └─ data_engine.write_to_postgres (id=span-5, parent_span_id=span-4)
+     └─ composio.gmail.send (id=span-6, parent_span_id=span-3)
+```
+
+Without `parent_span_id`, you cannot construct this hierarchy — only a flat list ordered by timestamp.
+
+**Important**: Runtime and Data-Engine services **must** capture the parent span ID from the incoming `x-parent-span-id` header and pass it when creating child spans.
 
 **CLI Usage Example**:
 ```bash
@@ -509,6 +533,21 @@ Client Request
 - Function execution happens in background
 - Request can continue even if function is slow/fails
 - Better for webhooks, notifications, batch processing
+
+**Reliability Guarantee** (At-Least-Once):
+- Queue Service guarantees **at-least-once delivery**
+- Functions may be executed multiple times on failure/retry
+- **Functions MUST be idempotent**:
+  ```javascript
+  // Bad (not idempotent):
+  ctx.db.insert("users", { id, name })  // Fails on second retry with duplicate key error
+  
+  // Good (idempotent):
+  ctx.db.insertIgnoreDuplicate("users", { id, name })  // Or use upsert
+  ```
+- If Queue crashes, jobs are replayed until success
+- If Runtime crashes mid-execution, job restarred
+- Client never knows about retries (202 response is final)
 
 ---
 
@@ -649,6 +688,9 @@ RouteRecord {
 - Headers: `Authorization: Bearer <jwt>`
 - Middleware extracts JWKS URL from route config
 - **JWKS Caching** — Fetches and caches public key sets (no per-request fetch)
+  - **TTL-based refresh**: Default 5 minutes (`JWKS_CACHE_TTL_SECS=300`)
+  - **Key rotation handling**: If verification fails with cached keys, refresh and retry (handles provider key rotation)
+  - **Security critical**: JWKS must refresh to detect revoked keys or rotation events
 - Validates: signature, audience, issuer
 - Extracts `role` claim for query cache isolation
 
@@ -670,10 +712,24 @@ RouteRecord {
 - Checked per identity (tenant + route)
 - Stateful buckets in `RateLimiter` (DashMap)
 
-**Behavior**:
-- Tokens refill at `limit_per_min / 60` per second
+**Bucket Capacity** (**CRITICAL FIX**):
+- Capacity = route rate_limit (e.g., 100 req/min = 100 tokens max)
+- Tokens refill at `rate_limit / 60` per second
 - Each request costs 1 token
-- Burst up to limit allowed
+- Burst up to capacity allowed
+- **Tokens never accumulate beyond capacity** (no infinite accumulation during idle periods)
+
+**Example**:
+- Route rate_limit = 100 req/min
+- Capacity = 100 tokens
+- Refill rate = 100/60 = 1.666 tokens/sec
+- After 1 minute idle: bucket = 100 (capped, not 100+100)
+- Burst: can send 100 requests instantly, then wait for refill
+
+**Result**:
+- No thundering herd on service restart
+- Fair rate limiting even after extended idle time
+- Well-defined maximum burst capacity per route
 - Excess requests: `429 Too Many Requests`
 
 ---
@@ -730,8 +786,48 @@ The gateway uses `INTERNAL_SERVICE_TOKEN` for internal-only endpoints like `/int
 - **Scope**: Only for internal service-to-service calls (Data-Engine, API, Runtime)
 - **Exposure**: Never expose to client environments (mobile apps, browsers, public SDKs)
 - **Validation**: Token is embedded in HTTP header `x-service-token` and validated via exact string match
+- **IP Restriction** (recommended): Restrict `/internal/*` endpoints to internal network:
+  ```rust
+  // Pseudocode
+  if path.starts_with("/internal/") {
+      // Check X-Forwarded-For or remote_addr against internal CIDR
+      if !is_internal_ip(request.ip) {
+          return Err(403 Forbidden);
+      }
+      // Also validate token
+      if header("x-service-token") != INTERNAL_SERVICE_TOKEN {
+          return Err(401 Unauthorized);
+      }
+  }
+  ```
+- **Future Enhancement**: JWT-based service tokens with expiry and scoped claims (e.g., `scope: [cache:invalidate, cache:read]`)
 
-**Future Enhancement**: Consider JWT-based service tokens with expiry and scoped claims (e.g., `scope: [cache:invalidate, cache:read]`).
+### Runtime Authentication Verification
+
+The gateway forwards `x-request-id` and authentication context to Runtime. **Runtime must verify these headers come from gateway**:
+
+**Verification Policy**:
+```
+POST /execute
+x-request-id: <uuid>
+x-service-token: <INTERNAL_SERVICE_TOKEN>  // Runtime validates this is from gateway
+x-tenant-id: <uuid>
+x-project-id: <uuid>
+
+Runtime actions:
+1. Verify x-service-token matches INTERNAL_SERVICE_TOKEN (only gateway has this)
+2. Verify tenant_id and project_id are present (would be missing in direct client calls)
+3. Reject requests not from gateway IP range
+4. Use x-request-id for span parent ID
+```
+
+**Why**: Without endpoint verification, an attacker could:
+- Hit Runtime directly, bypass gateway auth
+- Bypass rate limiting
+- Bypass gateway tracing root
+- Execute functions with fake tenant/project IDs
+
+---
 
 ---
 
@@ -765,9 +861,14 @@ All upstream service calls enforce strict timeouts to prevent gateway hangs:
 | Runtime | 30s | Serverless function execution time |
 | Data-Engine | 15s | Structured query + validation |
 | Queue | 5s | Job submission (fire-and-forget) |
-| API (SSE) | 60s | Long-lived streams (don't kill valid connections) |
+| API (SSE) | None (idle-only) | **Long-lived streams; don't kill valid connections** |
 | JWKS Fetch | 10s | Public key provider availability |
 | Database Queries | 5s | Local network operations |
+
+**SSE Timeout Detail**: Server-Sent Events are intentionally long-lived (hours). The gateway does NOT apply a fixed timeout. Instead:
+- **Idle timeout** (future): Disconnect if no event sent for 30 minutes
+- **Activity**: Keep-alive comments prevent idle disconnects
+- **Client reconnect**: Browser automatically reconnects on drop
 
 **Backpressure Handling**: If Runtime is slow and requests queue up, the gateway will hit timeouts before connection pools exhaust. This is preferable to silent hangs. Consider adding a circuit breaker if upstream stays unhealthy for >5 consecutive timeouts.
 
@@ -821,6 +922,42 @@ tokio::spawn(async move {
 **Why**: If the database is slow or unreachable, function execution must not pause. Trace integrity is secondary to request latency.
 
 **Monitoring**: If DB connection pool is exhausted, spans pile up in tokio task queue. Alert if pending spans > 1000.
+
+### Built-in Metrics & Observability
+
+The gateway **must** expose real-time metrics to operators. Current implementation:
+
+**Required Metrics** (tracked in-memory, exported via `/metrics` in future):
+
+| Metric | Type | Purpose |
+|--------|------|---------|
+| `gateway_requests_total` | Counter | Total requests by route, method, status |
+| `gateway_request_duration_seconds` | Histogram | Request latency p50/p95/p99 per route |
+| `gateway_cache_hits_total` | Counter | Query cache hits by project |
+| `gateway_cache_misses_total` | Counter | Query cache misses by project |
+| `gateway_cache_size_bytes` | Gauge | Current query cache memory usage |
+| `gateway_rate_limit_rejections_total` | Counter | Rejected requests by tenant, route |
+| `gateway_auth_failures_total` | Counter | Auth failures (JWT, API key) by type |
+| `gateway_jwks_refresh_total` | Counter | JWKS refreshes by provider |
+| `gateway_db_connections_open` | Gauge | Active DB connections in pool |
+| `gateway_db_write_errors_total` | Counter | Failed platform_logs writes |
+| `gateway_snapshot_refresh_seconds` | Histogram | Time to refresh routing snapshot |
+
+**Prometheus Integration** (Future):
+```
+GET /metrics
+# HELP gateway_requests_total Total HTTP requests
+# TYPE gateway_requests_total counter
+gateway_requests_total{route="/api/users",method="POST",status="200"} 1024
+```
+
+**Why**: Without metrics, operating Fluxbase is blind. When p95 latency rises, you need to know if it's:
+- Slow auth (JWKS timeout)?
+- Cache misses (thundering herd)?
+- DB pool exhaustion?
+- Slow downstream service?
+
+**Current Status**: Metrics infrastructure not yet implemented; high priority for production.
 
 ---
 
@@ -975,6 +1112,13 @@ Result:
 | `INTERNAL_SERVICE_TOKEN` | Required | Secret for internal endpoints (`/internal/*`) |
 | `API_URL` | `http://localhost:8080` | Fluxbase API (for SSE proxy) |
 | `QUERY_CACHE_TTL_SECS` | `30` | Cache entry lifetime in seconds |
+| `QUERY_CACHE_MAX_ENTRIES` | `4096` | Maximum cached query responses |
+| `QUERY_CACHE_MAX_RESPONSE_SIZE` | `1MB` | **Max response size to cache** (prevents bloat; responses > 1MB bypass cache) |
+| `JWKS_CACHE_TTL_SECS` | `300` | JWKS refresh interval in seconds (5 minutes) |
+| `PLATFORM_LOGS_POOL_SIZE` | `20` | connection pool size for trace writes |
+| `TRACE_SAMPLING_ERROR_RATE` | `1.0` | Always sample errors / 500s (1.0 = 100%) |
+| `TRACE_SAMPLING_SLOW_THRESHOLD_MS` | `200` | Sample requests slower than this |
+| `TRACE_SAMPLING_SUCCESS_RATE` | `0.1` | Sample successful requests (0.1 = 10%) |
 
 ### Database Schema
 
@@ -1014,15 +1158,20 @@ cors_headers TEXT[]
 **platform_logs**
 ```sql
 id UUID PRIMARY KEY
-tenant_id UUID
-project_id UUID
-source VARCHAR ('gateway', 'runtime', 'data-engine', etc.)
-resource_id VARCHAR (function_id, etc.)
-level VARCHAR ('info', 'warn', 'error')
+parent_span_id UUID NULL  -- Enables real trace tree hierarchy
+request_id UUID NOT NULL  -- Enforced UUID type; prevents spoofing
+tenant_id UUID NOT NULL
+project_id UUID NOT NULL
+source VARCHAR (255) NOT NULL  -- 'gateway', 'runtime', 'data-engine', etc.
+span_type VARCHAR (64) NOT NULL  -- 'start', 'complete', etc.
+level VARCHAR (32) DEFAULT 'info'  -- 'info', 'warn', 'error'
 message TEXT
-request_id VARCHAR (x-request-id)
-span_type VARCHAR ('start', 'end', etc.)
-created_at TIMESTAMP
+created_at TIMESTAMP NOT NULL DEFAULT NOW()
+
+-- Indexes for query patterns
+INDEX (request_id, created_at)  -- Trace reconstruction
+INDEX (parent_span_id)          -- Child lookup
+INDEX (tenant_id, created_at)   -- Multi-tenant isolation
 ```
 
 **api_keys**
@@ -1210,11 +1359,19 @@ curl http://localhost:8081/health
 
 | Component | Footprint |
 |-----------|-----------|
-| Routing snapshot | ~10 MB (5000 routes × 2 KB metadata) |
-| Query cache (4096 entries avg) | ~400 MB (100 KB avg per entry) |
-| JWKS cache (10 providers) | ~500 KB |
+| Routing snapshot | ~30 MB (5000 routes × ~6 KB metadata) |
+| Query cache (4096 entries, capped) | ~400 MB (100 KB avg per entry, **with max_cached_response_size enforcement**) |
+| JWKS cache (10 providers, TTL 5min) | ~500 KB |
 | Per-request allocations | Minimal (stack-only for most fields) |
 | **Total (typical)** | **~500-600 MB** |
+
+**Snapshot Estimate Breakdown**: Each RouteRecord contains:
+- id, path, method, function_id (80B)
+- auth_type, is_async, rate_limit (40B)
+- jwks_url, jwt_audience, jwt_issuer (200B)
+- json_schema JSONB (1-2KB typical)
+- cors_origins, cors_headers arrays (2-3KB)
+- **Total ~6KB per route** (not 2KB as previously estimated)
 
 ### Concurrency Model
 
@@ -1301,6 +1458,24 @@ This is enabled **entirely at the gateway** — no code changes needed, no funct
 10. **Readiness Probe** — Full dependency health check (DB, snapshot, JWKS) on GET /readiness
 11. **Event-Driven Snapshot Refresh** — Listen to platform_logs for route mutations instead of pure polling
 12. **Request Rate Bucketing** — Per-tenant and per-IP rate limits in addition to per-route
+13. **Trace Replay** — Re-execute a request from a stored trace
+    ```bash
+    # Given a past request_id, replay the exact same flow
+    $ flux trace replay <request-id>
+    
+    # Re-execute function with same:
+    # - path + method
+    # - request body
+    # - tenant_id + project_id
+    # - JWT/API key
+    #
+    # Outputs new trace_id to compare behavior:
+    # Original trace: 550e8400-e29b-41d4-a716-446655440000 [145ms] ✓
+    # Replayed trace: 550e8400-e29b-41d4-a716-446655460001 [98ms]  ✓ (faster!)
+    ```
+    
+    This enables debugging, regression testing, and incident reconstruction without access to production data.
+
 
 ---
 
