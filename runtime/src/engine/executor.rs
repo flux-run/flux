@@ -114,16 +114,30 @@ pub struct ExecutionResult {
 
 /// A structured log line emitted by user code or the tool executor.
 /// `span_type` and `source` allow the trace viewer to render distinct span kinds.
+///
+/// Fields added for execution tracing:
+/// - `duration_ms`       — set by tool/workflow/agent spans; propagated to log sink
+/// - `execution_state`   — lifecycle state: "started" | "running" | "completed" | "error"
+/// - `tool_name`         — the Fluxbase tool name for `span_type == "tool"` spans
 #[derive(Debug, serde::Deserialize)]
 pub struct LogLine {
     pub level:   String,
     pub message: String,
-    /// "event" (default) | "tool" | "start" | "end"
+    /// "event" (default) | "tool" | "workflow_step" | "agent_step" | "start" | "end"
     #[serde(default)]
     pub span_type: Option<String>,
-    /// "function" (default) | "tool"
+    /// "function" (default) | "tool" | "workflow" | "agent" | "runtime"
     #[serde(default)]
     pub source: Option<String>,
+    /// Duration in ms — set by tool/workflow/agent spans for replay recording.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    /// Lifecycle state tag used for replay and trace bisect.
+    #[serde(default)]
+    pub execution_state: Option<String>,
+    /// Tool name for tool spans — used to correlate with replay recordings.
+    #[serde(default)]
+    pub tool_name: Option<String>,
 }
 
 pub async fn execute_function(
@@ -227,10 +241,13 @@ pub async fn execute_function(
                                     );
                                     const duration = result._duration_ms || (Date.now() - _start);
                                     __fluxbase_logs.push({{
-                                        level:     "info",
-                                        message:   `tool:${{toolName}}  ${{duration}}ms`,
-                                        span_type: "tool",
-                                        source:    "tool",
+                                        level:           "info",
+                                        message:         `tool:${{toolName}}  ${{duration}}ms`,
+                                        span_type:       "tool",
+                                        source:          "tool",
+                                        duration_ms:     duration,
+                                        tool_name:       toolName,
+                                        execution_state: "completed",
                                     }});
                                     // Strip internal metadata before returning to user
                                     const {{ _tool, _duration_ms, _success, ...data }} = result;
@@ -238,10 +255,13 @@ pub async fn execute_function(
                                 }} catch (e) {{
                                     const duration = Date.now() - _start;
                                     __fluxbase_logs.push({{
-                                        level:     "error",
-                                        message:   `tool:${{toolName}}  failed (${{duration}}ms): ${{e.message}}`,
-                                        span_type: "tool",
-                                        source:    "tool",
+                                        level:           "error",
+                                        message:         `tool:${{toolName}}  failed (${{duration}}ms): ${{e.message}}`,
+                                        span_type:       "tool",
+                                        source:          "tool",
+                                        duration_ms:     duration,
+                                        tool_name:       toolName,
+                                        execution_state: "error",
                                     }});
                                     throw new Error(`tool:${{toolName}} failed: ${{e.message}}`);
                                 }}

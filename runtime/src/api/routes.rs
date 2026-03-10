@@ -33,7 +33,28 @@ pub struct AppState {
     pub isolate_pool: IsolatePool,
 }
 
-// ── Automatic span helper ─────────────────────────────────────────────────────
+// ── Span helpers ─────────────────────────────────────────────────────────────
+
+/// Compute a short stable fingerprint of the bundle code.
+/// Used as `code_sha` in trace spans for replay correlation.
+/// Not cryptographic — just sufficient to identify a unique bundle version.
+fn bundle_sha(code: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    code.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Extra trace context captured once per request and threaded through all lifecycle spans.
+#[derive(Clone)]
+struct TraceCtx {
+    /// Forwarded from Gateway via `x-parent-span-id` header.
+    parent_span_id: Option<String>,
+    /// Short fingerprint of the JS bundle being executed — for replay correlation.
+    code_sha: Option<String>,
+}
+
 /// Fire-and-forget: post a single structured span to the control-plane log sink.
 fn post_span(
     client:    &reqwest::Client,
@@ -68,6 +89,55 @@ fn post_span(
     });
 }
 
+/// Fire-and-forget: post an execution lifecycle span (start / end / error) with
+/// full trace context.
+///
+/// These are the anchors for `flux trace` and `flux why` — they carry:
+/// - `parent_span_id`    → links to the Gateway span for end-to-end trace trees
+/// - `code_sha`          → fingerprints the exact bundle version for replay
+/// - `execution_state`   → "started" | "completed" | "error"
+/// - `duration_ms`       → total execution time (only on end/error spans)
+fn post_trace_span(
+    client:          &reqwest::Client,
+    log_url:         String,
+    token:           String,
+    fn_id:           String,
+    tenant_id:       Uuid,
+    project_id:      Option<Uuid>,
+    request_id:      Option<String>,
+    trace_ctx:       &TraceCtx,
+    level:           &'static str,
+    message:         String,
+    span_type:       &'static str,
+    execution_state: &'static str,
+    duration_ms:     Option<u64>,
+) {
+    let parent_span_id = trace_ctx.parent_span_id.clone();
+    let code_sha       = trace_ctx.code_sha.clone();
+    let client = client.clone();
+    tokio::spawn(async move {
+        let _ = client
+            .post(&log_url)
+            .header("X-Service-Token", &token)
+            .json(&serde_json::json!({
+                "source":           "runtime",
+                "resource_id":      fn_id,
+                "tenant_id":        tenant_id,
+                "project_id":       project_id,
+                "level":            level,
+                "message":          message,
+                "request_id":       request_id,
+                "span_type":        span_type,
+                "parent_span_id":   parent_span_id,
+                "code_sha":         code_sha,
+                "execution_state":  execution_state,
+                "duration_ms":      duration_ms,
+            }))
+            .send()
+            .await;
+    });
+}
+
 #[axum::debug_handler]
 pub async fn execute_handler(
     State(state): State<Arc<AppState>>,
@@ -83,12 +153,23 @@ pub async fn execute_handler(
     let request_id = headers.get("x-request-id")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
+    // Forwarded by the Gateway — links this execution's spans to the parent gateway span.
+    let parent_span_id = headers.get("x-parent-span-id")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    // TraceCtx is built once per request; code_sha is filled in after the bundle is resolved.
+    // We use a mutable binding so we can add code_sha once the bundle code is available.
+    let mut trace_ctx = TraceCtx { parent_span_id, code_sha: None };
 
     let start_time = std::time::Instant::now();
 
     // ── Function-level bundle cache (skips control plane + S3 entirely) ──
     if let Some(cached_code) = state.bundle_cache.get_by_function(&req.function_id) {
         tracing::debug!(function_id = %req.function_id, "bundle cache hit (function-level)");
+
+        // Fingerprint the bundle for replay correlation.
+        trace_ctx.code_sha = Some(bundle_sha(&cached_code));
 
         // Auto-span: cache hit
         let log_url = format!("{}/internal/logs", state.control_plane_url);
@@ -103,10 +184,10 @@ pub async fn execute_handler(
                 Json(serde_json::json!({ "error": "SecretFetchError", "message": e })),
             ).into_response(),
         };
-        // Auto-span: execution start
-        post_span(&state.http_client, log_url.clone(), state.service_token.clone(),
+        // execution_start span: anchors the trace tree and records code_sha + parent link.
+        post_trace_span(&state.http_client, log_url.clone(), state.service_token.clone(),
             req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
-            "runtime", "info", "executing function".into(), "start");
+            &trace_ctx, "info", "execution_start".into(), "start", "started", None);
 
         let execution = match state.isolate_pool.execute(
             cached_code,
@@ -124,12 +205,21 @@ pub async fn execute_handler(
                 } else {
                     ("FunctionExecutionError".to_string(), e)
                 };
+                // execution_error span: marks failure with duration for dashboards and flux why.
+                let error_dur = start_time.elapsed().as_millis() as u64;
+                post_trace_span(&state.http_client, log_url.clone(), state.service_token.clone(),
+                    req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+                    &trace_ctx, "error", format!("execution_error: {}: {}", err_code, message), "end",
+                    "error", Some(error_dur));
                 let status = if err_code == "INPUT_VALIDATION_ERROR" { StatusCode::BAD_REQUEST } else { StatusCode::INTERNAL_SERVER_ERROR };
                 return (status, Json(serde_json::json!({ "error": err_code, "message": message }))).into_response();
             }
         };
         let duration_ms = start_time.elapsed().as_millis() as u64;
         {
+            // Clone trace_ctx fields for move into tokio::spawn
+            let trace_parent  = trace_ctx.parent_span_id.clone();
+            let trace_sha     = trace_ctx.code_sha.clone();
             let log_url       = format!("{}/internal/logs", state.control_plane_url);
             let service_token = state.service_token.clone();
             let function_id   = req.function_id.clone();
@@ -145,27 +235,37 @@ pub async fn execute_handler(
                     let source    = log.source.as_deref().unwrap_or("function");
                     let _ = client.post(&log_url).header("X-Service-Token", &service_token)
                         .json(&serde_json::json!({
-                            "source":      source,
-                            "resource_id": &function_id,
-                            "tenant_id":   tenant_id,
-                            "project_id":  project_id,
-                            "level":       log.level,
-                            "message":     log.message,
-                            "request_id":  &rid,
-                            "span_type":   span_type,
+                            "source":           source,
+                            "resource_id":      &function_id,
+                            "tenant_id":        tenant_id,
+                            "project_id":       project_id,
+                            "level":            log.level,
+                            "message":          log.message,
+                            "request_id":       &rid,
+                            "span_type":        span_type,
+                            "parent_span_id":   &trace_parent,
+                            "code_sha":         &trace_sha,
+                            "duration_ms":      log.duration_ms,
+                            "tool_name":        log.tool_name,
+                            "execution_state":  log.execution_state,
                         }))
                         .send().await;
                 }
+                // execution_end span: completes the trace tree entry.
                 let _ = client.post(&log_url).header("X-Service-Token", &service_token)
                     .json(&serde_json::json!({
-                        "source":      "runtime",
-                        "resource_id": &function_id,
-                        "tenant_id":   tenant_id,
-                        "project_id":  project_id,
-                        "level":       "info",
-                        "message":     format!("execution completed ({}ms)", dur),
-                        "request_id":  &rid,
-                        "span_type":   "end",
+                        "source":           "runtime",
+                        "resource_id":      &function_id,
+                        "tenant_id":        tenant_id,
+                        "project_id":       project_id,
+                        "level":            "info",
+                        "message":          format!("execution_end ({}ms)", dur),
+                        "request_id":       &rid,
+                        "span_type":        "end",
+                        "parent_span_id":   &trace_parent,
+                        "code_sha":         &trace_sha,
+                        "execution_state":  "completed",
+                        "duration_ms":      dur,
                     }))
                     .send().await;
             });
@@ -314,15 +414,18 @@ pub async fn execute_handler(
         }
     };
 
-    // Auto-span: execution start (non-cache path)
-    post_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
+    // Fingerprint the bundle for replay correlation.
+    trace_ctx.code_sha = Some(bundle_sha(&code));
+
+    // execution_start span: anchors the trace tree and records code_sha + parent link.
+    post_trace_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
         req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
-        "runtime", "info", "executing function".into(), "start");
+        &trace_ctx, "info", "execution_start".into(), "start", "started", None);
 
     // Execute the function with the new framework-aware executor
     let execution = match state.isolate_pool.execute(
-        code, 
-        secrets, 
+        code,
+        secrets,
         req.payload,
         tenant_id_header.to_string(),
         tenant_slug_header.to_string(),
@@ -346,6 +449,13 @@ pub async fn execute_handler(
                 StatusCode::INTERNAL_SERVER_ERROR
             };
 
+            // execution_error span: marks failure with duration for dashboards and flux why.
+            let error_dur = start_time.elapsed().as_millis() as u64;
+            post_trace_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
+                req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+                &trace_ctx, "error", format!("execution_error: {}: {}", err_code, message), "end",
+                "error", Some(error_dur));
+
             return (status, Json(serde_json::json!({ "error": err_code, "message": message }))).into_response();
         }
     };
@@ -354,6 +464,9 @@ pub async fn execute_handler(
 
     // Fire-and-forget: forward ctx.log() lines to /internal/logs
     {
+        // Clone trace_ctx fields for move into tokio::spawn
+        let trace_parent   = trace_ctx.parent_span_id.clone();
+        let trace_sha      = trace_ctx.code_sha.clone();
         let log_url        = format!("{}/internal/logs", state.control_plane_url);
         let service_token  = state.service_token.clone();
         let function_id    = req.function_id.clone();
@@ -372,30 +485,40 @@ pub async fn execute_handler(
                     .post(&log_url)
                     .header("X-Service-Token", &service_token)
                     .json(&serde_json::json!({
-                        "source":      source,
-                        "resource_id": &function_id,
-                        "tenant_id":   tenant_id,
-                        "project_id":  project_id,
-                        "level":       log.level,
-                        "message":     log.message,
-                        "request_id":  &rid,
-                        "span_type":   span_type,
+                        "source":           source,
+                        "resource_id":      &function_id,
+                        "tenant_id":        tenant_id,
+                        "project_id":       project_id,
+                        "level":            log.level,
+                        "message":          log.message,
+                        "request_id":       &rid,
+                        "span_type":        span_type,
+                        "parent_span_id":   &trace_parent,
+                        "code_sha":         &trace_sha,
+                        "duration_ms":      log.duration_ms,
+                        "tool_name":        log.tool_name,
+                        "execution_state":  log.execution_state,
                     }))
                     .send()
                     .await;
             }
+            // execution_end span: completes the trace tree entry.
             let _ = client
                 .post(&log_url)
                 .header("X-Service-Token", &service_token)
                 .json(&serde_json::json!({
-                    "source":      "runtime",
-                    "resource_id": &function_id,
-                    "tenant_id":   tenant_id,
-                    "project_id":  project_id,
-                    "level":       "info",
-                    "message":     format!("execution completed ({}ms)", dur),
-                    "request_id":  &rid,
-                    "span_type":   "end",
+                    "source":           "runtime",
+                    "resource_id":      &function_id,
+                    "tenant_id":        tenant_id,
+                    "project_id":       project_id,
+                    "level":            "info",
+                    "message":          format!("execution_end ({}ms)", dur),
+                    "request_id":       &rid,
+                    "span_type":        "end",
+                    "parent_span_id":   &trace_parent,
+                    "code_sha":         &trace_sha,
+                    "execution_state":  "completed",
+                    "duration_ms":      dur,
                 }))
                 .send()
                 .await;
