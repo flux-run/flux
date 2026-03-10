@@ -2940,6 +2940,421 @@ Click [Diff] → Shows: email_send latency 95ms → 40ms (3x faster now)
 
 ---
 
+## Incident-Level Deterministic Replay
+
+**The killer feature: reproduce production incidents in an isolated sandbox.**
+
+This is the capstone of the entire architecture. Because Fluxbase captures request envelopes, execution traces, code versions, state mutations, and execution checkpoints, it can replay an entire production incident deterministically — including all concurrency, timing, and state interactions.
+
+### The Command
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05
+```
+
+This recreates the entire 5-minute incident in a sandbox, with production state and traffic.
+
+### How It Works
+
+#### Phase 1: Extract Incident Traffic
+
+All requests in the time window are extracted from `trace_requests`, in original order:
+
+```sql
+SELECT *
+FROM trace_requests
+WHERE created_at BETWEEN '2026-03-09T14:00:00Z' AND '2026-03-09T14:05:00Z'
+ORDER BY created_at ASC
+```
+
+Example:
+
+```
+14:00:01.234 POST /v1/checkout body: {user_id: 123, items: [...], total: 99.99}
+14:00:02.801 GET /api/status
+14:00:03.456 POST /v1/checkout body: {user_id: 456, items: [...], total: 149.99}
+14:00:04.712 POST /webhooks/stripe body: {event: payment_failed, ...}
+14:00:07.089 POST /v1/checkout body: {user_id: 789, items: [...], total: 199.99}
+...
+```
+
+You now have the exact production traffic: sequence, timing, and payloads.
+
+#### Phase 2: Create Isolated Sandbox
+
+Fluxbase launches a dedicated sandbox environment:
+
+```bash
+Sandbox: incident-replay-9382-v1
+  Created: 2026-03-09T16:30:00Z
+  Status: provisioning...
+  
+  Components:
+  ├─ Gateway (same version & config)
+  ├─ Runtime (same version & config)
+  ├─ Data Engine (same version & config)
+  ├─ Queue (same version & config)
+  ├─ Database snapshot (isolated)
+  └─ Tool mocks (email, payments, webhooks)
+```
+
+**Database State Restoration:**
+
+The sandbox database is restored to the exact state 1 second before the incident:
+
+```bash
+# Reconstruct state at 2026-03-09T13:59:59Z
+flux state snapshot --at 2026-03-09T13:59:59Z --sandbox incident-replay-9382-v1
+```
+
+This works because `state_mutations` is append-only and linked to requests:
+
+```
+[Snapshot at 13:59:59] → [Replay mutations 13:59:59 - 14:00:00] → [Backend state = production at 14:00:00]
+```
+
+Now the sandbox backend is **identical to production before the incident occurred**.
+
+#### Phase 3: Replay Captured Requests
+
+Requests are replayed in exact order. Two modes:
+
+**Mode 1: Deterministic Replay**
+
+Original timing preserved, reproducing concurrency bugs:
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05 --mode deterministic
+```
+
+Timeline:
+
+```
+14:00:01.234 → POST /v1/checkout (original delay from 14:00:00)
+14:00:02.801 → GET /api/status  (1.567s after first)
+14:00:03.456 → POST /v1/checkout (0.655s after second)
+14:00:04.712 → POST /webhooks/stripe (1.256s after third)
+...
+```
+
+Each request waits for the original inter-arrival delay, reproducing timing-sensitive race conditions.
+
+**Mode 2: Accelerated Replay**
+
+All requests executed immediately:
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05 --mode accelerated
+```
+
+For rapid debugging when timing is not the issue.
+
+### During Replay: Live Inspection
+
+While replay is running or after it completes, you can:
+
+**View Traces**
+
+```bash
+# Compare side-by-side: original vs replay
+flux trace live --sandbox incident-replay-9382-v1
+
+# Shows real-time spans as requests execute
+```
+
+**Diff Traces**
+
+```bash
+# Original vs replay: exact latency/error diffs
+flux trace diff --original 550e8400-... --replay 550e8401-...
+
+# Output:
+# Span: runtime.execute_function
+#   Original: 145ms (succeeded)
+#   Replay:   156ms (succeeded)
+#   Δ: +11ms
+#
+# Span: stripe.payment_charge
+#   Original: 2500ms (ERROR: timeout)
+#   Replay:   1200ms (succeeded)
+#   Δ: -1300ms (FIXED!)
+```
+
+**Step Through Execution**
+
+```bash
+# Debug a specific checkout request
+flux trace debug --sandbox incident-replay-9382-v1 --request-id 550e8401-...
+
+# Interactive debugger:
+# (flux-debug) l          # local variables
+# (flux-debug) n          # step next
+# (flux-debug) s          # step into tool call
+# (flux-debug) c          # continue to next error
+```
+
+**Inspect State Changes**
+
+```bash
+# What did each request mutate?
+flux state history --sandbox incident-replay-9382-v1 --entity table:orders
+
+# Output:
+# 14:00:01 order_id: 12345 status: pending → processing
+# 14:00:02 order_id: 12346 status: pending → processing
+# 14:00:03 order_id: 12347 status: pending → failed (stripe timeout)
+# ...
+```
+
+### Partial Incident Replay
+
+Not every request matters. Filter to the relevant subset:
+
+**By Route**
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05 --filter route=/v1/checkout
+```
+
+Only checkout requests replayed.
+
+**By Tenant**
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05 --filter tenant=acme-org
+```
+
+Only requests from tenant `acme-org`.
+
+**By User**
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05 --filter user_id=456
+```
+
+Only requests from user 456.
+
+**By Status**
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05 --filter status=error
+```
+
+Only failed requests — useful for focused debugging.
+
+### External System Handling
+
+During replay, external systems are handled safely:
+
+| System | Production | Sandbox |
+|--------|-----------|---------|
+| Database writes | Production DB | Sandbox DB (isolated) |
+| Queue jobs | Production queue | Sandbox queue (isolated) |
+| Email sends | Gmail / SendGrid | Mocked (logged) |
+| Payment charges | Stripe / PayPal | Mocked (logged) |
+| Webhooks | External hosts | Mocked (logged) |
+| API calls | Live services | Mocked (logged) |
+
+This prevents accidental:
+
+- Double-charging customers
+- Sending duplicate emails
+- Calling external APIs twice
+- Mutating external state
+
+All tool outputs are **recorded from the original request** and **replayed deterministically**.
+
+Example:
+
+```
+Original request 14:00:01:
+  stripe.charge({customer_id: 123, amount: 99.99})
+  → Result: {charge_id: ch_1234, status: succeeded}
+
+Sandbox replay 14:00:01:
+  stripe.charge({customer_id: 123, amount: 99.99})
+  → Uses recorded result: {charge_id: ch_1234, status: succeeded}
+  → No actual charge made
+```
+
+### Testing Fixes: The Killer Workflow
+
+Engineer receives incident report:
+
+```
+Checkout failures 14:00-14:05
+  Error: stripe.charge timeout (2500ms threshold exceeded)
+  Impact: 127 failed checkouts, $8,500 revenue lost
+```
+
+**Step 1: Start Replay (1 second)**
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05
+```
+
+Sandbox starts. Incident reproduces instantly.
+
+**Step 2: Deploy Patched Code (5 seconds)**
+
+```bash
+git checkout fix/stripe-timeout
+cargo build -p runtime --release
+flux deploy --sandbox incident-replay-9382-v1 --version patched
+```
+
+Patched function deployed to sandbox.
+
+**Step 3: Re-run Replay (5 seconds)**
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05 --sandbox incident-replay-9382-v1
+```
+
+Same 127 requests, same timing, same state — but with patched code.
+
+**Step 4: Compare Results (2 seconds)**
+
+```bash
+flux trace compare --original incident-replay-9382-v1-orig --patched incident-replay-9382-v1-patched
+
+# Output:
+# Total requests: 127
+# Errors before:  127 (100%)  [all timeout: stripe.charge]
+# Errors after:   0   (0%)
+# 
+# Latency improvement:
+#   stripe.charge: 2500ms → 850ms
+#   
+# Revenue recovered: $8,500
+# 
+# ✓ FIX VALIDATED
+```
+
+Engineer now has **proof** the fix works — without affecting production.
+
+### Alternate Timeline Simulation
+
+You can also test what would have happened with different code:
+
+```bash
+flux incident replay 2026-03-09T14:00..14:05 \
+  --sandbox incident-replay-9382-original \
+  --function-version production
+
+flux incident replay 2026-03-09T14:00..14:05 \
+  --sandbox incident-replay-9382-patched \
+  --function-version fix/stripe-timeout
+
+flux trace compare --original incident-replay-9382-original --patched incident-replay-9382-patched
+```
+
+Result: **Branching backend histories** — you can see exactly how different code versions would have behaved.
+
+### Why This is Technically Feasible
+
+Deterministic replay requires three things:
+
+| Requirement | How Fluxbase Provides It |
+|------------|--------------------------|
+| **Input** | `trace_requests` (request envelope: method, path, headers, body, query, tenant, project) |
+| **Execution** | `platform_logs` (complete trace with spans, timings, errors, tool calls) |
+| **State** | `state_mutations` (append-only log of all backend mutations) |
+| **Code** | `code_sha` (exact deployed version) |
+| **Checkpoints** | `execution_state` (local variables, branches, decisions) |
+
+This is the same principle used in:
+
+- AFL (American Fuzzy Lop) — records crashing inputs, replays deterministcally
+- Perses — record-and-replay debugging (Mozilla)
+- `rr` (Record & Replay) — Linux kernel-level debugging
+- Temporal / Durable Execution — replay workflow steps
+
+Fluxbase applies this pattern to **entire backend systems**.
+
+### Why Other Platforms Can't Do This
+
+Most platforms store only logs:
+
+```
+AWS Lambda:
+  ✗ No request envelope
+  ✗ No state mutations
+  ✗ No execution checkpoints
+  ✓ Only: log lines, duration, error message
+
+Vercel:
+  ✗ No request envelope
+  ✗ No state mutations
+  ✗ No execution checkpoints
+  ✓ Only: error message, duration
+
+Cloudflare Workers:
+  ✗ No request envelope
+  ✗ No state mutations
+  ✗ No execution checkpoints
+  ✓ Only: log lines
+
+Temporal:
+  ✓ Stores workflow state
+  ✗ No database state mutations (app-dependent)
+  ✗ No network request envelopes
+  ✗ No execution checkpoints
+
+Fluxbase:
+  ✓ Request envelopes (trace_requests)
+  ✓ State mutations (state_mutations)
+  ✓ Code version (code_sha)
+  ✓ Execution checkpoints (execution_state)
+  ✓ Complete traces (platform_logs)
+  → Deterministic replay enabled
+```
+
+### Storage Requirements
+
+Storing incident replay data doesn't significantly increase storage:
+
+- `trace_requests`: Already captured at 100% error rate, ~10% success rate
+- `state_mutations`: Append-only, ~50GB/day at scale (with sampling + snapshots)
+- `platform_logs`: Spans with checkpoints, ~13.5GB/day at scale
+- `execution_state`: Captured at logical checkpoints only (~2-5KB overhead)
+
+**Total: ~75GB/day for complete incident replay capability at 100M requests/day.**
+
+Archived incidents older than 90 days can be compressed (~80% reduction) or deleted per retention policy.
+
+### The Backend Time-Travel Stack
+
+This transforms Fluxbase into the ultimate debugging platform:
+
+```
+Git CLI                 Fluxbase Equivalent
+──────────————————────────────────────────
+git log                 flux trace
+git blame               flux trace blame
+git show                flux trace debug (with execution_state)
+git diff                flux trace diff
+git checkout            flux state checkout
+git log --follow        flux state history
+git bisect              flux incident bisect ← next feature
+git revert              (manual rollback, but with replay validation)
+```
+
+The workflow:
+
+```
+1. Bug detected in production
+2. flux incident replay <time> → reproduce locally
+3. git log / flux trace blame → identify suspect commits
+4. Patch code → test in replay
+5. flux trace diff → quantify improvement
+6. Deploy → monitor
+```
+
+No staging environment needed. No data export required. No reproduction steps needed. **The production incident itself becomes the test case.**
+
+---
+
 ## Improvements & Future Considerations
 ````
 
