@@ -138,6 +138,9 @@ enum Commands {
     Trace {
         /// Request ID to look up (returned as x-request-id in API responses)
         request_id: String,
+        /// Milliseconds threshold above which a span delta is highlighted as slow (default 500)
+        #[arg(long, default_value = "500", value_name = "MS")]
+        slow: u64,
     },
     /// Initialise .fluxbase/config.json for this project
     Init {
@@ -230,7 +233,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Watch { output, interval } => sdk::execute_watch(output, interval).await?,
         Commands::Status { sdk } => sdk::execute_status(sdk).await?,
         Commands::Doctor => doctor::execute().await?,
-        Commands::Trace { request_id } => trace::execute(request_id).await?,
+        Commands::Trace { request_id, slow } => trace::execute(request_id, slow).await?,
         Commands::Init { project, output, interval, api_url, gateway_url, runtime_url } => init::execute(project, output, interval, api_url, gateway_url, runtime_url).await?,
         Commands::Stack { command } => match command {
             StackCommand::Up   { build, foreground }  => stack::execute_up(build, !foreground).await?,

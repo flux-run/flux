@@ -18,24 +18,6 @@ fn format_timestamp(ts: &str) -> String {
     format!("{h}:{m}:{s}.{ms:0<3}")
 }
 
-/// Parse an RFC-3339 timestamp to milliseconds-since-midnight.
-/// Sufficient for single-request traces that don't span midnight.
-fn ts_to_ms(ts: &str) -> Option<u64> {
-    let time = ts.split('T').nth(1)?;
-    let time = time.trim_end_matches('Z');
-    let mut parts = time.splitn(3, ':');
-    let h: u64 = parts.next()?.parse().ok()?;
-    let m: u64 = parts.next()?.parse().ok()?;
-    let rest   = parts.next()?;
-    let mut rp = rest.splitn(2, '.');
-    let s: u64  = rp.next()?.parse().ok()?;
-    let ms: u64 = if let Some(frac) = rp.next() {
-        let t = &frac[..frac.len().min(3)];
-        format!("{:0<3}", t).parse().unwrap_or(0)
-    } else { 0 };
-    Some(h * 3_600_000 + m * 60_000 + s * 1_000 + ms)
-}
-
 // ── Span type helpers ─────────────────────────────────────────────────────────
 
 fn span_icon(span_type: &str) -> &'static str {
@@ -77,11 +59,32 @@ fn colorize_level(level: &str) -> colored::ColoredString {
     }
 }
 
+// ── Slow-span helpers ─────────────────────────────────────────────────────────
+
+/// Colorise a delta label based on slow-span severity.
+///   delta >= 2× threshold  →  red bold (critical)
+///   delta >= threshold      →  yellow bold (slow)
+///   otherwise               →  dimmed (normal)
+fn colorize_delta(delta_ms: i64, slow_thresh: u64, is_slow: bool) -> colored::ColoredString {
+    if delta_ms < 0 {
+        return "      ".dimmed();
+    }
+    let label = format!("+{}ms", delta_ms);
+    if !is_slow {
+        return label.dimmed();
+    }
+    if delta_ms as u64 >= slow_thresh * 2 {
+        label.red().bold()
+    } else {
+        label.yellow().bold()
+    }
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
-pub async fn execute(request_id: String) -> anyhow::Result<()> {
+pub async fn execute(request_id: String, slow_threshold: u64) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
-    let url    = format!("{}/traces/{}", client.base_url, request_id);
+    let url    = format!("{}/traces/{}?slow_ms={}", client.base_url, request_id, slow_threshold);
 
     let res: reqwest::Response = client.client.get(&url).send().await?;
 
@@ -94,9 +97,12 @@ pub async fn execute(request_id: String) -> anyhow::Result<()> {
     }
 
     let body: Value = res.json().await?;
-    let data   = &body["data"];
-    let spans  = data["spans"].as_array().cloned().unwrap_or_default();
-    let count  = data["span_count"].as_u64().unwrap_or(spans.len() as u64);
+    let data         = &body["data"];
+    let spans        = data["spans"].as_array().cloned().unwrap_or_default();
+    let count        = data["span_count"].as_u64().unwrap_or(spans.len() as u64);
+    let total_ms     = data["total_duration_ms"].as_i64();
+    let slow_count   = data["slow_span_count"].as_u64().unwrap_or(0);
+    let slow_thresh  = data["slow_threshold_ms"].as_u64().unwrap_or(slow_threshold);
 
     if spans.is_empty() {
         println!("{} No spans found for request ID: {}", "ℹ".blue(), request_id.cyan().bold());
@@ -105,19 +111,22 @@ pub async fn execute(request_id: String) -> anyhow::Result<()> {
     }
 
     // ── Header ────────────────────────────────────────────────────────────────
-    let first_ms = spans.first().and_then(|s| s["timestamp"].as_str()).and_then(ts_to_ms);
-    let last_ms  = spans.last().and_then(|s| s["timestamp"].as_str()).and_then(ts_to_ms);
-    let total_ms = match (first_ms, last_ms) {
-        (Some(f), Some(l)) if l >= f => Some(l - f),
-        _ => None,
-    };
-
     println!();
-    println!("{} {}", "Trace".bold().white(), request_id.cyan().bold());
+    print!("{} {}", "Trace".bold().white(), request_id.cyan().bold());
     match total_ms {
-        Some(t) => println!("{} spans  •  {}ms end-to-end\n", count.to_string().dimmed(), t.to_string().bold()),
-        None    => println!("{} spans\n", count.to_string().dimmed()),
+        Some(t) => print!("  {}ms end-to-end", t.to_string().bold()),
+        None    => {},
     }
+    println!();
+    if slow_count > 0 {
+        println!(
+            "{}  {} {}",
+            "".dimmed(),
+            format!("⚠ {} slow (>{}ms)", slow_count, slow_thresh).yellow().bold(),
+            format!("— run with --slow {} to adjust", slow_thresh / 2).dimmed(),
+        );
+    }
+    println!("{} spans\n", count.to_string().dimmed());
 
     // ── Span rows ─────────────────────────────────────────────────────────────
     // Pre-calculate column width for source/resource so columns stay aligned
@@ -131,7 +140,7 @@ pub async fn execute(request_id: String) -> anyhow::Result<()> {
         .unwrap_or(18)
         .clamp(12, 32);
 
-    let mut prev_ms: Option<u64> = None;
+    let mut slow_spans: Vec<(String, String, i64)> = Vec::new(); // (source/resource, message, delta_ms)
 
     for span in &spans {
         let ts        = span["timestamp"].as_str().unwrap_or("?");
@@ -140,18 +149,22 @@ pub async fn execute(request_id: String) -> anyhow::Result<()> {
         let level     = span["level"].as_str().unwrap_or("info");
         let message   = span["message"].as_str().unwrap_or("");
         let span_type = span["span_type"].as_str().unwrap_or("event");
+        let delta_ms  = span["delta_ms"].as_i64().unwrap_or(-1);
+        let is_slow   = span["is_slow"].as_bool().unwrap_or(false);
 
-        let cur_ms = ts_to_ms(ts);
-        let delta  = match (prev_ms, cur_ms) {
-            (Some(p), Some(c)) if c > p => format!("+{}ms", c - p).dimmed(),
-            _                           => "      ".dimmed(),
+        if is_slow {
+            slow_spans.push((format!("{}/{}", source, resource), message.to_string(), delta_ms));
+        }
+
+        let delta_col = if delta_ms >= 0 {
+            colorize_delta(delta_ms, slow_thresh, is_slow)
+        } else {
+            "      ".dimmed()
         };
-        prev_ms = cur_ms.or(prev_ms);
 
         // Pad the plain label to align columns, then colorise source separately
-        let plain_label = format!("{}/{}", source, resource);
+        let plain_label  = format!("{}/{}", source, resource);
         let padded_plain = format!("{:<width$}", plain_label, width = label_width);
-        // Replace the plain source prefix with the coloured version for display
         let coloured_label = padded_plain.replacen(
             source,
             &colorize_source(source).to_string(),
@@ -161,7 +174,7 @@ pub async fn execute(request_id: String) -> anyhow::Result<()> {
         println!(
             "  {}  {}  {}  [{}]  {}  {}",
             format_timestamp(ts).dimmed(),
-            delta,
+            delta_col,
             colorize_span_icon(span_type, span_icon(span_type)),
             coloured_label,
             colorize_level(level),
@@ -175,7 +188,19 @@ pub async fn execute(request_id: String) -> anyhow::Result<()> {
         Some(t) => println!("  {} spans  •  {}ms total", count, t.to_string().bold()),
         None    => println!("  {} spans", count),
     }
-    println!();
 
+    if !slow_spans.is_empty() {
+        println!("\n  {} slow spans (>{}ms):", slow_spans.len().to_string().yellow().bold(), slow_thresh);
+        for (label, msg, delta) in &slow_spans {
+            println!(
+                "    {} {}  {}",
+                format!("+{}ms", delta).red().bold(),
+                label.bold(),
+                msg.dimmed(),
+            );
+        }
+    }
+
+    println!();
     Ok(())
 }

@@ -328,14 +328,26 @@ pub async fn list_project_logs(
 // Returns all log spans that share the same request_id in ascending timestamp
 // order, giving a full cross-service request trace:
 //   gateway → api middleware → function logs emitted by the runtime
+//
+// Query params:
+//   slow_ms — threshold in milliseconds above which a delta is flagged
+//             as slow (default 500).  Spans at or above this value have
+//             is_slow: true so the CLI / dashboard can highlight them.
+
+#[derive(Deserialize)]
+pub struct TraceQuery {
+    pub slow_ms: Option<i64>,
+}
 
 pub async fn get_trace(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
     Extension(context): Extension<RequestContext>,
     Path(request_id): Path<String>,
+    Query(params): Query<TraceQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
-    let pool = &state.pool;
+    let project_id  = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let pool        = &state.pool;
+    let slow_thresh = params.slow_ms.unwrap_or(500);   // 500ms default
 
     #[derive(sqlx::FromRow)]
     struct TraceRow {
@@ -364,27 +376,50 @@ pub async fn get_trace(
 
     if rows.is_empty() {
         return Ok(ApiResponse::new(serde_json::json!({
-            "request_id": request_id,
-            "spans":      [],
-            "span_count": 0,
+            "request_id":      request_id,
+            "spans":           [],
+            "span_count":      0,
+            "total_duration_ms": null,
+            "slow_span_count": 0,
         })));
     }
 
-    let spans: Vec<serde_json::Value> = rows.into_iter().map(|r| serde_json::json!({
-        "id":        r.id,
-        "source":    r.source,
-        "resource":  r.resource_id,
-        "level":     r.level,
-        "message":   r.message,
-        "span_type": r.span_type.as_deref().unwrap_or("event"),
-        "metadata":  r.metadata,
-        "timestamp": r.timestamp.to_rfc3339(),
-    })).collect();
+    // ── Compute per-span deltas and totals ────────────────────────────────
+    let first_ts = rows[0].timestamp;
+    let last_ts  = rows[rows.len() - 1].timestamp;
+    let total_duration_ms = (last_ts - first_ts).num_milliseconds();
+    let mut prev_ts = first_ts;
+    let mut slow_span_count: usize = 0;
+
+    let spans: Vec<serde_json::Value> = rows.into_iter().map(|r| {
+        let delta_ms   = (r.timestamp - prev_ts).num_milliseconds();
+        let elapsed_ms = (r.timestamp - first_ts).num_milliseconds();
+        let is_slow    = delta_ms >= slow_thresh;
+        if is_slow { slow_span_count += 1; }
+        prev_ts = r.timestamp;
+
+        serde_json::json!({
+            "id":         r.id,
+            "source":     r.source,
+            "resource":   r.resource_id,
+            "level":      r.level,
+            "message":    r.message,
+            "span_type":  r.span_type.as_deref().unwrap_or("event"),
+            "metadata":   r.metadata,
+            "timestamp":  r.timestamp.to_rfc3339(),
+            "delta_ms":   delta_ms,
+            "elapsed_ms": elapsed_ms,
+            "is_slow":    is_slow,
+        })
+    }).collect();
 
     let span_count = spans.len();
     Ok(ApiResponse::new(serde_json::json!({
-        "request_id": request_id,
-        "spans":      spans,
-        "span_count": span_count,
+        "request_id":        request_id,
+        "spans":             spans,
+        "span_count":        span_count,
+        "total_duration_ms": total_duration_ms,
+        "slow_span_count":   slow_span_count,
+        "slow_threshold_ms": slow_thresh,
     })))
 }
