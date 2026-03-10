@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod auth;
 mod client;
 mod config;
+mod create;
 mod deploy;
 mod dev;
 mod doctor;
@@ -166,6 +167,21 @@ enum Commands {
         #[arg(long, value_name = "URL")]
         runtime_url: Option<String>,
     },
+    /// Create a new project from an official template
+    ///
+    /// Examples:
+    ///   flux create my-app
+    ///   flux create my-app --template todo-api
+    ///   flux create my-app --template webhook-worker
+    ///   flux create my-app --template ai-backend
+    Create {
+        /// Project directory name to create
+        name: String,
+        /// Template to scaffold (todo-api | webhook-worker | ai-backend)
+        /// Omit to choose interactively.
+        #[arg(long, short, value_name = "TEMPLATE")]
+        template: Option<String>,
+    },
     /// Manage the local Fluxbase development stack (all services via Docker)
     Stack {
         #[command(subcommand)]
@@ -238,6 +254,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Doctor => doctor::execute().await?,
         Commands::Trace { request_id, slow, flame } => trace::execute(request_id, slow, flame).await?,
         Commands::Init { project, output, interval, api_url, gateway_url, runtime_url } => init::execute(project, output, interval, api_url, gateway_url, runtime_url).await?,
+        Commands::Create { name, template } => create::execute(name, template).await?,
         Commands::Stack { command } => match command {
             StackCommand::Up   { build, foreground }  => stack::execute_up(build, !foreground).await?,
             StackCommand::Down { volumes }             => stack::execute_down(volumes).await?,
