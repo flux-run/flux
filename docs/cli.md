@@ -304,7 +304,14 @@ flux
 │
 ├── debug <request-id>             📋 composite: trace + logs + replay + suggested fix
 ├── open [resource]                📋 open in browser
+├── whoami                         📋 print current user + active context
 ├── doctor                         ✅
+├── upgrade                        📋 self-update CLI to latest version
+├── help [command]                 built-in print usage for any command
+├── config
+│   ├── list                       📋 show all config values
+│   ├── set <key> <value>          📋 write a config value
+│   └── reset                      📋 restore defaults
 ├── stack                          ✅
 │   ├── up
 │   ├── down
@@ -1414,6 +1421,108 @@ flux completion fish  >> ~/.config/fish/completions/flux.fish
 
 ---
 
+### `flux whoami` 📋
+
+Print the currently authenticated user and active context. The fastest way to
+verify you are operating in the right tenant/project before a destructive
+command.
+
+```
+$ flux whoami
+
+  user:    shashi@example.com
+  tenant:  acme-org   (5b5f77d1-...)
+  project: backend    (3787e1fa-...)
+  env:     production
+  token:   flux_live_... (expires in 23h)
+```
+
+---
+
+### `flux upgrade` 📋
+
+Self-update the `flux` CLI binary to the latest released version. Follows the
+pattern used by `supabase update`, `vercel update`, `stripe upgrade`.
+
+```
+$ flux upgrade
+
+  Current version:  v0.2.0
+  Latest version:   v0.3.1
+  Downloading flux v0.3.1...
+  ✔ Upgraded to v0.3.1
+
+$ flux upgrade --version 0.2.8   # pin to a specific version
+$ flux upgrade --check            # print latest without installing
+```
+
+---
+
+### `flux help [command]` built-in
+
+Print usage information for any command or subcommand. Available automatically
+via the CLI framework; documented here for discoverability.
+
+```
+$ flux help
+$ flux help queue
+$ flux help queue publish
+$ flux help trace search
+
+# Equivalent forms
+$ flux queue --help
+$ flux queue publish --help
+```
+
+Every flag, its default, and a one-line description is printed. Long
+descriptions include an **Examples** block.
+
+---
+
+### `flux config` 📋
+
+Inspect and modify the active configuration without editing JSON files manually.
+Operates on the nearest config file: `.fluxbase/config.json` if present,
+otherwise `~/.fluxbase/config.json`.
+
+```
+flux config list
+flux config set <key> <value>
+flux config reset
+```
+
+```
+$ flux config list
+
+  Source: ~/.fluxbase/config.json
+
+  KEY             VALUE
+  api_url         https://api.fluxbase.co
+  gateway_url     https://fluxbase-gateway-658415624069.asia-south1.run.app
+  runtime_url     http://localhost:8083
+  tenant_id       5b5f77d1-...
+  tenant_slug     acme-org
+  project_id      3787e1fa-...
+
+$ flux config set api_url http://localhost:8080
+✔ Set api_url = http://localhost:8080 in .fluxbase/config.json
+
+$ flux config reset
+  This will restore all values to platform defaults.
+  Confirm? [y/N]: y
+✔ Reset .fluxbase/config.json
+```
+
+| Key | Default |
+|-----|--------|
+| `api_url` | `https://api.fluxbase.co` |
+| `gateway_url` | `https://gateway.fluxbase.co` |
+| `runtime_url` | `http://localhost:8083` |
+| `tenant_id` | set by `flux login` |
+| `project_id` | set by `flux project use` |
+
+---
+
 ### `flux` (interactive REPL) 📋
 
 Running `flux` with no arguments launches an interactive shell. Useful for
@@ -1681,4 +1790,7 @@ export default defineFunction({
 | `flux queue publish` | `POST /queues/:name/messages` |
 | `flux event publish` | `POST /events` |
 | `flux event subscribe` | `POST /events/subscriptions` |
+| `flux whoami` | `GET /auth/me` |
+| `flux config list` | local file read only |
+| `flux config set` | local file write only |
 | `flux doctor` | `GET /auth/me`, `GET /health`, `GET /schema/version` |
