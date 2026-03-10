@@ -296,7 +296,11 @@ pub async fn proxy_handler(
     let mut response = match runtime_resp {
         Ok(resp) => {
             let status = resp.status();
-            let body: Value = resp.json().await.unwrap_or(serde_json::json!({ "error": "runtime_response_parse_error" }));
+            let raw = resp.text().await.unwrap_or_default();
+            let body: Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
+                tracing::warn!(status = %status, raw_body = %&raw[..raw.len().min(200)], "runtime returned non-JSON");
+                serde_json::json!({ "error": "runtime_response_parse_error", "raw": &raw[..raw.len().min(200)] })
+            });
             (status, Json(body)).into_response()
         }
         Err(e) => {
