@@ -3,6 +3,8 @@ mod config;
 mod engine;
 mod secrets;
 mod cache;
+mod tools;
+mod triggers;
 
 use axum::{
     routing::{get, post},

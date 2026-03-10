@@ -9,6 +9,7 @@ export type {
   Schema,
   FluxContext,
   FluxSecrets,
+  FluxTools,
   FluxContext as Ctx,
   HandlerArgs,
   DefineFunctionOptions,

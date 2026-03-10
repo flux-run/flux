@@ -141,16 +141,18 @@ pub async fn execute_handler(
             let dur           = duration_ms;
             tokio::spawn(async move {
                 for log in logs {
+                    let span_type = log.span_type.as_deref().unwrap_or("event");
+                    let source    = log.source.as_deref().unwrap_or("function");
                     let _ = client.post(&log_url).header("X-Service-Token", &service_token)
                         .json(&serde_json::json!({
-                            "source":      "function",
+                            "source":      source,
                             "resource_id": &function_id,
                             "tenant_id":   tenant_id,
                             "project_id":  project_id,
                             "level":       log.level,
                             "message":     log.message,
                             "request_id":  &rid,
-                            "span_type":   "event",
+                            "span_type":   span_type,
                         }))
                         .send().await;
                 }
@@ -364,18 +366,20 @@ pub async fn execute_handler(
 
         tokio::spawn(async move {
             for log in logs {
+                let span_type = log.span_type.as_deref().unwrap_or("event");
+                let source    = log.source.as_deref().unwrap_or("function");
                 let _ = client
                     .post(&log_url)
                     .header("X-Service-Token", &service_token)
                     .json(&serde_json::json!({
-                        "source":      "function",
+                        "source":      source,
                         "resource_id": &function_id,
                         "tenant_id":   tenant_id,
                         "project_id":  project_id,
                         "level":       log.level,
                         "message":     log.message,
                         "request_id":  &rid,
-                        "span_type":   "event",
+                        "span_type":   span_type,
                     }))
                     .send()
                     .await;
