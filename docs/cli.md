@@ -13,6 +13,37 @@
 
 ---
 
+## 30-second quickstart
+
+New to Fluxbase? This shows the full flow from zero to a deployed, debuggable backend function.
+
+```bash
+# 1. Authenticate
+flux login
+
+# 2. Scaffold a project
+flux new demo
+cd demo
+
+# 3. Create a function
+flux function create create_user
+cd create_user && npm install
+# edit index.ts ...
+
+# 4. Deploy
+flux deploy
+
+# 5. Call it through the gateway
+curl https://gateway.fluxbase.co/signup \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Ada","email":"ada@example.com"}'
+
+# 6. Debug the request — one command gives you trace + logs + suggested fix
+flux debug <request-id-from-response>
+```
+
+---
+
 ## Status legend
 
 | Symbol | Meaning |
@@ -33,11 +64,13 @@ Apply to every command.
 | `--project <slug>` | from config | Override active project for this command |
 | `--env <name>` | `production` | Target environment |
 | `--output <format>` | `table` | `table \| json \| yaml \| plain` |
+| `--json` | — | Shorthand for `--output json` |
 | `--no-color` | — | Disable color output (useful for CI) |
 | `--quiet` | — | Suppress non-error output |
 | `--verbose` | — | Print HTTP requests and raw responses |
 | `--dry-run` | — | Show what would happen without executing |
 | `--confirm` | — | Skip confirmation prompts (for CI/CD) |
+| `--version` | — | Print CLI version and exit |
 
 **Environment variable overrides:**
 
@@ -48,6 +81,32 @@ Apply to every command.
 | `FLUXBASE_RUNTIME_URL` | Runtime base URL |
 | `FLUXBASE_TENANT_ID` | Active tenant |
 | `FLUXBASE_PROJECT_ID` | Active project |
+
+---
+
+## Exit codes
+
+All `flux` commands use consistent exit codes. Scripts and CI/CD pipelines can rely on these.
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | CLI error (bad flags, missing argument, local I/O) |
+| `2` | API error (non-2xx response from Fluxbase API) |
+| `3` | Authentication failure (missing or expired token) |
+| `4` | Resource not found (function, tenant, project, trace) |
+| `5` | Conflict (e.g. resource already exists) |
+
+```bash
+# Example: check exit code in a script
+flux deploy
+if [ $? -ne 0 ]; then
+  echo "Deploy failed"
+  exit 1
+fi
+```
+
+CI note: use `--confirm` to suppress prompts and `--no-color` for clean log output.
 
 ---
 
@@ -1455,6 +1514,23 @@ $ flux upgrade
 $ flux upgrade --version 0.2.8   # pin to a specific version
 $ flux upgrade --check            # print latest without installing
 ```
+
+---
+
+### `flux --version`
+
+Print the installed CLI version and the API version it targets. Available as
+both a flag and a zero-arg invocation.
+
+```
+$ flux --version
+flux CLI  v0.2.0
+API       v2026-03
+```
+
+Note: `flux version` (without `--`) is the deployment versioning namespace
+(`flux version list`, `flux version rollback`, etc.). Use `flux --version` to
+query the CLI itself.
 
 ---
 
