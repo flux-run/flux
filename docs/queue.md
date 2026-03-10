@@ -1,27 +1,88 @@
 # Queue Service
 
-The Fluxbase Queue service is a standalone async job execution engine. It accepts job submissions, persists them in PostgreSQL, and dispatches them to the Runtime service for execution — with retries, timeout recovery, idempotency, and observability built in.
+The Fluxbase Queue service is a **deterministic async execution engine**. It accepts job submissions from any Fluxbase service, persists them durably in PostgreSQL, and dispatches them to the Runtime for execution — with retries, timeout recovery, idempotency, distributed tracing, and replay built in.
+
+Unlike a simple task queue, the Queue is integrated with the Fluxbase tracing and state-mutation systems. This means every async job is fully observable, replayable, and debuggable using the same `flux trace` / `flux why` / `flux replay` commands that work on synchronous requests.
+
+### Use cases
+
+| Category | Examples |
+|----------|----------|
+| **Communication** | Send email, send SMS, dispatch webhooks |
+| **Workflows** | Multi-step onboarding, approval flows, data pipelines |
+| **AI agents** | Long-running LLM chains, tool-use loops |
+| **Background analytics** | Aggregate metrics, generate reports |
+| **Scheduled tasks** | Nightly jobs, polling integrations, reminder triggers |
+| **Event processing** | Handle inbound webhooks, process payment events |
+
+---
+
+## Platform Integration
+
+The Queue is the async execution layer in the Fluxbase service pipeline:
+
+```
+User request
+     │
+     ▼
+Gateway  (routes, auth, rate-limit)
+     │
+     ▼
+Runtime  (executes function synchronously)
+     │  function calls ctx.queue.enqueue()
+     ▼
+Queue Service  (persists job, returns job_id immediately)
+     │
+     ▼  (async, up to 200 ms later)
+Worker pool  (FOR UPDATE SKIP LOCKED)
+     │
+     ▼
+Runtime  (executes function in background)
+     │
+     ▼
+Database  (state mutations, logs, trace spans)
+```
+
+> **Important:** The Queue service never executes user code directly. All execution is delegated back to the Runtime service. This ensures:
+> - **Sandbox isolation** — user code always runs inside a Deno V8 isolate
+> - **Consistent tracing** — every execution emits spans through the same runtime tracing path
+> - **Deterministic replay** — `flux queue replay` re-runs via Runtime with the same `code_sha` and payload
+> - **Tool execution control** — `ctx.tools`, `ctx.workflow`, and `ctx.agent` are only available inside Runtime
+
+Once trace propagation columns are added, the full distributed trace tree becomes:
+
+```
+gateway.request           ← request_id origin
+  └─ runtime.function
+        └─ queue.enqueue       ← enqueue_span_id
+              └─ worker.execution  ← parent_span_id = enqueue_span_id
+                    └─ runtime.function
+                          └─ db mutation
+```
+
+This makes async jobs visible to `flux trace`, `flux why`, `flux incident replay`, and `flux bisect` — capabilities that most async platforms (Temporal, BullMQ, SQS) cannot offer out of the box.
 
 ---
 
 ## Table of Contents
 
-1. [Architecture Overview](#architecture-overview)
-2. [Delivery Guarantee](#delivery-guarantee)
-3. [Data Model](#data-model)
-4. [Job Lifecycle](#job-lifecycle)
-5. [Worker System](#worker-system)
-6. [Worker Fairness & Tenant Isolation](#worker-fairness--tenant-isolation)
-7. [Retry & Backoff](#retry--backoff)
-8. [Timeout Recovery & Visibility Timeout Model](#timeout-recovery--visibility-timeout-model)
-9. [Idempotency](#idempotency)
-10. [HTTP API](#http-api)
-11. [Stats & Observability](#stats--observability)
-12. [Configuration](#configuration)
-13. [Deployment](#deployment)
-14. [Architecture Scorecard](#architecture-scorecard)
-15. [Roadmap](#roadmap)
-16. [Known Issues & Improvement Areas](#known-issues--improvement-areas)
+1. [Platform Integration](#platform-integration)
+2. [Architecture Overview](#architecture-overview)
+3. [Delivery Guarantee](#delivery-guarantee)
+4. [Data Model](#data-model)
+5. [Job Lifecycle](#job-lifecycle)
+6. [Worker System](#worker-system)
+7. [Worker Fairness & Tenant Isolation](#worker-fairness--tenant-isolation)
+8. [Retry & Backoff](#retry--backoff)
+9. [Timeout Recovery & Visibility Timeout Model](#timeout-recovery--visibility-timeout-model)
+10. [Idempotency](#idempotency)
+11. [HTTP API](#http-api)
+12. [Stats & Observability](#stats--observability)
+13. [Configuration](#configuration)
+14. [Deployment](#deployment)
+15. [Architecture Scorecard](#architecture-scorecard)
+16. [Roadmap](#roadmap)
+17. [Known Issues & Improvement Areas](#known-issues--improvement-areas)
 
 ---
 
@@ -89,7 +150,7 @@ Jobs that must not execute twice must be made idempotent on the function side. C
 | `attempts` | INT | `0` | Number of execution attempts so far |
 | `max_attempts` | INT | `5` | Maximum attempts before dead-lettering |
 | `max_runtime_seconds` | INT | `300` | Max seconds a job may stay in `running` |
-| `run_at` | TIMESTAMP | `now()` | Earliest time a worker may pick up this job |
+| `run_at` | TIMESTAMP | `now()` | Earliest time a worker may pick up this job. Set to a future timestamp for scheduled / delayed jobs. Workers only claim jobs where `run_at <= now()`. |
 | `locked_at` | TIMESTAMP | NULL | When the row was claimed by a worker |
 | `started_at` | TIMESTAMP | NULL | When the HTTP call to the runtime began |
 | `idempotency_key` | TEXT | NULL | Optional deduplication key (unique index) |
@@ -205,6 +266,18 @@ RETURNING *
 ### Concurrency control
 
 A `tokio::sync::Semaphore` (size = `WORKER_CONCURRENCY`, default 50) limits the number of in-flight HTTP calls to the runtime. Each job task holds a semaphore permit for its entire lifetime and releases it on completion.
+
+### Throughput characteristics
+
+With default settings (50 workers, 200 ms poll interval, 20 job batch):
+
+| Parameter | Value |
+|-----------|-------|
+| Max concurrent in-flight jobs | 50 (semaphore) |
+| Jobs fetched per poll tick | 20 |
+| Poll interval | 200 ms |
+| Approximate throughput | ~100 jobs/sec per instance (at 500 ms avg job duration) |
+| Horizontal scale | Linear — additional instances each add 50 workers; `FOR UPDATE SKIP LOCKED` prevents double-dispatch |
 
 ### Execution flow (per job)
 
@@ -609,7 +682,25 @@ CREATE INDEX idx_jobs_pending_priority ON jobs(queue_name, status, priority DESC
 
 Update the inner `ORDER BY` to `priority DESC, run_at`. Combined with `queue_name`, this enables fine-grained dispatch without separate services.
 
-**6. State mutation log (Fluxbase-specific)**
+**6. `flux queue replay` (Fluxbase-specific)**
+
+Because each job will carry `code_sha`, `payload`, `request_id`, and `parent_span_id`, the CLI can re-execute a failed or past job deterministically:
+
+```bash
+flux queue replay <job_id>
+```
+
+This would:
+1. Fetch the job row (including `code_sha` and `payload`)
+2. Deploy the exact function version identified by `code_sha` to an isolated runtime
+3. Re-run with the original payload
+4. Emit a new trace linked to the original `request_id` with a `replay=true` label
+
+This makes async failure debugging as simple as synchronous debugging. Almost no queue systems (including Temporal, BullMQ, and SQS) support deterministic replay at this level because they do not store `code_sha` alongside the job.
+
+**Requires:** trace columns (P0) + result storage (P1 item 3) to be fully effective.
+
+**7. State mutation log (Fluxbase-specific)**
 
 For time-travel debugging (`flux state blame`, `flux incident replay`) async jobs must also record state mutations:
 

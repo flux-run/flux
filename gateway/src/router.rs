@@ -57,6 +57,16 @@ pub fn create_router(state: SharedState) -> Router {
                 ).into_response()
             }
         }))
+        // /metrics — lightweight process-level counters (no Prometheus dep).
+        // Useful for Cloud Run sidecar scrapers or a simple healthcheck script.
+        .route("/metrics", axum::routing::get(|| async {
+            use crate::middleware::analytics::{DROPPED_METRICS, CHANNEL_CAPACITY};
+            use std::sync::atomic::Ordering;
+            axum::Json(serde_json::json!({
+                "gateway_metrics_dropped_total":  DROPPED_METRICS.load(Ordering::Relaxed),
+                "gateway_analytics_channel_capacity": CHANNEL_CAPACITY,
+            }))
+        }))
         .route("/version", axum::routing::get(|| async {
             axum::Json(serde_json::json!({
                 "service": "gateway",

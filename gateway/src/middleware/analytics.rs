@@ -51,6 +51,11 @@ fn success_sample_pct() -> u64 {
 /// Rolling counter — wraps safely at u64::MAX.
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Total metrics dropped because the channel was full.
+/// Monotonically increasing; exposed at GET /metrics.
+/// A non-zero value means the DB drain worker is falling behind.
+pub static DROPPED_METRICS: AtomicU64 = AtomicU64::new(0);
+
 #[inline]
 fn should_sample(status: u16, latency_ms: i64) -> bool {
     if status >= 500 { return true; }                           // 100% errors
@@ -80,7 +85,12 @@ pub fn log_request(
     let row = MetricRow { route_id, tenant_id, status, latency_ms };
     if let Err(_) = tx.try_send(row) {
         // Channel full — drop metric rather than blocking or OOM-ing.
-        tracing::warn!("analytics channel full — metric dropped (route={route_id}, status={status})");
+        // Increment the observable counter so operators can alert on this.
+        let prev = DROPPED_METRICS.fetch_add(1, Ordering::Relaxed);
+        if prev.is_power_of_two() {
+            // Log at powers-of-two to avoid spamming on sustained overload.
+            tracing::warn!(dropped = prev + 1, "analytics channel full — metrics being dropped (route={route_id}, status={status})");
+        }
     }
 }
 
