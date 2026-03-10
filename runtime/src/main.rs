@@ -56,6 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .route("/execute", post(execute_handler))
         .route("/internal/cache/invalidate", post(invalidate_cache_handler))
+        .layer(axum::extract::DefaultBodyLimit::max(1 * 1024 * 1024)) // 1 MB
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

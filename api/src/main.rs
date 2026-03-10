@@ -238,6 +238,7 @@ pub fn create_app(state: AppState) -> Router {
         // Outermost layer: assigns / propagates x-request-id and logs every
         // non-health request with method, path, status, and latency.
         .layer(axum_middleware::from_fn(middleware::request_id::request_id_middleware))
+        .layer(axum::extract::DefaultBodyLimit::max(1 * 1024 * 1024)) // 1 MB
         .with_state(state)
 }
 

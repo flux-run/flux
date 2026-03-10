@@ -56,6 +56,7 @@ pub fn build(state: Arc<AppState>) -> Router {
                 "build_time": std::env::var("BUILD_TIME").unwrap_or_else(|_| "unknown".to_string())
             }))
         }))
+        .layer(axum::extract::DefaultBodyLimit::max(1 * 1024 * 1024)) // 1 MB
         .with_state(state)
         .layer(axum_middleware::from_fn(require_service_token))
 }

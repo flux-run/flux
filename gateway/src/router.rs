@@ -52,5 +52,6 @@ pub fn create_router(state: SharedState) -> Router {
         .merge(internal_routes)
         .merge(fn_routes)
         .layer(cors)
+        .layer(axum::extract::DefaultBodyLimit::max(1 * 1024 * 1024)) // 1 MB
         .with_state(state)
 }
