@@ -47,6 +47,9 @@ pub struct AppState {
     ///   `{"project_id":"...","table":"users","operation":"insert","row":{...}}`
     /// SSE handlers subscribe to this and filter by project_id.
     pub event_tx: tokio::sync::broadcast::Sender<String>,
+    /// Background log archiver — moves logs older than `LOG_HOT_DAYS` to R2/S3.
+    /// Also used by the read path to fetch archive data for old `since` queries.
+    pub log_archiver: std::sync::Arc<logs::archiver::LogArchiver>,
 }
 
 impl axum::extract::FromRef<AppState> for sqlx::PgPool {
@@ -249,6 +252,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let firebase_project_id = std::env::var("FIREBASE_PROJECT_ID").expect("FIREBASE_PROJECT_ID required");
     let firebase_auth = Arc::new(FirebaseAuth::new(&firebase_project_id).await);
     let storage = services::storage::StorageService::new().await;
+    let log_archiver = logs::archiver::LogArchiver::new(pool.clone()).await;
+    log_archiver.clone().spawn_task();
     
     let (event_tx, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
@@ -257,6 +262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         firebase_auth,
         storage,
         http_client: reqwest::Client::new(),
+        log_archiver,
         data_engine_url: std::env::var("DATA_ENGINE_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
         gateway_url: std::env::var("GATEWAY_URL")
