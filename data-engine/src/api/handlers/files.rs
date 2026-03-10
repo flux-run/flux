@@ -108,7 +108,6 @@ pub async fn download_url(
 fn require_file_engine(engine: Option<&FileEngine>) -> Result<&FileEngine, EngineError> {
     engine.ok_or_else(|| {
         EngineError::UnsupportedOperation(
-            "file storage is not configured (set S3_BUCKET env var)".into(),
-        )
+            "file storage is not configured (set FILES_BUCKET env var)".into(),        )
     })
 }

@@ -6,21 +6,78 @@ use aws_sdk_s3::Client;
 use std::env;
 use std::time::Duration;
 
+// ─── Shared storage configuration ─────────────────────────────────────────────
+//
+// Each bucket has a single, well-scoped responsibility:
+//
+//   FILES_BUCKET      (fluxbase-files)     — user / app file uploads
+//   FUNCTIONS_BUCKET  (fluxbase-functions) — function bundles + deployment artifacts
+//   LOGS_BUCKET       (fluxbase-logs)      — archived platform logs (NDJSON.gz)
+//
+// The env var precedence for each bucket is:
+//   1. The dedicated var (FILES_BUCKET, FUNCTIONS_BUCKET, LOGS_BUCKET)
+//   2. Legacy / compat aliases (S3_BUCKET, R2_BUCKET …)
+//   3. Hard-coded default (safe for local dev)
+
+#[derive(Clone, Debug)]
+pub struct StorageConfig {
+    pub files_bucket:     String,
+    pub functions_bucket: String,
+    pub logs_bucket:      String,
+}
+
+impl StorageConfig {
+    pub fn from_env() -> Self {
+        // FILES_BUCKET — user uploads (presigned put/get via data-engine)
+        let files_bucket = env::var("FILES_BUCKET")
+            .unwrap_or_else(|_| "fluxbase-files".to_string());
+
+        // FUNCTIONS_BUCKET — bundle storage (api deploy + runtime fetch)
+        let functions_bucket = env::var("FUNCTIONS_BUCKET")
+            .or_else(|_| env::var("S3_BUCKET"))
+            .or_else(|_| env::var("R2_BUCKET"))
+            .unwrap_or_else(|_| "fluxbase-functions".to_string());
+
+        // LOGS_BUCKET — log archiver (api/src/logs/archiver.rs)
+        let logs_bucket = env::var("LOGS_BUCKET")
+            .or_else(|_| env::var("LOG_BUCKET"))
+            .unwrap_or_else(|_| "fluxbase-logs".to_string());
+
+        Self { files_bucket, functions_bucket, logs_bucket }
+    }
+}
+
+// ─── StorageService (function bundle storage) ─────────────────────────────────
+//
+// Used exclusively for storing and fetching function bundles / deployment
+// artifacts.  Always talks to FUNCTIONS_BUCKET (fluxbase-functions).
+
 #[derive(Clone, Debug)]
 pub struct StorageService {
-    client: Client,
+    client:      Client,
     bucket_name: String,
 }
 
 impl StorageService {
     pub async fn new() -> Self {
-        let endpoint = env::var("R2_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
-        let access_key = env::var("R2_ACCESS_KEY_ID").unwrap_or_else(|_| "minioadmin".to_string());
-        let secret_key = env::var("R2_SECRET_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".to_string());
-        let bucket_name = env::var("R2_BUCKET").unwrap_or_else(|_| "fluxbase-bundles".to_string());
-        let region_name = "auto".to_string(); // R2 uses 'auto'
+        // Credentials — prefer the S3_* naming that matches env.yaml production values.
+        let endpoint   = env::var("S3_ENDPOINT")
+            .or_else(|_| env::var("R2_ENDPOINT"))
+            .unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
+        let access_key = env::var("S3_ACCESS_KEY_ID")
+            .or_else(|_| env::var("R2_ACCESS_KEY_ID"))
+            .unwrap_or_else(|_| "minioadmin".to_string());
+        let secret_key = env::var("S3_SECRET_ACCESS_KEY")
+            .or_else(|_| env::var("R2_SECRET_ACCESS_KEY"))
+            .unwrap_or_else(|_| "minioadmin".to_string());
 
-        let region_provider = RegionProviderChain::first_try(Region::new(region_name));
+        // Function bundle bucket — dedicated var first, then legacy aliases.
+        let bucket_name = env::var("FUNCTIONS_BUCKET")
+            .or_else(|_| env::var("S3_BUCKET"))
+            .or_else(|_| env::var("R2_BUCKET"))
+            .unwrap_or_else(|_| "fluxbase-functions".to_string());
+
+        let region_provider = RegionProviderChain::first_try(Region::new("auto"));
         let credentials = Credentials::new(access_key, secret_key, None, None, "env");
 
         let shared_config = aws_config::from_env()
@@ -31,20 +88,19 @@ impl StorageService {
             .await;
 
         let mut config_builder = Builder::from(&shared_config);
-        config_builder = config_builder.force_path_style(true); 
+        config_builder = config_builder.force_path_style(true);
 
         let s3_config = config_builder.build();
         let client = Client::from_conf(s3_config);
 
-        Self {
-            client,
-            bucket_name,
-        }
+        tracing::info!("StorageService initialised — functions bucket: {}", bucket_name);
+
+        Self { client, bucket_name }
     }
 
     pub async fn put_object(&self, key: &str, body: Vec<u8>, content_type: &str) -> std::result::Result<(), String> {
         let stream = ByteStream::from(body);
-        
+
         self.client
             .put_object()
             .bucket(&self.bucket_name)
@@ -54,14 +110,14 @@ impl StorageService {
             .send()
             .await
             .map_err(|e| format!("Failed to push to storage: {}", e))?;
-            
+
         Ok(())
     }
 
     pub async fn presigned_get_object(&self, key: &str, expires_in: Duration) -> std::result::Result<String, String> {
         let presigning_config = PresigningConfig::expires_in(expires_in)
             .map_err(|e| format!("Failed to construct presigning config: {}", e))?;
-        
+
         let presigned_request = self.client
             .get_object()
             .bucket(&self.bucket_name)
@@ -73,3 +129,4 @@ impl StorageService {
         Ok(presigned_request.uri().to_string())
     }
 }
+

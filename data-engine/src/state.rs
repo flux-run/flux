@@ -34,7 +34,7 @@ impl AppState {
                 FileEngine::new(bucket.clone(), cfg.s3_region.clone(), cfg.s3_endpoint.clone()).await,
             ))
         } else {
-            tracing::warn!("S3_BUCKET not set — file engine disabled");
+            tracing::warn!("FILES_BUCKET not set — file engine disabled");
             None
         };
 

@@ -23,7 +23,7 @@ pub struct Config {
     /// Requests deeper than this ceiling are rejected with HTTP 400.
     /// Default: 6. Set to 0 to disable.
     pub max_nest_depth: usize,
-    /// S3 bucket name for file storage. None = file engine disabled.
+    /// S3 bucket name for file storage (FILES_BUCKET env var). None = file engine disabled.
     pub s3_bucket: Option<String>,
     /// AWS region (default: us-east-1).
     pub s3_region: String,
@@ -61,7 +61,11 @@ pub fn load() -> Config {
             .unwrap_or_else(|_| "6".to_string())
             .parse()
             .expect("MAX_NEST_DEPTH must be a non-negative integer"),
-        s3_bucket: std::env::var("S3_BUCKET").ok(),
+        // FILES_BUCKET — user file uploads (presigned put/get)
+        // Compat alias: S3_BUCKET (legacy deployments)
+        s3_bucket: std::env::var("FILES_BUCKET")
+            .or_else(|_| std::env::var("S3_BUCKET"))
+            .ok(),
         s3_region: std::env::var("S3_REGION")
             .unwrap_or_else(|_| "us-east-1".to_string()),
         s3_endpoint: std::env::var("S3_ENDPOINT").ok(),

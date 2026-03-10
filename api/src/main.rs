@@ -33,6 +33,8 @@ pub struct AppState {
     pub pool: sqlx::PgPool,
     pub firebase_auth: Arc<FirebaseAuth>,
     pub storage: services::storage::StorageService,
+    /// Bucket names for each storage tier.  Loaded once at startup from env.
+    pub storage_config: services::storage::StorageConfig,
     pub http_client: reqwest::Client,
     pub data_engine_url: String,
     /// Gateway URL forwarded to OpenAPI spec servers[].
@@ -251,16 +253,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = db::connection::init_pool().await?;
     let firebase_project_id = std::env::var("FIREBASE_PROJECT_ID").expect("FIREBASE_PROJECT_ID required");
     let firebase_auth = Arc::new(FirebaseAuth::new(&firebase_project_id).await);
-    let storage = services::storage::StorageService::new().await;
-    let log_archiver = logs::archiver::LogArchiver::new(pool.clone()).await;
+    let storage        = services::storage::StorageService::new().await;
+    let storage_config  = services::storage::StorageConfig::from_env();
+    let log_archiver    = logs::archiver::LogArchiver::new(pool.clone()).await;
     log_archiver.clone().spawn_task();
-    
+
+    info!(
+        "Storage buckets — files: {}, functions: {}, logs: {}",
+        storage_config.files_bucket,
+        storage_config.functions_bucket,
+        storage_config.logs_bucket,
+    );
+
     let (event_tx, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
     let state = AppState {
         pool,
         firebase_auth,
         storage,
+        storage_config,
         http_client: reqwest::Client::new(),
         log_archiver,
         data_engine_url: std::env::var("DATA_ENGINE_URL")
