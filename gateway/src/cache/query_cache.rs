@@ -402,3 +402,35 @@ pub fn extract_table_hint(body: &[u8]) -> Option<String> {
         .and_then(|t| t.as_str())
         .map(|s| s.to_string())
 }
+
+/// Extract the column names referenced in the `filters` array of a `/db/query` body.
+///
+/// These are recorded in the db_query span so that the trace assembler can
+/// detect missing indexes: if the same (table, column) pair appears in ≥ 2
+/// slow spans within a single request, the assembler emits a `CREATE INDEX`
+/// suggestion in the trace envelope.
+///
+/// Returns a sorted, deduplicated list of column names (empty vec if the body
+/// has no `filters` key, is not JSON, or all entries lack a `column` field).
+pub fn extract_filter_cols(body: &[u8]) -> Vec<String> {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v)  => v,
+        Err(_) => return vec![],
+    };
+    let mut cols: Vec<String> = v
+        .get("filters")
+        .and_then(|f| f.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|f| {
+                    f.get("column")
+                        .and_then(|c| c.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    cols.sort();
+    cols.dedup();
+    cols
+}

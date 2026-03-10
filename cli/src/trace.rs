@@ -212,6 +212,10 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
         .as_array()
         .map(|a| a.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect())
         .unwrap_or_default();
+    let suggested_indexes: Vec<serde_json::Value> = data["suggested_indexes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
 
     if spans.is_empty() {
         println!("{} No spans found for request ID: {}", "ℹ".blue(), request_id.cyan().bold());
@@ -344,8 +348,31 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
             "\n  {} slow db quer{}  {}",
             slow_db_count.to_string().yellow().bold(),
             if slow_db_count == 1 { "y (>50ms)" } else { "ies (>50ms)" },
-            "— check indexes on the flagged tables".dimmed(),
+            "\u{2014} check indexes on the flagged tables".dimmed(),
         );
+    }
+
+    if !suggested_indexes.is_empty() {
+        println!(
+            "\n  {} missing index suggestion{}:",
+            suggested_indexes.len().to_string().yellow().bold(),
+            if suggested_indexes.len() == 1 { "" } else { "s" },
+        );
+        for idx in &suggested_indexes {
+            if let (Some(table), Some(col), Some(ddl)) = (
+                idx["table"].as_str(),
+                idx["column"].as_str(),
+                idx["ddl"].as_str(),
+            ) {
+                println!(
+                    "    {} {}.{}  run: {}",
+                    "\u{2192}".cyan(),
+                    table.bold(),
+                    col,
+                    ddl.green(),
+                );
+            }
+        }
     }
 
     if flame {

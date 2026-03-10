@@ -20,7 +20,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::cache::query_cache::{
-    extract_role_from_jwt, extract_table_hint, is_query_cacheable, CacheEntry, QueryCacheKey,
+    extract_filter_cols, extract_role_from_jwt, extract_table_hint, is_query_cacheable,
+    CacheEntry, QueryCacheKey,
 };
 use crate::state::SharedState;
 
@@ -116,6 +117,7 @@ fn post_db_span(
     table: String,
     duration_ms: u64,
     cache: &'static str,
+    filter_cols: Vec<String>,
 ) {
     let is_slow = duration_ms >= SLOW_DB_MS;
     let level   = if is_slow { "warn" } else { "info" };
@@ -125,10 +127,11 @@ fn post_db_span(
         _ => format!("db query on {} ({}ms)", table, duration_ms),
     };
     let metadata = serde_json::json!({
-        "table":       table,
-        "duration_ms": duration_ms,
-        "cache":       cache,
-        "slow":        is_slow,
+        "table":        table,
+        "duration_ms":  duration_ms,
+        "cache":        cache,
+        "slow":         is_slow,
+        "filter_cols":  filter_cols,
     });
     tokio::spawn(async move {
         let _ = sqlx::query(
@@ -193,11 +196,14 @@ pub async fn proxy_handler(
         .or_else(|| in_headers.get("x-project-id"))
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse().ok());
-    // Table hint extracted once for all /db/query spans.
-    let table_hint: String = if uri.path().ends_with("/db/query") {
-        extract_table_hint(&body_bytes).unwrap_or_else(|| "unknown".to_string())
+    // Table hint and filter columns extracted once for all /db/query spans.
+    let (table_hint, filter_cols): (String, Vec<String>) = if uri.path().ends_with("/db/query") {
+        (
+            extract_table_hint(&body_bytes).unwrap_or_else(|| "unknown".to_string()),
+            extract_filter_cols(&body_bytes),
+        )
     } else {
-        String::new()
+        (String::new(), vec![])
     };
     let query_start = Instant::now();
 
@@ -273,6 +279,7 @@ pub async fn proxy_handler(
                             state.db_pool.clone(), tid, span_project_id,
                             request_id.clone(), table_hint.clone(),
                             query_start.elapsed().as_millis() as u64, "hit",
+                            filter_cols.clone(),
                         );
                     }
                 }
@@ -350,6 +357,7 @@ pub async fn proxy_handler(
                                 state.db_pool.clone(), tid, span_project_id,
                                 request_id.clone(), table_hint.clone(),
                                 query_start.elapsed().as_millis() as u64, "miss",
+                                filter_cols.clone(),
                             );
                         }
                     }
@@ -397,6 +405,7 @@ pub async fn proxy_handler(
                 state.db_pool.clone(), tid, span_project_id,
                 request_id.clone(), table_hint.clone(),
                 query_start.elapsed().as_millis() as u64, "bypass",
+                filter_cols.clone(),
             );
         }
     }

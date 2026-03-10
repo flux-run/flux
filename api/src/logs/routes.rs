@@ -462,6 +462,52 @@ pub async fn get_trace(
         })
         .collect();
 
+    // ── Index suggestions ─────────────────────────────────────────────────
+    // Heuristic: if the same (table, filter_column) pair appears in ≥ 2 slow
+    // db spans within this request, the column is almost certainly unindexed.
+    // We surface an actionable CREATE INDEX DDL statement the developer can
+    // copy-paste directly — something no major platform does automatically.
+    let mut slow_col_counts: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+
+    for span in &spans {
+        if span["source"].as_str() != Some("db") { continue; }
+        if !span["metadata"]["slow"].as_bool().unwrap_or(false) { continue; }
+        let table = match span["metadata"]["table"].as_str() {
+            Some(t) => t.to_string(),
+            None    => continue,
+        };
+        if let Some(cols) = span["metadata"]["filter_cols"].as_array() {
+            for col in cols {
+                if let Some(c) = col.as_str() {
+                    *slow_col_counts
+                        .entry((table.clone(), c.to_string()))
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    let mut suggested_indexes: Vec<serde_json::Value> = slow_col_counts
+        .iter()
+        .filter(|(_, count)| **count >= 2)
+        .map(|((table, col), _)| {
+            serde_json::json!({
+                "table":  table,
+                "column": col,
+                "ddl":    format!("CREATE INDEX ON {}({});", table, col),
+            })
+        })
+        .collect();
+    // Stable sort so the CLI always renders in the same order.
+    suggested_indexes.sort_by_key(|s| {
+        format!(
+            "{}.{}",
+            s["table"].as_str().unwrap_or(""),
+            s["column"].as_str().unwrap_or(""),
+        )
+    });
+
     let span_count = spans.len();
     Ok(ApiResponse::new(serde_json::json!({
         "request_id":          request_id,
@@ -472,5 +518,6 @@ pub async fn get_trace(
         "slow_threshold_ms":   slow_thresh,
         "n_plus_one_tables":   n_plus_one_tables,
         "slow_db_count":       slow_db_count,
+        "suggested_indexes":   suggested_indexes,
     })))
 }
