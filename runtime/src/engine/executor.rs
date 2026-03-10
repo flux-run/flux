@@ -141,7 +141,9 @@ pub async fn execute_function(
     let composio_api_key = std::env::var("COMPOSIO_API_KEY").ok();
 
     // Each tenant is a Composio "entity" — their connected accounts are scoped under this ID.
-    let entity_id = tenant_id.clone();
+    // Allow override via COMPOSIO_ENTITY_ID (e.g., for a shared demo entity like "fluxbase-demo").
+    let entity_id = std::env::var("COMPOSIO_ENTITY_ID")
+        .unwrap_or_else(|_| tenant_id.clone());
 
     std::thread::spawn(move || {
         let tokio_rt = tokio::runtime::Builder::new_current_thread()
