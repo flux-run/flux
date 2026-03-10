@@ -69,6 +69,19 @@ impl BundleCache {
         }
     }
 
+    // ── Invalidation ──────────────────────────────────────────────────────
+
+    /// Drop a function-level cache entry immediately.
+    /// Called by the control plane after a new deployment is live.
+    pub fn invalidate_function(&self, function_id: &str) {
+        self.by_function.lock().unwrap().pop(function_id);
+    }
+
+    /// Drop a deployment-level cache entry immediately.
+    pub fn invalidate_deployment(&self, deployment_id: &str) {
+        self.by_deployment.lock().unwrap().pop(deployment_id);
+    }
+
     /// Cache code under both the function_id (TTL) and deployment_id (LRU).
     pub fn insert_both(&self, function_id: String, deployment_id: Option<String>, code: String) {
         {

@@ -292,3 +292,61 @@ pub async fn execute_handler(
 pub async fn health_check() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok" }))
 }
+
+/// POST /internal/cache/invalidate
+///
+/// Called by the control plane immediately after a new deployment goes live,
+/// so the runtime stops serving the old bundle within milliseconds instead of
+/// waiting for the 60-second function-cache TTL to expire.
+///
+/// Body (all fields optional – omit any you don't want to invalidate):
+/// ```json
+/// { "function_id": "...", "deployment_id": "...",
+///   "tenant_id":   "...", "project_id":    "..." }
+/// ```
+#[derive(Deserialize)]
+pub struct InvalidateCacheRequest {
+    pub function_id:   Option<String>,
+    pub deployment_id: Option<String>,
+    pub tenant_id:     Option<uuid::Uuid>,
+    pub project_id:    Option<uuid::Uuid>,
+}
+
+pub async fn invalidate_cache_handler(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<InvalidateCacheRequest>,
+) -> impl IntoResponse {
+    // Require the service token so this endpoint is not publicly callable.
+    let provided = headers
+        .get("X-Service-Token")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    if provided != state.service_token {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "unauthorized" }))).into_response();
+    }
+
+    let mut evicted: Vec<&str> = Vec::new();
+
+    if let Some(ref fid) = req.function_id {
+        state.bundle_cache.invalidate_function(fid);
+        evicted.push("function_bundle");
+    }
+    if let Some(ref did) = req.deployment_id {
+        state.bundle_cache.invalidate_deployment(did);
+        evicted.push("deployment_bundle");
+    }
+    if let Some(tid) = req.tenant_id {
+        state.secrets_client.cache().invalidate(tid, req.project_id);
+        evicted.push("secrets");
+    }
+
+    tracing::info!(
+        function_id   = ?req.function_id,
+        deployment_id = ?req.deployment_id,
+        tenant_id     = ?req.tenant_id,
+        "cache invalidated: {:?}", evicted
+    );
+
+    (StatusCode::OK, Json(serde_json::json!({ "evicted": evicted }))).into_response()
+}

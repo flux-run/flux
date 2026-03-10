@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
 
-use api::routes::{execute_handler, health_check, AppState};
+use api::routes::{execute_handler, health_check, invalidate_cache_handler, AppState};
 use config::settings::Settings;
 use secrets::secrets_client::SecretsClient;
 
@@ -22,7 +22,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::load();
     let port = settings.port;
 
-    let secrets_client = SecretsClient::new(settings.clone());
     let http_client = reqwest::Client::builder()
         .pool_max_idle_per_host(4)
         .pool_idle_timeout(std::time::Duration::from_secs(90))
@@ -30,6 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connection_verbose(false)
         .build()
         .expect("failed to build HTTP client");
+
+    let secrets_client = SecretsClient::new(settings.clone(), http_client.clone());
     
     let state = Arc::new(AppState {
         secrets_client,
@@ -49,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }))
         }))
         .route("/execute", post(execute_handler))
+        .route("/internal/cache/invalidate", post(invalidate_cache_handler))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
