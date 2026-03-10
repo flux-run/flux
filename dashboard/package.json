@@ -7,6 +7,7 @@
     "dev": "vite",
     "prebuild": "node scripts/copy-static.js",
     "build": "tsc -b && vite build",
+    "postbuild": "mv dist/index.html dist/dashboard.html && cp public/home.html dist/index.html",
     "lint": "eslint .",
     "preview": "vite preview"
   },
