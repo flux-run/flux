@@ -4,8 +4,19 @@
 
 ## Overview
 
-Fluxbase is a serverless backend platform. Developers write TypeScript functions,
-connect a hosted Postgres database, and deploy globally via the `flux` CLI.
+Fluxbase is a backend flow runtime. Developers write TypeScript functions — each
+one a step in a backend flow. Fluxbase handles routing (gateway), execution
+(Deno runtime), database queries (data engine), async work (queue), and traces
+every request end-to-end with zero configuration.
+
+Architecture layers (request flows through all of them):
+  Gateway → Runtime → Data Engine → (Queue for async) → API/Telemetry
+
+Positioning: "Build backend flows — not backend infrastructure."
+
+Key differentiator: every request is automatically traced from gateway auth
+through function execution and database queries. `flux trace <id>` renders
+the full trace in the terminal, including N+1 warnings and index suggestions.
 
 ---
 
@@ -122,10 +133,40 @@ Examples:
 ## API Gateway
 
 Base URL: https://gw.fluxbase.co
-Auth header: X-API-Key: <project-api-key>
+Auth header: Authorization: Bearer <project-api-key>
+
+The gateway runs before every function invocation:
+  1. Authenticate API key
+  2. Rate limit check (60/min free, 1000/min pro)
+  3. Route lookup (from flux.json route + method)
+  4. CORS headers applied
+  5. x-request-id stamped
+  6. Dispatch to runtime (sync) or queue (async: true)
 
   POST /function_name        Invoke function (synchronous)
-  x-request-id header        Trace ID — pass to `flux trace`
+  Response header: x-request-id: <trace-id>   pass to `flux trace`
+
+Error codes:
+  401  Invalid or missing API key
+  404  No function at this route/method
+  429  Rate limit exceeded
+  504  Function timed out (30s limit)
+
+---
+
+## Secrets
+
+flux secrets set <KEY> <value>    Store encrypted secret
+flux secrets list                 List secret names (values never returned)
+flux secrets delete <KEY>         Remove a secret
+
+In functions:
+  ctx.secrets.get("KEY")          Returns decrypted string (async)
+  ctx.secrets.get("KEY", default) Returns default if key not set
+
+Secrets vs env vars:
+  Secrets: encrypted, rotate without redeploy, values never exposed via API
+  ctx.env: plain config, visible in dashboard, requires redeploy to change
 
 ---
 
