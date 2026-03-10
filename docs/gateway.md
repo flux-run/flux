@@ -115,6 +115,132 @@ Without TLS termination validation, developers may accidentally:
 
 ---
 
+## Code Verification Checklist
+
+Before finalizing the gateway implementation, verify these 6 critical items exist in code. The architecture is production-grade; these checks ensure the code matches the design.
+
+### 1️⃣ Request Envelope Capture
+
+**Requirement:** Gateway must INSERT into `trace_requests` when request arrives (before forwarding to runtime).
+
+**Verify code contains:**
+
+```rust
+// Insert trace_requests row capturing original input
+INSERT INTO trace_requests (
+  request_id,
+  tenant_id,
+  project_id,
+  function_id,
+  function_version,
+  method,
+  path,
+  headers,
+  query_params,
+  body,
+  created_at
+) VALUES (...)
+```
+
+**Impact if missing:** Replay won't work (no request envelope to replay from).
+
+### 2️⃣ Parent Span ID Propagation
+
+**Requirement:** Gateway must generate its own `span_id`, forward it as `x-parent-span-id` header, so Runtime can attach child spans.
+
+**Verify code contains:**
+
+```rust
+let gateway_span_id = Uuid::now_v7();  // or gen_random_uuid()
+let mut headers = HeaderMap::new();
+headers.insert("x-parent-span-id", gateway_span_id.to_string());
+```
+
+**Impact if missing:** Trace tree becomes flat (no span hierarchy).
+
+### 3️⃣ Snapshot Readiness Gate
+
+**Requirement:** Gateway must not serve traffic until route snapshot is loaded. Return 503 if snapshot not ready.
+
+**Verify code contains:**
+
+```rust
+static SNAPSHOT_READY: AtomicBool = AtomicBool::new(false);
+
+// In request handler:
+if !SNAPSHOT_READY.load(Ordering::Acquire) {
+    return StatusCode::SERVICE_UNAVAILABLE;
+}
+```
+
+**Impact if missing:** Random 404s during startup/snapshot refresh.
+
+### 4️⃣ Span Logging Queue Backpressure
+
+**Requirement:** Gateway must use bounded `tokio::mpsc::channel` for span logging, not unbounded `tokio::spawn` per span.
+
+**Verify code contains:**
+
+```rust
+let (tx, rx) = tokio::mpsc::channel(MAX_PENDING_SPANS);  // Bounded
+
+// Not:
+tokio::spawn(async { /* log span */ })  // Unbounded
+```
+
+**Impact if missing:** Memory leak under high traffic (unbounded queue growth).
+
+### 5️⃣ Trace Sampling Logic
+
+**Requirement:** Gateway must implement sampling based on error rate, latency, and success rate (environment-driven).
+
+**Verify code uses:**
+
+```rust
+const TRACE_SAMPLING_ERROR_RATE: f64 = 1.0;    // 100% of errors
+const TRACE_SAMPLING_SLOW_THRESHOLD: u64 = 200; // ms
+const TRACE_SAMPLING_SUCCESS_RATE: f64 = 0.1;   // 10% of successes
+
+fn should_sample(status: StatusCode, latency_ms: u64) -> bool {
+    if status >= 500 { return true; }           // All errors
+    if latency_ms > TRACE_SAMPLING_SLOW_THRESHOLD { return true; }  // All slow
+    rand::random::<f64>() < TRACE_SAMPLING_SUCCESS_RATE  // Sampled success
+}
+```
+
+**Impact if missing:** `platform_logs` table explodes to 152TB/day (unsustainable).
+
+### 6️⃣ W3C Trace Context Support
+
+**Requirement:** Gateway should parse `traceparent` header and map to `request_id` + `parent_span_id` (optional but good).
+
+**Verify code either:**
+
+```rust
+// Parse W3C traceparent: 00-trace_id-parent_id-flags
+if let Some(traceparent) = headers.get("traceparent") {
+    // Extract trace_id, parent_span_id
+    request_id = trace_id;
+    parent_span_id = parent_id;
+}
+```
+
+**Or mark as TODO:** `// TODO: W3C trace context support`
+
+**Impact if missing:** No interop with external OpenTelemetry systems (acceptable for MVP).
+
+### Optional Improvement: State Mutations Schema Versioning
+
+Add `schema_version INT` to `state_mutations` table to handle schema evolution without breaking replay:
+
+```sql
+ALTER TABLE state_mutations ADD COLUMN schema_version INT DEFAULT 1;
+```
+
+This prevents replay from breaking after schema changes.
+
+---
+
 ## Architecture
 
 ### High-Level Components
