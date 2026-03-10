@@ -2,13 +2,16 @@ use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
 
 pub fn generate_slug(name: &str) -> String {
-    let base = name
+    // Normalize: lowercase, strip non-ASCII, keep only [a-z0-9-]
+    let base: String = name
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>();
-    
-    let trimmed = base.split('-')
+        .filter(|c| c.is_ascii())
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+
+    let trimmed = base
+        .split('-')
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-");
