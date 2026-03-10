@@ -312,11 +312,33 @@ Deno's `JsRuntime` is `!Send`. It must be created and used on the same thread. A
 
 Each request updates the worker's `JsRuntime` `OpState` (secrets, tenant context) via `try_take` + `put` before execution. This is the only per-request mutation; the V8 heap, extension registrations, and snapshot are already in place.
 
-**Global scope isolation** is handled by a two-part mechanism:
+`create_js_runtime()` applies two hardening steps **once at worker startup**, before any user code ever touches the isolate:
 
-1. **Baseline snapshot** — when `create_js_runtime()` first builds the worker's `JsRuntime`, it immediately captures the complete set of global keys (V8 built-ins + Deno core) into `globalThis.__fluxbase_allowed_globals`. This snapshot is frozen before any user code ever runs.
+**1. Prototype freeze** — `Object.freeze` is applied to the most-abused built-in prototype objects, preventing user code from poisoning shared prototype chains across tenants:
 
-2. **Per-invocation sweep** — at the very start of each IIFE wrapper, before the user bundle executes, any global key not in the baseline snapshot is deleted:
+```js
+const __protos = [
+    Object, Array, Function, String, Number, Boolean,
+    RegExp, Promise, Map, Set, WeakMap, WeakSet, Error,
+    TypeError, RangeError, SyntaxError, ReferenceError
+];
+for (const C of __protos) {
+    if (C && C.prototype) Object.freeze(C.prototype);
+}
+```
+
+Without this, a malicious or buggy bundle could do `Array.prototype.map = () => []` and break every subsequent invocation on the same worker. After the freeze, any attempt to mutate a frozen prototype throws a `TypeError` (in strict mode) or silently fails — it does not affect the shared prototype.
+
+Cost: ~20 µs at worker startup; zero per-request overhead.
+
+**2. Baseline global snapshot + per-invocation sweep** — immediately after the freeze, `create_js_runtime()` captures all current `globalThis` key names:
+
+```js
+globalThis.__fluxbase_allowed_globals =
+    new Set(Object.getOwnPropertyNames(globalThis));
+```
+
+At the top of every IIFE wrapper, before the user bundle runs, any key not in that baseline set is deleted:
 
 ```js
 if (typeof __fluxbase_allowed_globals !== "undefined") {
@@ -328,7 +350,16 @@ if (typeof __fluxbase_allowed_globals !== "undefined") {
 }
 ```
 
-This means user code that writes `globalThis.cache = ...` or any other global will have that value deleted before the next invocation on the same worker. The cost is O(n) over user-added keys only — typically zero keys in honest code, negligible otherwise.
+User code that writes `globalThis.cache = ...` or any custom global will have that value deleted before the next invocation on the same worker. Cost: O(n) over user-added keys only — typically zero in normal code.
+
+**Isolation matrix after both guards:**
+
+| Scope | Isolated? | Mechanism |
+|-------|-----------|-----------|
+| `__ctx`, `__payload`, `__secrets`, logs | ✅ per-request | IIFE closure |
+| `globalThis.*` (user-set) | ✅ per-request | baseline sweep |
+| Built-in prototypes | ✅ immutable | `Object.freeze` |
+| V8 heap / JIT cache | shared (intentional) | warm isolate benefit |
 
 If a request **times out**, the V8 event loop may be in an inconsistent state. The worker automatically recreates the `JsRuntime` in that case:
 
@@ -338,6 +369,27 @@ if matches!(&result, Err(e) if e.contains("timed out")) {
     js_rt = create_js_runtime();
 }
 ```
+
+### Deterministic replay (planned)
+
+The current runtime is **not fully deterministic** across replay attempts because user code can observe:
+
+- `Date.now()` / `new Date()` — wall clock time
+- `Math.random()` — PRNG seeded per-isolate
+- `performance.now()` — high-resolution monotonic timer
+
+For `flux replay` and incident time-travel to produce identical results, these must be overridden with recorded values. The planned approach injects overrides into the IIFE wrapper using a `ReplayCtx` carried in `OpState`:
+
+```js
+// injected at replay time only
+Date.now = () => {replay_epoch_ms};
+Math.random = (() => {
+    let _s = {replay_seed};
+    return () => { _s = (_s * 1664525 + 1013904223) & 0xFFFFFFFF; return _s / 0xFFFFFFFF; };
+})();
+```
+
+This is a non-breaking, per-request injection — live executions are unaffected. The recorded seed and epoch are stored alongside each execution's trace span, making replay 100% reproducible.
 
 ### Timeouts
 

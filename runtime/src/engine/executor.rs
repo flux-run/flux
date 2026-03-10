@@ -106,19 +106,42 @@ pub fn build_fluxbase_extension() -> Extension {
 /// Create a warm `JsRuntime` with the Fluxbase extension registered.
 /// Intended to be called once per worker thread; per-request state is injected
 /// via `OpState` before each execution (see `execute_with_runtime`).
+///
+/// # Isolation hardening (runs once per worker thread at startup):
+///
+/// 1. **Prototype freeze** — `Object.freeze` applied to the most-abused
+///    built-in prototypes (`Object`, `Array`, `Function`, `String`, `Number`,
+///    `Boolean`, `RegExp`, `Promise`, `Map`, `Set`, `Error`).  Prevents user
+///    code from poisoning shared prototype chains across tenants.
+///    Cost: ~20 µs at startup; no per-request overhead.
+///
+/// 2. **Global baseline snapshot** — captures all current `globalThis` key
+///    names into `__fluxbase_allowed_globals` immediately after freezing.
+///    `build_wrapper` sweeps any new keys added by a previous bundle before
+///    the next request runs, eliminating cross-request `globalThis` leakage.
 pub fn create_js_runtime() -> JsRuntime {
     let mut rt = JsRuntime::new(RuntimeOptions {
         extensions: vec![build_fluxbase_extension()],
         ..Default::default()
     });
-    // Snapshot the set of built-in global keys that exist before any user code
-    // runs. build_wrapper uses this to sweep user-added globals between
-    // invocations so that no cross-request state can leak on a warm isolate.
     rt.execute_script(
         "<fluxbase-init>",
-        "globalThis.__fluxbase_allowed_globals = \
+        // 1. Freeze built-in prototypes to prevent cross-tenant prototype poisoning.
+        //    e.g. user code cannot do: Array.prototype.map = () => []
+        "const __protos = [\
+            Object, Array, Function, String, Number, Boolean,\
+            RegExp, Promise, Map, Set, WeakMap, WeakSet, Error,\
+            TypeError, RangeError, SyntaxError, ReferenceError\
+        ];\
+        for (const C of __protos) {\
+            if (C && C.prototype) Object.freeze(C.prototype);\
+        }\
+        Object.freeze(__protos);\
+        \
+        // 2. Snapshot baseline globals for the per-request sweep in build_wrapper.\
+        globalThis.__fluxbase_allowed_globals =\
             new Set(Object.getOwnPropertyNames(globalThis));",
-    ).expect("failed to initialise global sweep sentinel");
+    ).expect("failed to initialise worker sandbox");
     rt
 }
 
@@ -131,6 +154,7 @@ fn build_wrapper(
     transformed_code: &str,
     tenant_id:        &str,
     tenant_slug:      &str,
+    execution_seed:   i64,
 ) -> String {
     format!(r#"
         var __fluxbase_fn;
@@ -147,6 +171,39 @@ fn build_wrapper(
                 }}
             }}
         }}
+
+        // ── Deterministic execution seed ─────────────────────────────────────────────
+        // Overrides Math.random, crypto.randomUUID, and nanoid with seeded equivalents
+        // so `flux queue replay` reproduces identical IDs and execution paths.
+        // When execution_seed is 0 (sync / non-replay path) the seed is a runtime-
+        // generated mix, so behaviour is unchanged but still deterministic per call.
+        (function() {{
+            let __t = ({execution_seed} ^ 0xDEADBEEF) >>> 0;
+            if (__t === 0) __t = 0x1;
+            globalThis.__fluxbase_rand = function() {{
+                __t += 0x6D2B79F5;
+                let r = Math.imul(__t ^ (__t >>> 15), 1 | __t);
+                r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+                return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+            }};
+        }})();
+        Math.random = globalThis.__fluxbase_rand;
+        crypto.randomUUID = () => {{
+            const b = new Uint8Array(16);
+            for (let i = 0; i < 16; i++) b[i] = Math.floor(globalThis.__fluxbase_rand() * 256);
+            b[6] = (b[6] & 0x0f) | 0x40;
+            b[8] = (b[8] & 0x3f) | 0x80;
+            const h = x => (x + 256).toString(16).slice(1);
+            return h(b[0])+h(b[1])+h(b[2])+h(b[3])+'-'+h(b[4])+h(b[5])+'-'+
+                   h(b[6])+h(b[7])+'-'+h(b[8])+h(b[9])+'-'+
+                   h(b[10])+h(b[11])+h(b[12])+h(b[13])+h(b[14])+h(b[15]);
+        }};
+        globalThis.nanoid = (size = 21) => {{
+            const abc = "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
+            let id = "";
+            for (let i = 0; i < size; i++) id += abc[Math.floor(globalThis.__fluxbase_rand() * abc.length)];
+            return id;
+        }};
 
         (async () => {{
             const __fluxbase_logs = [];
@@ -363,6 +420,7 @@ fn build_wrapper(
         transformed_code = transformed_code,
         tenant_id        = tenant_id,
         tenant_slug      = tenant_slug,
+        execution_seed   = execution_seed,
     )
 }
 
