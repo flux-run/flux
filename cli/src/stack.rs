@@ -155,3 +155,102 @@ pub async fn execute_logs(service: Option<String>, tail: u32) -> anyhow::Result<
 
     run(args)
 }
+
+/// `flux stack reset` — stop the stack, wipe volumes, then restart.
+pub async fn execute_reset() -> anyhow::Result<()> {
+    let compose = find_compose_file().ok_or_else(|| {
+        anyhow::anyhow!("{} not found.", COMPOSE_FILE)
+    })?;
+
+    // Prompt for confirmation before wiping data
+    eprint!(
+        "{} This will {}. Continue? [y/N] ",
+        "⚠".yellow().bold(),
+        "destroy all local data volumes".red().bold(),
+    );
+    use std::io::BufRead;
+    let mut line = String::new();
+    std::io::BufReader::new(std::io::stdin())
+        .read_line(&mut line)?;
+    if !matches!(line.trim(), "y" | "Y") {
+        println!("Aborted.");
+        return Ok(());
+    }
+
+    println!("{} Stopping services and removing volumes…", "■".red().bold());
+    let mut down_args = base_args(&compose);
+    down_args.extend(["down".to_string(), "-v".to_string()]);
+    run(down_args)?;
+
+    println!("{} Restarting Fluxbase stack…", "▶".green().bold());
+    let mut up_args = base_args(&compose);
+    up_args.extend(["up".to_string(), "--build".to_string(), "-d".to_string()]);
+    run(up_args)
+}
+
+/// `flux stack seed` — run the seed script inside the running `api` container.
+///
+/// Looks for `scripts/seed.sql` or `scripts/seed.sh` relative to the compose
+/// file, then executes it inside the `db` service.
+pub async fn execute_seed(seed_file: Option<String>) -> anyhow::Result<()> {
+    let compose = find_compose_file().ok_or_else(|| {
+        anyhow::anyhow!("{} not found.", COMPOSE_FILE)
+    })?;
+    let root = compose.parent().unwrap_or(std::path::Path::new("."));
+
+    // Resolve seed file path
+    let seed = if let Some(f) = seed_file {
+        std::path::PathBuf::from(f)
+    } else {
+        let sql = root.join("scripts/seed.sql");
+        let sh  = root.join("scripts/seed.sh");
+        if sql.exists() {
+            sql
+        } else if sh.exists() {
+            sh
+        } else {
+            anyhow::bail!(
+                "No seed file found. Expected scripts/seed.sql or scripts/seed.sh.\n\
+                 Pass --file <path> to specify one."
+            );
+        }
+    };
+
+    println!(
+        "{} Seeding from {}…",
+        "▶".green().bold(),
+        seed.display().to_string().cyan()
+    );
+
+    // Pipe the file through docker exec into psql inside the db container
+    let mut base = base_args(&compose);
+    base.extend([
+        "exec".to_string(),
+        "-T".to_string(),
+        "db".to_string(),
+        "psql".to_string(),
+        "-U".to_string(),
+        "postgres".to_string(),
+    ]);
+
+    let file_content = std::fs::read(&seed)
+        .map_err(|e| anyhow::anyhow!("Cannot read {}: {}", seed.display(), e))?;
+
+    use std::io::Write;
+    let mut cmd = std::process::Command::new("docker");
+    for a in &base { cmd.arg(a); }
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+
+    let mut child = cmd.spawn().map_err(|e| anyhow::anyhow!("docker error: {}", e))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(&file_content)?;
+    }
+    let status = child.wait()?;
+    if !status.success() {
+        anyhow::bail!("Seed command exited with status {}", status);
+    }
+    println!("{} Seed complete.", "✔".green().bold());
+    Ok(())
+}

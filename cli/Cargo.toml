@@ -3,10 +3,15 @@ name = "cli"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "flux"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-clap = { version = "4.5.60", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5.60", features = ["derive", "env"] }
 colored = "2"
 directories = "5"
 dirs = "6.0.0"
@@ -17,3 +22,12 @@ serde_json = "1.0.149"
 tokio = { version = "1.50.0", features = ["full"] }
 uuid = { version = "1.22.0", features = ["v4", "serde"] }
 zip = "0.6"
+open = "5"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+mockito = "1"
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }

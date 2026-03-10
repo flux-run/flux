@@ -1572,7 +1572,339 @@ This is enabled **entirely at the gateway** — no code changes needed, no funct
 
 ---
 
+## Time-Travel Debugging: Replay & Trace Diffing
+
+Fluxbase's trace architecture enables a unique capability: **replay any past request** and **compare execution traces** — similar to `git log` and `git diff` but for backend execution.
+
+This transforms debugging from "what happened?" to "what would happen if I run it again?" and "why did this change?"
+
+### The Single Architectural Change: Request Envelope Capture
+
+To enable time-travel debugging, the gateway captures the **canonical request envelope** when a request arrives:
+
+**New Table: `trace_requests`**
+
+```sql
+trace_requests
+id UUID PRIMARY KEY
+request_id UUID UNIQUE  -- links to platform_logs
+tenant_id UUID
+project_id UUID
+
+-- Original request snapshot
+method VARCHAR(10)  -- GET, POST, etc.
+path TEXT
+headers JSONB
+query_params JSONB
+body JSONB
+
+-- Execution context
+function_id UUID
+function_version TEXT  -- e.g., "v7" or "a93f42c"
+created_at TIMESTAMP
+
+-- Optional artifact reference (for large payloads)
+artifact_uri TEXT NULL  -- S3://, gs://, etc. for >10MB bodies
+```
+
+**Update to `platform_logs`:**
+
+Add one field:
+```sql
+replay_of UUID NULL  -- if non-NULL, this trace is a replay of another trace
+```
+
+**Why this model:**
+- **Single source of truth** — captured once at the gateway, before any mutation
+- **Storage efficient** — avoids payload duplication across spans
+- **Complete context** — contains everything needed to reconstruct execution
+- **Replay-compatible** — original request can be replayed deterministically
+
+### Replay Mechanics
+
+**CLI Command: Replay a Request**
+
+```bash
+$ flux trace replay 550e8400-e29b-41d4-a716-446655440000
+
+Replaying request...
+gateway.receive
+├─ gateway.auth_passed                 4ms
+├─ gateway.rate_limit_passed           2ms
+└─ runtime.execute_function        0-92ms
+   ├─ data_engine.db.insert       15-52ms
+   ├─ composio.gmail.send_email   38-95ms
+   └─ workflow.invoke             12-45ms
+
+Original duration:  145ms
+Replay duration:     92ms
+
+New trace_id: f9e1234a-d5c2-4a77-9c01-1a2b3c4d5e6f
+```
+
+**Execution Flow:**
+
+1. Query `trace_requests` for original envelope
+2. Extract: method, path, headers, body, function_version
+3. Reconstruct HTTP request
+4. Send to gateway with header: `X-Replay-Of: <original-request-id>`
+5. Gateway processes normally (auth, rate limiting, tracing)
+6. Routes to Runtime with same context
+7. New trace created with `replay_of = original-request-id`
+
+### Safe Replay Modes
+
+**Dry-Run Mode** (Safe for Side Effects)
+
+```bash
+$ flux trace replay <id> --dry-run
+
+Tool calls mocked:
+  composio.gmail.send_email → MOCK (no email sent)
+  stripe.charge → MOCK (no charge)
+  
+Database writes skipped:
+  INSERT users → SKIPPED
+  UPDATE orders → SKIPPED
+
+Safe for:
+  • Testing incident causes
+  • Verifying fixes
+  • Debugging without side effects
+```
+
+Implementation: Gateway injects `X-Replay-Mode: dry-run` header; Runtime/Data-Engine mock external calls.
+
+**Partial Replay** (Execute from Specific Span)
+
+```bash
+$ flux trace replay <id> --from data_engine.db.insert
+
+Skips:
+  • gateway.receive
+  • gateway.auth
+  • runtime.execute_function start
+
+Starts at:
+  • data_engine.db.insert (with original query)
+
+Useful for:
+  • Isolating failures to specific service
+  • Testing fixes in downstream systems
+  • Performance regression in one service
+```
+
+**Version-Pinned Replay**
+
+```bash
+$ flux trace replay <id> --function-version v5
+
+Re-executes with function version v5 (original was v7).
+
+Compares:
+  • v7 latency vs v5 latency
+  • Behavior changes between versions
+  • Regression detection
+```
+
+### Trace Diffing
+
+**Compare Two Traces**
+
+```bash
+$ flux trace diff <orig-id> <new-id>
+
+runtime.execute_function
+  orig: 145ms
+  new:   98ms
+  Δ: -47ms (-32%)
+
+├─ data_engine.db.insert
+    orig: 50ms
+    new:  22ms
+    Δ: -28ms (-56%)
+    
+└─ composio.gmail.send_email
+    orig: 95ms
+    new:  76ms
+    Δ: -19ms (-20%)
+
+New code is 32% faster overall.
+Attribute: new index on users.email_hash (reduces query from 50ms to 22ms)
+```
+
+**What Differs Reports:**
+- Span latencies (original vs replay)
+- Error rates
+- Span count changes
+- Tool call outputs
+- Cache hit/miss patterns
+- Resource attribution
+
+**Use Cases:**
+- **Regression detection** — did this deployment slow things down?
+- **Fix validation** — did my code change improve latency?
+- **Performance attribution** — which deployment caused the slowdown?
+- **Behavioral changes** — why does my function output differ?
+
+### Use Cases: Real-World Scenarios
+
+**1. Customer Incident Forensics**
+
+Customer reports: "My order failed yesterday at 3 PM."
+
+Operator workflow:
+
+```bash
+# Find the trace
+$ flux trace search order_id=12345 --time "2026-03-09T15:00:00Z"
+
+Found: 550e8400-e29b-41d4-a716-446655440000
+
+# Replay the exact request
+$ flux trace replay 550e8400-e29b-41d4-a716-446655440000 --dry-run
+
+# See what happens now
+gateway.receive
+├─ auth_passed
+├─ rate_limit_passed
+└─ runtime.execute_function [NOW SUCCEEDS]
+
+# The failure was Stripe timeout (now resolved)
+# Confirm with diff
+$ flux trace diff 550e8400-e29b-41d4-a716-446655440000 <new-replay-id>
+
+stripe.charge latency: 15000ms → 450ms (API recovered)
+```
+
+**2. Deployment Regression Detection**
+
+After deploying function `create_user` v8:
+
+```bash
+# Compare v7 (stable) vs v8 (new)
+$ flux trace search function=create_user limit=100 | head -10 | xargs -I{} flux trace diff {} <v8-trace-id>
+
+Results:
+  v7 avg latency: 145ms
+  v8 avg latency: 1200ms
+
+Regression detected! 8.2x slower.
+
+# Rollback v8, investigate
+$ git log --oneline v7..v8
+  a93f42c: add full-text search index on bio field
+  
+# The new index query is slow. Revert and optimize.
+```
+
+**3. A/B Testing Validation**
+
+Testing two versions of a checkout flow:
+
+```bash
+$ flux trace diff <checkout-v1-id> <checkout-v2-id>
+
+v1: creates order → charges stripe → sends email
+v2: creates order → sends email → charges stripe (reordered)
+
+latency impact:
+  v1: 200ms
+  v2: 180ms (-10%)
+
+behavior:
+  v1: email sent after charge
+  v2: email sent before charge (order still pending, riskier UX)
+
+Decision: v1 is safer, accept latency cost.
+```
+
+### Storage & Sampling Considerations
+
+**Storage Cost:**
+
+Typical request envelope:
+- Headers: ~1 KB
+- Query params: ~100 B
+- Body: 1-5 KB
+
+Total: ~2-6 KB per request
+
+At 100M requests/day:
+- Raw storage: ~200-600 GB/day
+- With compression (gzip): ~30-90 GB/day
+- Acceptable on cloud storage (S3, GCS)
+
+**TTL Policy:**
+
+Recommend: 30 days retention for `trace_requests` (configurable)
+
+```
+trace_requests TTL: 30 days (sufficient for incident investigation)
+platform_logs TTL: 7 days (shorter for span details, traces are queryable via envelope)
+```
+
+**Large Payload Handling:**
+
+For bodies > 10 MB:
+- Store in object storage (S3, GCS)
+- Reference via URI in `artifact_uri` field
+- Fetch on replay if needed
+
+### Schema Integration
+
+Complete request envelope flow:
+
+```
+Client Request (POST /api/users/create, body={...})
+         ↓
+Gateway.receive
+  ├─ INSERT platform_logs (span: start)
+  ├─ INSERT trace_requests (canonical envelope)  ← captured once
+  ├─ INSERT platform_logs (span: route_matched)
+  ├─ INSERT platform_logs (span: auth_passed)
+  └─ Forward to Runtime
+         ↓
+Runtime.execute_function
+  ├─ INSERT platform_logs (span with parent_span_id)
+  ├─ Call db.insert
+  └─ INSERT platform_logs (span: complete)
+         ↓
+Later: flux trace replay <request-id>
+  ├─ SELECT * FROM trace_requests WHERE request_id = ?
+  ├─ Reconstruct request
+  ├─ Send to gateway (with X-Replay-Of header)
+  └─ INSERT platform_logs with replay_of = original_request_id
+```
+
+### Example: Time-Travel UI
+
+Dashboard shows:
+
+```
+Request: create_user (order_id=12345)
+Time: 2026-03-09 15:23:45 UTC
+
+Trace: 550e8400-...
+
+Spans:
+  gateway.receive
+  gateway.auth_passed (6ms)
+  runtime.execute_function
+    ├─ data_engine.db.insert (50ms)
+    ├─ composio.gmail.send_email (95ms)  [ERROR: timeout]
+    └─ [FAILED]
+
+[Replay] [Diff] [Partial Replay]
+
+Click [Replay] → Re-executes now → Success (stripe recovered)
+Click [Diff] → Shows: email_send latency 95ms → 40ms (3x faster now)
+```
+
+---
+
 ## Improvements & Future Considerations
+````
 
 ### Current Limitations
 
