@@ -11,7 +11,7 @@
 /// Resulting Cloud Run log shape:
 ///   {"request_id":"abc123","method":"GET","path":"/schema/graph","msg":"request started"}
 ///   {"request_id":"abc123","status":200,"latency_ms":34,"msg":"request completed"}
-use axum::{extract::Request, middleware::Next, response::Response};
+use axum::{body::Body, extract::Request, middleware::Next, response::Response};
 use uuid::Uuid;
 
 pub async fn request_id_middleware(mut req: Request, next: Next) -> Response {
@@ -56,9 +56,35 @@ pub async fn request_id_middleware(mut req: Request, next: Next) -> Response {
         );
     }
 
-    // Echo ID back so clients can correlate.
+    // Echo ID back so clients can correlate errors immediately.
     if let Ok(val) = request_id.parse() {
         resp.headers_mut().insert("x-request-id", val);
+    }
+
+    // Inject request_id into error response bodies so developers can run
+    // `flux trace <request_id>` directly from any error message.
+    if resp.status().is_client_error() || resp.status().is_server_error() {
+        let is_json = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map_or(false, |ct| ct.contains("application/json"));
+
+        if is_json {
+            let (parts, body) = resp.into_parts();
+            // Drain body — unwrap_or_default ensures resp is always reassigned below.
+            let bytes = axum::body::to_bytes(body, 512 * 1024).await
+                .unwrap_or_default();
+            let new_body = if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if json.get("success") == Some(&serde_json::json!(false)) {
+                    json["request_id"] = serde_json::json!(&request_id);
+                }
+                serde_json::to_vec(&json).unwrap_or_else(|_| bytes.to_vec())
+            } else {
+                bytes.to_vec()
+            };
+            resp = Response::from_parts(parts, Body::from(new_body));
+        }
     }
 
     resp

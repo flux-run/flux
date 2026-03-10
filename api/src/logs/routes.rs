@@ -55,6 +55,8 @@ pub struct LogEntry {
     pub project_id:  Option<Uuid>,
     pub request_id:  Option<String>,
     pub metadata:    Option<serde_json::Value>,
+    /// Trace span classification: start | end | error | event (default)
+    pub span_type:   Option<String>,
     // ── Shared fields ─────────────────────────────────────────────────────
     pub level:       Option<String>,
     pub message:     String,
@@ -109,11 +111,12 @@ pub async fn create_log(
 
     sqlx::query(
         "INSERT INTO platform_logs \
-         (tenant_id, project_id, source, resource_id, level, message, request_id, metadata) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+         (tenant_id, project_id, source, resource_id, level, message, request_id, metadata, span_type) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(tenant_id).bind(project_id).bind(source).bind(&resource_id)
     .bind(level).bind(&entry.message).bind(&entry.request_id).bind(&entry.metadata)
+    .bind(&entry.span_type)
     .execute(&pool).await.map_err(|_| db_err())?;
 
     Ok(ApiResponse::new(serde_json::json!({ "logged": true })))
@@ -221,6 +224,7 @@ pub async fn list_project_logs(
         message:     String,
         request_id:  Option<String>,
         metadata:    Option<serde_json::Value>,
+        span_type:   Option<String>,
         timestamp:   chrono::DateTime<chrono::Utc>,
     }
 
@@ -241,7 +245,7 @@ pub async fn list_project_logs(
 
     let sql = format!(
         "SELECT l.id, l.source, l.resource_id, l.level, l.message, \
-                l.request_id, l.metadata, l.timestamp \
+                l.request_id, l.metadata, l.span_type, l.timestamp \
          FROM platform_logs l \
          WHERE {} \
          ORDER BY l.timestamp {} LIMIT ${}",
@@ -266,6 +270,7 @@ pub async fn list_project_logs(
         "level":      r.level,
         "message":    r.message,
         "request_id": r.request_id,
+        "span_type":  r.span_type.as_deref().unwrap_or("event"),
         "metadata":   r.metadata,
         "timestamp":  r.timestamp.to_rfc3339(),
         "tier":       "hot",
@@ -339,12 +344,14 @@ pub async fn get_trace(
         resource_id: String,
         level:       String,
         message:     String,
+        span_type:   Option<String>,
         metadata:    Option<serde_json::Value>,
         timestamp:   chrono::DateTime<chrono::Utc>,
     }
 
     let rows = sqlx::query_as::<_, TraceRow>(
-        "SELECT l.id, l.source, l.resource_id, l.level, l.message, l.metadata, l.timestamp \
+        "SELECT l.id, l.source, l.resource_id, l.level, l.message, \
+                l.span_type, l.metadata, l.timestamp \
          FROM platform_logs l \
          WHERE l.project_id = $1 AND l.request_id = $2 \
          ORDER BY l.timestamp ASC",
@@ -369,6 +376,7 @@ pub async fn get_trace(
         "resource":  r.resource_id,
         "level":     r.level,
         "message":   r.message,
+        "span_type": r.span_type.as_deref().unwrap_or("event"),
         "metadata":  r.metadata,
         "timestamp": r.timestamp.to_rfc3339(),
     })).collect();

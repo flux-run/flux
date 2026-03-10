@@ -82,7 +82,7 @@ pub async fn execute_handler(
             }
         };
         let duration_ms = start_time.elapsed().as_millis() as u64;
-        if !execution.logs.is_empty() {
+        {
             let log_url       = format!("{}/internal/logs", state.control_plane_url);
             let service_token = state.service_token.clone();
             let function_id   = req.function_id.clone();
@@ -90,21 +90,35 @@ pub async fn execute_handler(
             let project_id    = req.project_id;
             let logs          = execution.logs;
             let client        = state.http_client.clone();
-            let request_id_log = request_id.clone();
+            let rid           = request_id.clone();
+            let dur           = duration_ms;
             tokio::spawn(async move {
                 for log in logs {
                     let _ = client.post(&log_url).header("X-Service-Token", &service_token)
                         .json(&serde_json::json!({
                             "source":      "function",
-                            "resource_id": function_id,
+                            "resource_id": &function_id,
                             "tenant_id":   tenant_id,
                             "project_id":  project_id,
                             "level":       log.level,
                             "message":     log.message,
-                            "request_id":  request_id_log,
+                            "request_id":  &rid,
+                            "span_type":   "event",
                         }))
                         .send().await;
                 }
+                let _ = client.post(&log_url).header("X-Service-Token", &service_token)
+                    .json(&serde_json::json!({
+                        "source":      "runtime",
+                        "resource_id": &function_id,
+                        "tenant_id":   tenant_id,
+                        "project_id":  project_id,
+                        "level":       "info",
+                        "message":     format!("execution completed ({}ms)", dur),
+                        "request_id":  &rid,
+                        "span_type":   "end",
+                    }))
+                    .send().await;
             });
         }
         return (StatusCode::OK, Json(ExecuteResponse { result: execution.output, duration_ms })).into_response();
@@ -275,7 +289,7 @@ pub async fn execute_handler(
     let duration_ms = start_time.elapsed().as_millis() as u64;
 
     // Fire-and-forget: forward ctx.log() lines to /internal/logs
-    if !execution.logs.is_empty() {
+    {
         let log_url        = format!("{}/internal/logs", state.control_plane_url);
         let service_token  = state.service_token.clone();
         let function_id    = req.function_id.clone();
@@ -283,7 +297,8 @@ pub async fn execute_handler(
         let project_id     = req.project_id;
         let logs           = execution.logs;
         let client         = state.http_client.clone();
-        let request_id_log = request_id.clone();
+        let rid            = request_id.clone();
+        let dur            = duration_ms;
 
         tokio::spawn(async move {
             for log in logs {
@@ -292,16 +307,32 @@ pub async fn execute_handler(
                     .header("X-Service-Token", &service_token)
                     .json(&serde_json::json!({
                         "source":      "function",
-                        "resource_id": function_id,
+                        "resource_id": &function_id,
                         "tenant_id":   tenant_id,
                         "project_id":  project_id,
                         "level":       log.level,
                         "message":     log.message,
-                        "request_id":  request_id_log,
+                        "request_id":  &rid,
+                        "span_type":   "event",
                     }))
                     .send()
                     .await;
             }
+            let _ = client
+                .post(&log_url)
+                .header("X-Service-Token", &service_token)
+                .json(&serde_json::json!({
+                    "source":      "runtime",
+                    "resource_id": &function_id,
+                    "tenant_id":   tenant_id,
+                    "project_id":  project_id,
+                    "level":       "info",
+                    "message":     format!("execution completed ({}ms)", dur),
+                    "request_id":  &rid,
+                    "span_type":   "end",
+                }))
+                .send()
+                .await;
         });
     }
 
