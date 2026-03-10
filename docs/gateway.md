@@ -1614,7 +1614,389 @@ curl http://localhost:8081/health
 
 ---
 
-## Traffic Splitting & Canary Rollouts (Future)
+## State Mutations: Event-Sourced Observability (Git for Backend State)
+
+The revolutionary piece that enables true time-travel debugging for entire backend systems:
+
+**Record every state mutation as an append-only event linked to request_id.**
+
+This automatically transforms Fluxbase into an event-sourced system, without forcing developers to design around it.
+
+### Schema: State Mutation Log
+
+Add a new table:
+
+```sql
+state_mutations
+id UUID PRIMARY KEY
+request_id UUID              -- links to the request that caused this change
+span_id UUID NULL            -- if from nested execution
+tenant_id UUID
+
+entity_type TEXT             -- "table:users", "table:orders", "file", "queue:jobs"
+entity_id TEXT               -- primary key / identifier (e.g., "user-123")
+
+operation TEXT               -- insert | update | delete | append
+
+before JSONB NULL            -- state before mutation (null for insert)
+after JSONB NULL             -- state after mutation (null for delete)
+
+created_at TIMESTAMP
+
+INDEX (request_id, created_at)
+INDEX (entity_type, entity_id, created_at)  -- query entity history
+INDEX (created_at)  -- time-based queries
+```
+
+### Example: State Mutations from a User Signup Request
+
+Request: `POST /signup` with `request_id = 550e8400-...`
+
+Every state change is recorded:
+
+```sql
+Mutation 1: Insert User
+  request_id: 550e8400-...
+  entity_type: table:users
+  entity_id: user-123
+  operation: insert
+  before: null
+  after: {
+    "id": "user-123",
+    "email": "alice@example.com",
+    "name": "Alice",
+    "created_at": "2026-03-09T15:30:45Z"
+  }
+
+Mutation 2: Send Email
+  request_id: 550e8400-...
+  entity_type: tool:gmail
+  entity_id: message-887
+  operation: insert
+  before: null
+  after: {
+    "id": "message-887",
+    "to": "alice@example.com",
+    "status": "sent",
+    "timestamp": "2026-03-09T15:30:46Z"
+  }
+
+Mutation 3: Queue Job
+  request_id: 550e8400-...
+  entity_type: queue:jobs
+  entity_id: job-901
+  operation: insert
+  before: null
+  after: {
+    "id": "job-901",
+    "function": "send_welcome_email",
+    "status": "pending",
+    "scheduled_at": "2026-03-09T15:30:47Z"
+  }
+```
+
+Now the request is a **complete state transition** — not just execution trace, but what changed.
+
+### State Timeline: Reconstructing the Backend at Any Point
+
+With append-only mutations linked to request_id, you can reconstruct backend state exactly as it was at any moment:
+
+```
+Timeline of state changes:
+
+T1: 2026-03-09T15:30:00  request A creates user-123 (Alice)
+T2: 2026-03-09T15:31:15  request B updates user-123 (Alice → Alice Smith)
+T3: 2026-03-09T15:32:42  request C deletes user-123
+
+State reconstruction:
+
+at T1:
+  users[user-123] = {name: "Alice"}
+
+at T2:
+  users[user-123] = {name: "Alice Smith"}
+
+at T3:
+  users[user-123] = deleted
+```
+
+**Implementation:** To reconstruct state at time T:
+1. Find latest snapshot before T (or start empty)
+2. Replay all mutations with `created_at <= T` in order
+3. Apply each (insert/update/delete) to get final state
+
+### New CLI Commands: Time-Travel for Backend State
+
+**Inspect backend state at a specific time:**
+
+```bash
+$ flux state inspect --at 2026-03-09T15:00:00
+
+Database state @ 2026-03-09T15:00:00
+
+users
+  user-1    Alice Smith
+  user-2    Bob Johnson
+
+orders
+  order-101 {user: user-1, amount: $45.99}
+  order-102 {user: user-2, amount: $120.00}
+
+queue_jobs
+  (empty)
+```
+
+**See exactly what a request changed:**
+
+```bash
+$ flux trace state 550e8400--e29b-41d4-a716-446655440000
+
+State changes from request
+
+users
+  + user-123 {name: "Alice", email: "alice@example.com"}
+
+email_messages
+  + message-887 {to: "alice@example.com", status: "sent"}
+
+queue_jobs
+  + job-901 {function: "send_welcome_email", status: "pending"}
+```
+
+**Rewind system to before a request executed:**
+
+```bash
+$ flux state checkout 550e8400
+
+Reverting system to state before request 550e8400...
+
+Changes reverted:
+
+users[-] user-123
+email_messages[-] message-887
+queue_jobs[-] job-901
+
+System restored to 2026-03-09T15:30:00 (before request)
+```
+
+**View complete state history of an entity:**
+
+```bash
+$ flux state history table:users:user-123
+
+History of users[user-123]
+
+T1: 2026-03-09T15:30:45  INSERT {name: "Alice"}
+    request:550e8400
+    code_sha:a93f42c
+
+T2: 2026-03-09T16:00:12  UPDATE {name: "Alice Smith"}
+    request:7c2b9d1
+    code_sha:b8f51d9
+
+T3: 2026-03-09T16:15:33  DELETE
+    request:e4a3c2d
+    code_sha:a93f42c
+```
+
+### Storage Strategy
+
+The mutation log is append-only and grows linearly:
+
+**Scale estimate:**
+
+```
+100M requests/day
+~5 mutations per request (on average)
+= 500M mutations/day
+~ 1 KB per mutation (JSON overhead)
+≈ 500 GB/day
+
+Mitigation strategies:
+
+1. Sampling:
+   - 100% sampling for mutations affecting critical entities
+   - 10% sampling for routine CRUD
+   - Can reduce to ~50 GB/day
+
+2. Snapshots:
+   - Periodic snapshot every 10 minutes
+   - Allows pruning old mutations
+   - Replay only mutations after latest snapshot
+
+3. Compression:
+   - Archive old mutations
+   - gzip compressed mutations ~80% reduction
+   - Keep 30 days hot, 90 days archived
+
+4. Entity-level TTL:
+   - Keep mutations for entity X for 90 days
+   - Older mutations can be pruned if snapshot exists
+```
+
+### How to Implement: Runtime State Tracking
+
+When a function executes and modifies state, the runtime automatically logs mutations:
+
+```javascript
+// Example: Runtime automatically tracks state changes
+
+// User signup function
+async function create_user(req) {
+  // Database mutation
+  const user = await ctx.db.insert("users", {
+    email: req.email,
+    name: req.name
+  });
+  
+  // Runtime automatically logs:
+  // state_mutations {
+  //   entity_type: "table:users",
+  //   entity_id: user.id,
+  //   operation: "insert",
+  //   before: null,
+  //   after: {email, name}
+  // }
+  
+  // Tool mutation
+  await ctx.tool.gmail.send({
+    to: req.email,
+    subject: "Welcome"
+  });
+  
+  // Runtime automatically logs:
+  // state_mutations {
+  //   entity_type: "tool:gmail",
+  //   entity_id: <message_id>,
+  //   operation: "insert",
+  //   after: {to, subject, status: "sent"}
+  // }
+}
+```
+
+Developer writes normal code. Runtime intercepts state changes and logs them.
+
+### Handling Nondeterminism in Replay
+
+**Q: How do you handle randomness and generated IDs when replaying?**
+
+**A: Record the outputs, replay uses recorded values.**
+
+Example:
+
+```
+Original execution:
+
+request A calls uuid()
+generated: user-123
+
+Mutation log records:
+  entity_id: user-123  ← the actual generated value
+
+Replay:
+
+flux trace replay <request-A>
+↓
+uuid() called
+↓
+Runtime intercepts and injects recorded value: user-123
+↓
+Deterministic replay executed with same generated values
+```
+
+This is the same approach used in deterministic replay debuggers (e.g., rr).
+
+### External Tool Calls During Replay
+
+Tool calls are handled by classification:
+
+| Tool Type | Original | Dry-Run | Replay with `--enable-real-tools` |
+|-----------|----------|---------|-------------------------------------|
+| `db.insert` | Real | Mocked | Real (idempotent required) |
+| `db.update` | Real | Mocked | Real (idempotent required) |
+| `db.delete` | Real | Mocked | Real (idempotent required) |
+| `gmail.send` | Real | Mocked | Mocked (financial: never double-send) |
+| `stripe.charge` | Real | Mocked | Mocked (always prevents double-charge) |
+| `workflow.run` | Real | Mocked | Mocked (would create duplicate jobs) |
+
+### The Complete Feature Stack
+
+Your system now supports:
+
+| Command | What | Dimension |
+|---------|------|-----------|
+| `flux trace <id>` | View execution trace | Execution |
+| `flux trace debug <id>` | Step through past execution | Execution + State |
+| `flux trace replay <id>` | Re-execute request | Execution |
+| `flux trace diff <a> <b>` | Compare traces | Execution |
+| `flux trace blame <id>` | Git blame for code | Code |
+| `flux trace state <id>` | What changed | State |
+| `flux state inspect --at T` | Backend at time T | State |
+| `flux state history <entity>` | Entity change history | State |
+| `flux state checkout T` | Restore system state | State |
+
+This is:
+
+- **Git** (blame, history, checkout, diff)
+- **+ Debugger** (step through execution, inspect locals)
+- **+ APM** (traces, metrics, performance)
+- **+ Database time machine** (reconstruct state at any time)
+
+For backend execution.
+
+### Why This Is Unique
+
+Traditional platforms capture:
+- Span duration
+- Error messages
+- Custom attributes
+
+Event-sourced systems capture:
+- State changes
+- But require developer design
+
+Fluxbase captures both automatically:
+1. **Execution** (trace + checkpoints) — what happened
+2. **State mutations** (append-only log) — what changed
+3. **Code provenance** (code_sha) — which code caused it
+4. **Request envelope** (trace_requests) — what was the input
+
+Developers don't change their code. The platform transparently records everything.
+
+### The Ultimate Debugging Experience
+
+Engineer gets bug report: "User balance is wrong"
+
+```bash
+# Find affected user
+$ flux state history table:users:user-123
+
+Shows all mutations to that user
+
+# See a suspicious update
+$ flux trace blame <suspicious-request-id>
+
+Shows which code change caused it
+
+# Understand the issue
+$ flux trace debug <request-id>
+
+Step through execution, inspect variables at time of change
+
+# Verify fix
+$ flux trace replay <request-id> --function-version <new-version>
+
+Compare old vs new behavior
+
+# Restore if needed
+$ flux state checkout <request-id>
+
+Rewind system to before the bug
+```
+
+All without leaving the command line. All without reproduction. All with complete audit trail.
+
+---
 
 One of the killer features enabled by the gateway architecture:
 
