@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Puzzle, CheckCircle2, XCircle, ExternalLink, Unplug } from 'lucide-react'
+import { CheckCircle2, XCircle, ExternalLink, Unplug } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useStore } from '@/state/tenantStore'
 import { Button } from '@/components/ui/button'
@@ -18,14 +18,6 @@ interface Tool {
   label: string
   description: string
   connected: boolean
-}
-
-interface Connected {
-  id: string
-  provider: string
-  account_label: string | null
-  status: string
-  connected_at: string | null
 }
 
 // ── Provider grouping ──────────────────────────────────────────────────────
