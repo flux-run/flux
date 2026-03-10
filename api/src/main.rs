@@ -193,6 +193,11 @@ pub fn create_app(state: AppState) -> Router {
         .route("/logs",            get(logs::routes::list_project_logs))
         // Full request trace — all log spans for a given request_id across services
         .route("/traces/{request_id}", get(logs::routes::get_trace))
+        // Integrations + tool catalog
+        .route("/tools",                   get(routes::tools::list_tools))
+        .route("/tools/connected",         get(routes::tools::list_connected))
+        .route("/tools/connect/:provider", post(routes::tools::connect_provider))
+        .route("/tools/disconnect/:provider", delete(routes::tools::disconnect_provider))
         // Data Engine management proxy — CRUD for databases, tables, schema,
         // relationships, policies, hooks, subscriptions, workflows, cron.
         // Execution traffic (POST /db/query) is routed to the gateway instead.
@@ -229,6 +234,8 @@ pub fn create_app(state: AppState) -> Router {
     Router::new()
         .merge(authenticated_api)
         .nest("/internal", internal_routes)
+        // OAuth callback — Composio redirects here after provider OAuth; no auth required
+        .route("/tools/oauth/callback", get(routes::tools::oauth_callback))
         .route("/health", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
         .route("/version", get(|| async {
             Json(serde_json::json!({

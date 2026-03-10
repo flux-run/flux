@@ -23,6 +23,7 @@ import WorkflowsPage from '@/pages/workflows/WorkflowsPage'
 import CronPage from '@/pages/cron/CronPage'
 import QueryExplorerPage from '@/pages/query/QueryExplorerPage'
 import SchemaGraphPage from '@/pages/schema/SchemaGraphPage'
+import IntegrationsPage from '@/pages/integrations/IntegrationsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -68,7 +69,8 @@ export default function App() {
               <Route path="secrets" element={<SecretsPage />} />
               <Route path="api-keys" element={<ApiKeysPage />} />
               <Route path="logs" element={<LogsPage />} />
-              <Route path="settings" element={<ProjectSettingsPage />} />
+              <Route path="settings"      element={<ProjectSettingsPage />} />
+              <Route path="integrations"  element={<IntegrationsPage />} />
             </Route>
           </Route>
 
