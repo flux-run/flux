@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Quickstart — Fluxbase Docs</title>
+  <meta name="description" content="Deploy your first Fluxbase backend in under 5 minutes.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="logo" href="/"><span>flux</span>base</a>
+  <div class="nav-links">
+    <a href="/docs" class="active">Docs</a>
+    <a href="/examples">Examples</a>
+    <a href="/dashboard">Dashboard</a>
+  </div>
+  <a class="nav-cta" href="/dashboard">Dashboard →</a>
+</nav>
+
+<div class="page-wrap">
+<nav class="sidebar">
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Getting Started</div>
+    <a href="/docs/install">Install</a>
+    <a href="/docs/quickstart" class="active">Quickstart</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Platform</div>
+    <a href="/docs/functions">Functions</a>
+    <a href="/docs/database">Database</a>
+    <a href="/docs/observability">Observability</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">CLI Reference</div>
+    <a href="/docs/cli">All Commands</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Examples</div>
+    <a href="/examples/todo-api">Todo API</a>
+    <a href="/examples/webhook-worker">Webhook Worker</a>
+    <a href="/examples/ai-backend">AI Backend</a>
+  </div>
+</nav>
+
+<main class="main-content">
+<article class="content">
+
+<h1>Deploy your first backend in 5 minutes</h1>
+<p class="page-subtitle">From a fresh machine to a live API — using the Fluxbase CLI.</p>
+
+<!-- Step list -->
+<ol class="steps">
+
+  <li>
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <h3>Install the CLI</h3>
+      <p>One command — detects your OS and architecture automatically.</p>
+    </div>
+  </li>
+
+  <li>
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <h3>Log in</h3>
+      <p>Saves a credential token locally.</p>
+    </div>
+  </li>
+
+  <li>
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <h3>Scaffold a project</h3>
+      <p>Pick a template — 4 CRUD functions and a Postgres schema are generated for you.</p>
+    </div>
+  </li>
+
+  <li>
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <h3>Deploy</h3>
+      <p>All functions in the project are bundled and deployed in a single command.</p>
+    </div>
+  </li>
+
+  <li>
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <h3>Call the API</h3>
+      <p>Your functions are live at a public endpoint. Call them with <code>curl</code> or any HTTP client.</p>
+    </div>
+  </li>
+
+</ol>
+
+<!-- Complete walkthrough -->
+<h2>Full walkthrough</h2>
+
+<h3>Step 1 — Install</h3>
+<pre><code><span class="shell-prompt">$</span> curl -fsSL https://fluxbase.co/install | bash
+<span class="cm"># Fluxbase CLI 0.1.0 installed to /usr/local/bin/flux</span>
+
+<span class="shell-prompt">$</span> flux --version
+flux 0.1.0</code></pre>
+
+<h3>Step 2 — Log in</h3>
+<pre><code><span class="shell-prompt">$</span> flux login
+<span class="cm"># Opens browser → sign in with Google
+# → Logged in as you@example.com</span></code></pre>
+
+<h3>Step 3 — Create a project</h3>
+<p>Create a new project from the <strong>todo-api</strong> template.  The interactive picker lets you choose, or pass <code>--template</code> directly:</p>
+<pre><code><span class="shell-prompt">$</span> flux create my-todo-api --template todo-api
+
+  flux create
+
+  Scaffolding todo-api template into my-todo-api/ ...
+
+    + my-todo-api/functions/create_todo/index.ts
+    + my-todo-api/functions/list_todos/index.ts
+    + my-todo-api/functions/update_todo/index.ts
+    + my-todo-api/functions/delete_todo/index.ts
+    + my-todo-api/schema/todos.sql
+    + my-todo-api/README.md
+    + my-todo-api/.env.example
+    + my-todo-api/.gitignore
+  ✔ Project created: my-todo-api/</code></pre>
+
+<pre><code><span class="shell-prompt">$</span> cd my-todo-api</code></pre>
+
+<h3>Step 4 — Link to a Fluxbase project</h3>
+<pre><code><span class="cm"># Create a project in Fluxbase if you don't have one yet</span>
+<span class="shell-prompt">$</span> flux project create --name "My Todo App"
+<span class="cm"># → project_id: 3787e1fa-...-bccc12</span>
+
+<span class="cm"># Link this directory to that project</span>
+<span class="shell-prompt">$</span> flux init --project 3787e1fa-...-bccc12</code></pre>
+
+<h3>Step 5 — Deploy</h3>
+<pre><code><span class="shell-prompt">$</span> flux deploy
+
+  Deploying 4 functions...
+
+  ✔ create_todo   → https://gw.fluxbase.co/create_todo
+  ✔ list_todos    → https://gw.fluxbase.co/list_todos
+  ✔ update_todo   → https://gw.fluxbase.co/update_todo
+  ✔ delete_todo   → https://gw.fluxbase.co/delete_todo
+
+  Deployed in 8.2s</code></pre>
+
+<h3>Step 6 — Call the API</h3>
+<pre><code><span class="cm"># Create a todo</span>
+<span class="shell-prompt">$</span> curl -X POST https://gw.fluxbase.co/create_todo \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: YOUR_API_KEY" \
+    -d '{"title": "Launch on Fluxbase"}'
+<span class="str">{"id":"c7f2...","title":"Launch on Fluxbase","done":false}</span>
+
+<span class="cm"># List all todos</span>
+<span class="shell-prompt">$</span> curl https://gw.fluxbase.co/list_todos \
+    -H "X-API-Key: YOUR_API_KEY"
+<span class="str">{"todos":[{"id":"c7f2...","title":"Launch on Fluxbase","done":false}]}</span></code></pre>
+
+<!-- What's inside -->
+<h2>What got deployed</h2>
+<p>Each function in <code>functions/</code> is an independent serverless unit:</p>
+
+<pre><code>my-todo-api/
+  functions/
+    create_todo/
+      index.ts    ← your function handler
+      flux.json   ← name, runtime, route config
+      package.json
+    list_todos/   ...
+    update_todo/  ...
+    delete_todo/  ...
+  schema/
+    todos.sql     ← Postgres DDL
+  .env.example    ← required env vars
+  README.md</code></pre>
+
+<p>Open <code>functions/create_todo/index.ts</code> to see the function code:</p>
+<pre><code><span class="kw">import</span> { <span class="fn">defineFunction</span> } <span class="kw">from</span> <span class="str">"@fluxbase/functions"</span>;
+
+<span class="kw">export default</span> <span class="fn">defineFunction</span>({
+  name: <span class="str">"create_todo"</span>,
+  handler: <span class="kw">async</span> ({ input, ctx }) => {
+    <span class="kw">const</span> [todo] = <span class="kw">await</span> ctx.db
+      .<span class="fn">query</span>({ table: <span class="str">"todos"</span>, operation: <span class="str">"insert"</span>,
+               data: { title: input.title, done: <span class="kw">false</span> } });
+    <span class="kw">return</span> todo;
+  },
+});</code></pre>
+
+<!-- Observability -->
+<h2>Inspect traces</h2>
+<p>After invoking your functions, view the distributed trace:</p>
+<pre><code><span class="shell-prompt">$</span> flux logs --tail
+<span class="shell-prompt">$</span> flux trace &lt;trace-id&gt;</code></pre>
+
+<div class="callout callout-success">
+  <div class="callout-title">You're live!</div>
+  Check out the <a href="/docs/functions">Functions reference</a>, <a href="/docs/database">Database guide</a>,
+  or explore the <a href="/examples">example projects</a>.
+</div>
+
+<hr>
+<p style="display:flex;gap:16px;font-size:.875rem;">
+  <a href="/docs/install">← Install</a>
+  <a href="/docs/functions">Next: Functions →</a>
+</p>
+
+</article>
+</main>
+</div>
+</body>
+</html>

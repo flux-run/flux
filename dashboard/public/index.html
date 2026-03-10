@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Fluxbase — Deploy backends in minutes</title>
+  <meta name="description" content="Fluxbase is a serverless backend platform. Write functions, deploy instantly, observe everything.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+  <style>
+    .gradient-text {
+      background: linear-gradient(135deg, #6c63ff 0%, #a78bfa 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ─── Nav ─────────────────────────────────────────────────────────────── -->
+<nav class="topnav">
+  <a class="logo" href="/"><span>flux</span>base</a>
+  <div class="nav-links">
+    <a href="/docs">Docs</a>
+    <a href="/docs/cli">CLI</a>
+    <a href="/examples">Examples</a>
+  </div>
+  <a class="nav-cta" href="/dashboard">Dashboard →</a>
+</nav>
+
+<!-- ─── Hero ─────────────────────────────────────────────────────────────── -->
+<div class="landing-wrap">
+<section class="hero">
+  <span class="eyebrow">Serverless Backend Platform</span>
+  <h1>Deploy your first backend<br><span class="gradient-text">in under 5 minutes.</span></h1>
+  <p>Write TypeScript functions. Connect a database. Deploy globally. Observe everything — from your terminal.</p>
+  <div class="hero-actions">
+    <a class="btn-primary" href="/docs/quickstart">Get started →</a>
+    <a class="btn-secondary" href="/docs">Read the docs</a>
+  </div>
+  <div style="display:flex;justify-content:center;margin-top:32px;">
+    <div class="install-hint">
+      <span class="prompt">$</span>
+      curl -fsSL https://fluxbase.co/install | bash
+    </div>
+  </div>
+</section>
+
+<!-- ─── Features ─────────────────────────────────────────────────────────── -->
+<div class="feature-grid">
+  <div class="feature-card">
+    <div class="icon">⚡</div>
+    <h3>Serverless Functions</h3>
+    <p>Write TypeScript. Deploy in seconds. Auto-scale globally. No servers to manage.</p>
+  </div>
+  <div class="feature-card">
+    <div class="icon">🗄️</div>
+    <h3>Hosted Database</h3>
+    <p>Postgres-backed. Simple query API. Row-level security. Migrations via CLI.</p>
+  </div>
+  <div class="feature-card">
+    <div class="icon">🔭</div>
+    <h3>Built-in Observability</h3>
+    <p>Distributed traces. N+1 query detection. Slow query alerts. Index suggestions. All automatic.</p>
+  </div>
+  <div class="feature-card">
+    <div class="icon">🔑</div>
+    <h3>Secrets Management</h3>
+    <p>Encrypted key-value store. Inject into functions at runtime. Rotate without redeploy.</p>
+  </div>
+  <div class="feature-card">
+    <div class="icon">🛡️</div>
+    <h3>API Gateway</h3>
+    <p>Auth, rate limiting, CORS, and routing included. Expose functions as REST endpoints instantly.</p>
+  </div>
+  <div class="feature-card">
+    <div class="icon">🖥️</div>
+    <h3>Powerful CLI</h3>
+    <p><code>flux create</code>, <code>flux deploy</code>, <code>flux trace</code>. Everything from your terminal.</p>
+  </div>
+</div>
+
+<!-- ─── Quick demo ─────────────────────────────────────────────────────────── -->
+<section style="padding:0 24px 80px; max-width:900px; margin:0 auto;">
+  <h2 style="font-size:1.5rem;font-weight:700;text-align:center;margin-bottom:40px;">From zero to deployed in one terminal session.</h2>
+  <pre><code><span class="shell-prompt">$</span> curl -fsSL https://fluxbase.co/install | bash
+<span class="cm"># → Fluxbase CLI 0.1.0 installed</span>
+
+<span class="shell-prompt">$</span> flux login
+<span class="cm"># → Opens browser, saves token</span>
+
+<span class="shell-prompt">$</span> flux create todo-api --template todo-api
+<span class="cm"># → Scaffolds functions/, schema/, README.md</span>
+
+<span class="shell-prompt">$</span> cd todo-api &amp;&amp; flux deploy
+<span class="cm"># → Deploys all 4 functions to Fluxbase</span>
+
+<span class="shell-prompt">$</span> curl https://your-app.fluxbase.co/list_todos
+<span class="str">{"todos":[]}</span></code></pre>
+</section>
+
+<!-- ─── Examples ─────────────────────────────────────────────────────────── -->
+<section class="examples-strip">
+  <h2>Start from a template</h2>
+  <p>Production-ready examples you can deploy in minutes.</p>
+  <div class="example-cards">
+    <a class="example-card" href="/examples/todo-api">
+      <div class="tag">REST API</div>
+      <h3>Todo API</h3>
+      <p>Full CRUD with Postgres. Create, list, update, delete tasks.</p>
+    </a>
+    <a class="example-card" href="/examples/webhook-worker">
+      <div class="tag">Event Processing</div>
+      <h3>Webhook Worker</h3>
+      <p>Receive, validate, and process webhooks. Stores events in the database.</p>
+    </a>
+    <a class="example-card" href="/examples/ai-backend">
+      <div class="tag">AI / LLM</div>
+      <h3>AI Backend</h3>
+      <p>Proxy to OpenAI with logging, rate limiting, and response caching.</p>
+    </a>
+  </div>
+</section>
+
+<!-- ─── CTA ─────────────────────────────────────────────────────────────── -->
+<section class="cta-strip">
+  <h2>Ready to deploy?</h2>
+  <p>Install the CLI and your first function is live in under 5 minutes.</p>
+  <a class="btn-primary" href="/docs/quickstart">Start the quickstart →</a>
+</section>
+
+<footer>
+  <span>© 2026 Fluxbase</span>
+  <div style="display:flex;gap:20px;">
+    <a href="/docs">Docs</a>
+    <a href="/examples">Examples</a>
+    <a href="/docs/cli">CLI</a>
+    <a href="/dashboard">Dashboard</a>
+  </div>
+</footer>
+
+</div><!-- .landing-wrap -->
+</body>
+</html>

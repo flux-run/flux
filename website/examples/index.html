@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Examples — Fluxbase</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="logo" href="/"><span>flux</span>base</a>
+  <div class="nav-links">
+    <a href="/docs">Docs</a>
+    <a href="/examples" class="active">Examples</a>
+    <a href="/dashboard">Dashboard</a>
+  </div>
+</nav>
+
+<div class="landing-wrap">
+<section class="hero" style="padding-bottom:40px;">
+  <span class="eyebrow">Examples</span>
+  <h1>Start from a template</h1>
+  <p>Production-ready projects — deploy in minutes with <code>flux create</code>.</p>
+</section>
+
+<div style="max-width:900px;margin:0 auto;padding:0 24px 80px;display:flex;flex-wrap:wrap;gap:20px;">
+
+  <a class="example-card" href="/examples/todo-api" style="width:100%;max-width:340px;">
+    <div class="tag">REST API</div>
+    <h3>Todo API</h3>
+    <p>Full CRUD with Postgres. Create, list, update, and delete tasks using 4 serverless functions.</p>
+    <p style="margin-top:12px;font-size:.8rem;color:#6c63ff;">flux create my-app --template todo-api →</p>
+  </a>
+
+  <a class="example-card" href="/examples/webhook-worker" style="width:100%;max-width:340px;">
+    <div class="tag">Event Processing</div>
+    <h3>Webhook Worker</h3>
+    <p>Receive, validate, and process incoming webhooks. Stores events in the database with full trace visibility.</p>
+    <p style="margin-top:12px;font-size:.8rem;color:#6c63ff;">flux create my-app --template webhook-worker →</p>
+  </a>
+
+  <a class="example-card" href="/examples/ai-backend" style="width:100%;max-width:340px;">
+    <div class="tag">AI / LLM</div>
+    <h3>AI Backend</h3>
+    <p>Proxy requests to OpenAI with built-in logging, rate limiting, and response persistence.</p>
+    <p style="margin-top:12px;font-size:.8rem;color:#6c63ff;">flux create my-app --template ai-backend →</p>
+  </a>
+
+</div>
+
+<footer>
+  <span>© 2026 Fluxbase</span>
+  <div style="display:flex;gap:20px;">
+    <a href="/docs">Docs</a>
+    <a href="/examples">Examples</a>
+    <a href="/dashboard">Dashboard</a>
+  </div>
+</footer>
+</div>
+</body>
+</html>

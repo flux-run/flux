@@ -1,0 +1,168 @@
+# .github/workflows/release-cli.yml
+# Builds the Fluxbase CLI for all 6 platforms and uploads binaries to a
+# GitHub Release whenever a tag matching v*.*.* is pushed.
+#
+# Trigger examples:
+#   git tag v0.1.0 && git push origin v0.1.0
+
+name: Release CLI
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]*"
+
+permissions:
+  contents: write   # needed to create releases and upload assets
+
+jobs:
+  # ─── macOS: native ARM64 + cross-compile AMD64 ────────────────────────────
+  build-macos:
+    name: macOS (${{ matrix.target }})
+    runs-on: macos-14          # Apple Silicon runner
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            asset:  flux-darwin-arm64
+          - target: x86_64-apple-darwin
+            asset:  flux-darwin-amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p cli
+      - name: Copy binary
+        run: cp target/${{ matrix.target }}/release/cli ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  # ─── Linux: AMD64 + ARM64 via cross ───────────────────────────────────────
+  build-linux:
+    name: Linux (${{ matrix.target }})
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            asset:  flux-linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            asset:  flux-linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+      - name: Build
+        run: cross build --release --target ${{ matrix.target }} -p cli
+      - name: Copy binary
+        run: cp target/${{ matrix.target }}/release/cli ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  # ─── Windows: AMD64 + ARM64 ───────────────────────────────────────────────
+  build-windows:
+    name: Windows (${{ matrix.target }})
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            asset:  flux-windows-amd64.exe
+          - target: aarch64-pc-windows-msvc
+            asset:  flux-windows-arm64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p cli
+      - name: Copy binary
+        run: cp target/${{ matrix.target }}/release/cli.exe ${{ matrix.asset }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  # ─── Create GitHub Release and upload all binaries ────────────────────────
+  release:
+    name: Create Release
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-assets
+          find dist -type f -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum * > sha256sums.txt
+
+      - name: Extract release notes from CHANGELOG (if present)
+        id: notes
+        run: |
+          if [[ -f CHANGELOG.md ]]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            # Extract section between ## [VERSION] and next ##
+            NOTES=$(awk "/^## \[$VERSION\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+            echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$NOTES" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          else
+            echo "notes=No changelog entry for this release." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: flux ${{ github.ref_name }}
+          body: |
+            ## Install
+
+            ```bash
+            curl -fsSL https://fluxbase.co/install | bash
+            ```
+
+            Or download a binary directly for your platform:
+
+            | Platform | Architecture | Download |
+            |---|---|---|
+            | macOS | arm64 | [flux-darwin-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-darwin-arm64) |
+            | macOS | amd64 | [flux-darwin-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-darwin-amd64) |
+            | Linux | arm64 | [flux-linux-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-linux-arm64) |
+            | Linux | amd64 | [flux-linux-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-linux-amd64) |
+            | Windows | arm64 | [flux-windows-arm64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-windows-arm64.exe) |
+            | Windows | amd64 | [flux-windows-amd64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-windows-amd64.exe) |
+
+            ${{ steps.notes.outputs.notes }}
+          files: release-assets/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

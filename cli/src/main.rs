@@ -21,7 +21,8 @@ mod trace;
 
 #[derive(Parser)]
 #[command(name = "flux")]
-#[command(about = "Fluxbase CLI", long_about = None)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(about = "Fluxbase CLI — deploy backends in minutes", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

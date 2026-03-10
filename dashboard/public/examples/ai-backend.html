@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Backend — Fluxbase Examples</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="logo" href="/"><span>flux</span>base</a>
+  <div class="nav-links">
+    <a href="/docs">Docs</a>
+    <a href="/examples" class="active">Examples</a>
+    <a href="/dashboard">Dashboard</a>
+  </div>
+</nav>
+<div class="page-wrap">
+<nav class="sidebar">
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Examples</div>
+    <a href="/examples/todo-api">Todo API</a>
+    <a href="/examples/webhook-worker">Webhook Worker</a>
+    <a href="/examples/ai-backend" class="active">AI Backend</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Docs</div>
+    <a href="/docs/quickstart">Quickstart</a>
+    <a href="/docs/functions">Functions</a>
+    <a href="/docs/database">Database</a>
+    <a href="/docs/cli">CLI</a>
+  </div>
+</nav>
+<main class="main-content">
+<article class="content">
+
+<span style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#6c63ff;">AI / LLM</span>
+<h1 style="margin-top:6px;">AI Backend</h1>
+<p class="page-subtitle">Proxy requests to OpenAI with built-in logging, rate limiting, and response persistence — deployed as a single Fluxbase function.</p>
+
+<h2>Deploy in one command</h2>
+<pre><code><span class="shell-prompt">$</span> flux create my-ai --template ai-backend
+<span class="shell-prompt">$</span> cd my-ai
+<span class="shell-prompt">$</span> flux secrets set OPENAI_API_KEY "sk-..."
+<span class="shell-prompt">$</span> flux init --project &lt;PROJECT_ID&gt;
+<span class="shell-prompt">$</span> flux deploy</code></pre>
+
+<h2>What gets created</h2>
+<pre><code>my-ai/
+  functions/
+    ai_query/          POST /ai_query
+  schema/
+    ai_queries.sql
+  README.md
+  .env.example</code></pre>
+
+<h2>Database schema</h2>
+<pre><code><span class="kw">CREATE TABLE IF NOT EXISTS</span> ai_queries (
+  id           UUID <span class="kw">DEFAULT</span> gen_random_uuid() <span class="kw">PRIMARY KEY</span>,
+  prompt       TEXT <span class="kw">NOT NULL</span>,
+  model        TEXT <span class="kw">NOT NULL</span> <span class="kw">DEFAULT</span> <span class="str">'gpt-4o-mini'</span>,
+  response     TEXT,
+  tokens_used  INT,
+  latency_ms   INT,
+  created_at   TIMESTAMPTZ <span class="kw">DEFAULT</span> now()
+);</code></pre>
+
+<h2>Function</h2>
+
+<h3>ai_query — POST /ai_query</h3>
+<pre><code><span class="cm">// functions/ai_query/index.ts</span>
+<span class="kw">import</span> { <span class="fn">defineFunction</span> } <span class="kw">from</span> <span class="str">"@fluxbase/functions"</span>;
+
+<span class="kw">export default</span> <span class="fn">defineFunction</span>({
+  name: <span class="str">"ai_query"</span>,
+  handler: <span class="kw">async</span> ({ input, ctx }) => {
+    <span class="kw">const</span> model  = (input.model <span class="kw">as</span> <span class="type">string</span>) ?? <span class="str">"gpt-4o-mini"</span>;
+    <span class="kw">const</span> prompt = input.prompt <span class="kw">as</span> <span class="type">string</span>;
+
+    <span class="cm">// Retrieve API key from secrets</span>
+    <span class="kw">const</span> apiKey = ctx.env.OPENAI_API_KEY;
+    <span class="kw">if</span> (!apiKey) <span class="kw">throw new</span> <span class="fn">Error</span>(<span class="str">"OPENAI_API_KEY not configured"</span>);
+
+    ctx.<span class="fn">log</span>(<span class="str">"querying LLM"</span>, { model, prompt_len: prompt.length });
+
+    <span class="kw">const</span> start = Date.<span class="fn">now</span>();
+
+    <span class="cm">// Call OpenAI</span>
+    <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"https://api.openai.com/v1/chat/completions"</span>, {
+      method: <span class="str">"POST"</span>,
+      headers: {
+        <span class="str">"Authorization"</span>: <span class="str">`Bearer ${apiKey}`</span>,
+        <span class="str">"Content-Type"</span>: <span class="str">"application/json"</span>,
+      },
+      body: JSON.<span class="fn">stringify</span>({
+        model,
+        messages: [{ role: <span class="str">"user"</span>, content: prompt }],
+      }),
+    });
+
+    <span class="kw">if</span> (!res.ok) <span class="kw">throw new</span> <span class="fn">Error</span>(<span class="str">`OpenAI error: ${res.status}`</span>);
+
+    <span class="kw">const</span> data       = <span class="kw">await</span> res.<span class="fn">json</span>();
+    <span class="kw">const</span> answer     = data.choices[<span class="num">0</span>]?.message?.content ?? <span class="str">""</span>;
+    <span class="kw">const</span> tokensUsed = data.usage?.total_tokens ?? <span class="num">0</span>;
+    <span class="kw">const</span> latency    = Date.<span class="fn">now</span>() - start;
+
+    <span class="cm">// Persist to database</span>
+    <span class="kw">await</span> ctx.db.<span class="fn">query</span>({
+      table: <span class="str">"ai_queries"</span>, operation: <span class="str">"insert"</span>,
+      data: { prompt, model, response: answer, tokens_used: tokensUsed, latency_ms: latency },
+    });
+
+    ctx.<span class="fn">log</span>(<span class="str">"LLM response"</span>, { tokens: tokensUsed, latency_ms: latency });
+
+    <span class="kw">return</span> { answer, model, tokens_used: tokensUsed, latency_ms: latency };
+  },
+});</code></pre>
+
+<h2>Usage</h2>
+<pre><code><span class="shell-prompt">$</span> curl -X POST https://gw.fluxbase.co/ai_query \
+    -H "X-API-Key: $API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"prompt":"What is Fluxbase?","model":"gpt-4o-mini"}'
+
+<span class="str">{
+  "answer": "Fluxbase is a serverless backend platform...",
+  "model": "gpt-4o-mini",
+  "tokens_used": 142,
+  "latency_ms": 834
+}</span></code></pre>
+
+<h2>Query stored responses</h2>
+<pre><code><span class="cm"># List recent queries from the database</span>
+<span class="shell-prompt">$</span> curl -X POST https://gw.fluxbase.co/list_queries \
+    -H "X-API-Key: $API_KEY" \
+    -d '{"limit":10}'</code></pre>
+
+<h2>Extend this example</h2>
+<ul>
+  <li>Add a <strong>cache layer</strong> — check <code>ai_queries</code> for identical prompts before calling OpenAI</li>
+  <li>Add <strong>streaming</strong> — return a stream response for real-time output</li>
+  <li>Add <strong>cost tracking</strong> — log token costs per user or project</li>
+  <li>Add <strong>model routing</strong> — route cheap prompts to smaller models automatically</li>
+</ul>
+
+<div class="callout callout-info">
+  <div class="callout-title">Observability included</div>
+  Every call is traced automatically. View latency, token counts, and slow queries with
+  <code>flux trace &lt;request-id&gt;</code>.
+</div>
+
+<hr>
+<p style="display:flex;gap:16px;font-size:.875rem;">
+  <a href="/examples/webhook-worker">← Webhook Worker</a>
+  <a href="/examples">All examples</a>
+</p>
+
+</article>
+</main>
+</div>
+</body>
+</html>

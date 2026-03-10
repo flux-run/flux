@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Docs — Fluxbase</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="logo" href="/"><span>flux</span>base</a>
+  <div class="nav-links">
+    <a href="/docs" class="active">Docs</a>
+    <a href="/examples">Examples</a>
+    <a href="/dashboard">Dashboard</a>
+  </div>
+  <a class="nav-cta" href="/docs/quickstart">Quickstart →</a>
+</nav>
+
+<div class="page-wrap">
+<nav class="sidebar">
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Getting Started</div>
+    <a href="/docs/install">Install</a>
+    <a href="/docs/quickstart">Quickstart</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Platform</div>
+    <a href="/docs/functions">Functions</a>
+    <a href="/docs/database">Database</a>
+    <a href="/docs/observability">Observability</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">CLI Reference</div>
+    <a href="/docs/cli">All Commands</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Examples</div>
+    <a href="/examples/todo-api">Todo API</a>
+    <a href="/examples/webhook-worker">Webhook Worker</a>
+    <a href="/examples/ai-backend">AI Backend</a>
+  </div>
+</nav>
+
+<main class="main-content">
+<article class="content">
+
+<h1>Fluxbase Documentation</h1>
+<p class="page-subtitle">Everything you need to deploy, scale, and observe serverless backends.</p>
+
+<div class="callout callout-info">
+  <div class="callout-title">New here?</div>
+  Start with the <a href="/docs/quickstart">Quickstart</a> — deploy your first backend in under 5 minutes.
+</div>
+
+<h2>Getting started</h2>
+<table>
+  <thead><tr><th>Guide</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><a href="/docs/install">Install</a></td><td>Install the CLI on macOS, Linux, or Windows</td></tr>
+    <tr><td><a href="/docs/quickstart">Quickstart</a></td><td>Deploy your first function in 5 minutes</td></tr>
+  </tbody>
+</table>
+
+<h2>Platform</h2>
+<table>
+  <thead><tr><th>Guide</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><a href="/docs/functions">Functions</a></td><td>Write and deploy TypeScript serverless functions</td></tr>
+    <tr><td><a href="/docs/database">Database</a></td><td>Postgres-backed structured queries, schema migrations</td></tr>
+    <tr><td><a href="/docs/observability">Observability</a></td><td>Traces, N+1 detection, slow queries, index suggestions</td></tr>
+  </tbody>
+</table>
+
+<h2>CLI Reference</h2>
+<table>
+  <thead><tr><th>Command</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><a href="/docs/cli#create"><code>flux create</code></a></td><td>Scaffold a new project from a template</td></tr>
+    <tr><td><a href="/docs/cli#deploy"><code>flux deploy</code></a></td><td>Deploy functions to Fluxbase</td></tr>
+    <tr><td><a href="/docs/cli#invoke"><code>flux invoke</code></a></td><td>Call a deployed function</td></tr>
+    <tr><td><a href="/docs/cli#logs"><code>flux logs</code></a></td><td>Stream function logs</td></tr>
+    <tr><td><a href="/docs/cli#trace"><code>flux trace</code></a></td><td>View a distributed trace as a flame graph</td></tr>
+    <tr><td><a href="/docs/cli#secrets"><code>flux secrets</code></a></td><td>Manage project secrets</td></tr>
+    <tr><td><a href="/docs/cli">Full reference →</a></td><td>All CLI commands</td></tr>
+  </tbody>
+</table>
+
+<h2>Examples</h2>
+<div class="example-cards" style="justify-content:flex-start;margin-top:16px;">
+  <a class="example-card" href="/examples/todo-api">
+    <div class="tag">REST API</div>
+    <h3>Todo API</h3>
+    <p>Full CRUD with Postgres.</p>
+  </a>
+  <a class="example-card" href="/examples/webhook-worker">
+    <div class="tag">Events</div>
+    <h3>Webhook Worker</h3>
+    <p>Receive and process webhooks.</p>
+  </a>
+  <a class="example-card" href="/examples/ai-backend">
+    <div class="tag">AI</div>
+    <h3>AI Backend</h3>
+    <p>LLM proxy with logging.</p>
+  </a>
+</div>
+
+<h2>AI / LLM reference</h2>
+<p>A machine-readable summary of the entire Fluxbase API is available at <a href="/docs/llm.txt">/docs/llm.txt</a> — useful for AI agents and LLM prompts.</p>
+
+</article>
+</main>
+</div>
+</body>
+</html>

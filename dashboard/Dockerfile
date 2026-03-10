@@ -21,11 +21,21 @@ RUN npm run build
 # ─── Stage 2: Serve with Nginx ───────────────────────────────────────────────
 FROM nginx:1.25-alpine
 
-# SPA routing config — all unmatched paths fall through to index.html
+# Routing config — docs/examples served statically; /dashboard → React SPA
 COPY nginx.dev.conf /etc/nginx/conf.d/default.conf
 
-# Copy built assets
+# React SPA — served at /dashboard/* and /login
 COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Static marketing site (landing, docs, examples, install script).
+# These are copied from public/ into the image.
+# Run `npm run prebuild` (or `node scripts/copy-static.js`) from the dashboard/
+# directory before building this image to populate public/{docs,examples,assets,...}
+COPY public/index.html  /usr/share/nginx/static/index.html
+COPY public/install.sh  /usr/share/nginx/static/install.sh
+COPY public/assets      /usr/share/nginx/static/assets
+COPY public/docs        /usr/share/nginx/static/docs
+COPY public/examples    /usr/share/nginx/static/examples
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
