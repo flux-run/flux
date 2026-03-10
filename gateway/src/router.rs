@@ -1,4 +1,4 @@
-use axum::{routing::any, routing::get, routing::post, Router};
+use axum::{routing::any, routing::get, routing::post, Router, response::IntoResponse};
 use tower_http::cors::{CorsLayer, Any};
 use crate::state::SharedState;
 use crate::routes::proxy::proxy_handler;
@@ -39,6 +39,23 @@ pub fn create_router(state: SharedState) -> Router {
     Router::new()
         .route("/health", axum::routing::get(|| async {
             axum::Json(serde_json::json!({ "status": "ok" }))
+        }))
+        // /readiness — returns 503 until the route snapshot is populated.
+        // Distinct from /health (which is always 200) so Cloud Run and load
+        // balancers can gate traffic until the gateway is actually ready to route.
+        .route("/readiness", axum::routing::get(|axum::extract::State(state): axum::extract::State<SharedState>| async move {
+            let data = state.snapshot.get_data().await;
+            if data.routes.is_empty() {
+                (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(serde_json::json!({ "status": "loading", "message": "Route snapshot not yet loaded" })),
+                ).into_response()
+            } else {
+                (
+                    axum::http::StatusCode::OK,
+                    axum::Json(serde_json::json!({ "status": "ready", "routes": data.routes.len() })),
+                ).into_response()
+            }
         }))
         .route("/version", axum::routing::get(|| async {
             axum::Json(serde_json::json!({

@@ -47,6 +47,16 @@ async fn main() -> anyhow::Result<()> {
         http_client.clone(),
     );
 
+    // Bounded analytics channel — drain worker writes to `gateway_metrics`.
+    // Sized to absorb short bursts; rows are dropped (not blocked) when full.
+    let (metric_tx, metric_rx) =
+        tokio::sync::mpsc::channel::<middleware::analytics::MetricRow>(
+            middleware::analytics::CHANNEL_CAPACITY,
+        );
+
+    // Clone pool for the drain worker before it is moved into GatewayState.
+    let analytics_pool = db_pool.clone();
+
     let state = Arc::new(state::GatewayState {
         db_pool,
         http_client,
@@ -57,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         snapshot,
         jwks_cache,
         api_url: config.api_url,
+        metric_tx,
         query_cache: {
             let cache = cache::query_cache::QueryCache::new(
                 std::env::var("QUERY_CACHE_TTL_SECS")
@@ -68,6 +79,9 @@ async fn main() -> anyhow::Result<()> {
             cache
         },
     });
+
+    // Spawn the single drain worker — exits when `metric_tx` (inside state) drops.
+    tokio::spawn(middleware::analytics::drain_worker(metric_rx, analytics_pool));
 
     // Build router
     let app = router::create_router(state);

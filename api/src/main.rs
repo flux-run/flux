@@ -234,6 +234,20 @@ pub fn create_app(state: AppState) -> Router {
     Router::new()
         .merge(authenticated_api)
         .nest("/internal", internal_routes)
+        // ── Execution-plane guard ──────────────────────────────────────────
+        // The API service is the CONTROL PLANE only.  All runtime execution
+        // traffic must flow through {tenant_slug}.fluxbase.co (Gateway).
+        // These routes explicitly reject any attempt to invoke function
+        // execution here, so architectural drift fails loudly at runtime.
+        .route("/run",                          any(routes::system::execution_not_allowed))
+        .route("/run/{*path}",                  any(routes::system::execution_not_allowed))
+        .route("/invoke",                       any(routes::system::execution_not_allowed))
+        .route("/invoke/{*path}",               any(routes::system::execution_not_allowed))
+        .route("/execute",                      any(routes::system::execution_not_allowed))
+        .route("/execute/{*path}",              any(routes::system::execution_not_allowed))
+        // Block SDK-generated execution patterns like /functions/{name}/run
+        .route("/functions/{name}/run",         any(routes::system::execution_not_allowed))
+        .route("/functions/{name}/invoke",      any(routes::system::execution_not_allowed))
         // ── Public demo endpoints (no auth, rate-limited by IP) ─────────────
         // Back the landing-page "Try Fluxbase" interactive trace demo.
         .route("/demo/signup",           post(routes::demo::demo_signup))

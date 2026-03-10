@@ -32,17 +32,32 @@ pub async fn proxy_handler(
         }
     };
 
-    // 0.5 Extract x-request-id and x-parent-span-id early for tracing
+    // 0.5 Extract x-request-id and x-parent-span-id early for tracing.
+    //
+    // Fallback chain:
+    //   request_id:   x-request-id  →  W3C traceparent trace_id  →  new UUID
+    //   parent_span:  x-parent-span-id  →  W3C traceparent parent_id  →  None
+    //
+    // This means external systems (OTel collectors, browsers, CDNs) that emit
+    // the standard `traceparent` header get full distributed-trace propagation
+    // without any client-side changes.
+    let traceparent = req.headers()
+        .get("traceparent")
+        .and_then(|v| v.to_str().ok())
+        .and_then(crate::middleware::traceparent::parse);
+
     let incoming_request_id: String = req.headers()
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
+        .or_else(|| traceparent.as_ref().map(|tp| tp.trace_id.clone()))
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    
+
     let incoming_parent_span_id: Option<String> = req.headers()
         .get("x-parent-span-id")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(|s| s.to_string())
+        .or_else(|| traceparent.map(|tp| tp.parent_id));
 
     // 1. Resolve Route from memory snapshot
     // CRITICAL: Snapshot must be ready before routing any traffic.
@@ -370,7 +385,7 @@ pub async fn proxy_handler(
         }
 
         crate::middleware::analytics::log_request(
-            state.db_pool.clone(),
+            &state.metric_tx,
             route.id,
             tenant_id,
             response.status().as_u16(),
@@ -465,7 +480,7 @@ pub async fn proxy_handler(
     // 6. Asynchronous Analytics
     let status = response.status().as_u16();
     crate::middleware::analytics::log_request(
-        state.db_pool.clone(),
+        &state.metric_tx,
         route.id,
         tenant_id,
         status,

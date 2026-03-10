@@ -5,8 +5,9 @@
 **Every request in Fluxbase receives a unique request ID.** This ID links logs, traces, tool calls, database operations, and workflows together — enabling one-command debugging with `flux debug`.
 
 - `flux debug` — interactive production debugger: shows recent errors, you pick one, it auto-runs trace + logs + suggests a fix
-- `flux debug <request-id>` — deep-dive a specific request directly
-- `flux tail` — live request stream (htop for your backend)
+- `flux debug <request-id>` / `flux fix <request-id>` — deep-dive a specific request directly; trace URL printed for sharing
+- `flux tail` — live request stream (htop for your backend); `--auto-debug` auto-debugs errors as they arrive
+- `flux errors` — per-function error summary (counts, last error type, p95) for quick triage
 
 **Design principles:**
 - `flux <resource> <operation>` — noun-first, verb-second
@@ -128,6 +129,7 @@ Power-user shortcuts. All flags and subcommands work identically — aliases are
 | `flux i` | `flux invoke` | invoke a function |
 | `flux fn` | `flux function` | function subcommands |
 | `flux db` | `flux db` | database subcommands (already short) |
+| `flux fix` | `flux debug` | debug alias — shorter during incident response |
 
 For CI/CD scripts prefer the full names so scripts remain readable.
 
@@ -370,8 +372,12 @@ flux
 ├── debug [request-id]             ✅ interactive debugger (no args) or deep-dive a specific request
 │     No args: lists recent errors → select one → auto trace + logs + suggested fix
 │     With ID: direct deep-dive (trace + logs + suggested fix + optional replay)
+│     Trace URL printed in every output for Slack/PR sharing
+├── fix [request-id]               ✅ alias for debug — shorter to type during incident response
+├── errors                         ✅ per-function error summary (count, last error, p95) for triage
+│     Flags: --since <duration>, --function <name>
 ├── tail [function]                ✅ live request stream — htop for your backend
-│     Flags: --errors, --slow <ms>, --json
+│     Flags: --errors, --slow <ms>, --json, --auto-debug
 ├── open [resource]                📋 open in browser
 ├── whoami                         📋 print current user + active context
 ├── doctor                         ✅
@@ -1706,12 +1712,13 @@ $ flux debug 9624a58d57e7
 
 Request Summary
 ────────────────────────────────────────
-Request ID: 9624a58d57e7
-Route:      POST /signup
-Function:   create_user
-Duration:   3816ms
-Status:     error
-Time:       2026-03-10 14:01:12 UTC
+Request ID:   9624a58d57e7
+Route:        POST /signup
+Function:     create_user
+Duration:     3816ms
+Status:       error
+Time:         2026-03-10 14:01:12 UTC
+Trace URL:    https://app.fluxbase.co/acme-org/backend/traces/9624a58d57e7
 
 Trace
 ─────────────────────────────────────────────
@@ -1737,13 +1744,17 @@ Replay this request? [y/N]: y
   new request_id: c2d3e4f5a6b7
 ```
 
-This is the first thing a developer should reach for when something goes wrong in production. The 3-command story for Fluxbase is:
+This is the first thing a developer should reach for when something goes wrong in production. The 5-command story for Fluxbase is:
 
 ```bash
 flux deploy           # ship your backend
 flux tail             # watch live traffic
-flux debug            # fix what breaks
+flux errors           # triage by function
+flux fix              # shorter alias for flux debug
+flux debug            # interactive: pick an error, get root cause
 ```
+
+`flux fix` is identical to `flux debug` — it's there for muscle memory during incident response.
 
 ---
 
@@ -1760,6 +1771,7 @@ flux tail [function] [flags]
 | `--errors` | Show only failed requests |
 | `--slow <ms>` | Show only requests slower than N ms |
 | `--json` | Output raw JSON (one object per line, for piping) |
+| `--auto-debug` | Pause stream and auto-run `flux debug` when an error appears |
 
 ```
 $ flux tail
@@ -1783,7 +1795,68 @@ flux tail create_user          # single function
 flux tail --errors             # errors only — immediately actionable
 flux tail --slow 500           # requests taking > 500ms
 flux tail --json | jq .        # pipe to jq for custom filtering
+flux tail --auto-debug         # auto-run `flux debug` on every error
 ```
+
+---
+
+### `flux errors` ✅
+
+Production error summary grouped by function. Shows error counts, most recent error type, and p95 duration across a time window. The fastest way to triage which function is misbehaving before running `flux debug`.
+
+```
+flux errors [flags]
+```
+
+| Flag | Description |
+|------|--------------|
+| `--since <duration>` | Time window: `1h` (default), `24h`, `7d`, etc. |
+| `--function <name>` | Filter to a specific function |
+| `--json` | Output raw JSON |
+
+```
+$ flux errors
+
+Production Errors (last 1h)
+───────────────────────────────────────────────────
+  create_user  12 errors
+    last:  gmail_rate_limit
+    p95:   2.8s
+    at:    2026-03-10 14:01
+    → flux debug --function create_user
+
+  auth_handler  3 errors
+    last:  invalid_password
+    p95:   102ms
+    at:    2026-03-10 13:47
+    → flux debug --function auth_handler
+```
+
+**Typical triage workflow:**
+
+```bash
+flux errors              # which function is broken?
+flux debug               # interactive: select it, see root cause
+flux fix <request-id>    # or jump straight to a known bad request
+```
+
+---
+
+### `flux fix [request-id]` ✅
+
+Alias for `flux debug`. Identical behaviour, shorter to type when responding to an alert or pasting into a Slack message.
+
+```bash
+# These are identical:
+flux debug 9624a58d57e7
+flux fix   9624a58d57e7
+
+# Interactive mode (no args) is also identical:
+flux debug
+flux fix
+```
+
+Use `flux fix` when you are in incident mode and every character counts. Use `flux debug` in scripts and docs where clarity matters.
 
 
 
@@ -1961,8 +2034,9 @@ export default defineFunction({
 | `flux trace search` | `GET /traces?function=...&error=true&since=...` |
 | `flux trace replay` | `POST /traces/:id/replay` |
 | `flux tail` | `GET /traces?limit=25&order=desc&since=<cursor>` (polled every 2s) |
-| `flux debug` (interactive) | `GET /traces?status=error&limit=15&window=10m` |
-| `flux debug <id>` | composite: `GET /traces/:id` + `GET /logs` + `POST /traces/:id/replay` |
+| `flux errors` | `GET /traces/errors/summary?since=<window>&function=<name>` |
+| `flux debug` / `flux fix` (interactive) | `GET /traces?status=error&limit=15&window=10m` |
+| `flux debug <id>` / `flux fix <id>` | composite: `GET /traces/:id` + `GET /logs` + `POST /traces/:id/replay` |
 | `flux db create` | `POST /db/databases` |
 | `flux db list` | `GET /db/databases` |
 | `flux db table create` | `POST /db/tables` |

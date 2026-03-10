@@ -117,117 +117,167 @@ Without TLS termination validation, developers may accidentally:
 
 ## Code Verification Checklist
 
-Before finalizing the gateway implementation, verify these 6 critical items exist in code. The architecture is production-grade; these checks ensure the code matches the design.
+Verified against actual gateway source code (`gateway/src/`). Status reflects what is in code today.
 
-### 1️⃣ Request Envelope Capture
+| # | Item | Status | File |
+|---|------|--------|------|
+| 1 | `trace_requests` INSERT before runtime dispatch | ✅ Implemented | `routes/proxy.rs` |
+| 2 | `x-request-id` + `x-parent-span-id` propagation | ✅ Implemented | `routes/proxy.rs` |
+| 3 | Snapshot readiness gate (503 if no routes) | ✅ Implemented | `routes/proxy.rs`, `router.rs` |
+| 4 | Span queue backpressure (bounded channel) | ✅ Implemented | `middleware/analytics.rs`, `state.rs`, `main.rs` |
+| 5 | Trace sampling logic | ✅ Implemented | `middleware/analytics.rs` |
+| 6 | W3C `traceparent` header support | ✅ Implemented | `middleware/traceparent.rs`, `routes/proxy.rs` |
 
-**Requirement:** Gateway must INSERT into `trace_requests` when request arrives (before forwarding to runtime).
+---
 
-**Verify code contains:**
+### 1️⃣ Request Envelope Capture ✅
+
+**Status: Implemented** in `gateway/src/routes/proxy.rs`.
+
+The gateway INSERTs into `trace_requests` before forwarding to runtime, capturing method, path, headers (with `authorization`/`x-api-key`/`cookie` redacted), query params, and body:
 
 ```rust
-// Insert trace_requests row capturing original input
-INSERT INTO trace_requests (
-  request_id,
-  tenant_id,
-  project_id,
-  function_id,
-  function_version,
-  method,
-  path,
-  headers,
-  query_params,
-  body,
-  created_at
-) VALUES (...)
+// CRITICAL: INSERT trace_requests *before* forwarding — ensures replay works
+// even if runtime crashes mid-execution.
+sqlx::query("INSERT INTO trace_requests (...) VALUES ($1,...)")
+    .bind(request_id)   // x-request-id from client (or generated)
+    .bind(tenant_id)
+    ...
+    .execute(&state.db_pool).await?;
 ```
 
-**Impact if missing:** Replay won't work (no request envelope to replay from).
+**Known gap:** `function_version` is always `""`. Fix: join `deployments` table during snapshot build to capture the active deployment version.
 
-### 2️⃣ Parent Span ID Propagation
+---
 
-**Requirement:** Gateway must generate its own `span_id`, forward it as `x-parent-span-id` header, so Runtime can attach child spans.
+### 2️⃣ Parent Span ID Propagation ✅
 
-**Verify code contains:**
+**Status: Implemented** in `gateway/src/routes/proxy.rs`.
+
+`x-request-id` is extracted from the incoming request (or generated as a new UUID). Both `x-request-id` and `x-parent-span-id` are forwarded to runtime and echoed back in the response:
 
 ```rust
-let gateway_span_id = Uuid::now_v7();  // or gen_random_uuid()
-let mut headers = HeaderMap::new();
-headers.insert("x-parent-span-id", gateway_span_id.to_string());
+// Forwarded to runtime:
+req_headers.insert("x-request-id",     request_id.to_string());
+req_headers.insert("x-parent-span-id", gateway_span_id.to_string());
+
+// Echoed in gateway response:
+response.headers_mut().insert("x-request-id", request_id.to_string());
 ```
 
-**Impact if missing:** Trace tree becomes flat (no span hierarchy).
+---
 
-### 3️⃣ Snapshot Readiness Gate
+### 3️⃣ Snapshot Readiness Gate ✅
 
-**Requirement:** Gateway must not serve traffic until route snapshot is loaded. Return 503 if snapshot not ready.
+**Status: Implemented** in two places.
 
-**Verify code contains:**
-
+**In `proxy.rs`** — returns 503 for all function traffic if no routes are loaded:
 ```rust
-static SNAPSHOT_READY: AtomicBool = AtomicBool::new(false);
-
-// In request handler:
-if !SNAPSHOT_READY.load(Ordering::Acquire) {
-    return StatusCode::SERVICE_UNAVAILABLE;
+if snapshot_data.routes.is_empty() {
+    return (StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "error": "gateway_not_ready" }))).into_response();
 }
 ```
 
-**Impact if missing:** Random 404s during startup/snapshot refresh.
-
-### 4️⃣ Span Logging Queue Backpressure
-
-**Requirement:** Gateway must use bounded `tokio::mpsc::channel` for span logging, not unbounded `tokio::spawn` per span.
-
-**Verify code contains:**
-
-```rust
-let (tx, rx) = tokio::mpsc::channel(MAX_PENDING_SPANS);  // Bounded
-
-// Not:
-tokio::spawn(async { /* log span */ })  // Unbounded
+**In `router.rs`** — dedicated `/readiness` endpoint (distinct from `/health`):
+```
+GET /readiness  →  200 { "status": "ready",   "routes": N }
+GET /readiness  →  503 { "status": "loading", "message": "Route snapshot not yet loaded" }
+GET /health     →  200 always (liveness, never blocks)
 ```
 
-**Impact if missing:** Memory leak under high traffic (unbounded queue growth).
+`/health` stays always-200 so Cloud Run's liveness probe never kills a warming instance.  
+`/readiness` gates load-balancer traffic until routes are available.
 
-### 5️⃣ Trace Sampling Logic
+**Escape hatch for tests:** Set `SKIP_SNAPSHOT_READY_CHECK=true` to bypass the 503 gate.
 
-**Requirement:** Gateway must implement sampling based on error rate, latency, and success rate (environment-driven).
+---
 
-**Verify code uses:**
+### 4️⃣ Span Queue Backpressure ✅
+
+**Status: Implemented** across `middleware/analytics.rs`, `state.rs`, and `main.rs`.
+
+A single `tokio::sync::mpsc::channel(4096)` is created at startup. `GatewayState` holds the `Sender<MetricRow>`; a single drain worker (spawned once) holds the `Receiver` and writes rows to `gateway_metrics` sequentially.  The hot request path calls `try_send` — non-blocking, bounded memory:
 
 ```rust
-const TRACE_SAMPLING_ERROR_RATE: f64 = 1.0;    // 100% of errors
-const TRACE_SAMPLING_SLOW_THRESHOLD: u64 = 200; // ms
-const TRACE_SAMPLING_SUCCESS_RATE: f64 = 0.1;   // 10% of successes
+// analytics.rs — hot path
+pub fn log_request(tx: &mpsc::Sender<MetricRow>, ...) {
+    if !should_sample(status, latency_ms) { return; }
+    let row = MetricRow { route_id, tenant_id, status, latency_ms };
+    if let Err(_) = tx.try_send(row) {
+        tracing::warn!("analytics channel full — metric dropped");
+    }
+}
 
-fn should_sample(status: StatusCode, latency_ms: u64) -> bool {
-    if status >= 500 { return true; }           // All errors
-    if latency_ms > TRACE_SAMPLING_SLOW_THRESHOLD { return true; }  // All slow
-    rand::random::<f64>() < TRACE_SAMPLING_SUCCESS_RATE  // Sampled success
+// analytics.rs — background worker (spawned once in main.rs)
+pub async fn drain_worker(mut rx: mpsc::Receiver<MetricRow>, db_pool: PgPool) {
+    while let Some(row) = rx.recv().await {
+        sqlx::query("INSERT INTO gateway_metrics ...").execute(&db_pool).await;
+    }
 }
 ```
 
-**Impact if missing:** `platform_logs` table explodes to 152TB/day (unsustainable).
+**Behaviour under overload:** rows are silently dropped once the 4096-slot channel is full. Errors and slow requests are still always captured because they always pass the sampling check first.
 
-### 6️⃣ W3C Trace Context Support
+**Observable:** `DROPPED_METRICS` (`AtomicU64`) is incremented on every drop and exposed at `GET /metrics`:
+```json
+{
+  "gateway_metrics_dropped_total": 0,
+  "gateway_analytics_channel_capacity": 4096
+}
+```
+A non-zero `gateway_metrics_dropped_total` means the DB drain worker is falling behind. Logging throttles to powers-of-two to avoid log spam under sustained overload.
 
-**Requirement:** Gateway should parse `traceparent` header and map to `request_id` + `parent_span_id` (optional but good).
+**Channel capacity override:** 4096 is the compile-time constant `CHANNEL_CAPACITY` in `middleware/analytics.rs`.
 
-**Verify code either:**
+---
+
+### 5️⃣ Trace Sampling Logic ✅
+
+**Status: Implemented** in `gateway/src/middleware/analytics.rs`.
+
+Sampling uses a deterministic round-robin counter (no external dependency). Rules evaluated in order:
+
+| Condition | Action |
+|-----------|--------|
+| `status >= 500` | Always log (100% of errors) |
+| `latency_ms > ANALYTICS_SLOW_THRESHOLD_MS` | Always log (100% of slow requests) |
+| Otherwise | Log every Nth request per `ANALYTICS_SAMPLE_RATE_SUCCESS` (default 10%) |
 
 ```rust
-// Parse W3C traceparent: 00-trace_id-parent_id-flags
-if let Some(traceparent) = headers.get("traceparent") {
-    // Extract trace_id, parent_span_id
-    request_id = trace_id;
-    parent_span_id = parent_id;
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn should_sample(status: u16, latency_ms: i64) -> bool {
+    if status >= 500 { return true; }
+    if latency_ms > slow_threshold_ms() { return true; }
+    let n = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    (n % 100) < success_sample_pct()
 }
 ```
 
-**Or mark as TODO:** `// TODO: W3C trace context support`
+**Environment variables:**
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `ANALYTICS_SLOW_THRESHOLD_MS` | `200` | Latency (ms) above which requests are always logged |
+| `ANALYTICS_SAMPLE_RATE_SUCCESS` | `10` | Integer percentage of success traffic to log (0–100) |
 
-**Impact if missing:** No interop with external OpenTelemetry systems (acceptable for MVP).
+---
+
+### 6️⃣ W3C Trace Context (`traceparent`) ✅
+
+**Status: Implemented** in `gateway/src/middleware/traceparent.rs`.
+
+The W3C `traceparent` header is parsed on every request as a fallback when the caller does not send `x-request-id`/`x-parent-span-id`. This gives full distributed-trace propagation with any OTel-compatible client (browser, CDN, collector) without requiring changes.
+
+Priority chain:
+```
+request_id  :  x-request-id  →  traceparent.trace_id  →  new UUID
+parent_span :  x-parent-span-id  →  traceparent.parent_id  →  None
+```
+
+The 128-bit `trace_id` is formatted as a UUID string; the 64-bit `parent_id` is stored as a 16-char hex string. All-zero values and the reserved version `ff` are rejected per spec. 7 unit tests cover happy-path and all rejection cases.
+
+---
 
 ### Optional Improvement: State Mutations Schema Versioning
 

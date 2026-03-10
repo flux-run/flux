@@ -272,9 +272,9 @@ Each tenant's tool calls are isolated under their Composio entity ID (defaulting
 
 ## IsolatePool — Worker Thread Model
 
-**Problem without pooling**: every invocation would spawn a new OS thread (~0.5 ms, 8 MB stack) and its own Tokio runtime (~1 ms). Under load this creates unbounded threads and memory pressure.
+**Problem without pooling**: every invocation would spawn a new OS thread (~0.5 ms, 8 MB stack), its own Tokio runtime (~1 ms), and a fresh `JsRuntime` (V8 heap + extension registration, ~3–5 ms). Under load this creates unbounded threads, memory pressure, and per-call startup overhead.
 
-**Solution**: a fixed pool of pre-spawned OS threads, each owning a dedicated single-threaded Tokio runtime.
+**Solution**: a fixed pool of pre-spawned OS threads, each owning a dedicated single-threaded Tokio runtime **and a single warm `JsRuntime` that persists across requests** (warm-isolate model). The per-request cost is reduced to an `OpState` swap (nanoseconds).
 
 ### Pool sizing
 
@@ -285,23 +285,40 @@ Each tenant's tool calls are isolated under their Composio entity ID (defaulting
 
 ### Why dedicated threads and not `tokio::spawn`?
 
-Deno's `JsRuntime` is `!Send`. It must be created and used on the same thread. A regular `tokio::task` can be moved between threads by the scheduler. A dedicated OS thread guarantees the runtime stays pinned.
+Deno's `JsRuntime` is `!Send`. It must be created and used on the same thread. A regular `tokio::task` can be moved between threads by the scheduler. A dedicated OS thread guarantees the runtime stays pinned, which is also required for the warm-isolate model.
 
 ### Worker lifecycle
 
 ```
-                 ┌──────────────────────────────────┐
-                 │  isolate-worker-N (OS thread)    │
-                 │                                  │
-                 │  tokio::runtime (single-thread)  │
-                 │  ┌──────────────────────────┐    │
-                 │  │  loop {                  │    │
-                 │  │    task = rx.recv()      │    │
-                 │  │    run_in_isolate(task)  │    │
-                 │  │    reply.send(result)    │    │
-                 │  │  }                       │    │
-                 │  └──────────────────────────┘    │
-                 └──────────────────────────────────┘
+                 ┌──────────────────────────────────────────┐
+                 │  isolate-worker-N (OS thread)            │
+                 │                                          │
+                 │  JsRuntime created ONCE at startup       │
+                 │  tokio::runtime (single-thread)          │
+                 │  ┌──────────────────────────────────┐    │
+                 │  │  loop {                          │    │
+                 │  │    task = rx.recv()              │    │
+                 │  │    // hot path: OpState swap     │    │
+                 │  │    execute_with_runtime(&mut rt) │    │
+                 │  │    reply.send(result)            │    │
+                 │  │    // on timeout: recreate rt    │    │
+                 │  │    if timed_out { rt = create_js_runtime() }   │
+                 │  │  }                               │    │
+                 │  └──────────────────────────────────┘    │
+                 └──────────────────────────────────────────┘
+```
+
+### JsRuntime warm-isolate safety
+
+Each request updates the worker's `JsRuntime` `OpState` (secrets, tenant context) via `try_take` + `put` before execution. This is the only per-request mutation; the V8 heap, extension registrations, and snapshot are already in place.
+
+If a request **times out**, the V8 event loop may be in an inconsistent state. The worker automatically recreates the `JsRuntime` in that case:
+
+```rust
+if matches!(&result, Err(e) if e.contains("timed out")) {
+    tracing::warn!(worker = id, "execution timed out — recreating JsRuntime");
+    js_rt = create_js_runtime();
+}
 ```
 
 ### Timeouts
@@ -353,7 +370,7 @@ When the worker pool is saturated (all workers busy and the channel buffer full)
 
 ## V8 Sandbox & FluxContext
 
-Each function execution creates a **fresh `JsRuntime`** — there is no state sharing between calls. The bundle code is executed inside a wrapper IIFE that injects the `__ctx` object.
+Each function execution runs inside a **warm `JsRuntime`** that is reused across calls on the same worker thread. Tenant secrets and payload are injected fresh on every request via `OpState`; there is no JavaScript state leakage between calls. The bundle code is executed inside a wrapper IIFE that injects the `__ctx` object.
 
 ### Bundle format
 
@@ -900,7 +917,8 @@ These are empirical benchmarks from production (Cloud Run, `asia-south1`, 1 vCPU
 | Bundle cache hit (function-level) | < 1 ms | 0 network calls |
 | Bundle cache hit (deployment-level) | < 1 ms | 0 network calls |
 | Secrets cache hit | < 1 ms | In-process LRU |
-| Isolate execution startup | 2–5 ms | Fresh `JsRuntime` per call |
+| `JsRuntime` startup (cold, container init) | 3–5 ms | Paid once per worker thread at startup |
+| Isolate execution startup (warm) | < 0.5 ms | `OpState` swap; V8 heap already warm |
 | Secrets fetch (cache miss) | 5–15 ms | Control plane round-trip |
 | Bundle fetch from R2/S3 (cache miss) | 30–100 ms | Object storage round-trip |
 | Tool call via Composio | 100–2000 ms | External API dependent |
@@ -910,7 +928,7 @@ These are empirical benchmarks from production (Cloud Run, `asia-south1`, 1 vCPU
 
 | Scenario | Expected duration |
 |----------|------------------|
-| Warm cache, no tools | 5–20 ms |
+| Warm cache, no tools | 2–8 ms |
 | Warm cache, 1 tool call | 150–500 ms |
 | Cold bundle + cold secrets | 50–120 ms overhead |
 | 3-step workflow, 3 tool calls | 400–2000 ms |
@@ -920,7 +938,7 @@ These are empirical benchmarks from production (Cloud Run, `asia-south1`, 1 vCPU
 
 | Component | Approx. RSS |
 |-----------|------------|
-| V8 isolate (fresh, no user code) | ~5 MB |
+| V8 isolate (warm, per worker thread) | ~5 MB |
 | OS thread stack | 8 MB |
 | Per worker total | ~13–20 MB |
 | 4-worker pool | ~60–80 MB |
