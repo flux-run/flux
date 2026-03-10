@@ -201,12 +201,17 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
     }
 
     let body: Value = res.json().await?;
-    let data         = &body["data"];
-    let spans        = data["spans"].as_array().cloned().unwrap_or_default();
-    let count        = data["span_count"].as_u64().unwrap_or(spans.len() as u64);
-    let total_ms     = data["total_duration_ms"].as_i64();
-    let slow_count   = data["slow_span_count"].as_u64().unwrap_or(0);
-    let slow_thresh  = data["slow_threshold_ms"].as_u64().unwrap_or(slow_threshold);
+    let data              = &body["data"];
+    let spans             = data["spans"].as_array().cloned().unwrap_or_default();
+    let count             = data["span_count"].as_u64().unwrap_or(spans.len() as u64);
+    let total_ms          = data["total_duration_ms"].as_i64();
+    let slow_count        = data["slow_span_count"].as_u64().unwrap_or(0);
+    let slow_thresh       = data["slow_threshold_ms"].as_u64().unwrap_or(slow_threshold);
+    let slow_db_count     = data["slow_db_count"].as_u64().unwrap_or(0);
+    let n_plus_one_tables: Vec<String> = data["n_plus_one_tables"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
 
     if spans.is_empty() {
         println!("{} No spans found for request ID: {}", "ℹ".blue(), request_id.cyan().bold());
@@ -247,14 +252,15 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
     let mut slow_spans: Vec<(String, String, i64)> = Vec::new(); // (source/resource, message, delta_ms)
 
     for span in &spans {
-        let ts        = span["timestamp"].as_str().unwrap_or("?");
-        let source    = span["source"].as_str().unwrap_or("?");
-        let resource  = span["resource"].as_str().unwrap_or("?");
-        let level     = span["level"].as_str().unwrap_or("info");
-        let message   = span["message"].as_str().unwrap_or("");
-        let span_type = span["span_type"].as_str().unwrap_or("event");
-        let delta_ms  = span["delta_ms"].as_i64().unwrap_or(-1);
-        let is_slow   = span["is_slow"].as_bool().unwrap_or(false);
+        let ts          = span["timestamp"].as_str().unwrap_or("?");
+        let source      = span["source"].as_str().unwrap_or("?");
+        let resource    = span["resource"].as_str().unwrap_or("?");
+        let level       = span["level"].as_str().unwrap_or("info");
+        let message     = span["message"].as_str().unwrap_or("");
+        let span_type   = span["span_type"].as_str().unwrap_or("event");
+        let delta_ms    = span["delta_ms"].as_i64().unwrap_or(-1);
+        let is_slow     = span["is_slow"].as_bool().unwrap_or(false);
+        let is_n_plus_1 = span["n_plus_one"].as_bool().unwrap_or(false);
 
         if is_slow {
             slow_spans.push((format!("{}/{}", source, resource), message.to_string(), delta_ms));
@@ -275,6 +281,13 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
             1,
         );
 
+        // Append N+1 badge for repeated table queries.
+        let display_msg = if is_n_plus_1 {
+            format!("{}  {}", message, "⚠ N+1".yellow().bold())
+        } else {
+            message.to_string()
+        };
+
         println!(
             "  {}  {}  {}  [{}]  {}  {}",
             format_timestamp(ts).dimmed(),
@@ -282,7 +295,7 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
             colorize_span_icon(span_type, span_icon(span_type)),
             coloured_label,
             colorize_level(level),
-            message,
+            display_msg,
         );
     }
 
@@ -303,6 +316,36 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
                 msg.dimmed(),
             );
         }
+    }
+
+    if !n_plus_one_tables.is_empty() {
+        println!(
+            "\n  {} probable N+1 pattern{}:",
+            n_plus_one_tables.len().to_string().yellow().bold(),
+            if n_plus_one_tables.len() == 1 { "" } else { "s" },
+        );
+        for table in &n_plus_one_tables {
+            let q_count = spans.iter()
+                .filter(|s| s["source"].as_str() == Some("db")
+                    && s["metadata"]["table"].as_str() == Some(table.as_str()))
+                .count();
+            println!(
+                "    {} table {} ({} queries)  {}",
+                "⚠".yellow().bold(),
+                table.bold(),
+                q_count,
+                "consider batching with IN or preloading all at once".dimmed(),
+            );
+        }
+    }
+
+    if slow_db_count > 0 {
+        println!(
+            "\n  {} slow db quer{}  {}",
+            slow_db_count.to_string().yellow().bold(),
+            if slow_db_count == 1 { "y (>50ms)" } else { "ies (>50ms)" },
+            "— check indexes on the flagged tables".dimmed(),
+        );
     }
 
     if flame {

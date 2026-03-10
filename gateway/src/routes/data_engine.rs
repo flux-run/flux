@@ -100,6 +100,54 @@ async fn do_proxy(
     Ok((status, Arc::new(resp_headers), resp_bytes))
 }
 
+// ── DB query span helper ──────────────────────────────────────────────────
+
+/// Slow-query threshold — DB queries taking longer than this are logged at WARN.
+const SLOW_DB_MS: u64 = 50;
+
+/// Fire-and-forget: insert a `source=db` span into platform_logs so the query
+/// appears in distributed traces.  Runs in a detached tokio task to keep the
+/// hot proxy path free of extra latency.
+fn post_db_span(
+    pool: sqlx::PgPool,
+    tenant_id: uuid::Uuid,
+    project_id: Option<uuid::Uuid>,
+    request_id: String,
+    table: String,
+    duration_ms: u64,
+    cache: &'static str,
+) {
+    let is_slow = duration_ms >= SLOW_DB_MS;
+    let level   = if is_slow { "warn" } else { "info" };
+    let message = match cache {
+        "hit" => format!("db query on {} (edge cache)", table),
+        _ if is_slow => format!("slow db query on {} ({}ms)", table, duration_ms),
+        _ => format!("db query on {} ({}ms)", table, duration_ms),
+    };
+    let metadata = serde_json::json!({
+        "table":       table,
+        "duration_ms": duration_ms,
+        "cache":       cache,
+        "slow":        is_slow,
+    });
+    tokio::spawn(async move {
+        let _ = sqlx::query(
+            "INSERT INTO platform_logs \
+             (tenant_id, project_id, source, resource_id, level, message, request_id, span_type, metadata) \
+             VALUES ($1, $2, 'db', $3, $4, $5, $6, 'event', $7)",
+        )
+        .bind(tenant_id)
+        .bind(project_id)
+        .bind(&table)
+        .bind(level)
+        .bind(&message)
+        .bind(&request_id)
+        .bind(metadata)
+        .execute(&pool)
+        .await;
+    });
+}
+
 // ── Public handler ────────────────────────────────────────────────────────
 
 pub async fn proxy_handler(
@@ -133,6 +181,25 @@ pub async fn proxy_handler(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // For db query spans — resolve owning tenant/project from caller headers.
+    let span_tenant_id: Option<uuid::Uuid> = in_headers
+        .get("x-fluxbase-tenant")
+        .or_else(|| in_headers.get("x-tenant-id"))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok());
+    let span_project_id: Option<uuid::Uuid> = in_headers
+        .get("x-fluxbase-project")
+        .or_else(|| in_headers.get("x-project-id"))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok());
+    // Table hint extracted once for all /db/query spans.
+    let table_hint: String = if uri.path().ends_with("/db/query") {
+        extract_table_hint(&body_bytes).unwrap_or_else(|| "unknown".to_string())
+    } else {
+        String::new()
+    };
+    let query_start = Instant::now();
 
     // Headers to forward to the data-engine.
     let forward_headers: Vec<(String, String)> = in_headers
@@ -199,6 +266,16 @@ pub async fn proxy_handler(
                     .body(axum::body::Body::from(entry.body.clone()))
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                 resp.headers_mut().extend(cors_headers());
+                // Span: edge cache hit — query was NOT forwarded to the DB.
+                if !table_hint.is_empty() {
+                    if let Some(tid) = span_tenant_id {
+                        post_db_span(
+                            state.db_pool.clone(), tid, span_project_id,
+                            request_id.clone(), table_hint.clone(),
+                            query_start.elapsed().as_millis() as u64, "hit",
+                        );
+                    }
+                }
                 return Ok(resp);
             }
 
@@ -266,6 +343,16 @@ pub async fn proxy_handler(
                         .body(axum::body::Body::from(entry.body.clone()))
                         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                     resp.headers_mut().extend(cors_headers());
+                    // Span: actual DB query (cache miss).
+                    if !table_hint.is_empty() {
+                        if let Some(tid) = span_tenant_id {
+                            post_db_span(
+                                state.db_pool.clone(), tid, span_project_id,
+                                request_id.clone(), table_hint.clone(),
+                                query_start.elapsed().as_millis() as u64, "miss",
+                            );
+                        }
+                    }
                     Ok(resp)
                 }
                 Err(()) => Err(StatusCode::BAD_GATEWAY),
@@ -303,5 +390,15 @@ pub async fn proxy_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     response.headers_mut().extend(cors_headers());
+    // Span: non-cacheable db query (write, file op, or large result).
+    if !table_hint.is_empty() {
+        if let Some(tid) = span_tenant_id {
+            post_db_span(
+                state.db_pool.clone(), tid, span_project_id,
+                request_id.clone(), table_hint.clone(),
+                query_start.elapsed().as_millis() as u64, "bypass",
+            );
+        }
+    }
     Ok(response)
 }

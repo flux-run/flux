@@ -413,13 +413,64 @@ pub async fn get_trace(
         })
     }).collect();
 
+    // ── N+1 detection ─────────────────────────────────────────────────────
+    // A table queried ≥ 3 times within the same request is a probable N+1.
+    // We count simply by table name across all db spans; the 50ms window is
+    // implicitly enforced because all queries share one request_id.
+    let mut table_query_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut slow_db_count: usize = 0;
+
+    for span in &spans {
+        if span["source"].as_str() != Some("db") { continue; }
+        if let Some(table) = span["metadata"]["table"].as_str() {
+            *table_query_counts.entry(table.to_string()).or_insert(0) += 1;
+        }
+        // Count spans emitted with slow:true in metadata.
+        if span["metadata"]["slow"].as_bool().unwrap_or(false) {
+            slow_db_count += 1;
+        }
+    }
+
+    let n_plus_one_tables: Vec<String> = {
+        let mut tables: Vec<String> = table_query_counts
+            .iter()
+            .filter(|(_, count)| **count >= 3)
+            .map(|(t, _)| t.clone())
+            .collect();
+        tables.sort();
+        tables
+    };
+
+    // Tag individual spans that are part of an N+1 pattern.
+    let spans: Vec<serde_json::Value> = spans
+        .into_iter()
+        .map(|mut span| {
+            if span["source"].as_str() == Some("db") {
+                if let Some(table) = span["metadata"]["table"]
+                    .as_str()
+                    .map(|s| s.to_string())
+                {
+                    if n_plus_one_tables.contains(&table) {
+                        if let Some(obj) = span.as_object_mut() {
+                            obj.insert("n_plus_one".into(), serde_json::json!(true));
+                        }
+                    }
+                }
+            }
+            span
+        })
+        .collect();
+
     let span_count = spans.len();
     Ok(ApiResponse::new(serde_json::json!({
-        "request_id":        request_id,
-        "spans":             spans,
-        "span_count":        span_count,
-        "total_duration_ms": total_duration_ms,
-        "slow_span_count":   slow_span_count,
-        "slow_threshold_ms": slow_thresh,
+        "request_id":          request_id,
+        "spans":               spans,
+        "span_count":          span_count,
+        "total_duration_ms":   total_duration_ms,
+        "slow_span_count":     slow_span_count,
+        "slow_threshold_ms":   slow_thresh,
+        "n_plus_one_tables":   n_plus_one_tables,
+        "slow_db_count":       slow_db_count,
     })))
 }
