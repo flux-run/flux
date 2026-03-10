@@ -69,6 +69,7 @@ fn post_span(
     message:   String,
     span_type: &'static str,
 ) {
+    let span_id = Uuid::new_v4().to_string();
     let client = client.clone();
     tokio::spawn(async move {
         let _ = client
@@ -82,6 +83,7 @@ fn post_span(
                 "level":       level,
                 "message":     message,
                 "request_id":  request_id,
+                "span_id":     span_id,
                 "span_type":   span_type,
             }))
             .send()
@@ -114,6 +116,7 @@ fn post_trace_span(
 ) {
     let parent_span_id = trace_ctx.parent_span_id.clone();
     let code_sha       = trace_ctx.code_sha.clone();
+    let span_id        = Uuid::new_v4().to_string();
     let client = client.clone();
     tokio::spawn(async move {
         let _ = client
@@ -127,6 +130,7 @@ fn post_trace_span(
                 "level":            level,
                 "message":          message,
                 "request_id":       request_id,
+                "span_id":          span_id,
                 "span_type":        span_type,
                 "parent_span_id":   parent_span_id,
                 "code_sha":         code_sha,
@@ -233,6 +237,7 @@ pub async fn execute_handler(
                 for log in logs {
                     let span_type = log.span_type.as_deref().unwrap_or("event");
                     let source    = log.source.as_deref().unwrap_or("function");
+                    let span_id   = log.span_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
                     let _ = client.post(&log_url).header("X-Service-Token", &service_token)
                         .json(&serde_json::json!({
                             "source":           source,
@@ -242,6 +247,7 @@ pub async fn execute_handler(
                             "level":            log.level,
                             "message":          log.message,
                             "request_id":       &rid,
+                            "span_id":          span_id,
                             "span_type":        span_type,
                             "parent_span_id":   &trace_parent,
                             "code_sha":         &trace_sha,
@@ -261,6 +267,7 @@ pub async fn execute_handler(
                         "level":            "info",
                         "message":          format!("execution_end ({}ms)", dur),
                         "request_id":       &rid,
+                        "span_id":          Uuid::new_v4().to_string(),
                         "span_type":        "end",
                         "parent_span_id":   &trace_parent,
                         "code_sha":         &trace_sha,
@@ -481,6 +488,7 @@ pub async fn execute_handler(
             for log in logs {
                 let span_type = log.span_type.as_deref().unwrap_or("event");
                 let source    = log.source.as_deref().unwrap_or("function");
+                let span_id   = log.span_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
                 let _ = client
                     .post(&log_url)
                     .header("X-Service-Token", &service_token)
@@ -492,6 +500,7 @@ pub async fn execute_handler(
                         "level":            log.level,
                         "message":          log.message,
                         "request_id":       &rid,
+                        "span_id":          span_id,
                         "span_type":        span_type,
                         "parent_span_id":   &trace_parent,
                         "code_sha":         &trace_sha,
@@ -514,6 +523,7 @@ pub async fn execute_handler(
                     "level":            "info",
                     "message":          format!("execution_end ({}ms)", dur),
                     "request_id":       &rid,
+                    "span_id":          Uuid::new_v4().to_string(),
                     "span_type":        "end",
                     "parent_span_id":   &trace_parent,
                     "code_sha":         &trace_sha,

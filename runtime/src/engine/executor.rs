@@ -116,6 +116,7 @@ pub struct ExecutionResult {
 /// `span_type` and `source` allow the trace viewer to render distinct span kinds.
 ///
 /// Fields added for execution tracing:
+/// - `span_id`           — unique ID for this span; generated JS-side or server-side on ship
 /// - `duration_ms`       — set by tool/workflow/agent spans; propagated to log sink
 /// - `execution_state`   — lifecycle state: "started" | "running" | "completed" | "error"
 /// - `tool_name`         — the Fluxbase tool name for `span_type == "tool"` spans
@@ -129,6 +130,10 @@ pub struct LogLine {
     /// "function" (default) | "tool" | "workflow" | "agent" | "runtime"
     #[serde(default)]
     pub source: Option<String>,
+    /// Unique span identifier — used to link parent → child spans across services.
+    /// If not provided by JS, routes.rs generates a UUID v4 before shipping.
+    #[serde(default)]
+    pub span_id: Option<String>,
     /// Duration in ms — set by tool/workflow/agent spans for replay recording.
     #[serde(default)]
     pub duration_ms: Option<u64>,

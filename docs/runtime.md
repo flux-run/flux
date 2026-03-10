@@ -803,6 +803,7 @@ X-Service-Token: {SERVICE_TOKEN}
   "span_type":        "tool",
 
   // ── Trace fields (added by this implementation) ──────────────────────
+  "span_id":          "unique UUID v4 for this span",
   "parent_span_id":   "span id from Gateway x-parent-span-id header",
   "code_sha":         "16-char bundle fingerprint for replay correlation",
   "execution_state":  "started | completed | error",
@@ -843,7 +844,8 @@ execution_end    (span_type="end",    execution_state="completed", duration_ms=1
 | `resource_id` | string | ✓ | | function UUID |
 | `tenant_id` | UUID | ✓ | | Tenant context |
 | `project_id` | UUID? | ✓ | | Project context |
-| `request_id` | string? | ✓ | | Trace correlation ID from Gateway |
+| `request_id` | string? | ✓ | | Trace correlation ID — same across all spans for one invocation |
+| `span_id` | string | ✓ | | Unique UUID v4 per span — required to build parent → child tree |
 | `source` | string | ✓ | | `"runtime"` \| `"function"` \| `"tool"` \| `"workflow"` \| `"agent"` |
 | `span_type` | string | ✓ | | `"start"` \| `"end"` \| `"event"` \| `"tool"` \| `"workflow_step"` \| `"agent_step"` |
 | `level` | string | ✓ | | `"debug"` \| `"info"` \| `"warn"` \| `"error"` |
@@ -867,6 +869,7 @@ When execution fails, the error span is emitted **before** returning the HTTP er
   "span_type":       "end",
   "execution_state": "error",
   "message":         "execution_error: FunctionExecutionError: ...",
+  "span_id":         "<uuid-v4>",
   "duration_ms":     1243,
   "code_sha":        "a3f2c1b0d4e5f6a7",
   "parent_span_id":  "gw-span-abc123"
@@ -877,12 +880,12 @@ When execution fails, the error span is emitted **before** returning the HTTP er
 
 Given a `request_id`, a query to the log store for all spans matching `request_id=X` ordered by timestamp gives:
 
-1. Gateway span tree (from gateway)
+1. Gateway span tree (from gateway) — links via `parent_span_id` = gateway's own `span_id`
 2. `execution_start` span (runtime, first)
-3. All tool/workflow/agent/log spans (runtime, middle)
+3. All tool/workflow/agent/log spans (runtime, middle) — each with its own `span_id`, all sharing the same `parent_span_id`
 4. `execution_end` or `execution_error` span (runtime, last)
 
-This is the complete call graph for one invocation. `flux why` renders this as a flamegraph-style display.
+The three-identifier model (`request_id` / `span_id` / `parent_span_id`) is now complete and matches the OpenTelemetry / Jaeger span linking convention. `flux why` renders this as a flamegraph-style display.
 
 ---
 
