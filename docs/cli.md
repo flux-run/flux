@@ -517,6 +517,11 @@ Deploy the current directory. Behaviour depends on context:
 - **In a function directory** (has `flux.json`): deploys that single function
 - **At project root**: discovers all subdirectories with `flux.json` and deploys all
 
+During deployment Flux automatically bundles your function and its dependencies,
+compiles runtime-compatible JavaScript, and uploads the bundle to the Fluxbase
+runtime. This ensures deterministic deployments regardless of the developer's
+local environment.
+
 ```
 flux deploy [flags]
 ```
@@ -554,6 +559,9 @@ flux rollback <function-name> --version <n>
 $ flux rollback send_email --version 3
 ✔ Rolled back send_email to v3
 ```
+
+> **Note:** Rollbacks take effect immediately on the gateway. All new incoming
+> requests are routed to the restored version as soon as the rollback completes.
 
 ---
 
@@ -1148,6 +1156,9 @@ evt_abc123   user.signed_up   2026-03-10 14:01       1
 
 Show the full cross-service execution trace for a request.
 
+Every request in Fluxbase generates a trace automatically — no instrumentation
+or manual span creation is required.
+
 ```
 flux trace <request-id> [flags]
 ```
@@ -1163,16 +1174,18 @@ $ flux trace 9624a58d57e7
   request: 9624a58d57e7   status: ready   total: 3816ms
 
   TIME          SOURCE     SPAN                     DURATION   DELTA
-  14:01:12.031  gateway    gateway.route            11ms       —
+  14:01:12.031  gateway    gateway.receive          11ms       —
   14:01:12.041  gateway    gateway.route            487ms      +476ms
-  14:01:12.528  workflow   db.insert(users)         0ms        —
-  14:01:12.528  tool       gmail.send_email         1862ms     +1862ms ⚠
+  14:01:12.528  function   create_user              146ms      +146ms
+  14:01:12.674  db         db.insert(users)         0ms        —
+  14:01:12.674  tool       gmail.send_email         1862ms     +1862ms ⚠
 
 $ flux trace 9624a58d57e7 --flame
-  14:01:12.031  ┤ gateway.route (11ms)
+  14:01:12.031  ┤ gateway.receive (11ms)
   14:01:12.041  ┤──────────────────── gateway.route (487ms)
-  14:01:12.528  ┤ db.insert(users) (0ms)
-  14:01:12.528  ┤──────────────────────────────────────── gmail.send_email (1862ms)
+  14:01:12.528  ┤ create_user (146ms)
+  14:01:12.674  ┤ db.insert(users) (0ms)
+  14:01:12.674  ┤──────────────────────────────────────── gmail.send_email (1862ms)
 ```
 
 #### `flux trace live` 📋
@@ -1653,16 +1666,18 @@ $ flux debug 9624a58d57e7
 
 Request Summary
 ────────────────────────────────────────
-Route:     POST /signup
-Function:  create_user
-Duration:  3816ms
-Status:    error
-Time:      2026-03-10 14:01:12 UTC
+Request ID: 9624a58d57e7
+Route:      POST /signup
+Function:   create_user
+Duration:   3816ms
+Status:     error
+Time:       2026-03-10 14:01:12 UTC
 
 Trace
 ─────────────────────────────────────────────
-gateway.route        11ms    ✔
+gateway.receive      11ms    ✔
 gateway.route        487ms   ✔
+create_user          146ms   ✔
 db.insert(users)     0ms     ✔
 gmail.send_email     1862ms  ✗  rate_limit_exceeded
 
