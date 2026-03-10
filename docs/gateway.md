@@ -430,6 +430,59 @@ Request IDs are the golden thread of observability. The gateway enforces a stric
 - Malicious clients spoofing request IDs to access unrelated traces
 - Accidental loss of trace continuity across service boundaries
 
+#### Trace Context Compatibility (W3C Standard)
+
+Fluxbase currently propagates tracing using internal headers (`x-request-id`, `x-parent-span-id`). To ensure compatibility with industry-standard observability tools, the gateway should also support the **W3C Trace Context** specification.
+
+**Standard W3C Headers**:
+```
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+tracestate: vendor=value
+```
+
+**Format**: `traceparent: version-trace-id-parent-id-flags`
+
+**Mapping Strategy**:
+
+| W3C Field | Fluxbase Field | Purpose |
+|-----------|----------------|---------|
+| trace-id (128-bit) | request_id (UUID) | Root trace identifier |
+| parent-id (64-bit) | parent_span_id (UUID) | Parent span identifier |
+
+**Gateway Behavior**:
+
+1. **If `traceparent` header exists** → Extract trace-id and parent-id
+2. Map trace-id → `request_id` (validate UUID format)
+3. Map parent-id → `parent_span_id` for span relationships
+4. Generate a **new span-id** for the gateway's own span
+5. Forward updated `traceparent` downstream with gateway span-id
+
+**Example Flow**:
+
+```
+Client sends:
+  traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+
+Gateway:
+  ├─ Extract: trace-id=4bf92f3577b34da6a3ce929d0e0e4736
+  ├─ Extract: parent-id=00f067aa0ba902b7
+  ├─ Create new gateway span-id=a1b2c3d4e5f6g7h8
+  └─ Forward downstream:
+     traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-a1b2c3d4e5f6g7h8-01
+
+Runtime receives same trace-id, can create its own child spans.
+```
+
+**External Tool Integration**:
+
+This enables Fluxbase to integrate with industry-standard observability systems:
+- **OpenTelemetry** — Parse W3C traceparent natively
+- **Jaeger** — Ingest traces with standard context propagation
+- **Datadog APM** — Inject Datadog trace context alongside W3C
+- **Honeycomb** — Use W3C headers for cross-service tracing
+
+**Implementation Priority**: Medium (enables future integrations without breaking internal architecture)
+
 ### Trace Reconstruction & Query
 
 Fluxbase traces are not streamed—they are reconstructed from storage on-demand.
@@ -847,10 +900,68 @@ The gateway exposes two health endpoints for load balancers and orchestrators:
 - Status: `200 OK` if dependencies ready, `503 Service Unavailable` otherwise
 - Checks:
   - ✓ PostgreSQL connection pool (ping query)
-  - ✓ Snapshot cache loaded (routes in memory)
+  - ✓ Snapshot cache loaded (routes in memory) — **MUST be OK before any traffic**
   - ✓ JWKS cache initialized (public key fetch succeeded)
 - Latency: 100-500ms (includes network calls)
 - Use: Orchestrator readiness probe (prevent traffic before initialization)
+
+#### Startup Behavior & Snapshot Safety
+
+The gateway **must not accept traffic** before the routing snapshot is successfully loaded from the database.
+
+**Recommended Startup Flow**:
+
+```
+Gateway Process Start
+         ↓
+    Initialize logger
+         ↓
+    Load routing snapshot from database
+    (if fails → retry loop or crash)
+         ↓
+    Initialize caches:
+      • JWKS cache (empty initially, lazy-load)
+      • Query cache (empty initially)
+      • Rate limiter state (empty initially)
+         ↓
+    Start HTTP server on port 8081
+         ↓
+    HTTP handlers ready
+    (/health → 200 OK immediately)
+    (/readiness → 200 OK if snapshot loaded)
+         ↓
+    Periodic jobs:
+      • Snapshot refresh every 60s
+      • JWKS TTL refresh
+      • Cache eviction
+```
+
+**Startup Guarantees**:
+
+- **Before snapshot loads**:
+  - `/health` → `200 OK` (process alive, but not ready)
+  - `/readiness` → `503 Service Unavailable` (not ready for traffic)
+  - All incoming requests → `503 Service Unavailable` with error: `Gateway snapshot not loaded`
+
+- **After snapshot loads**:
+  - `/health` → `200 OK`
+  - `/readiness` → `200 OK`
+  - Function requests → normal processing
+
+**Why This Matters**:
+
+Without startup sequencing, early client requests could receive:
+- `404 Not Found` (route not in empty snapshot)
+- Cascading errors if upstream services retry immediately
+- Confusing traces with gateway as failure point
+
+With startup ordering:
+- Orchestrator sees `503` during initialization
+- Load balancer removes gateway from rotation
+- Client requests queue at LB, not at gateway
+- First client request processed after snapshot is guaranteed to succeed or fail for correct reason
+
+**Implementation Note**: Use a startup sync primitive (`tokio::sync::Notify` or atomic bool) to block HTTP handler execution until snapshot is ready.
 
 ### Timeout Policy
 
@@ -922,6 +1033,53 @@ tokio::spawn(async move {
 **Why**: If the database is slow or unreachable, function execution must not pause. Trace integrity is secondary to request latency.
 
 **Monitoring**: If DB connection pool is exhausted, spans pile up in tokio task queue. Alert if pending spans > 1000.
+
+#### Backpressure Protection (Future Enhancement)
+
+Under extreme conditions (DB unavailable for extended time), span logging tasks may accumulate unboundedly in the tokio task queue, consuming memory and potentially crashing the gateway.
+
+**Recommended Design**: Introduce a **bounded span queue**.
+
+```rust
+// Pseudocode: Architecture
+const MAX_PENDING_SPANS: usize = 5000;
+
+let (tx, rx) = tokio::sync::mpsc::channel(MAX_PENDING_SPANS);
+
+// Gateway request handler
+tokio::spawn(async move {
+    match tx.try_send(span) {
+        Ok(_) => {}, // Span enqueued
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            // Queue is full; drop span
+            tracing::warn!("Dropped span due to queue saturation (DB unavailable?)");
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            // Receiver dropped; application is shutting down
+        }
+    }
+});
+
+// Span writer worker
+while let Some(span) = rx.recv().await {
+    if let Err(e) = db.insert_span(span).await {
+        tracing::warn!("Failed to write span: {}", e);
+    }
+}
+```
+
+**Behavior**:
+- **Normal**: Spans enqueued and written at ~1000s/sec
+- **DB slow**: Queue fills up; new spans dropped
+- **Alert triggered**: Gateway operator alerted to investigate
+
+**Benefits**:
+- Prevents unbounded memory growth during DB outages
+- Maintains non-blocking logging guarantee
+- Protects gateway stability under failure conditions
+- Clear observability (dropped span count metric)
+
+**Trade-off**: Some spans lost during sustained DB failures (acceptable; operational alerts take precedence over perfect trace capture)
 
 ### Built-in Metrics & Observability
 
