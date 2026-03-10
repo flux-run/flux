@@ -2,6 +2,8 @@
 
 `flux` is the terminal interface for Fluxbase. It gives developers full control over every layer of the platform — from deploying a function and wiring a gateway route to managing database schema, running AI agents, and inspecting end-to-end traces — all without leaving the terminal.
 
+**Every request in Fluxbase receives a unique request ID.** This ID links logs, traces, tool calls, database operations, and workflows together — enabling one-command debugging with `flux debug <request-id>`.
+
 **Design principles:**
 - `flux <resource> <operation>` — noun-first, verb-second
 - Flags over positional args
@@ -118,10 +120,11 @@ Lives in every function directory. Committed to version control.
 
 ```
 flux
+├── (no subcommand)                📋 launch interactive REPL shell
 ├── login                          ✅ authenticate with an API key
 ├── status                         📋 show active context + platform health
 ├── init                           ✅ initialise .fluxbase/config.json
-├── create <name>                  ✅ scaffold a new project from a template
+├── new <name>                     ✅ scaffold a new project from a template
 ├── dev                            ✅ run local dev server
 ├── deploy                         ✅ deploy current function / all functions
 ├── rollback <name> --version <n>  ✅ roll back a function to a previous version
@@ -142,7 +145,6 @@ flux
 │   ├── create <name>              ✅
 │   ├── list                       ✅
 │   ├── get <name>                 📋
-│   ├── deploy <name>              📋 (single-function deploy)
 │   ├── invoke <name>              ✅ (also: flux invoke <name>)
 │   ├── logs <name>                📋 (also: flux logs function <name>)
 │   └── delete <name>              📋
@@ -364,12 +366,16 @@ $ flux init --project 3787e1fa
 
 ---
 
-### `flux create <name>` ✅
+### `flux new <name>` ✅
 
 Scaffold a new Fluxbase project from an official template.
 
+> Renamed from `flux create` to follow the convention of `cargo new`, `npm create`,
+> and `next create`. The name `create` is reserved as a generic subcommand verb
+> across resource groups (`flux tenant create`, `flux db table create`, etc.).
+
 ```
-flux create <name> [--template <template>]
+flux new <name> [--template <template>]
 ```
 
 | Flag | Description |
@@ -377,8 +383,8 @@ flux create <name> [--template <template>]
 | `--template <name>` | `todo-api \| webhook-worker \| ai-backend` — omit to pick interactively |
 
 ```
-$ flux create my-app
-$ flux create my-app --template ai-backend
+$ flux new my-app
+$ flux new my-app --template ai-backend
 ```
 
 ---
@@ -608,14 +614,9 @@ create_user     deno      v7        deployed   2h ago
 send_email      deno      v3        deployed   5d ago
 ```
 
-#### `flux function deploy <name>` 📋
-
-Deploy a single named function without changing directory.
-
-```
-$ flux function deploy send_email
-$ flux function deploy send_email --env staging
-```
+> **Single-function deploy:** to deploy just one function, `cd` into its
+> directory and run `flux deploy`. Keeping deploy context-driven avoids a
+> second mental model for the same operation.
 
 #### `flux function delete <name>` 📋
 
@@ -1121,23 +1122,32 @@ $ flux trace live
 
 #### `flux trace search` 📋
 
-Search historical traces with filters. Becomes a powerful interactive debugger
-when combined with `--error`.
+Search historical traces with filters. Combines into a production debugging
+session when used interactively.
 
 | Flag | Description |
 |------|-------------|
 | `--function <name>` | Filter to traces involving this function |
-| `--error` | Only show failed traces |
+| `--route <path>` | Filter by gateway route, e.g. `/signup` |
+| `--status <status>` | `error \| success` |
+| `--error` | Shorthand for `--status error` |
+| `--tool <action>` | Filter traces that called a specific tool, e.g. `gmail.send_email` |
 | `--since <duration>` | e.g. `1h`, `30m`, `24h` |
 | `--min-duration <ms>` | Only traces slower than this threshold |
 
 ```
-$ flux trace search --function create_user --error --since 1h
-  REQUEST ID     ROUTE         DURATION   ERROR
-  9624a58d       POST /signup  3816ms     gmail_rate_limit
-  f8e3d9c4       POST /signup  102ms      invalid_email
+$ flux trace search --error
+  REQUEST ID   ROUTE         FUNCTION      DURATION   ERROR
+  9624a58d     POST /signup  create_user   3816ms     gmail_rate_limit
+  b3c7d2e1     POST /login   auth_handler  102ms      invalid_password
 
-$ flux trace search --min-duration 2000 --since 24h
+$ flux trace search --function create_user --error --since 1h
+  REQUEST ID   ROUTE         FUNCTION      DURATION   ERROR
+  9624a58d     POST /signup  create_user   3816ms     gmail_rate_limit
+  f8e3d9c4     POST /signup  create_user   102ms      invalid_email
+
+$ flux trace search --tool gmail.send_email --since 24h
+$ flux trace search --route /signup --min-duration 2000
 ```
 
 #### `flux trace replay <request-id>` 📋
@@ -1401,6 +1411,39 @@ flux completion bash  >> /etc/bash_completion.d/flux
 flux completion zsh   >> ~/.zsh/completions/_flux
 flux completion fish  >> ~/.config/fish/completions/flux.fish
 ```
+
+---
+
+### `flux` (interactive REPL) 📋
+
+Running `flux` with no arguments launches an interactive shell. Useful for
+debugging sessions where you want to run multiple commands in sequence without
+re-authenticating or re-loading context each time.
+
+Inspired by `redis-cli`, `terraform console`, and `psql`.
+
+```
+$ flux
+
+  Fluxbase CLI  v0.2.0
+  tenant: acme-org  project: backend
+  Type 'help' or '?' for commands, 'exit' to quit.
+
+flux> trace search --error --since 1h
+  REQUEST ID   ROUTE         FUNCTION      DURATION   ERROR
+  9624a58d     POST /signup  create_user   3816ms     gmail_rate_limit
+
+flux> debug 9624a58d
+  [... full debug output ...]
+
+flux> trace replay 9624a58d --payload override.json
+  new request_id: c2d3e4f5a6b7
+
+flux> logs --request-id c2d3e4f5a6b7 --follow
+```
+
+The REPL preserves context (tenant, project, auth token) across commands and
+supports tab completion for subcommands and flags.
 
 ---
 
