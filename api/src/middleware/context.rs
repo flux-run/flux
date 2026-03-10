@@ -56,6 +56,17 @@ pub async fn resolve_context(
             if let Some(row) = record {
                 context.tenant_id = Some(tenant_id);
                 context.role = Some(row);
+
+                // Fetch tenant slug so the data-engine proxy can forward it.
+                let t_slug: Option<String> = sqlx::query_scalar(
+                    "SELECT slug FROM tenants WHERE id = $1"
+                )
+                .bind(tenant_id)
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten();
+                context.tenant_slug = t_slug;
             } else {
                 return Err(StatusCode::FORBIDDEN);
             }
@@ -75,6 +86,17 @@ pub async fn resolve_context(
 
                     if project_exists {
                         context.project_id = Some(project_id);
+
+                        // Fetch project slug for data-engine proxy.
+                        let p_slug: Option<String> = sqlx::query_scalar(
+                            "SELECT slug FROM projects WHERE id = $1"
+                        )
+                        .bind(project_id)
+                        .fetch_optional(&pool)
+                        .await
+                        .ok()
+                        .flatten();
+                        context.project_slug = p_slug;
                     } else {
                          return Err(StatusCode::FORBIDDEN);
                     }

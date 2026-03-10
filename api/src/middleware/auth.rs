@@ -44,10 +44,24 @@ pub async fn verify_auth(
 
         // Resolve the tenant owner so that routes which write to user-FK columns
         // (tenants.owner_id, tenant_members.user_id) receive a valid users.id.
-        let owner_id: Option<Uuid> = sqlx::query_scalar(
-            "SELECT owner_id FROM tenants WHERE id = $1"
+        // Also fetch tenant + project slugs so the data-engine proxy can inject them.
+        let tenant_row: Option<(Uuid, String)> = sqlx::query_as(
+            "SELECT owner_id, slug FROM tenants WHERE id = $1"
         )
         .bind(api_key.tenant_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+
+        let (owner_id, tenant_slug) = tenant_row
+            .map(|(id, slug)| (Some(id), Some(slug)))
+            .unwrap_or((None, None));
+
+        let project_slug: Option<String> = sqlx::query_scalar(
+            "SELECT slug FROM projects WHERE id = $1"
+        )
+        .bind(api_key.project_id)
         .fetch_optional(&pool)
         .await
         .ok()
@@ -58,6 +72,8 @@ pub async fn verify_auth(
             firebase_uid: "api_key".to_string(),
             tenant_id: Some(api_key.tenant_id),
             project_id: Some(api_key.project_id),
+            tenant_slug,
+            project_slug,
             role: Some("owner".to_string()),
         };
         req.extensions_mut().insert(context);
@@ -97,6 +113,8 @@ pub async fn verify_auth(
         firebase_uid,
         tenant_id: None,
         project_id: None,
+        tenant_slug: None,
+        project_slug: None,
         role: None,
     };
     req.extensions_mut().insert(context);

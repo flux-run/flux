@@ -45,6 +45,8 @@ pub async fn require_api_key(
         firebase_uid: "api_key".to_string(), // Mark this connection differently inherently than standard user sessions
         tenant_id: Some(api_key.tenant_id),
         project_id: Some(api_key.project_id),
+        tenant_slug: None,
+        project_slug: None,
         role: Some("owner".to_string()),     // API Keys behave as full tenant owners inherently
     };
 

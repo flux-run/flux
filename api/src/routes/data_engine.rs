@@ -12,11 +12,13 @@ use axum::{
     extract::{Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
+    Extension,
 };
-use crate::AppState;
+use crate::{AppState, types::context::RequestContext};
 
 pub async fn proxy_handler(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     req: Request,
 ) -> Result<Response, StatusCode> {
     let method     = req.method().clone();
@@ -71,6 +73,23 @@ pub async fn proxy_handler(
     let token = std::env::var("INTERNAL_SERVICE_TOKEN")
         .unwrap_or_else(|_| "fluxbase_secret_token".to_string());
     rb = rb.header("x-service-token", token);
+
+    // Inject resolved tenant/project context headers that the data-engine
+    // expects (x-tenant-id, x-project-id, x-tenant-slug, x-project-slug).
+    if let Some(tid) = context.tenant_id {
+        rb = rb.header("x-tenant-id", tid.to_string());
+    }
+    if let Some(pid) = context.project_id {
+        rb = rb.header("x-project-id", pid.to_string());
+    }
+    if let Some(ref slug) = context.tenant_slug {
+        rb = rb.header("x-tenant-slug", slug.as_str());
+    }
+    if let Some(ref slug) = context.project_slug {
+        rb = rb.header("x-project-slug", slug.as_str());
+    }
+    rb = rb.header("x-user-id", context.user_id.to_string());
+    rb = rb.header("x-user-role", context.role.as_deref().unwrap_or("authenticated"));
 
     if !body_bytes.is_empty() {
         rb = rb.body(body_bytes.to_vec());
