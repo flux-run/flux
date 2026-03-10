@@ -361,14 +361,31 @@ User code that writes `globalThis.cache = ...` or any custom global will have th
 | Built-in prototypes | ✅ immutable | `Object.freeze` |
 | V8 heap / JIT cache | shared (intentional) | warm isolate benefit |
 
-If a request **times out**, the V8 event loop may be in an inconsistent state. The worker automatically recreates the `JsRuntime` in that case:
+If a request **times out**, the V8 event loop may be in an inconsistent state. The worker recreates its `JsRuntime` and clears the tenant affinity so the next task re-applies the full tenant check:
 
 ```rust
 if matches!(&result, Err(e) if e.contains("timed out")) {
-    tracing::warn!(worker = id, "execution timed out — recreating JsRuntime");
     js_rt = create_js_runtime();
+    current_tenant = None;  // forces affinity re-check on next task
 }
 ```
+
+### Tenant affinity
+
+Each worker thread tracks `current_tenant_id`. When a task arrives for a *different* tenant, the worker recreates its `JsRuntime` before executing. This ensures no V8 heap state, closure references, or `OpState` residue from tenant A can ever reach tenant B.
+
+```rust
+let tenant_changed = match &current_tenant {
+    Some(prev) if prev != &task.tenant_id => true,
+    _ => false,
+};
+if tenant_changed {
+    js_rt = create_js_runtime();
+}
+current_tenant = Some(task.tenant_id.clone());
+```
+
+In practice tasks arrive in per-tenant bursts, so tenant switches are infrequent and the warm-isolate benefit is fully preserved within each tenant's burst.
 
 ### Deterministic replay (planned)
 
