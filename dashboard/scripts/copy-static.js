@@ -41,7 +41,7 @@ const copies = [
 
 // Individual files
 const files = [
-  ["index.html",  "index.html"],
+  ["index.html",  "home.html"],   // renamed to avoid overwriting Vite's built dist/index.html
   ["install.sh",  "install.sh"],
 ];
 
