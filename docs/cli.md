@@ -49,6 +49,23 @@ Apply to every command.
 
 ---
 
+## Short aliases
+
+Power-user shortcuts. All flags and subcommands work identically — aliases are purely ergonomic.
+
+| Alias | Full command | Notes |
+|-------|-------------|-------|
+| `flux d` | `flux deploy` | deploy current context |
+| `flux l` | `flux logs` | stream logs |
+| `flux t` | `flux trace` | inspect a trace |
+| `flux i` | `flux invoke` | invoke a function |
+| `flux fn` | `flux function` | function subcommands |
+| `flux db` | `flux db` | database subcommands (already short) |
+
+For CI/CD scripts prefer the full names so scripts remain readable.
+
+---
+
 ## Configuration files
 
 ### `~/.fluxbase/config.json` — global auth context
@@ -177,6 +194,7 @@ flux
 │   │   └── delete                 📋
 │   ├── query                      📋
 │   ├── shell                      📋 (interactive psql session)
+│   ├── diff [env1] [env2]         📋 compare schemas between environments
 │   └── migration
 │       ├── create                 📋
 │       ├── apply                  📋
@@ -208,6 +226,7 @@ flux
 │   ├── deploy <name>              📋
 │   ├── run <name>                 📋
 │   ├── simulate <name>            📋
+│   ├── trace <name>               📋 step-by-step reasoning trace
 │   └── delete <name>              📋
 │
 ├── schedule
@@ -242,8 +261,8 @@ flux
 ├── trace
 │   ├── get <request-id>           ✅ (also: flux trace <id>)
 │   ├── live                       📋
-│   ├── search                     📋
-│   ├── replay <request-id>        📋
+│   ├── search                     📋 --function --error --since
+│   ├── replay <request-id>        📋 --payload <file> for override
 │   └── export <request-id>        📋
 │
 ├── logs                           ✅
@@ -281,8 +300,16 @@ flux
 │   ├── generate                   📋
 │   └── (pull / watch / status)    ✅ (also: flux pull / flux watch / flux status)
 │
+├── debug <request-id>             📋 composite: trace + logs + replay + suggested fix
 ├── open [resource]                📋 open in browser
 ├── doctor                         ✅
+├── stack                          ✅
+│   ├── up
+│   ├── down
+│   ├── reset                      📋 wipe and recreate local state
+│   ├── seed                       📋 populate with fixture data
+│   ├── status
+│   └── logs
 └── completion <shell>             📋 bash | zsh | fish
 ```
 
@@ -752,6 +779,26 @@ psql (15.4)  connected to tenant_5b5f77d1_default
 =#
 ```
 
+#### `flux db diff [env1] [env2]` 📋
+
+Compare schemas between two environments. Outputs a human-readable diff and
+an optional migration SQL file.
+
+| Flag | Description |
+|------|-------------|
+| `--format <fmt>` | `table \| sql \| json` (default: `table`) |
+| `--output <file>` | Write migration SQL to a file |
+
+```
+$ flux db diff production staging
+  TABLE     COLUMN           CHANGE
+  users     stripe_customer  + added (text, nullable)
+  orders    (missing)        + table added in staging
+
+$ flux db diff production staging --format sql --output migration.sql
+✔ Wrote migration.sql (3 statements)
+```
+
 #### `flux db migration create` 📋
 
 ```
@@ -901,6 +948,10 @@ flux agent delete <name>
 `flux agent simulate` runs the agent against a fixture scenario and prints
 the reasoning trace without making real tool calls — safe for testing.
 
+`flux agent trace` replays the recorded reasoning trace for a past run — showing
+every tool call attempted, which succeeded, and the final answer. Useful when
+`simulate` passes but production behaviour diverges.
+
 ```
 $ flux agent run support-bot --input "My order hasn't arrived"
   → tool: notion.search_page ("order not arrived policy")
@@ -909,6 +960,11 @@ $ flux agent run support-bot --input "My order hasn't arrived"
   Result: "I've sent a follow-up email with tracking details."
 
 $ flux agent simulate support-bot --scenario ./scenarios/missing_order.json
+
+$ flux agent trace support-bot --request-id 9624a58d57e7
+  step 1  notion.search_page       245ms  ✔  found 1 result
+  step 2  gmail.send_email         1862ms ✔  sent to ada@example.com
+  conclusion: "I've sent a follow-up email with tracking details."
 ```
 
 ---
@@ -916,6 +972,11 @@ $ flux agent simulate support-bot --scenario ./scenarios/missing_order.json
 ### `flux schedule` 📋
 
 Trigger functions or workflows on a cron schedule.
+
+> **Design note:** schedules are time-based triggers on top of functions or
+> workflows — conceptually they are `workflow trigger cron`. A future version
+> may surface this as `flux workflow trigger --cron` for consistency, but the
+> `flux schedule` namespace is kept for discoverability.
 
 ```
 flux schedule create --name <name> --cron <expr> --function <name>
@@ -951,6 +1012,12 @@ ghi789         error     2026-03-08 02:00     0.1s
 
 ### `flux queue` 📋
 
+> **queue vs event** — `queue` is a **work queue**: each message is consumed
+> by exactly one function instance, with retry and dead-letter support. Use it
+> for jobs that must run once (emails, billing, image processing).
+> `event` is a **pub/sub bus**: every subscriber receives a copy of the event.
+> Use it for fan-out notifications and audit streams.
+
 Manage async message queues. Functions bind as consumers and process messages
 with retry and dead-letter support.
 
@@ -981,6 +1048,9 @@ msg_deadbeef     3          "invalid email format"  2026-03-10 08:12
 ---
 
 ### `flux event` 📋
+
+> See the **queue vs event** note above. `event` delivers to all subscribers;
+> `queue` delivers to exactly one consumer.
 
 Pub/sub event bus. Functions subscribe to event types and are invoked when
 matching events are published.
@@ -1049,13 +1119,44 @@ $ flux trace live
   [14:02:01]  POST /signup  f8e3d9c4  →  create_user  0.1s  ✗  invalid_email
 ```
 
+#### `flux trace search` 📋
+
+Search historical traces with filters. Becomes a powerful interactive debugger
+when combined with `--error`.
+
+| Flag | Description |
+|------|-------------|
+| `--function <name>` | Filter to traces involving this function |
+| `--error` | Only show failed traces |
+| `--since <duration>` | e.g. `1h`, `30m`, `24h` |
+| `--min-duration <ms>` | Only traces slower than this threshold |
+
+```
+$ flux trace search --function create_user --error --since 1h
+  REQUEST ID     ROUTE         DURATION   ERROR
+  9624a58d       POST /signup  3816ms     gmail_rate_limit
+  f8e3d9c4       POST /signup  102ms      invalid_email
+
+$ flux trace search --min-duration 2000 --since 24h
+```
+
 #### `flux trace replay <request-id>` 📋
 
-Re-execute a past request with the same payload. Useful for debugging failures.
+Re-execute a past request — same payload by default, or override with `--payload`
+to test a small fix without hitting the original flow.
+
+| Flag | Description |
+|------|-------------|
+| `--payload <file>` | JSON file to use instead of the original payload |
+| `--dry-run` | Print the payload that would be sent without executing |
 
 ```
 $ flux trace replay 9624a58d57e7
   new request_id: b1c2d3e4f5a6
+
+$ flux trace replay 9624a58d57e7 --payload override.json
+  using custom payload: override.json
+  new request_id: c2d3e4f5a6b7
 ```
 
 #### `flux trace export <request-id>` 📋
@@ -1275,9 +1376,17 @@ Manage the full local development stack via Docker Compose.
 ```
 flux stack up       # start all services locally
 flux stack down     # stop all services
+flux stack reset    # 📋 wipe volumes and recreate from scratch
+flux stack seed     # 📋 populate databases with fixture data
 flux stack status   # show running containers
 flux stack logs     # tail all service logs
 ```
+
+`flux stack reset` wipes all Docker volumes and rebuilds the stack — useful
+after a migration conflict or when you need a completely clean state.
+
+`flux stack seed` runs seed scripts in `fixtures/` to populate local databases
+with test data after `flux stack up` or `flux stack reset`.
 
 Reads from `docker-compose.dev.yml` at the project root.
 
@@ -1292,6 +1401,62 @@ flux completion bash  >> /etc/bash_completion.d/flux
 flux completion zsh   >> ~/.zsh/completions/_flux
 flux completion fish  >> ~/.config/fish/completions/flux.fish
 ```
+
+---
+
+### `flux debug <request-id>` 📋
+
+The **killer command**. Runs `trace`, `logs`, and offers `replay` in one
+interactive flow — turning a request ID into a complete picture of what
+happened, what failed, and what to try next.
+
+```
+flux debug <request-id> [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--replay` | Automatically replay after showing the trace |
+| `--replay-payload <file>` | Replay with an overridden payload |
+| `--no-logs` | Skip the logs section |
+
+```
+$ flux debug 9624a58d57e7
+
+Request Summary
+────────────────────────────────────────
+Route:     POST /signup
+Function:  create_user
+Duration:  3816ms
+Status:    error
+Time:      2026-03-10 14:01:12 UTC
+
+Trace
+─────────────────────────────────────────────
+gateway.route        11ms    ✔
+gateway.route        487ms   ✔
+db.insert(users)     0ms     ✔
+gmail.send_email     1862ms  ✗  rate_limit_exceeded
+
+Logs
+─────────────────────────────────────────────
+[14:01:12.528]  create_user    INFO   sending welcome email to ada@example.com
+[14:01:14.390]  gmail          ERROR  API rate limit exceeded (retry-after: 30s)
+
+Suggested Fix
+─────────────────────────────────────────────
+⚠ gmail.send_email hit a rate limit.
+  → Queue the email job instead of calling inline.
+  → flux queue create email-jobs
+  → flux queue bind email-jobs --function send_email
+
+Replay this request? [y/N]: y
+  new request_id: c2d3e4f5a6b7
+```
+
+This command is the signature debugging experience for Fluxbase. It is the
+first thing a developer should reach for when something goes wrong in
+production.
 
 ---
 
@@ -1322,9 +1487,18 @@ flux logs function send_email -f
 ### 3. Debug a production error
 
 ```bash
-flux logs --level error --since 1h
+# Start here — one command gives you the full picture
+flux debug 9624a58d57e7
+
+# Drill in if you need more detail
 flux trace 9624a58d57e7 --flame
-flux trace replay 9624a58d57e7
+flux trace search --function create_user --error --since 1h
+flux logs --request-id 9624a58d57e7
+
+# Replay with a patched payload to verify the fix
+flux trace replay 9624a58d57e7 --payload override.json
+
+# If the bug is a regression, roll back
 flux version list send_email
 flux rollback send_email --version 5
 ```
@@ -1446,8 +1620,22 @@ export default defineFunction({
 | `flux secrets delete` | `DELETE /secrets/:key` |
 | `flux logs` | `GET /logs?source=...&limit=...` |
 | `flux trace <id>` | `GET /traces/:id` |
+| `flux trace search` | `GET /traces?function=...&error=true&since=...` |
+| `flux trace replay` | `POST /traces/:id/replay` |
+| `flux debug <id>` | composite: `GET /traces/:id` + `GET /logs` + `POST /traces/:id/replay` |
 | `flux db create` | `POST /db/databases` |
 | `flux db list` | `GET /db/databases` |
 | `flux db table create` | `POST /db/tables` |
 | `flux db table list` | `GET /db/tables/:database` |
+| `flux db diff` | `GET /db/diff?from=:env1&to=:env2` |
+| `flux agent trace` | `GET /agents/:name/traces/:request_id` |
+| `flux gateway route list` | `GET /gateway/routes` |
+| `flux gateway route create` | `POST /gateway/routes` |
+| `flux gateway route delete` | `DELETE /gateway/routes/:id` |
+| `flux schedule create` | `POST /schedules` |
+| `flux schedule list` | `GET /schedules` |
+| `flux queue create` | `POST /queues` |
+| `flux queue publish` | `POST /queues/:name/messages` |
+| `flux event publish` | `POST /events` |
+| `flux event subscribe` | `POST /events/subscriptions` |
 | `flux doctor` | `GET /auth/me`, `GET /health`, `GET /schema/version` |
