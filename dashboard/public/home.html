@@ -3,78 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Fluxbase — Build backend flows, not backend infrastructure</title>
-  <meta name="description" content="Fluxbase is a backend flow runtime. Write TypeScript functions, deploy in seconds, and watch every request trace through your system — right from your terminal.">
+  <title>Fluxbase — Backend flow runtime</title>
+  <meta name="description" content="Fluxbase is a backend flow runtime. Write TypeScript functions, deploy in seconds, and trace every request through your system — right from your terminal.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/style.css">
   <style>
+    /* ── Gradient text ────────────────────────────────────────────────── */
     .gradient-text {
       background: linear-gradient(135deg, #6c63ff 0%, #a78bfa 100%);
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
-    /* ── Stats bar ─────────────────────────────────────────────────────── */
-    .stats-bar {
-      display: flex; justify-content: center; flex-wrap: wrap;
-      gap: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
-      padding: 0; background: var(--bg-surface);
-    }
-    .stat-item {
-      flex: 1; min-width: 160px; max-width: 260px;
-      padding: 24px 32px; text-align: center;
-      border-right: 1px solid var(--border);
-    }
-    .stat-item:last-child { border-right: none; }
-    .stat-num {
-      font-size: 1.75rem; font-weight: 800; letter-spacing: -.04em;
-      color: var(--accent); margin-bottom: 4px;
-    }
-    .stat-label { font-size: .78rem; color: var(--muted); }
 
-    /* ── Pain section ──────────────────────────────────────────────────── */
-    .pain-section {
-      padding: 80px 24px; max-width: 1040px; margin: 0 auto; text-align: center;
-    }
-    .pain-section .section-tag {
-      display: inline-block; font-size: .72rem; font-weight: 700; letter-spacing: .1em;
-      text-transform: uppercase; color: var(--yellow);
-      background: rgba(245,197,66,.1); padding: 4px 12px; border-radius: 20px; margin-bottom: 20px;
-    }
-    .pain-section h2 {
-      font-size: clamp(1.5rem, 3vw, 2.2rem); font-weight: 800;
-      letter-spacing: -.03em; margin-bottom: 12px;
-    }
-    .pain-section .lead {
-      color: var(--muted); font-size: 1rem; max-width: 560px;
-      margin: 0 auto 48px;
-    }
-    .pain-cards {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;
-      text-align: left;
-    }
-    .pain-card {
-      background: var(--bg-surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 24px;
-    }
-    .pain-card .pain-icon { font-size: 1.3rem; margin-bottom: 14px; }
-    .pain-card h3 { font-size: .95rem; font-weight: 600; margin-bottom: 8px; }
-    .pain-card p { font-size: .85rem; color: var(--muted); line-height: 1.65; margin: 0; }
-
-    /* ── How it works ──────────────────────────────────────────────────── */
-    .how-section {
-      border-top: 1px solid var(--border);
-      padding: 80px 24px; max-width: 1040px; margin: 0 auto;
-    }
-    .how-section .section-tag {
-      display: inline-block; font-size: .72rem; font-weight: 700; letter-spacing: .1em;
-      text-transform: uppercase; color: var(--accent);
-      background: var(--accent-dim); padding: 4px 12px; border-radius: 20px; margin-bottom: 20px;
-    }
-    .how-section h2 {
-      font-size: clamp(1.5rem, 3vw, 2.2rem); font-weight: 800;
-      letter-spacing: -.03em; margin-bottom: 48px;
-    }
-    .flow-steps { display: flex; flex-direction: column; gap: 0; }
+    /* ── How it works flow steps ──────────────────────────────────────── */
     .flow-step {
       display: grid; grid-template-columns: 48px 1fr 1fr;
       gap: 32px; align-items: start;
@@ -89,64 +30,40 @@
       flex-shrink: 0; margin-top: 2px;
     }
     .flow-step-text h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 10px; }
-    .flow-step-text p { font-size: .9rem; color: var(--muted); line-height: 1.65; margin: 0; }
+    .flow-step-text p  { font-size: .9rem; color: var(--muted); line-height: 1.65; margin: 0; }
     .flow-step-code pre { margin: 0; font-size: .8rem !important; }
     @media (max-width: 768px) {
       .flow-step { grid-template-columns: 1fr; }
       .flow-step-num { display: none; }
-      .stat-item { border-right: none; border-bottom: 1px solid var(--border); }
     }
 
-    /* ── Trace demo ────────────────────────────────────────────────────── */
-    .trace-section {
-      border-top: 1px solid var(--border);
-      padding: 80px 24px; text-align: center;
-      background: var(--bg-surface);
-    }
-    .trace-section .section-tag {
-      display: inline-block; font-size: .72rem; font-weight: 700; letter-spacing: .1em;
-      text-transform: uppercase; color: var(--green);
-      background: rgba(61,214,140,.1); padding: 4px 12px; border-radius: 20px; margin-bottom: 20px;
-    }
-    .trace-section h2 {
-      font-size: clamp(1.5rem, 3vw, 2.2rem); font-weight: 800;
-      letter-spacing: -.03em; margin-bottom: 10px;
-    }
-    .trace-section .lead {
-      color: var(--muted); font-size: 1rem; max-width: 540px;
-      margin: 0 auto 48px;
-    }
+    /* ── Trace window ─────────────────────────────────────────────────── */
     .trace-window {
       max-width: 720px; margin: 0 auto;
       background: #0a0a0c; border: 1px solid var(--border);
-      border-radius: 10px; overflow: hidden;
-      text-align: left;
+      border-radius: 10px; overflow: hidden; text-align: left;
     }
     .trace-titlebar {
       background: var(--bg-elevated); border-bottom: 1px solid var(--border);
       padding: 10px 16px; display: flex; align-items: center; gap: 8px;
     }
     .trace-dot { width: 10px; height: 10px; border-radius: 50%; }
-    .trace-dot.red   { background: #f87171; }
+    .trace-dot.red    { background: #f87171; }
     .trace-dot.yellow { background: var(--yellow); }
     .trace-dot.green  { background: var(--green); }
     .trace-title { font-size: .75rem; color: var(--muted); margin-left: 8px; font-family: var(--font-mono); }
-    .trace-body { padding: 24px 28px; font-family: var(--font-mono); font-size: .82rem; line-height: 2; }
-    .trace-cmd   { color: var(--green); }
-    .trace-id    { color: var(--accent); }
-    .trace-ts    { color: var(--muted); }
-    .trace-fn    { color: #f9a8d4; }
-    .trace-db    { color: #60a5fa; }
-    .trace-ms    { color: var(--yellow); }
-    .trace-miss  { color: var(--muted); }
-    .trace-hit   { color: var(--green); }
-    .trace-warn  { color: var(--red); }
-    .trace-sugg  { color: var(--green); }
-    .trace-dim   { color: var(--muted); }
-    .trace-section .caption {
-      margin-top: 24px; font-size: .85rem; color: var(--muted);
-      max-width: 520px; margin-left: auto; margin-right: auto;
+    .trace-body {
+      padding: 24px 28px; font-family: var(--font-mono); font-size: .82rem; line-height: 2;
     }
+    .trace-cmd  { color: var(--green); }
+    .trace-id   { color: var(--accent); }
+    .trace-ts   { color: var(--muted); }
+    .trace-fn   { color: #f9a8d4; }
+    .trace-db   { color: #60a5fa; }
+    .trace-ms   { color: var(--yellow); }
+    .trace-warn { color: var(--red); }
+    .trace-sugg { color: var(--green); }
+    .trace-dim  { color: var(--muted); }
   </style>
 </head>
 <body>
@@ -167,11 +84,11 @@
 <!-- ─── Hero ─────────────────────────────────────────────────────────────── -->
 <section class="hero">
   <span class="eyebrow">Backend Flow Runtime</span>
-  <h1>Build backend flows —<br><span class="gradient-text">not backend infrastructure.</span></h1>
-  <p>Write TypeScript functions. Each one is a step in a flow. Fluxbase routes requests, queries your database, manages your secrets, and traces every hop — automatically, from the first deploy.</p>
+  <h1>Your backend is a flow.<br><span class="gradient-text">Now you can see it.</span></h1>
+  <p>Write TypeScript steps. Deploy in seconds. Run <code>flux trace</code> to see exactly how every request moved through your system — gateway, functions, database, async jobs.</p>
   <div class="hero-actions">
-    <a class="btn-primary" href="/docs/quickstart">Start building →</a>
-    <a class="btn-secondary" href="/docs">Read the docs</a>
+    <a class="btn-primary" href="/docs/quickstart">Get started →</a>
+    <a class="btn-secondary" href="#how-it-works">How it works</a>
   </div>
   <div style="display:flex;justify-content:center;margin-top:32px;">
     <div class="install-hint">
@@ -181,75 +98,163 @@
   </div>
 </section>
 
-<!-- ─── Stats bar ──────────────────────────────────────────────────────────── -->
-<div class="stats-bar">
-  <div class="stat-item">
-    <div class="stat-num">&lt; 30s</div>
-    <div class="stat-label">avg deploy time</div>
-  </div>
-  <div class="stat-item">
-    <div class="stat-num">0</div>
-    <div class="stat-label">config files to write</div>
-  </div>
-  <div class="stat-item">
-    <div class="stat-num">100%</div>
-    <div class="stat-label">requests auto-traced</div>
-  </div>
-  <div class="stat-item">
-    <div class="stat-num">1 cmd</div>
-    <div class="stat-label">from code to live API</div>
+<!-- ─── Immediate proof: deploy → invoke → trace ─────────────────────────── -->
+<section style="border-top:1px solid var(--border); padding:80px 0;">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--green);background:rgba(61,214,140,.1);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Proof</div>
+  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Three commands. Full observability.</h2>
+  <p style="color:var(--muted);font-size:.95rem;max-width:520px;margin:0 0 40px;">Deploy a function, invoke it, then run <code>flux trace</code> with the request ID from the response header. You get a complete picture of every step — immediately, without instrumenting anything.</p>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start;">
+    <div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+      <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
+        <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;"></span>
+        <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">deploy + invoke</span>
+      </div>
+      <div style="padding:20px 24px;font-family:var(--font-mono);font-size:.8rem;line-height:1.9;white-space:pre;"><span style="color:var(--green);">$</span> flux deploy
+
+  Deploying 2 functions...
+
+  <span style="color:var(--green);">✔</span> create_user  <span style="color:var(--muted);">→ gw.fluxbase.co/create_user</span>
+  <span style="color:var(--green);">✔</span> send_welcome <span style="color:var(--muted);">(async)</span>
+
+  <span style="color:var(--green);">✔</span> Deployed in 18s
+
+<span style="color:var(--green);">$</span> curl -X POST https://gw.fluxbase.co/create_user \
+    -d <span style="color:var(--accent);">'{"email":"alice@example.com"}'</span>
+
+  <span style="color:var(--green);">{"userId":"u_99a1","status":"ok"}</span>
+  <span style="color:var(--muted);">x-request-id: 4f9a3b2c</span></div>
+    </div>
+
+    <div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+      <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
+        <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;"></span>
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;"></span>
+        <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux trace 4f9a3b2c</span>
+      </div>
+      <div style="padding:20px 24px;font-family:var(--font-mono);font-size:.8rem;line-height:1.9;white-space:pre;"><span style="color:var(--green);">$</span> flux trace <span style="color:var(--accent);">4f9a3b2c</span>
+
+  Trace <span style="color:var(--accent);">4f9a3b2c</span>  <span style="color:var(--muted);">2026-03-10 14:22:01 UTC</span>
+
+  <span style="color:#f9a8d4;">▸ gateway</span>                    <span style="color:var(--yellow);">3ms</span>
+    <span style="color:var(--muted);">auth ✔  rate_limit ✔  cors ✔</span>
+
+  <span style="color:#f9a8d4;">▸ create_user</span>                <span style="color:var(--yellow);">81ms</span>
+    <span style="color:#60a5fa;">▸ db:select(users)</span>          <span style="color:var(--yellow);">11ms</span>
+    <span style="color:#60a5fa;">▸ db:insert(users)</span>          <span style="color:var(--yellow);">14ms</span>
+
+  <span style="color:#f9a8d4;">▸ send_welcome</span>   <span style="color:var(--muted);">async →</span>  <span style="color:var(--yellow);">queued</span>
+
+  <span style="color:var(--muted);">── total: 98ms ──────────────────────</span></div>
+    </div>
   </div>
 </div>
+</section>
 
-<!-- ─── Pain section ──────────────────────────────────────────────────────── -->
-<section class="pain-section">
-  <span class="section-tag">The problem</span>
-  <h2>Building backends is drowning in overhead.</h2>
-  <p class="lead">Every feature you ship starts with days of infrastructure work that has nothing to do with your idea.</p>
-  <div class="pain-cards">
-    <div class="pain-card">
-      <div class="pain-icon">🔧</div>
-      <h3>Config before code</h3>
-      <p>Before writing a line of logic, you're setting up CORS, auth middleware, rate limiting, environment variables, and connection pooling. None of it is the product.</p>
+<!-- ─── What is a backend flow? ──────────────────────────────────────────── -->
+<section style="border-top:1px solid var(--border); padding:80px 0;">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">The concept</div>
+  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">What is a backend flow?</h2>
+  <p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 48px;">A backend request is never a single thing. It's a chain of steps — routing, logic, data, side-effects. Fluxbase treats that chain as a first-class structure: it runs it, records every step, and shows it to you.</p>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
+
+    <!-- Flow diagram -->
+    <div>
+      <p style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">User signup — example flow</p>
+      <div style="display:flex;flex-direction:column;">
+
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);">
+          <span>📱</span>
+          <div>
+            <div style="font-size:.88rem;font-weight:600;">Client</div>
+            <div style="font-size:.75rem;color:var(--muted);">POST /create_user</div>
+          </div>
+        </div>
+        <div style="height:28px;display:flex;align-items:stretch;padding:0 30px;"><div style="width:2px;background:var(--border);"></div></div>
+
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);">
+          <span>🛡️</span>
+          <div>
+            <div style="font-size:.88rem;font-weight:600;color:var(--accent);">Gateway</div>
+            <div style="font-size:.75rem;color:var(--muted);">auth, rate limit, route</div>
+          </div>
+        </div>
+        <div style="height:28px;display:flex;align-items:stretch;padding:0 30px;"><div style="width:2px;background:var(--border);"></div></div>
+
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);">
+          <span>⚡</span>
+          <div>
+            <div style="font-size:.88rem;font-weight:600;color:var(--accent);">create_user</div>
+            <div style="font-size:.75rem;color:var(--muted);">your TypeScript logic</div>
+          </div>
+        </div>
+        <div style="height:28px;display:flex;align-items:stretch;padding:0 30px;"><div style="width:2px;background:var(--border);"></div></div>
+
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);">
+          <span>🗄️</span>
+          <div>
+            <div style="font-size:.88rem;font-weight:600;color:var(--accent);">Database write</div>
+            <div style="font-size:.75rem;color:var(--muted);">ctx.db.query(...)</div>
+          </div>
+        </div>
+        <div style="height:28px;display:flex;align-items:stretch;padding:0 30px;"><div style="width:2px;background:var(--border);"></div></div>
+
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);">
+          <span>📬</span>
+          <div>
+            <div style="font-size:.88rem;font-weight:600;">send_welcome</div>
+            <div style="font-size:.75rem;color:var(--muted);">async background step</div>
+          </div>
+        </div>
+
+      </div>
     </div>
-    <div class="pain-card">
-      <div class="pain-icon">🕵️</div>
-      <h3>Debugging is a separate job</h3>
-      <p>Something's slow in production. You open three dashboards, search Datadog, grep logs, guess. You never get a clean answer — just a pile of signals to correlate manually.</p>
+
+    <!-- Explanation -->
+    <div style="padding-top:8px;">
+      <h3 style="font-size:1rem;font-weight:700;margin-bottom:12px;">Fluxbase runs the flow. You see the flow.</h3>
+      <p style="font-size:.88rem;color:var(--muted);line-height:1.7;margin-bottom:14px;">Each highlighted node is traced automatically. You don't add any instrumentation. Every step gets a span, a duration, and a result.</p>
+      <p style="font-size:.88rem;color:var(--muted);line-height:1.7;margin-bottom:14px;">The gateway is not separate infrastructure you configure. The database is not a connection string you manage. The async queue is not a separate service you deploy. They're all part of the flow — and all traced.</p>
+      <p style="font-size:.88rem;color:var(--muted);line-height:1.7;margin-bottom:24px;">When something goes wrong, <code>flux trace &lt;id&gt;</code> shows which step failed, how long everything took, and what the data looked like at each hop.</p>
+      <a class="btn-secondary" href="/docs/architecture" style="font-size:.85rem;">Read the architecture →</a>
     </div>
-    <div class="pain-card">
-      <div class="pain-icon">🌪️</div>
-      <h3>Side projects die in cloud config</h3>
-      <p>You have 10 tabs open: IAM roles, VPC settings, Docker registries, Terraform state. The idea was good. The infrastructure killed it before you validated anything.</p>
-    </div>
+
   </div>
+</div>
 </section>
 
 <!-- ─── How it works ─────────────────────────────────────────────────────── -->
-<section style="border-top:1px solid var(--border); padding:80px 0;">
-<div class="how-section" style="border-top:none; padding-top:0;">
-  <span class="section-tag">How it works</span>
-  <h2>Write logic. Deploy flows. See everything.</h2>
-  <div class="flow-steps">
+<section id="how-it-works" style="border-top:1px solid var(--border); padding:80px 0;">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">How it works</div>
+  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:48px;">Write logic. Deploy. Trace.</h2>
+
+  <div style="display:flex;flex-direction:column;gap:0;">
 
     <div class="flow-step">
       <div class="flow-step-num">1</div>
       <div class="flow-step-text">
-        <h3>Write pure logic</h3>
-        <p>Your function receives <code>input</code> and a <code>ctx</code> — that's it. Query your database with <code>ctx.db</code>, read secrets with <code>ctx.secrets</code>, log with <code>ctx.log</code>. No boilerplate, no imports, no configuration.</p>
+        <h3>Write a step</h3>
+        <p>A function is a step in a flow. It receives <code>input</code> and a <code>ctx</code> — database, secrets, logging, tools. No boilerplate, no imports, no configuration files.</p>
       </div>
       <div class="flow-step-code">
         <pre><code><span class="kw">export default</span> <span class="fn">defineFunction</span>({
-  name: <span class="str">"create_order"</span>,
+  name: <span class="str">"create_user"</span>,
 
   handler: <span class="kw">async</span> ({ input, ctx }) => {
-    <span class="kw">const</span> key = <span class="kw">await</span> ctx.secrets.<span class="fn">get</span>(<span class="str">"STRIPE_KEY"</span>);
-    <span class="kw">const</span> [order] = <span class="kw">await</span> ctx.db.<span class="fn">query</span>({
-      table: <span class="str">"orders"</span>, operation: <span class="str">"insert"</span>,
-      data: { user_id: input.userId, total: input.total },
+    <span class="kw">const</span> [user] = <span class="kw">await</span> ctx.db.<span class="fn">query</span>({
+      table: <span class="str">"users"</span>,
+      operation: <span class="str">"insert"</span>,
+      data: { email: input.email },
     });
-    ctx.<span class="fn">log</span>(<span class="str">"order created"</span>, { id: order.id });
-    <span class="kw">return</span> { orderId: order.id };
+    ctx.<span class="fn">log</span>(<span class="str">"user created"</span>, { id: user.id });
+    <span class="kw">return</span> { userId: user.id };
   },
 });</code></pre>
       </div>
@@ -258,18 +263,17 @@
     <div class="flow-step">
       <div class="flow-step-num">2</div>
       <div class="flow-step-text">
-        <h3>Deploy in one command</h3>
-        <p>Run <code>flux deploy</code>. Every function in your project is bundled, routed, and live in under 30 seconds. The gateway handles auth, rate limiting, and CORS before your code runs.</p>
+        <h3>Deploy the flow</h3>
+        <p>Run <code>flux deploy</code>. Every function is bundled and live in under 30 seconds. The gateway — auth, rate limiting, routing — is wired automatically. Mark a function <code>async: true</code> and it becomes a background flow step: queued, traced, observable.</p>
       </div>
       <div class="flow-step-code">
         <pre><code><span class="shell-prompt">$</span> flux deploy
 
   Deploying 3 functions...
 
-  <span class="str">✔</span> create_order  → https://gw.fluxbase.co/create_order
-  <span class="str">✔</span> list_orders   → https://gw.fluxbase.co/list_orders
-  <span class="str">✔</span> send_invoice  → https://gw.fluxbase.co/send_invoice
-    <span class="cm">(async, fire-and-forget)</span>
+  <span class="str">✔</span> create_user   → gw.fluxbase.co/create_user
+  <span class="str">✔</span> list_users    → gw.fluxbase.co/list_users
+  <span class="str">✔</span> send_welcome  <span class="cm">(async background step)</span>
 
   <span class="str">✔</span> Deployed in 22s</code></pre>
       </div>
@@ -278,18 +282,18 @@
     <div class="flow-step">
       <div class="flow-step-num">3</div>
       <div class="flow-step-text">
-        <h3>Trace every request</h3>
-        <p>Every request has an <code>x-request-id</code>. Run <code>flux trace &lt;id&gt;</code> and see the full journey: which functions ran, every database query, how long each step took, and if anything looks wrong — N+1 patterns, slow queries, missing indexes.</p>
+        <h3>Trace the flow</h3>
+        <p>Every response has an <code>x-request-id</code> header. Run <code>flux trace &lt;id&gt;</code> and see the full chain: which steps ran, every database query, how long each took, what was slow, and index suggestions.</p>
       </div>
       <div class="flow-step-code">
         <pre><code><span class="shell-prompt">$</span> flux trace 4f9a3b2c
 
-  <span class="trace-fn">▸ create_order</span>          <span class="trace-ms">88 ms</span>
-    <span class="trace-db">▸ db:insert(orders)</span>     <span class="trace-ms">14 ms</span>
-    <span class="trace-db">▸ db:select(users)</span>      <span class="trace-ms">284 ms</span>  <span class="trace-warn">⚠ slow</span>
+  <span class="trace-fn">▸ gateway</span>               <span class="trace-ms"> 3ms</span>
+  <span class="trace-fn">▸ create_user</span>           <span class="trace-ms">81ms</span>
+    <span class="trace-db">▸ db:insert(users)</span>    <span class="trace-ms">14ms</span>
+  <span class="trace-fn">▸ send_welcome</span>  <span class="trace-dim">async →</span>  <span class="trace-ms">queued</span>
 
-  <span class="trace-dim">── Index suggestion ────────────────────</span>
-  <span class="trace-sugg">→ CREATE INDEX ON users(id);</span></code></pre>
+  <span class="trace-dim">── total: 98ms ─────────────────</span></code></pre>
       </div>
     </div>
 
@@ -297,11 +301,12 @@
 </div>
 </section>
 
-<!-- ─── Trace demo ────────────────────────────────────────────────────────── -->
-<section class="trace-section">
-  <span class="section-tag">flux trace</span>
-  <h2>Debugging that actually helps.</h2>
-  <p class="lead">One command. Every hop, every query, every millisecond — correlated under a single request ID. No dashboards. No guessing.</p>
+<!-- ─── Deep trace demo ───────────────────────────────────────────────────── -->
+<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;text-align:center;">
+  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--green);background:rgba(61,214,140,.1);padding:4px 12px;border-radius:20px;margin-bottom:20px;">flux trace</div>
+  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">One command. The complete picture.</h2>
+  <p style="color:var(--muted);font-size:.95rem;max-width:520px;margin:0 auto 40px;">Every hop correlated under a single request ID. No dashboards, no log aggregation, no guessing. N+1 patterns and missing indexes flagged automatically.</p>
 
   <div class="trace-window">
     <div class="trace-titlebar">
@@ -327,87 +332,126 @@
   <span class="trace-fn">▸ function:send_invoice</span>        <span class="trace-ms">async →</span>   <span class="trace-dim">queued</span><br>
 <br>
   <span class="trace-dim">── Slow queries ───────────────────────────────</span><br>
-  <span class="trace-warn">  users.user_id   284 ms</span><br>
+  <span class="trace-warn">  users.user_id   284 ms   no index found</span><br>
 <br>
-  <span class="trace-dim">── Index suggestions ──────────────────────────</span><br>
+  <span class="trace-dim">── Suggestions ────────────────────────────────</span><br>
   <span class="trace-sugg">  → CREATE INDEX ON users(user_id);</span><br>
     </div>
   </div>
-
-  <p class="caption">The trace ID comes back in the <code>x-request-id</code> response header on every API call. You can paste it straight into your terminal.</p>
+  <p style="margin-top:20px;font-size:.82rem;color:var(--muted);max-width:520px;margin-left:auto;margin-right:auto;">The trace ID comes back in the <code>x-request-id</code> response header on every API call.</p>
+</div>
 </section>
 
-<!-- ─── Feature grid ─────────────────────────────────────────────────────── -->
-<section style="padding:80px 0; border-top:1px solid var(--border);">
-  <div style="text-align:center;margin-bottom:48px;padding:0 24px;">
-    <span class="section-tag" style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:16px;">Everything included</span>
-    <h2 style="font-size:clamp(1.5rem,3vw,2.2rem);font-weight:800;letter-spacing:-.03em;">The full stack, assembled.</h2>
-    <p style="color:var(--muted);font-size:1rem;max-width:480px;margin:0 auto;">Every layer your backend needs — already wired together, already observable.</p>
+<!-- ─── Architecture ──────────────────────────────────────────────────────── -->
+<section style="border-top:1px solid var(--border); padding:80px 0;">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--bg-elevated);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Architecture</div>
+  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Five layers. One runtime.</h2>
+  <p style="color:var(--muted);font-size:.95rem;max-width:500px;margin:0 0 40px;">Each layer is already wired to the next. You write logic inside the Runtime layer — everything else is handled.</p>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;">
+    <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:20px;">
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">Layer 1</div>
+      <h4 style="font-size:.92rem;font-weight:600;margin-bottom:6px;">Gateway</h4>
+      <p style="font-size:.8rem;color:var(--muted);line-height:1.6;margin:0;">Routes requests. Handles auth, rate limiting, and CORS before your code runs.</p>
+    </div>
+    <div style="background:var(--bg-surface);border:1px solid var(--accent);border-radius:8px;padding:20px;">
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:6px;">Layer 2 — you write here</div>
+      <h4 style="font-size:.92rem;font-weight:600;margin-bottom:6px;">Runtime</h4>
+      <p style="font-size:.8rem;color:var(--muted);line-height:1.6;margin:0;">Executes TypeScript in V8 isolates. Each function gets <code>ctx</code> with db, secrets, logs, tools.</p>
+    </div>
+    <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:20px;">
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">Layer 3</div>
+      <h4 style="font-size:.92rem;font-weight:600;margin-bottom:6px;">Database</h4>
+      <p style="font-size:.8rem;color:var(--muted);line-height:1.6;margin:0;">Postgres, already connected. Query via <code>ctx.db</code>. Every query auto-traced.</p>
+    </div>
+    <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:20px;">
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">Layer 4</div>
+      <h4 style="font-size:.92rem;font-weight:600;margin-bottom:6px;">Tools</h4>
+      <p style="font-size:.8rem;color:var(--muted);line-height:1.6;margin:0;">Slack, GitHub, Gmail via <code>ctx.tools.run()</code>. Tool calls appear in the trace.</p>
+    </div>
+    <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:20px;">
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">Layer 5</div>
+      <h4 style="font-size:.92rem;font-weight:600;margin-bottom:6px;">Observability</h4>
+      <p style="font-size:.8rem;color:var(--muted);line-height:1.6;margin:0;">Every request produces a trace. Steps, durations, queries, anomalies — all under one request ID.</p>
+    </div>
   </div>
+</div>
+</section>
+
+<!-- ─── What you can build ────────────────────────────────────────────────── -->
+<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Capabilities</div>
+  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">What you can build</h2>
+  <p style="color:var(--muted);font-size:.95rem;max-width:500px;margin:0 0 40px;">Fluxbase runs three kinds of flows. All traced the same way.</p>
   <div class="feature-grid" style="padding-bottom:0;">
+
     <div class="feature-card">
       <div class="icon">⚡</div>
-      <h3>TypeScript functions</h3>
-      <p>Write logic — not boilerplate. <code>defineFunction()</code> is your entire API surface. Deno-based, fast cold starts, isolated per function.</p>
-    </div>
-    <div class="feature-card">
-      <div class="icon">🗄️</div>
-      <h3>Postgres, zero config</h3>
-      <p>Every project gets a hosted Postgres database. Query it with <code>ctx.db</code> — no connection string, no ORM, no migrations script to wire up.</p>
-    </div>
-    <div class="feature-card">
-      <div class="icon">🔭</div>
-      <h3>Traces + N+1 detection</h3>
-      <p>Every request is automatically instrumented. N+1 query patterns are caught and flagged. Slow queries get index suggestions. No SDK required.</p>
-    </div>
-    <div class="feature-card">
-      <div class="icon">🔑</div>
-      <h3>Secrets that rotate live</h3>
-      <p>Store encrypted secrets with <code>flux secrets set</code>. Inject at runtime with <code>ctx.secrets.get()</code>. Rotate without redeploying.</p>
-    </div>
-    <div class="feature-card">
-      <div class="icon">🛡️</div>
-      <h3>Gateway, already configured</h3>
-      <p>Auth, CORS, rate limiting, and request routing are handled before your function runs. You write business logic. The gateway handles the rest.</p>
+      <h3>Request flows</h3>
+      <p>Standard request → response. A function runs, queries the database, returns a result. Every step is traced, every query timed.</p>
     </div>
     <div class="feature-card">
       <div class="icon">🔀</div>
-      <h3>Async flows built in</h3>
-      <p>Mark any function <code>async: true</code> and it becomes a background flow step. Fire-and-forget from your main handler — queued, traced, observable.</p>
+      <h3>Async background flows</h3>
+      <p>Mark a function <code>async: true</code>. It becomes a queued background step — fire-and-forget, but still fully traced and observable.</p>
     </div>
+    <div class="feature-card">
+      <div class="icon">🔗</div>
+      <h3>Workflow flows</h3>
+      <p>Chain steps into a named flow with <code>ctx.workflow.run()</code>. Each step sees the previous output. Sequential or parallel.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🤖</div>
+      <h3>Agent flows</h3>
+      <p>Give an LLM access to your tools via <code>ctx.agent.run()</code>. It decides which tool to call next, loop by loop. Every LLM call and tool execution is traced.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🔑</div>
+      <h3>Secrets at runtime</h3>
+      <p>Store encrypted secrets with <code>flux secrets set</code>. Inject with <code>ctx.secrets.get()</code>. Rotate without redeploying.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🔭</div>
+      <h3>Trace everything</h3>
+      <p>One CLI command. Every step, query, tool call, and timing across your entire request chain. No external APM. No configuration.</p>
+    </div>
+
   </div>
+</div>
 </section>
 
 <!-- ─── Examples ─────────────────────────────────────────────────────────── -->
 <section class="examples-strip">
-  <h2>Start from a flow template</h2>
-  <p>Production-ready flows you can deploy and study in minutes.</p>
+  <h2>Example flows</h2>
+  <p>Each example shows a complete flow: the steps, the trace output, and the code.</p>
   <div class="example-cards">
     <a class="example-card" href="/examples/todo-api">
-      <div class="tag">REST API</div>
+      <div class="tag">Request flow</div>
       <h3>Todo API</h3>
-      <p>A 4-step flow: create, list, update, delete. Full CRUD with Postgres, traced end-to-end.</p>
+      <p>Create, list, update, delete. Four functions. One Postgres table. Trace every query.</p>
     </a>
     <a class="example-card" href="/examples/webhook-worker">
-      <div class="tag">Async Flow</div>
+      <div class="tag">Async flow</div>
       <h3>Webhook Worker</h3>
-      <p>Receive a webhook, validate it synchronously, process it as an async background flow.</p>
+      <p>Validate synchronously, process as a background flow step. Trace the hand-off.</p>
     </a>
     <a class="example-card" href="/examples/ai-backend">
-      <div class="tag">AI / LLM</div>
+      <div class="tag">Agent flow</div>
       <h3>AI Backend</h3>
-      <p>Proxy to OpenAI with caching, rate limiting, and full request tracing on every LLM call.</p>
+      <p>LLM decides the next tool call. Each step — LLM call, tool call, database write — appears in the trace.</p>
     </a>
   </div>
 </section>
 
 <!-- ─── CTA ─────────────────────────────────────────────────────────────── -->
 <section class="cta-strip">
-  <h2>Your first flow is 5 minutes away.</h2>
-  <p>Install the CLI, scaffold a project, deploy. You'll have a live API with full observability before your coffee gets cold.</p>
+  <h2>Deploy your first flow in 5 minutes.</h2>
+  <p>Install the CLI, scaffold a project, run <code>flux deploy</code>. You'll have a live API with a full trace before you finish your coffee.</p>
   <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:24px;">
     <a class="btn-primary" href="/docs/quickstart">Start the quickstart →</a>
-    <a class="btn-secondary" href="/docs/architecture">How it works</a>
+    <a class="btn-secondary" href="/docs/architecture">Architecture</a>
   </div>
   <div style="display:flex;justify-content:center;">
     <div class="install-hint">
