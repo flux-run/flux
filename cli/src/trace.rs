@@ -80,9 +80,113 @@ fn colorize_delta(delta_ms: i64, slow_thresh: u64, is_slow: bool) -> colored::Co
     }
 }
 
+// ── Flame graph ──────────────────────────────────────────────────────────────
+
+/// Render a Gantt-style waterfall timeline where every span is a row and its
+/// position along the bar corresponds to `elapsed_ms / total_ms`.
+fn render_flame(spans: &[Value], total_ms: i64, slow_thresh: u64) {
+    const BAR_WIDTH: i64 = 52;
+    const EMPTY: char = '░';
+    const FILL: char  = '█';
+
+    // Pre-calculate label column width (same logic as span table).
+    let label_width = spans.iter()
+        .map(|s| {
+            s["source"].as_str().unwrap_or("?").len()
+            + 1
+            + s["resource"].as_str().unwrap_or("?").len()
+        })
+        .max()
+        .unwrap_or(18)
+        .clamp(12, 28);
+
+    println!(
+        "  {:<lw$}  {}  {}",
+        "span".bold().to_string(),
+        format!("|{:─<width$}|", "", width = BAR_WIDTH as usize).dimmed(),
+        "Δ / message".dimmed(),
+        lw = label_width,
+    );
+    println!(
+        "  {:<lw$}  {}  {}",
+        "",
+        format!(" 0{:>width$}", format!("{}ms", total_ms), width = BAR_WIDTH as usize - 1).dimmed(),
+        "",
+        lw = label_width,
+    );
+
+    for span in spans {
+        let source     = span["source"].as_str().unwrap_or("?");
+        let resource   = span["resource"].as_str().unwrap_or("?");
+        let span_type  = span["span_type"].as_str().unwrap_or("event");
+        let delta_ms   = span["delta_ms"].as_i64().unwrap_or(0);
+        let elapsed_ms = span["elapsed_ms"].as_i64().unwrap_or(0);
+        let is_slow    = span["is_slow"].as_bool().unwrap_or(false);
+        let message    = span["message"].as_str().unwrap_or("");
+
+        // Position of the marker in the bar.
+        let marker_pos = if total_ms > 0 {
+            ((elapsed_ms * BAR_WIDTH) / total_ms).clamp(0, BAR_WIDTH - 1) as usize
+        } else {
+            0
+        };
+
+        // Width of the filled delta block (minimum 1 if non-zero delta).
+        let fill_width = if total_ms > 0 && delta_ms > 0 {
+            ((delta_ms * BAR_WIDTH) / total_ms).max(1).min(BAR_WIDTH - marker_pos as i64) as usize
+        } else {
+            1
+        };
+
+        // Build three separate string segments (avoids byte-boundary issues with
+        // multi-byte block chars) and colourize each independently.
+        let prefix_str = format!("|{}", EMPTY.to_string().repeat(marker_pos));
+        let fill_str   = FILL.to_string().repeat(fill_width);
+        let suffix_len = (BAR_WIDTH as usize).saturating_sub(marker_pos + fill_width);
+        let suffix_str = format!("{}|", EMPTY.to_string().repeat(suffix_len));
+
+        let coloured_bar = match span_type {
+            "start" => format!("{}{}{}",
+                prefix_str.dimmed(), fill_str.cyan().bold(), suffix_str.dimmed()),
+            "end"   => format!("{}{}{}",
+                prefix_str.dimmed(), fill_str.green().bold(), suffix_str.dimmed()),
+            "error" => format!("{}{}{}",
+                prefix_str.dimmed(), fill_str.red().bold(), suffix_str.dimmed()),
+            _       => format!("{}{}{}",
+                prefix_str.dimmed(), fill_str.yellow(), suffix_str.dimmed()),
+        };
+
+        // Delta label with slow colouring.
+        let delta_label = colorize_delta(delta_ms, slow_thresh, is_slow);
+
+        // Pad plain label then inject colour into source portion.
+        let plain_label  = format!("{}/{}", source, resource);
+        let padded_plain = format!("{:<width$}", plain_label, width = label_width);
+        let coloured_label = padded_plain.replacen(
+            source,
+            &colorize_source(source).to_string(),
+            1,
+        );
+
+        // Truncate message so line stays comfortable.
+        let short_msg: String = message.chars().take(40).collect();
+        let trail = if message.len() > 40 { "…" } else { "" };
+
+        println!(
+            "  {}  {}  {}  {}{}",
+            coloured_label,
+            coloured_bar,
+            delta_label,
+            short_msg.dimmed(),
+            trail.dimmed(),
+        );
+    }
+    println!();
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
-pub async fn execute(request_id: String, slow_threshold: u64) -> anyhow::Result<()> {
+pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
     let url    = format!("{}/traces/{}?slow_ms={}", client.base_url, request_id, slow_threshold);
 
@@ -182,7 +286,7 @@ pub async fn execute(request_id: String, slow_threshold: u64) -> anyhow::Result<
         );
     }
 
-    // ── Footer ────────────────────────────────────────────────────────────────
+    // ── Footer / flame graph ──────────────────────────────────────────────────
     println!();
     match total_ms {
         Some(t) => println!("  {} spans  •  {}ms total", count, t.to_string().bold()),
@@ -198,6 +302,17 @@ pub async fn execute(request_id: String, slow_threshold: u64) -> anyhow::Result<
                 label.bold(),
                 msg.dimmed(),
             );
+        }
+    }
+
+    if flame {
+        if let Some(t) = total_ms {
+            println!();
+            println!("  {}", "Flame graph".bold().white());
+            println!();
+            render_flame(&spans, t, slow_thresh);
+        } else {
+            eprintln!("{} flame graph unavailable (total_duration_ms missing from trace)", "⚠".yellow());
         }
     }
 

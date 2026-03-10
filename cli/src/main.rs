@@ -141,6 +141,9 @@ enum Commands {
         /// Milliseconds threshold above which a span delta is highlighted as slow (default 500)
         #[arg(long, default_value = "500", value_name = "MS")]
         slow: u64,
+        /// Render a terminal flame graph (waterfall timeline) instead of the span table
+        #[arg(long)]
+        flame: bool,
     },
     /// Initialise .fluxbase/config.json for this project
     Init {
@@ -233,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Watch { output, interval } => sdk::execute_watch(output, interval).await?,
         Commands::Status { sdk } => sdk::execute_status(sdk).await?,
         Commands::Doctor => doctor::execute().await?,
-        Commands::Trace { request_id, slow } => trace::execute(request_id, slow).await?,
+        Commands::Trace { request_id, slow, flame } => trace::execute(request_id, slow, flame).await?,
         Commands::Init { project, output, interval, api_url, gateway_url, runtime_url } => init::execute(project, output, interval, api_url, gateway_url, runtime_url).await?,
         Commands::Stack { command } => match command {
             StackCommand::Up   { build, foreground }  => stack::execute_up(build, !foreground).await?,
