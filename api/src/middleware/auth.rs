@@ -42,8 +42,19 @@ pub async fn verify_auth(
             Err(_) => return Err(StatusCode::UNAUTHORIZED),
         };
 
+        // Resolve the tenant owner so that routes which write to user-FK columns
+        // (tenants.owner_id, tenant_members.user_id) receive a valid users.id.
+        let owner_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT owner_id FROM tenants WHERE id = $1"
+        )
+        .bind(api_key.tenant_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten();
+
         let context = RequestContext {
-            user_id: api_key.id,
+            user_id: owner_id.unwrap_or(api_key.id),
             firebase_uid: "api_key".to_string(),
             tenant_id: Some(api_key.tenant_id),
             project_id: Some(api_key.project_id),

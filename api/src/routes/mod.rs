@@ -12,3 +12,4 @@ pub mod openapi;
 pub mod schema;
 pub mod sdk;
 pub mod tools;
+pub mod demo;

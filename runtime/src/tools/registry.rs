@@ -57,7 +57,10 @@ impl ToolRegistry {
             // ── Gmail ──────────────────────────────────────────────────────────
             ("gmail.send_email",        "Send an email",              "gmail",   "GMAIL_SEND_EMAIL",           "Send an email via Gmail"),
             ("gmail.create_draft",      "Create email draft",         "gmail",   "GMAIL_CREATE_EMAIL_DRAFT",   "Create a draft email in Gmail"),
-
+            // ── Microsoft Outlook ──────────────────────────────────────────────
+            ("outlook.send_email",      "Send an Outlook email",      "outlook",  "MICROSOFT_OUTLOOK_SEND_EMAIL",   "Send an email via Microsoft Outlook"),
+            ("outlook.create_draft",    "Create Outlook draft",       "outlook",  "MICROSOFT_OUTLOOK_CREATE_DRAFT", "Create a draft in Microsoft Outlook"),
+            ("outlook.reply_email",     "Reply to Outlook email",     "outlook",  "MICROSOFT_OUTLOOK_REPLY_TO_EMAIL","Reply to an email in Microsoft Outlook"),
             // ── Linear ─────────────────────────────────────────────────────────
             ("linear.create_issue",     "Create a Linear issue",      "linear",  "LINEAR_CREATE_ISSUE",        "Create a new issue in Linear"),
             ("linear.update_issue",     "Update a Linear issue",      "linear",  "LINEAR_UPDATE_ISSUE",        "Update an existing issue in Linear"),

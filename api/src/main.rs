@@ -234,6 +234,10 @@ pub fn create_app(state: AppState) -> Router {
     Router::new()
         .merge(authenticated_api)
         .nest("/internal", internal_routes)
+        // ── Public demo endpoints (no auth, rate-limited by IP) ─────────────
+        // Back the landing-page "Try Fluxbase" interactive trace demo.
+        .route("/demo/signup",           post(routes::demo::demo_signup))
+        .route("/demo/trace/:request_id", get(routes::demo::demo_trace))
         // OAuth callback — Composio redirects here after provider OAuth; no auth required
         .route("/tools/oauth/callback", get(routes::tools::oauth_callback))
         .route("/health", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))

@@ -4,6 +4,7 @@ mod auth;
 mod client;
 mod config;
 mod create;
+mod db;
 mod deploy;
 mod dev;
 mod doctor;
@@ -183,6 +184,11 @@ enum Commands {
         #[arg(long, short, value_name = "TEMPLATE")]
         template: Option<String>,
     },
+    /// Database operations (create, list, manage tables)
+    Db {
+        #[command(subcommand)]
+        command: db::DbCommands,
+    },
     /// Manage the local Fluxbase development stack (all services via Docker)
     Stack {
         #[command(subcommand)]
@@ -256,6 +262,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Trace { request_id, slow, flame } => trace::execute(request_id, slow, flame).await?,
         Commands::Init { project, output, interval, api_url, gateway_url, runtime_url } => init::execute(project, output, interval, api_url, gateway_url, runtime_url).await?,
         Commands::Create { name, template } => create::execute(name, template).await?,
+        Commands::Db { command } => db::execute(command).await?,
         Commands::Stack { command } => match command {
             StackCommand::Up   { build, foreground }  => stack::execute_up(build, !foreground).await?,
             StackCommand::Down { volumes }             => stack::execute_down(volumes).await?,

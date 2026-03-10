@@ -37,7 +37,7 @@ pub async fn op_execute_tool(
     let api_key_str = api_key.as_deref().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            "tools_not_configured: FLUXBASE_COMPOSIO_KEY secret not set",
+            "tools_not_configured: Composio integration is not available on this runtime",
         )
     })?;
 
@@ -135,11 +135,10 @@ pub async fn execute_function(
 ) -> Result<ExecutionResult, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
 
-    // Resolve Composio API key from tenant secrets.
-    // Users set this via: flux secrets set FLUXBASE_COMPOSIO_KEY <key>
-    let composio_api_key = secrets.get("FLUXBASE_COMPOSIO_KEY")
-        .or_else(|| secrets.get("COMPOSIO_API_KEY"))
-        .cloned();
+    // Composio is a first-party Fluxbase service — the platform-level API key is set as
+    // an env var on the runtime service (COMPOSIO_API_KEY). Users do not supply their own key.
+    // Each tenant is a separate Composio entity, scoped under their tenant_id.
+    let composio_api_key = std::env::var("COMPOSIO_API_KEY").ok();
 
     // Each tenant is a Composio "entity" — their connected accounts are scoped under this ID.
     let entity_id = tenant_id.clone();

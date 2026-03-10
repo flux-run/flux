@@ -4,6 +4,11 @@ use serde_json::Value;
 
 #[derive(Subcommand)]
 pub enum TenantCommands {
+    /// Create a new tenant (organization)
+    Create {
+        /// Name of the new organization
+        name: String,
+    },
     /// List available tenants
     List,
     /// Switch to a specific tenant
@@ -16,6 +21,27 @@ pub async fn execute(command: TenantCommands) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
     match command {
+        TenantCommands::Create { name } => {
+            let res = client.client
+                .post(format!("{}/tenants", client.base_url))
+                .json(&serde_json::json!({ "name": name }))
+                .send()
+                .await?;
+            let json: Value = res.error_for_status()?.json().await?;
+            let data = json.get("data").unwrap_or(&json);
+            let tenant_id = data.get("tenant_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let slug = data.get("slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            println!("✓ Tenant created");
+            println!("  id:   {}", tenant_id);
+            println!("  slug: {}", slug);
+
+            // Auto-select the new tenant
+            let mut config = client.config;
+            config.tenant_id = Some(tenant_id.clone());
+            config.project_id = None; // clear stale project from another org
+            config.save().await?;
+            println!("✓ Now using tenant: {}", tenant_id);
+        }
         TenantCommands::List => {
             let res = client.client
                 .get(format!("{}/tenants", client.base_url))

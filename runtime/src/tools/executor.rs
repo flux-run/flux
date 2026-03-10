@@ -66,8 +66,8 @@ impl ToolExecutor {
         input:     Value,
     ) -> Result<ToolOutput, String> {
         let api_key = self.api_key.as_deref().ok_or_else(|| {
-            "tools_not_configured: FLUXBASE_COMPOSIO_KEY secret is not set. \
-             Add it in your Fluxbase dashboard → Settings → Integrations.".to_string()
+            "tools_not_configured: Composio integration is not available on this runtime. \
+             Contact support if you believe this is an error.".to_string()
         })?;
 
         // Resolve the Composio action ID through the registry
