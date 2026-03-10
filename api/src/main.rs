@@ -194,10 +194,10 @@ pub fn create_app(state: AppState) -> Router {
         // Full request trace — all log spans for a given request_id across services
         .route("/traces/{request_id}", get(logs::routes::get_trace))
         // Integrations + tool catalog
-        .route("/tools",                   get(routes::tools::list_tools))
-        .route("/tools/connected",         get(routes::tools::list_connected))
-        .route("/tools/connect/:provider", post(routes::tools::connect_provider))
-        .route("/tools/disconnect/:provider", delete(routes::tools::disconnect_provider))
+        .route("/tools",                     get(routes::tools::list_tools))
+        .route("/tools/connected",           get(routes::tools::list_connected))
+        .route("/tools/connect/{provider}",  post(routes::tools::connect_provider))
+        .route("/tools/disconnect/{provider}", delete(routes::tools::disconnect_provider))
         // Data Engine management proxy — CRUD for databases, tables, schema,
         // relationships, policies, hooks, subscriptions, workflows, cron.
         // Execution traffic (POST /db/query) is routed to the gateway instead.
