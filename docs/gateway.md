@@ -69,6 +69,52 @@ In summary: **The gateway is the control plane**. It provides three core guarant
 
 ---
 
+## TLS Termination Policy
+
+**All external traffic MUST terminate TLS before reaching the gateway.**
+
+The Gateway is an internal component that expects HTTP traffic. TLS termination should occur at a higher layer:
+
+```
+Client (HTTPS)
+    ↓
+Cloud Run / ALB / Nginx (TLS termination)
+    ↓
+Gateway (HTTP internal)
+    ↓
+Runtime, Data-Engine, Queue (HTTP internal)
+```
+
+**Expected Headers from TLS Terminator**:
+
+The gateway validates these headers to reconstruct the original client request:
+
+| Header | Purpose | Example |
+|--------|---------|----------|
+| `X-Forwarded-Proto` | Original protocol (must be "https") | `https` |
+| `X-Forwarded-For` | Client IP address (for logging/rate limiting) | `192.0.2.1` |
+| `X-Forwarded-Host` | Original host from client request | `acme-org.fluxbase.dev` |
+
+**Validation**:
+
+```rust
+// Gateway validation
+if let Some(proto) = req.headers().get("x-forwarded-proto") {
+    if proto != "https" {
+        return Err(400 Bad Request);  // Reject non-HTTPS clients
+    }
+}
+```
+
+**Why This Matters**:
+
+Without TLS termination validation, developers may accidentally:
+- Deploy the gateway directly on the internet (security risk)
+- Send plaintext authentication tokens over HTTP
+- Expose sensitive request data in logs
+
+---
+
 ## Architecture
 
 ### High-Level Components
@@ -228,7 +274,7 @@ Understanding the complete lifecycle of a single HTTP request is key to understa
 │                                                                              │
 │   8. REQUEST_FORWARD_TO_RUNTIME                                           │
 │      ──────────────────────────                                           │
-│      ├─ Forward headers: auth, x-request-id, x-tenant, x-project        │
+│      ├─ Forward headers: auth, x-request-id, x-tenant-id, x-project-id │
 │      ├─ Forward body: { "name": "Alice", ... }                         │
 │      ├─ Include x-service-token for service-to-service auth            │
 │      └─ POST http://runtime:3000/api/users/create                      │
@@ -314,7 +360,7 @@ Understanding the complete lifecycle of a single HTTP request is key to understa
 
 ---
 
-## Trace Root Model
+## Trace Root Architecture
 
 Fluxbase's observability is **built on trace roots, not log aggregation**. The gateway creates and manages these roots.
 
@@ -417,6 +463,7 @@ Request IDs are the golden thread of observability. The gateway enforces a stric
 
 2. **If `x-request-id` header is absent**:
    - Generate a new UUID v7 (use `uuid::Uuid::now_v7()`)
+   - UUID v7 provides **sortable timestamps** for trace ordering (compare UUIDs lexicographically = ordering by time)
    - Convert to String for HTTP transmission
    - Parse back to `UUID` for database operations
    - Inject into all downstream context as header
@@ -864,8 +911,8 @@ The gateway forwards `x-request-id` and authentication context to Runtime. **Run
 POST /execute
 x-request-id: <uuid>
 x-service-token: <INTERNAL_SERVICE_TOKEN>  // Runtime validates this is from gateway
-x-tenant-id: <uuid>
-x-project-id: <uuid>
+x-tenant-id: <uuid>      # UUID of tenant (consistent naming: -id suffix)
+x-project-id: <uuid>     # UUID of project (consistent naming: -id suffix)
 
 Runtime actions:
 1. Verify x-service-token matches INTERNAL_SERVICE_TOKEN (only gateway has this)
@@ -981,7 +1028,34 @@ All upstream service calls enforce strict timeouts to prevent gateway hangs:
 - **Activity**: Keep-alive comments prevent idle disconnects
 - **Client reconnect**: Browser automatically reconnects on drop
 
-**Backpressure Handling**: If Runtime is slow and requests queue up, the gateway will hit timeouts before connection pools exhaust. This is preferable to silent hangs. Consider adding a circuit breaker if upstream stays unhealthy for >5 consecutive timeouts.
+**Circuit Breaker** (Future Enhancement):
+
+If Runtime / Data-Engine repeatedly timeout or return 5xx, the gateway should "open the circuit" and fail fast:
+
+```rust
+// Pseudocode: Circuit breaker state machine
+enum CircuitState {
+    Closed,           // Normal operation
+    Open,             // Fail fast without trying
+    HalfOpen,         // Retry once per timeout interval
+}
+
+// Example: Open circuit after 5 consecutive failures
+if consecutive_timeouts >= 5 {
+    circuit_state = Open;
+    timer::after(30s).then(|| circuit_state = HalfOpen);
+}
+
+// When circuit is Open:
+// POST /proxy → 503 Service Unavailable immediately (no attempt)
+```
+
+Benefits:
+- Prevents cascading failures (downstream doesn't get DDoS'd with retries)
+- Fast fail allows client to retry or use fallback
+- Automatic recovery after cooldown period
+
+**Backpressure Handling**: If Runtime is slow and requests queue up, the gateway will hit timeouts before connection pools exhaust. This is preferable to silent hangs. A circuit breaker (when implemented) prevents hammering unhealthy services.
 
 ### Trace Sampling Strategy
 
@@ -1160,7 +1234,7 @@ gateway_requests_total{route="/api/users",method="POST",status="200"} 1024
    └─ Insert "route matched" span to platform_logs
 
 8. Request Forwarding to Runtime
-   ├─ Forward headers: auth, x-request-id, x-tenant, x-project
+   ├─ Forward headers: auth, x-request-id, x-tenant-id, x-project-id
    ├─ Forward body as-is
    ├─ If is_async=true → redirect to Queue (fire job)
    └─ Otherwise → wait for response
@@ -1605,6 +1679,59 @@ created_at TIMESTAMP
 
 -- Optional artifact reference (for large payloads)
 artifact_uri TEXT NULL  -- S3://, gs://, etc. for >10MB bodies
+
+-- Sampling & TTL
+INDEX (request_id, created_at)  -- lookups and time ordering
+INDEX (tenant_id, created_at)   -- tenant audit
+INDEX (replay_of)               -- finding related replays
+```
+
+**Trace Requests Sampling Policy**
+
+Capturing every request envelope will cause table bloat. Apply selective sampling:
+
+**Policy** (configurable via `TRACE_ENVELOPE_SAMPLING_*` env vars):
+
+- **100% sampling for**:
+  - HTTP 5xx responses (errors)
+  - Requests > 200ms (slow requests)
+  - Requests with auth_failed or rate_limit_exceeded
+  - Requests from debug tenants (opt-in debug mode)
+
+- **Configurable sampling for successful requests**:
+  - Default: 10% (1 in 10 successful requests)
+  - Tunable per tenant (premium tenants get 100%)
+  - Can be disabled for high-volume read tenants
+
+**Why**: At scale, storage without sampling explodes:
+```
+100M req/day × 5 KB/request × 30 days retention
+= ~152 TB for full history
+```
+
+With 10% sampling (plus 100% for errors/slow):
+```
+100M req/day × 90% sampling (10%) × 5 KB/request × 30 days
+≈ 13.5 TB (acceptable, indexable)
+```
+
+**Implementation**:
+
+```rust
+fn should_sample_envelope(response_status: u16, duration_ms: u64, tenant_id: &UUID) -> bool {
+    // Always sample errors and slow requests
+    if response_status >= 500 || duration_ms > 200 {
+        return true;
+    }
+    
+    // Check tenant debug mode
+    if DEBUG_TENANTS.contains(tenant_id) {
+        return true;
+    }
+    
+    // Sample success with configurable rate
+    rand::random::<f64>() < TRACE_ENVELOPE_SAMPLING_RATE  // 0.10 default
+}
 ```
 
 **Update to `platform_logs`:**
@@ -1654,16 +1781,103 @@ New trace_id: f9e1234a-d5c2-4a77-9c01-1a2b3c4d5e6f
 
 ### Safe Replay Modes
 
+**Replay Authentication Policy**
+
+JWTs expire. When replaying after token expiry, the gateway must decide how to authenticate:
+
+- **Mode 1: Preserve Original Auth (Default)**
+  ```bash
+  $ flux trace replay <id>
+  ```
+  - Use the original JWT from `trace_requests.headers`
+  - If expired: Returns 401 Unauthorized (replay fails)
+  - Best for: Exact reproduction of original execution
+  - Risk: Fails if original token is no longer valid
+
+- **Mode 2: Bypass Auth (Internal Debugging)**
+  ```bash
+  $ flux trace replay <id> --bypass-auth
+  ```
+  - Skip JWT validation
+  - Inject `X-Bypass-Auth: internal-debug` header
+  - Requires internal service token verification
+  - Best for: Incident investigation when original token lost
+  - Risk: Executes with admin privileges regardless of original role
+
+- **Mode 3: Replace with Operator Token (Recommended)**
+  ```bash
+  $ flux trace replay <id> --operator-token <token>
+  ```
+  - Replace original JWT with operator's token
+  - Preserves role claims from operator (not original request)
+  - Best for: Safe replay with audit trail
+  - Risk: Results may differ if authorization context affects behavior
+
+**Recommendation**: Default to Mode 1 (fail if expired). Operators must explicitly request Mode 2/3 for historical replays.
+
+**Queue Replay Safety**
+
+Replaying a request that originally called external tools carries risk:
+
+```
+Original trace:
+  └─ stripe.charge($100)      ✓ charged
+  └─ send_email("order confirmed")
+
+IfReplayed without precautions:
+  └─ stripe.charge($100)      ✓ CHARGED AGAIN (duplicate charge!)
+  └─ send_email("order confirmed")  ✓ EMAIL SENT AGAIN
+```
+
+**Default Behavior**: External tool calls are **mocked by default** unless explicitly enabled.
+
+```bash
+$ flux trace replay <id>                               # Safe (mocked tools)
+$ flux trace replay <id> --enable-real-tools           # Dangerous (real calls)
+```
+
+Tool visibility:
+
+| Tool | Default | Notes |
+|------|---------|-------|
+| `stripe.charge` | MOCK | Always mock (financial risk) |
+| `stripe.refund` | MOCK | Always mock (financial risk) |
+| `gmail.send_email` | MOCK | Mock by default (spam risk) |
+| `slack.post_message` | MOCK | Mock by default |
+| `db.insert` | REAL | Idempotency required (see below) |
+| `db.update` | REAL | Idempotency required |
+
+**Idempotency Requirement**:
+
+For database writes to be safe during replay, functions must be idempotent:
+
+```javascript
+// ✗ NOT IDEMPOTENT: creates duplicate rows
+ctx.db.insert("orders", { order_id: req.id, amount: 100 });
+
+// ✓ IDEMPOTENT: upsert (insert or update if exists)
+ctx.db.upsert("orders", 
+  { order_id: req.id }, 
+  { order_id: req.id, amount: 100 }
+);
+```
+
 **Dry-Run Mode** (Safe for Side Effects)
 
 ```bash
 $ flux trace replay <id> --dry-run
 
-Tool calls mocked:
+Behavior:
+  • All tool calls mocked
+  • Database writes skipped
+  • Execution logic runs (compute, validation, etc.)
+  • Observability: logs what WOULD have happened
+
+Mocked tools:
   composio.gmail.send_email → MOCK (no email sent)
   stripe.charge → MOCK (no charge)
   
-Database writes skipped:
+Skipped writes:
   INSERT users → SKIPPED
   UPDATE orders → SKIPPED
 
@@ -1940,7 +2154,7 @@ Click [Diff] → Shows: email_send latency 95ms → 40ms (3x faster now)
 2. **Response Transformation** — Per-route header injection, status code mapping, body transformation
 3. **Request Signing** — Sign outgoing requests with project key for inter-service auditability
 4. **Traffic Splitting** — Canary deployments (v1: 90%, v2: 10% by route version)
-5. **Circuit Breaker** — Fail fast if Data-Engine / Runtime unhealthy (prevent cascading failures)
+5. **Trace Envelope Sampling** — Selective capture into `trace_requests` (100% errors/slow, configurable success rate)
 6. **Metrics Export** — Prometheus `/metrics` endpoint for real-time p50/p95/p99 latencies per route
 7. **Webhook Retry** — Built-in retry logic with exponential backoff and jitter for webhook failures
 8. **Request Deduplication** — Idempotency key support (prevent duplicate writes on automatic retries)
