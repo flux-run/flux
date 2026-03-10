@@ -71,7 +71,7 @@ impl ToolExecutor {
         })?;
 
         // Resolve the Composio action ID through the registry
-        let composio_action = self.registry.resolve_composio_action(tool_name);
+        let (composio_action, app_name) = self.registry.resolve_action_with_app(tool_name);
 
         let start = Instant::now();
 
@@ -79,6 +79,7 @@ impl ToolExecutor {
             api_key,
             &self.entity_id,
             &composio_action,
+            app_name.as_deref(),
             input,
         ).await;
 

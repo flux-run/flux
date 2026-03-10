@@ -31,7 +31,7 @@ pub async fn op_execute_tool(
     };
 
     let registry = ToolRegistry::new();
-    let composio_action = registry.resolve_composio_action(&tool_name);
+    let (composio_action, app_name) = registry.resolve_action_with_app(&tool_name);
     let start = std::time::Instant::now();
 
     let api_key_str = api_key.as_deref().ok_or_else(|| {
@@ -41,7 +41,7 @@ pub async fn op_execute_tool(
         )
     })?;
 
-    let result = composio::execute_action(api_key_str, &entity_id, &composio_action, input)
+    let result = composio::execute_action(api_key_str, &entity_id, &composio_action, app_name.as_deref(), input)
         .await
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 

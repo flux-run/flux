@@ -32,11 +32,14 @@ pub struct ComposioResult {
 /// - `entity_id`    Per-tenant identifier — maps to a Composio "entity" which
 ///                  holds all connected accounts for that tenant  
 /// - `action_name`  Composio action ID, e.g. "SLACK_SEND_MESSAGE"
+/// - `app_name`     App slug e.g. "gmail", "slack" — required by Composio to
+///                  resolve the correct connected account for the entity
 /// - `input`        Action input parameters (free-form JSON)
 pub async fn execute_action(
     api_key:     &str,
     entity_id:   &str,
     action_name: &str,
+    app_name:    Option<&str>,
     input:       Value,
 ) -> Result<ComposioResult, String> {
     let client = reqwest::Client::builder()
@@ -46,10 +49,17 @@ pub async fn execute_action(
 
     let url = format!("{}/actions/{}/execute", COMPOSIO_BASE_URL, action_name);
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "entityId": entity_id,
         "input":    input,
     });
+
+    // Include appName so Composio can resolve the connected account for the entity
+    if let Some(app) = app_name {
+        if let serde_json::Value::Object(ref mut map) = body {
+            map.insert("appName".to_string(), serde_json::json!(app));
+        }
+    }
 
     let response = client
         .post(&url)

@@ -120,6 +120,18 @@ impl ToolRegistry {
         // Auto-convert: "slack.send_message" → "SLACK_SEND_MESSAGE"
         name.replace('.', "_").to_uppercase()
     }
+
+    /// Resolve a Fluxbase tool name to (composio_action, app_name).
+    /// Returns the Composio action ID and the app slug required by the API.
+    pub fn resolve_action_with_app(&self, name: &str) -> (String, Option<String>) {
+        if let Some(meta) = self.get(name) {
+            return (meta.composio_action.clone(), Some(meta.app.clone()));
+        }
+        // Auto-convert: "slack.send_message" → "SLACK_SEND_MESSAGE", app = "slack"
+        let composio_action = name.replace('.', "_").to_uppercase();
+        let app_name = name.split('.').next().map(|s| s.to_string());
+        (composio_action, app_name)
+    }
 }
 
 impl Default for ToolRegistry {

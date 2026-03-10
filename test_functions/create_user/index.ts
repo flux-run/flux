@@ -31,8 +31,8 @@ export default {
         name: "workflow.send_welcome",
         fn: async () => {
           const requestId = (ctx.env && ctx.env.REQUEST_ID) || (payload && payload.REQUEST_ID) || "unknown";
-          await ctx.tools.run("outlook.send_email", {
-            to:      email,
+          await ctx.tools.run("gmail.send_email", {
+            recipient_email: email,
             subject: "You just ran a real backend trace on Fluxbase",
             body:    "Hello " + name + ",\n\nYou triggered a real backend on Fluxbase. Trace: " + requestId + "\n\n- The Fluxbase Team",
           });
