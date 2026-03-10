@@ -38,7 +38,41 @@ pub async fn resolve_identity(
         let slug = parts[0];
 
         // Ignore reserved subdomains that point to platform services
-        let reserved = ["api", "run", "gateway", "www", "dashboard", "localhost"];
+        let reserved = [
+            // ── Core platform ──────────────────────────────────────────
+            "api", "run", "gateway", "www", "localhost",
+            // ── Product surfaces ───────────────────────────────────────
+            "dashboard", "console", "app", "admin", "portal",
+            "demo", "sandbox", "preview", "staging", "beta", "alpha",
+            // ── Developer tools ────────────────────────────────────────
+            "docs", "doc", "trace", "traces", "cli", "sdk",
+            "workflow", "workflows", "agents", "agent",
+            "registry", "packages", "releases", "install", "download",
+            // ── Auth / identity ────────────────────────────────────────
+            "auth", "login", "logout", "signup", "register",
+            "oauth", "sso", "saml", "id",
+            // ── Observability / ops ────────────────────────────────────
+            "status", "health", "ping", "metrics", "logs",
+            "monitoring", "alerts", "uptime",
+            // ── Infra / routing ────────────────────────────────────────
+            "edge", "relay", "proxy", "ingress", "cdn",
+            "static", "assets", "media", "storage", "files", "uploads",
+            // ── Comms ──────────────────────────────────────────────────
+            "mail", "smtp", "inbound", "outbound",
+            "webhooks", "events", "hooks",
+            // ── Commerce ──────────────────────────────────────────────
+            "billing", "checkout", "payment", "invoices", "pricing",
+            // ── Communication / community ─────────────────────────────
+            "help", "support", "feedback", "community", "forum",
+            "blog", "changelog", "updates", "roadmap",
+            // ── Corporate / legal ─────────────────────────────────────
+            "about", "careers", "jobs", "legal", "privacy", "terms",
+            "security", "compliance",
+            // ── Internal ──────────────────────────────────────────────
+            "internal", "corp", "staff", "team", "dev",
+            // ── API versioning ────────────────────────────────────────
+            "v1", "v2", "v3", "v4", "grpc", "graphql",
+        ];
         if reserved.contains(&slug) {
             return Err(StatusCode::NOT_FOUND);
         }
