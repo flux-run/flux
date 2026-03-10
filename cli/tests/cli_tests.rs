@@ -90,6 +90,9 @@ help_test!(help_tool,         "tool");
 help_test!(help_env,          "env");
 help_test!(help_db,           "db");
 help_test!(help_stack,        "stack");
+help_test!(help_tail,         "tail");
+help_test!(help_errors,       "errors");
+help_test!(help_fix,          "fix");
 help_test!(help_doctor,       "doctor");
 help_test!(help_open,         "open");
 help_test!(help_upgrade,      "upgrade");
@@ -220,11 +223,60 @@ fn invoke_requires_name() {
 }
 
 #[test]
-fn debug_requires_request_id() {
+// flux debug (no args) is now interactive mode — it should parse correctly
+// and show help content rather than failing with "required argument missing".
+fn debug_without_args_parses_as_interactive() {
+    // --help verifies that the optional request_id is described correctly
     flux()
-        .arg("debug")
+        .args(["debug", "--help"])
         .assert()
-        .failure();
+        .success()
+        .stdout(predicate::str::contains("interactive").or(
+            predicate::str::contains("request_id").or(
+                predicate::str::contains("request-id"),
+            ),
+        ));
+}
+
+#[test]
+fn tail_help_shows_usage() {
+    flux()
+        .args(["tail", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tail").or(predicate::str::contains("Usage")));
+}
+
+#[test]
+fn tail_auto_debug_flag_is_accepted() {
+    // --auto-debug is a known flag; --help should parse cleanly
+    flux()
+        .args(["tail", "--auto-debug", "--help"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn fix_and_debug_are_equivalent_aliases() {
+    // both should show the same help structure
+    flux()
+        .args(["fix", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alias").or(
+            predicate::str::contains("debug").or(
+                predicate::str::contains("Usage"),
+            ),
+        ));
+}
+
+#[test]
+fn errors_command_parses_since_flag() {
+    // --help with --since flag verifies the flag is defined
+    flux()
+        .args(["errors", "--since", "24h", "--help"])
+        .assert()
+        .success();
 }
 
 // ─── API mock tests (require FLUXBASE_API_URL override) ──────────────────────

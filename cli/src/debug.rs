@@ -1,9 +1,13 @@
-//! `flux debug <request-id>` — the killer debugging command.
+//! `flux debug [request-id]` — the killer debugging command.
 //!
-//! Runs `trace`, `logs`, and optionally `replay` in one interactive flow.
+//! With no arguments: interactive production debugger.
+//!   Lists recent errors → user selects → auto traces + logs + suggests fix.
+//!
+//! With a request ID: deep-dive a specific request.
 //!
 //! ```text
-//! flux debug 9624a58d57e7
+//! flux debug                        # interactive: pick from recent errors
+//! flux debug 9624a58d57e7           # deep-dive a specific request
 //! flux debug 9624a58d57e7 --replay
 //! flux debug 9624a58d57e7 --replay-payload override.json
 //! flux debug 9624a58d57e7 --no-logs
@@ -16,12 +20,123 @@ use std::io::{self, Write};
 
 use crate::client::ApiClient;
 
+/// Entry point — routes to interactive mode or direct mode.
 pub async fn execute(
+    request_id: Option<String>,
+    replay: bool,
+    replay_payload: Option<String>,
+    no_logs: bool,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    match request_id {
+        None => execute_interactive().await,
+        Some(id) => execute_request(id, replay, replay_payload, no_logs, json_output, false).await,
+    }
+}
+
+/// Interactive mode: show recent errors, let user pick one.
+async fn execute_interactive() -> anyhow::Result<()> {
+    let client = ApiClient::new().await?;
+
+    // Fetch recent errors (traces with errors, last 10 minutes)
+    let res = client
+        .client
+        .get(format!(
+            "{}/traces?status=error&limit=15&window=10m",
+            client.base_url
+        ))
+        .send()
+        .await?;
+
+    let body: Value = res.json().await.unwrap_or_default();
+    let empty = vec![];
+    let errors: &Vec<Value> = body
+        .get("data")
+        .and_then(|d| d.as_array())
+        .unwrap_or(&empty);
+
+    if errors.is_empty() {
+        println!(
+            "{}",
+            "No production errors in the last 10 minutes.".green().bold()
+        );
+        println!("{}", "Your backend looks healthy! ✔".dimmed());
+        return Ok(());
+    }
+
+    println!();
+    println!("{}", "Recent Production Errors (last 10m)".bold());
+    println!("{}", "─".repeat(52).dimmed());
+
+    for (i, e) in errors.iter().enumerate() {
+        let route = e["route"].as_str().unwrap_or("?");
+        let function = e["function"].as_str().unwrap_or("?");
+        let error = e["error"].as_str().unwrap_or("unknown");
+        let request_id = e["request_id"].as_str().unwrap_or("?");
+        let duration = e["total_ms"].as_i64().unwrap_or(0);
+
+        let dur_str = if duration > 1000 {
+            format!("{}s", duration / 1000).yellow().to_string()
+        } else {
+            format!("{}ms", duration).normal().to_string()
+        };
+
+        println!(
+            "{}) {}  {}  {}",
+            (i + 1).to_string().bold().cyan(),
+            route.bold(),
+            function.dimmed(),
+            error.red()
+        );
+        println!(
+            "   request_id: {}  {}",
+            request_id.cyan(),
+            dur_str
+        );
+        println!();
+    }
+
+    // Prompt
+    print!("{}", "Select an error to inspect › ".bold());
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().lock().read_line(&mut input)?;
+    let input = input.trim();
+
+    let idx: usize = match input.parse::<usize>() {
+        Ok(n) if n >= 1 && n <= errors.len() => n - 1,
+        _ => {
+            eprintln!("{} Invalid selection.", "✗".red().bold());
+            return Ok(());
+        }
+    };
+
+    let selected_id = errors[idx]["request_id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    if selected_id.is_empty() {
+        eprintln!("{} Could not read request_id for that entry.", "✗".red().bold());
+        return Ok(());
+    }
+
+    println!();
+    execute_request(selected_id, false, None, false, false, false).await
+}
+
+/// Called by `flux tail --auto-debug` — full debug output without the replay prompt.
+pub async fn execute_auto(request_id: String) -> anyhow::Result<()> {
+    execute_request(request_id, false, None, false, false, true).await
+}
+
+async fn execute_request(
     request_id: String,
     replay: bool,
     replay_payload: Option<String>,
     no_logs: bool,
     json_output: bool,
+    skip_prompt: bool,
 ) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
@@ -101,6 +216,18 @@ pub async fn execute(
         colorize_status(status_val)
     );
     println!("{:<summary_w$} {}", "Time:".bold(), time_val.dimmed());
+
+    // Trace URL — shareable link for Slack / issue comments
+    let trace_url = {
+        let slug = client.config.tenant_slug.as_deref().unwrap_or("");
+        let proj = client.config.project_id.as_deref().unwrap_or("");
+        if !slug.is_empty() && !proj.is_empty() {
+            format!("https://app.fluxbase.co/{}/{}/traces/{}", slug, proj, request_id)
+        } else {
+            format!("https://app.fluxbase.co/traces/{}", request_id)
+        }
+    };
+    println!("{:<summary_w$} {}", "Trace URL:".bold(), trace_url.cyan().underline());
 
     // ── 4. Print Trace spans ──────────────────────────────────────────────
     println!();
@@ -227,7 +354,7 @@ pub async fn execute(
     // ── 7. Replay prompt ─────────────────────────────────────────────────
     if replay {
         do_replay(&client, &request_id, replay_payload.as_deref()).await?;
-    } else {
+    } else if !skip_prompt {
         println!();
         print!("{}", "Replay this request? [y/N]: ".bold());
         io::stdout().flush()?;

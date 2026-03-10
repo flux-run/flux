@@ -619,7 +619,548 @@ Return the exact backend state at execution checkpoint 3 (where the error occurr
 
 ---
 
+## Execution Timeline: Time-Travel Within a Request
+
+### The One Missing Column
+
+To transform incident replay into **production time-travel**, add one column to `trace_signatures`:
+
+```sql
+ALTER TABLE trace_signatures ADD COLUMN
+  execution_timeline JSONB;  -- Checkpoint snapshots during execution
+```
+
+### What Goes In execution_timeline
+
+Snapshots captured at each logical checkpoint during execution:
+
+```json
+{
+  "checkpoints": [
+    {
+      "span": "gateway.route",
+      "timestamp": 1678354945000,
+      "locals": {}
+    },
+    {
+      "span": "create_user.start",
+      "timestamp": 1678354945005,
+      "locals": {
+        "email": "alice@example.com",
+        "name": "Alice"
+      }
+    },
+    {
+      "span": "db.insert",
+      "timestamp": 1678354945012,
+      "locals": {
+        "query": "INSERT INTO users (email, name) VALUES ($1, $2)",
+        "params": ["alice@example.com", "Alice"]
+      },
+      "state_delta": {
+        "users": {
+          "u123": {
+            "id": "u123",
+            "email": "alice@example.com",
+            "name": "Alice",
+            "created_at": "2026-03-09T14:02:25Z"
+          }
+        }
+      }
+    },
+    {
+      "span": "tool.gmail.send",
+      "timestamp": 1678354945028,
+      "locals": {
+        "template": "welcome.html",
+        "recipient": "alice@example.com",
+        "subject": "Welcome to Fluxbase"
+      }
+    },
+    {
+      "span": "create_user.end",
+      "timestamp": 1678354945145,
+      "locals": {
+        "result": {
+          "id": "u123",
+          "email": "alice@example.com",
+          "name": "Alice"
+        }
+      }
+    }
+  ]
+}
+```
+
+### Reconstruct State at Any Checkpoint
+
+```bash
+flux state at --trace 550e8400 --checkpoint 3
+```
+
+**Output:**
+
+```
+STATE AT CHECKPOINT 3
+(db.insert → users table inserted)
+
+Backend State:
+  users:
+    u123:
+      id: u123
+      email: alice@example.com
+      name: Alice
+      created_at: 2026-03-09T14:02:25Z
+
+Execution Context:
+  Current span: tool.gmail.send
+  Locals:
+    template = "welcome.html"
+    recipient = "alice@example.com"
+```
+
+This enables reconstructing the exact system state at any point during a request's execution.
+
+---
+
+## Step-Through Production Debugger
+
+### The Interactive Replay Session
+
+Combine `execution_timeline` + `platform_logs` + `execution_state` to enable:
+
+```bash
+flux trace debug 550e8400
+```
+
+**Interactive session example:**
+
+```
+$ flux trace debug 550e8400
+
+Request: POST /api/create_user
+Status: 201 ✓
+Duration: 145ms
+
+Breakpoints: 5 (function_entry, db_call, tool_call, tool_result, function_exit)
+
+[1/5] Breakpoint: create_user (entry)
+    Locals:
+      email = "alice@example.com"
+      name = "Alice"
+
+    > next
+
+[2/5] Breakpoint: db.insert
+    SQL:
+      INSERT INTO users (email, name) VALUES ($1, $2)
+    Params:
+      $1 = "alice@example.com"
+      $2 = "Alice"
+
+    > next
+
+[3/5] Breakpoint: tool.gmail.send
+    Call:
+      composio.gmail.send_email({
+        template: "welcome.html",
+        recipient: "alice@example.com",
+        subject: "Welcome to Fluxbase"
+      })
+
+    > next
+
+[4/5] Breakpoint: tool.gmail.send (result)
+    Result:
+      status: "queued"
+      message_id: "CADc-_xabc123"
+
+    > next
+
+[5/5] Breakpoint: create_user (exit)
+    Return value:
+      {
+        id: "u123",
+        email: "alice@example.com",
+        name: "Alice"
+      }
+
+    Session complete ✓
+```
+
+### Step Commands
+
+| Command | Effect |
+|---------|--------|
+| `next` (or `n`) | Step to next checkpoint |
+| `step-in` (or `s`) | Step into tool call details |
+| `continue` (or `c`) | Continue to next error (if any) |
+| `locals` (or `l`) | Show local variables at current checkpoint |
+| `state` | Show backend state mutations so far |
+| `exit` (or `q`) | End session |
+
+### Why This Works
+
+`execution_timeline` + `platform_logs` allow Fluxbase to reconstruct execution **exactly as it occurred**, then let developers step through it like they're debugging locally — but they're actually inspecting a production request from hours ago.
+
+No reproduction steps. No staging environment. No data export. **Pure replay debugging.**
+
+---
+
+## Incident Simulator: Validate Fixes Before Deploy
+
+Once you can replay traffic and compare signatures, you can simulate fixes:
+
+```bash
+flux incident simulate \
+  --window 2026-03-09T14:00..14:05 \
+  --patch fix.js
+```
+
+**What happens:**
+
+```
+1. Extract incident traffic (127 requests in window)
+2. Run original execution (baseline)
+3. Apply patched code
+4. Replay same 127 requests
+5. Compare: errors, latencies, state mutations
+```
+
+**Output:**
+
+```
+Incident Simulation Report
+
+Window: 2026-03-09 14:00-14:05
+Requests: 127
+
+BASELINE (production code a82d91a)
+  Status 201 (success):  0 (0%)
+  Status 500 (error):    127 (100%)
+  Avg latency:          2500ms
+  p95 latency:          4500ms
+
+WITH FIX (patched code)
+  Status 201 (success):  127 (100%)  ← FIX WORKS!
+  Status 500 (error):    0 (0%)
+  Avg latency:          850ms       ← Performance improved
+  p95 latency:          1200ms
+
+Detailed Comparison:
+
+Request 1 (POST /checkout user=123)
+  Before: ERROR stripe.charge timeout
+  After:  SUCCESS status=201
+
+Request 2 (POST /checkout user=456)
+  Before: ERROR db connection lost
+  After:  SUCCESS status=200
+
+...
+
+Summary:
+  ✓ All 127 requests now succeed
+  ✓ Latency improved (2500ms → 850ms)
+  ✓ Ready to deploy with confidence
+```
+
+Then deploy knowing the fix actually works on real production traffic.
+
+---
+
+## Production Time-Travel: State Inspection at Any Time
+
+### Reconstruct Backend State
+
+Using `state_mutations` (append-only log) + periodic snapshots:
+
+```bash
+flux state inspect --at 2026-03-09T14:30:00Z
+```
+
+**Output:**
+
+```
+BACKEND STATE AT 2026-03-09 14:30:00 UTC
+
+Snapshot: 2026-03-09T14:30:00 (used snapshot from 14:20:00 + replayed mutations)
+
+users:
+  u1:
+    id: u1
+    email: alice@example.com
+    name: Alice
+    created_at: 2026-03-09T14:02:00Z
+
+  u2:
+    id: u2
+    email: bob@example.com
+    name: Bob
+    created_at: 2026-03-09T14:15:00Z
+
+  u3:
+    id: u3
+    email: charlie@example.com
+    name: Charlie
+    created_at: 2026-03-09T14:29:00Z
+
+orders:
+  o1:
+    id: o1
+    user_id: u1
+    total: 99.99
+    status: completed
+    created_at: 2026-03-09T14:03:00Z
+
+  o2:
+    id: o2
+    user_id: u2
+    total: 149.99
+    status: pending
+    created_at: 2026-03-09T14:25:00Z
+```
+
+### Compare State Between Two Times
+
+```bash
+flux state diff \
+  --at 2026-03-09T14:00:00Z \
+  --at 2026-03-09T14:05:00Z
+```
+
+**Output:**
+
+```
+CHANGES BETWEEN 14:00:00 AND 14:05:00
+
+users: +3 rows inserted
+  + u1 alice@example.com
+  + u2 bob@example.com
+  + u3 charlie@example.com
+
+orders: +2 rows inserted
+  + o1 total: 99.99
+  + o2 total: 149.99
+
+queue_jobs: +5 rows
+  (async email jobs created)
+
+Total mutations: 10
+```
+
+**Real-world use case:**
+
+Event occurs: "Payments stopped processing 14:00-14:05"
+
+```bash
+flux state inspect --at 2026-03-09T13:59:00Z  # Before incident
+flux state inspect --at 2026-03-09T14:05:00Z  # After incident
+
+# Compare to see what state diverged
+# Then trace which requests created those divergences
+# Then debug those requests with flux trace debug
+```
+
+---
+
+## State Blame: "Who Created This Record?"
+
+### Link Records Back to Code
+
+Find out exactly who created a database record and why:
+
+```bash
+flux state blame table:users id:u123
+```
+
+**Output:**
+
+```
+AUDIT TRAIL FOR users/u123
+
+Record:
+  id: u123
+  email: alice@example.com
+  name: Alice
+  created_at: 2026-03-09T14:02:25Z
+
+Created by request:
+  request_id: 550e8400-e29b-41d4-a716-446655440000
+  timestamp: 2026-03-09T14:02:25Z
+  method: POST
+  path: /api/users/create
+  user: alice@example.com (jwt sub)
+
+Function:
+  name: create_user
+  version: 7
+
+Code:
+  commit: a82d91a
+  message: "feat: allow bulk user creation"
+  author: dev@example.com
+  date: 2026-03-08T10:15:00Z
+
+  File: create_user/index.ts
+  Lines 45-60:
+    db.insert("users", {
+      email: request.email,
+      name: request.name,
+      created_at: new Date()
+    })
+
+Trace:
+  $ flux trace 550e8400
+```
+
+This is **Git blame for your database** — trace any record back to:
+
+- The exact request that created it
+- The exact commit that authorized it
+- The exact code that modified it
+- The exact time it was created
+
+---
+
+## The 10-Second Production Debugger
+
+### Auto-Debug Command
+
+The ultimate killer feature combines everything above:
+
+```bash
+flux debug
+```
+
+**Interactive session (no arguments):**
+
+```
+$ flux debug
+
+Recent production errors (last 1h):
+
+1. POST /checkout     db_timeout        127 errors   14:00-14:05
+2. POST /signup       email_regex_error 3 errors     14:08-14:09
+3. POST /login        jwt_decode_error  1 error      14:12
+
+Select error to debug [1-3]:
+> 2
+
+Debugging: POST /signup email_regex_error (3 occurrences)
+
+=== TRACE ===
+Request: POST /signup
+Status: 400 Bad Request
+Duration: 45ms
+
+Span tree:
+  gateway.route (5ms)
+  gateway.auth_passed (2ms)
+  runtime.execute_function (38ms)
+    ├─ email_validation.regex (8ms) ERROR: regex.test() failed
+    ├─ [execution aborted]
+
+=== EXECUTION CONTEXT ===
+Locals at error:
+  email = "josé@españa.es"
+  regex = /^[a-zA-Z]+@[a-zA-Z]+\.[a-zA-Z]{2,}$/
+
+=== CODE ANALYSIS ===
+Likely cause:
+  Email regex rejects international domains and special chars
+
+Suggested fix:
+  Change: /^[a-zA-Z]+@/
+  To:      /^[a-zA-Z0-9._%+-]+@/
+
+=== FIND ROOT CAUSE ===
+Running automated bisect...
+
+Testing a82d91a: ✓ (success)
+Testing a83a02b: ✗ (error)
+
+First bad commit: a83a02b
+Author: dev
+Message: "optimize email validation regex"
+Date: 2026-03-08T16:45:00Z
+
+Diff:
+  - const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
+  + const EMAIL_REGEX = /^[a-zA-Z]+@[a-zA-Z]+\.[a-zA-Z]{2,}$/
+
+=== REPLAY WITH FIX ===
+Testing commit revert...
+
+flux incident simulate --window 14:08..14:09 --patch <revert> 
+
+Result:
+  Errors before: 3
+  Errors after: 0
+  ✓ Fix validated
+
+=== SUMMARY ===
+Error Type: Regression
+Introduced: a83a02b (2026-03-08T16:45:00Z)
+Cause: Email regex too restrictive
+Fix: Revert regex to original
+Status: ✓ Validated on production traffic
+
+Ready to deploy? (y/n)
+> y
+
+Deploying fix...
+```
+
+**Time to debug: ~10 seconds**. All automatic.
+
+---
+
+## The Complete Platform Vision
+
+What you've built is a new category of backend platform:
+
+| Capability | Purpose |
+|-----------|---------|
+| **Trace** | Know what happened |
+| **Replay** | Reproduce execution (deterministically) |
+| **Signatures** | Compare behavior (automatically) |
+| **Bisect** | Find breaking commits (on real traffic) |
+| **Timeline** | Step through execution |
+| **Debugger** | Interactive production debugging |
+| **Simulator** | Validate fixes on real traffic |
+| **State Time-Travel** | Reconstruct backend at any moment |
+| **State Blame** | Link records to code |
+| **Auto-Debug** | 10-second bug diagnosis |
+
+No other platform combines all of these.
+
+Result: **Deterministic Backend Runtime** where every request is replayable, every bug is reproducible, and every deploy isvalidated against production data.
+
+---
+
 ## Architecture Integration
+
+**These features depend on:**
+
+- `gateway.md` — Request envelope capture (trace_requests)
+- `incident-replay` section of gateway.md — Sandbox execution & time-travel
+- `platform_logs` — Complete trace tree with code_sha
+- `state_mutations` — Backend state reconstruction (replay)
+- `execution_state` — Local variable inspection (debug)
+- `execution_timeline` JSONB — Checkpoint snapshots within requests
+
+**These features enable:**
+
+- `flux debug` — Auto-diagnosis of production bugs
+- `flux trace debug` — Interactive step-through debugger
+- `flux incident simulate` — Validate fixes before deploy
+- `flux state inspect --at` — Backend time-travel
+- `flux state blame` — Record accountability
+- `flux bug bisect` — Automatic regression detection
+- `flux guard deploy` — CI based on real traffic
+- `flux trace diff` — Behavioral comparison
+- `flux trace blame` — Code-level accountability
 
 **These features depend on:**
 

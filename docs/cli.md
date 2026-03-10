@@ -2,7 +2,11 @@
 
 `flux` is the terminal interface for Fluxbase. It gives developers full control over every layer of the platform — from deploying a function and wiring a gateway route to managing database schema, running AI agents, and inspecting end-to-end traces — all without leaving the terminal.
 
-**Every request in Fluxbase receives a unique request ID.** This ID links logs, traces, tool calls, database operations, and workflows together — enabling one-command debugging with `flux debug <request-id>`.
+**Every request in Fluxbase receives a unique request ID.** This ID links logs, traces, tool calls, database operations, and workflows together — enabling one-command debugging with `flux debug`.
+
+- `flux debug` — interactive production debugger: shows recent errors, you pick one, it auto-runs trace + logs + suggests a fix
+- `flux debug <request-id>` — deep-dive a specific request directly
+- `flux tail` — live request stream (htop for your backend)
 
 **Design principles:**
 - `flux <resource> <operation>` — noun-first, verb-second
@@ -38,8 +42,10 @@ curl https://gateway.fluxbase.co/signup \
   -H 'Content-Type: application/json' \
   -d '{"name":"Ada","email":"ada@example.com"}'
 
-# 6. Debug the request — one command gives you trace + logs + suggested fix
-flux debug <request-id-from-response>
+# 6. Watch live traffic and debug errors — two commands tell the whole story
+flux tail                          # stream requests in real time
+flux debug                         # interactive: pick an error, auto-debug it
+flux debug <request-id-from-response>  # or jump directly to a known request
 ```
 
 ---
@@ -361,7 +367,11 @@ flux
 │   ├── generate                   📋
 │   └── (pull / watch / status)    ✅ (also: flux pull / flux watch / flux status)
 │
-├── debug <request-id>             📋 composite: trace + logs + replay + suggested fix
+├── debug [request-id]             ✅ interactive debugger (no args) or deep-dive a specific request
+│     No args: lists recent errors → select one → auto trace + logs + suggested fix
+│     With ID: direct deep-dive (trace + logs + suggested fix + optional replay)
+├── tail [function]                ✅ live request stream — htop for your backend
+│     Flags: --errors, --slow <ms>, --json
 ├── open [resource]                📋 open in browser
 ├── whoami                         📋 print current user + active context
 ├── doctor                         ✅
@@ -1645,15 +1655,45 @@ supports tab completion for subcommands and flags.
 
 ---
 
-### `flux debug <request-id>` 📋
+### `flux debug [request-id]` ✅
 
-The **killer command**. Runs `trace`, `logs`, and offers `replay` in one
-interactive flow — turning a request ID into a complete picture of what
-happened, what failed, and what to try next.
+The **signature command** of Fluxbase. Two modes:
+
+**Interactive mode** (`flux debug` — no args):  
+Lists recent production errors. You select one. The CLI automatically runs trace + logs + suggests a fix.
+
+**Direct mode** (`flux debug <request-id>`):  
+Deep-dives a specific request — trace + logs + suggested fix + optional replay.
 
 ```
-flux debug <request-id> [flags]
+flux debug                         # interactive: pick from recent errors
+flux debug <request-id> [flags]    # direct: inspect a known request
 ```
+
+#### Interactive mode
+
+```
+$ flux debug
+
+Recent Production Errors (last 10m)
+────────────────────────────────────────────────────
+1) POST /signup      create_user      gmail_rate_limit
+   request_id: 9624a58d57e7   3.8s
+
+2) POST /login       auth_handler     invalid_password
+   request_id: a7f9c1e4d2ab   102ms
+
+3) POST /signup      create_user      invalid_email
+   request_id: f8e3d9c4a1b7   101ms
+
+Select an error to inspect › 1
+
+Inspecting 9624a58d57e7
+```
+
+The CLI then runs the full debug flow for the selected request (same output as direct mode below).
+
+#### Direct mode
 
 | Flag | Description |
 |------|-------------|
@@ -1697,9 +1737,55 @@ Replay this request? [y/N]: y
   new request_id: c2d3e4f5a6b7
 ```
 
-This command is the signature debugging experience for Fluxbase. It is the
-first thing a developer should reach for when something goes wrong in
-production.
+This is the first thing a developer should reach for when something goes wrong in production. The 3-command story for Fluxbase is:
+
+```bash
+flux deploy           # ship your backend
+flux tail             # watch live traffic
+flux debug            # fix what breaks
+```
+
+---
+
+### `flux tail [function]` ✅
+
+Live request stream — **htop for your backend**. Streams requests as they arrive with method, route, function, duration, and pass/fail status. Errors print an inline `flux debug <id>` hint.
+
+```
+flux tail [function] [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--errors` | Show only failed requests |
+| `--slow <ms>` | Show only requests slower than N ms |
+| `--json` | Output raw JSON (one object per line, for piping) |
+
+```
+$ flux tail
+
+Fluxbase · Live Request Stream
+Watching: all requests
+────────────────────────────────────────────────────────────────────────────
+METHOD   ROUTE                         FUNCTION                DURATION   STATUS
+────────────────────────────────────────────────────────────────────────────
+POST     /signup                       create_user             312ms      ✔
+GET      /status                       health_check            8ms        ✔
+POST     /signup                       create_user             281ms      ✔
+POST     /signup                       create_user             3.8s       ✗ rate_limit
+   → flux debug 9624a58d57e7
+POST     /login                        auth_handler            102ms      ✔
+```
+
+```bash
+flux tail                      # all functions
+flux tail create_user          # single function
+flux tail --errors             # errors only — immediately actionable
+flux tail --slow 500           # requests taking > 500ms
+flux tail --json | jq .        # pipe to jq for custom filtering
+```
+
+
 
 ---
 
@@ -1730,10 +1816,19 @@ flux logs function send_email -f
 ### 3. Debug a production error
 
 ```bash
-# Start here — one command gives you the full picture
+# Option A: Interactive mode — lists recent errors, pick one, auto-debugs
+flux debug
+
+# Option B: You already have a request ID (from response header or flux tail)
 flux debug 9624a58d57e7
 
-# Drill in if you need more detail
+# Watch live traffic to catch errors as they happen (Ctrl-C to stop)
+flux tail
+flux tail create_user          # filter to one function
+flux tail --errors             # errors only
+flux tail --slow 500           # only requests > 500ms
+
+# Drill deeper after picking a request
 flux trace 9624a58d57e7 --flame
 flux trace search --function create_user --error --since 1h
 flux logs --request-id 9624a58d57e7
@@ -1865,6 +1960,8 @@ export default defineFunction({
 | `flux trace <id>` | `GET /traces/:id` |
 | `flux trace search` | `GET /traces?function=...&error=true&since=...` |
 | `flux trace replay` | `POST /traces/:id/replay` |
+| `flux tail` | `GET /traces?limit=25&order=desc&since=<cursor>` (polled every 2s) |
+| `flux debug` (interactive) | `GET /traces?status=error&limit=15&window=10m` |
 | `flux debug <id>` | composite: `GET /traces/:id` + `GET /logs` + `POST /traces/:id/replay` |
 | `flux db create` | `POST /db/databases` |
 | `flux db list` | `GET /db/databases` |

@@ -14,6 +14,7 @@ mod deployments;
 mod dev;
 mod doctor;
 mod env_cmd;
+mod errors;
 mod event;
 mod functions;
 mod gateway;
@@ -28,6 +29,7 @@ mod schedule;
 mod sdk;
 mod secrets;
 mod stack;
+mod tail;
 mod tenant;
 mod tool;
 mod trace;
@@ -185,9 +187,17 @@ enum Commands {
         #[arg(long)]
         flame: bool,
     },
-    /// Deep-dive debug a request: trace + logs + suggested fix + optional replay
+    /// Interactive production debugger.
+    ///
+    /// Without a request ID: lists recent errors and lets you select one.
+    /// With a request ID: deep-dives that specific request.
+    ///
+    /// Examples:
+    ///   flux debug               # interactive: pick from recent errors
+    ///   flux debug 9624a58d57e7  # deep-dive a specific request
     Debug {
-        request_id: String,
+        /// Request ID to inspect directly (omit for interactive mode)
+        request_id: Option<String>,
         #[arg(long)]
         replay: bool,
         #[arg(long, value_name = "FILE")]
@@ -196,6 +206,67 @@ enum Commands {
         no_logs: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Alias for `debug` — shorter to type when responding to an alert.
+    ///
+    /// `flux fix` is identical to `flux debug`: interactive mode with no args,
+    /// or deep-dive a specific request when a request ID is given.
+    #[command(name = "fix")]
+    Fix {
+        request_id: Option<String>,
+        #[arg(long)]
+        replay: bool,
+        #[arg(long, value_name = "FILE")]
+        replay_payload: Option<String>,
+        #[arg(long)]
+        no_logs: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Production error summary by function — quick triage before `flux debug`.
+    ///
+    /// Shows per-function error counts, most recent error type, and p95 duration.
+    ///
+    /// Examples:
+    ///   flux errors               # last 1h
+    ///   flux errors --since 24h   # last 24h
+    ///   flux errors --function create_user
+    Errors {
+        /// Filter to a specific function
+        #[arg(long, value_name = "NAME")]
+        function: Option<String>,
+        /// Time window (e.g. 1h, 24h, 7d)
+        #[arg(long, default_value = "1h", value_name = "DURATION")]
+        since: String,
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Live request stream — htop for your backend.
+    ///
+    /// Streams incoming requests in real time: method, route, function, duration, status.
+    /// Errors print a `flux debug <id>` hint inline.
+    ///
+    /// Examples:
+    ///   flux tail                   # all functions
+    ///   flux tail create_user       # single function
+    ///   flux tail --errors          # errors only
+    ///   flux tail --slow 500        # requests > 500ms
+    Tail {
+        /// Filter to a specific function name
+        function: Option<String>,
+        /// Show only failed requests
+        #[arg(long)]
+        errors: bool,
+        /// Show only requests slower than N ms
+        #[arg(long, value_name = "MS")]
+        slow: Option<u64>,
+        /// Output raw JSON (one object per line)
+        #[arg(long)]
+        json: bool,
+        /// Automatically run `flux debug` when an error appears (pauses stream)
+        #[arg(long)]
+        auto_debug: bool,
     },
     /// Monitor service status, metrics, and alerts
     Monitor {
@@ -400,8 +471,15 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Trace { request_id, slow, flame } => trace::execute(request_id, slow, flame).await?,
-        Commands::Debug { request_id, replay, replay_payload, no_logs, json } => {
+        Commands::Debug { request_id, replay, replay_payload, no_logs, json } |
+        Commands::Fix   { request_id, replay, replay_payload, no_logs, json } => {
             debug::execute(request_id, replay, replay_payload, no_logs, json).await?
+        }
+        Commands::Tail { function, errors, slow, json, auto_debug } => {
+            tail::execute(function, errors, slow, json, auto_debug).await?
+        }
+        Commands::Errors { function, since, json } => {
+            errors::execute(function, since, json).await?
         }
         Commands::Monitor { command } => monitor::execute(command).await?,
 
