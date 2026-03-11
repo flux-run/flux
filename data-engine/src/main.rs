@@ -24,7 +24,10 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::load();
 
     tracing::info!("connecting to database...");
-    let pool = db::connection::init_pool(&cfg.database_url).await;
+    // init_pool_with_identity_log logs the system_identifier + db_name at startup.
+    // For user-provided (BYODB) pools call verify_db_identity() after pool construction
+    // to enforce the expected identity stored in project_databases.
+    let pool = db::connection::init_pool_with_identity_log(&cfg.database_url, "platform").await;
 
     let app_state = Arc::new(state::AppState::new(pool.clone(), &cfg).await);
 

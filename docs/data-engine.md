@@ -1224,6 +1224,45 @@ Any row returned has a version gap — log as a structured warning keyed on `(te
 
 ---
 
+### Gap 16 — BYODB Database Identity Check `[resolved]`
+
+**Problem:** In a BYODB architecture the Data Engine accepts a user-supplied `connection_url`. DNS failover, snapshot restores, or misconfiguration can silently redirect the pool to a different PostgreSQL cluster. Without an identity check the engine writes to the wrong database without any error signal.
+
+**Three dangerous scenarios this prevents:**
+
+| Scenario | Without check | With check |
+|---|---|---|
+| DNS failover to new cluster | Silent writes to wrong DB | Engine refuses to start |
+| Customer restores March 1 snapshot | New data lands in old state; replay corrupted | Engine refuses to start |
+| Staging DB accidentally registered | Production workloads on staging | Engine refuses to start |
+
+**Implementation (≈15 lines):** `db/connection.rs`
+
+```rust
+// Query the live cluster identity
+pub async fn read_db_identity(pool: &PgPool) -> Result<DbIdentity, sqlx::Error> {
+    let (system_identifier, db_name): (String, String) = sqlx::query_as(
+        "SELECT system_identifier::text, current_database() FROM pg_control_system()",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(DbIdentity { system_identifier, db_name })
+}
+
+// Enforce the identity matches the registration record
+pub async fn verify_db_identity(pool: &PgPool, project_id: &str, expected: &DbIdentity) { … }
+```
+
+`pg_control_system().system_identifier` is unique per physical cluster and survives logical replica promotion — it only changes on `initdb`. `current_database()` guards against pointing at the wrong logical database on the same host.
+
+**Stored in:** `fluxbase_internal.project_databases.expected_system_identifier` + `expected_db_name` (migration `20260311000016`).
+
+**Call site:** call `verify_db_identity()` once after constructing any user pool. For the platform DB, `init_pool_with_identity_log()` logs the live identity at startup without enforcing an expected value.
+
+**Degraded mode:** If `pg_control_system()` is unavailable (managed provider restricts role), a warning is logged and the check is skipped. This is the only exception — mismatches always panic.
+
+---
+
 ### Other Items
 
 | Area | Item |
