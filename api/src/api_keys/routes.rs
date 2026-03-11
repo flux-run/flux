@@ -59,6 +59,10 @@ pub async fn revoke_api_key(
     Extension(ctx): Extension<RequestContext>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<serde_json::Value> {
+    if ctx.role.as_deref() != Some("owner") {
+        return Err(ApiError::forbidden("Only owners can revoke API keys"));
+    }
+
     let tenant_id = ctx.tenant_id.unwrap_or_default();
 
     service::revoke_api_key(&state.pool, id, tenant_id)

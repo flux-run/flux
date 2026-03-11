@@ -167,6 +167,10 @@ pub async fn delete_function(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
+    if context.role.as_deref() != Some("owner") && context.role.as_deref() != Some("admin") {
+        return Err(ApiError::forbidden("Only owners or admins can delete functions"));
+    }
+
     let project_id = context
         .project_id
         .ok_or(ApiError::bad_request("missing_project"))?;

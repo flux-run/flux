@@ -96,11 +96,13 @@ pub fn build_cors() -> CorsLayer {
                 return true;
             }
 
-            // More inclusive check for production domains
-            let allowed = origin_lc.ends_with(".fluxbase.co") 
-                || origin_lc == "https://fluxbase.co" 
+            // Subdomain check: the LEADING DOT in ".fluxbase.co" is intentional.
+            // "evilfluxbase.co".ends_with(".fluxbase.co") → false  ✓
+            // "app.fluxbase.co".ends_with(".fluxbase.co")  → true   ✓
+            let allowed = origin_lc.ends_with(".fluxbase.co")
+                || origin_lc == "https://fluxbase.co"
                 || origin_lc == "http://fluxbase.co";
-            
+
             if !allowed {
                 tracing::warn!("CORS origin denied: {}", origin_str);
             }
@@ -146,7 +148,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/logs", post(logs::routes::create_log))
         .route("/logs", get(logs::routes::list_logs))
         // Emits a table-change event to all connected SSE clients for the project.
-        .route("/events/emit", post(routes::events::emit));
+        .route("/events/emit", post(routes::events::emit))
+        // Central service-token guard — applied once here so every /internal/*
+        // handler is protected without relying on per-handler checks.
+        .layer(axum_middleware::from_fn(middleware::internal_auth::require_service_token));
 
     // Tenant Scope routes (X-Fluxbase-Tenant required + membership verified)
     let tenant_routes = Router::new()
@@ -173,7 +178,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/functions", post(routes::functions::create_function))
         .route("/functions/{id}", get(routes::functions::get_function))
         .route("/functions/{id}", delete(routes::functions::delete_function))
-        .route("/functions/deploy", post(routes::deployments::deploy_function_cli))
+        // 10 MB per-route override so JS bundles (often 2-5 MB) are not
+        // rejected by the global 1 MB limit applied at the outer router layer.
+        .route("/functions/deploy", post(routes::deployments::deploy_function_cli)
+            .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)))
         .route("/deployments", post(routes::deployments::create_deployment))
         .route("/deployments/list/{id}", get(routes::deployments::list_deployments))
         .route("/deployments/{id}/activate/{version}", post(routes::deployments::activate_deployment))
