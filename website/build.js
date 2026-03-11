@@ -10,13 +10,14 @@
  *   export function render()                            // returns HTML string
  */
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, watchFile } from 'fs';
+import { writeFileSync, mkdirSync, readdirSync, statSync, watchFile } from 'fs';
 import { join, dirname, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __dirname  = dirname(fileURLToPath(import.meta.url));
 const PAGES_DIR  = join(__dirname, 'src', 'pages');
 const OUTPUT_DIR = resolve(__dirname, '../dashboard/public');  // write directly into Vercel-served public/
+const VERCEL_JSON = resolve(__dirname, '../dashboard/vercel.json');
 
 // ── Discover all page modules ────────────────────────────────────────────────
 function discoverPages(dir, found = []) {
@@ -31,7 +32,7 @@ function discoverPages(dir, found = []) {
   return found;
 }
 
-// ── Build a single page ───────────────────────────────────────────────────────
+// ── Build a single page — returns meta.path on success, null on failure ──────
 async function buildPage(modulePath) {
   // Break module cache by appending a timestamp (ESM dynamic import caches)
   const url = `file://${modulePath}?t=${Date.now()}`;
@@ -40,12 +41,12 @@ async function buildPage(modulePath) {
     mod = await import(url);
   } catch (e) {
     console.error(`  ERROR importing ${relative(__dirname, modulePath)}:`, e.message);
-    return;
+    return null;
   }
 
   if (!mod.meta || !mod.render) {
     console.warn(`  SKIP ${relative(__dirname, modulePath)} — missing meta or render export`);
-    return;
+    return null;
   }
 
   const html = mod.render();
@@ -53,15 +54,58 @@ async function buildPage(modulePath) {
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, html, 'utf8');
   console.log(`  ✔  ${mod.meta.path}`);
+  return mod.meta.path;
+}
+
+// ── Convert a meta.path like "docs/quickstart.html" to a Vercel rewrite ──────
+// Rules:
+//   home.html          → /  (marketing root)
+//   foo/index.html     → /foo
+//   foo/bar.html       → /foo/bar
+//   anything.html      → /anything
+function metaPathToRewrite(metaPath) {
+  const dest = '/' + metaPath.replace(/\\/g, '/');
+  let source = dest.replace(/\.html$/, '');
+  if (source.endsWith('/index')) source = source.slice(0, -6) || '/';
+  if (source === '/home') source = '/';
+  return { source, destination: dest };
+}
+
+// ── Write vercel.json from the collected page paths ───────────────────────────
+function writeVercelJson(builtPaths) {
+  // Sort: root first, then alphabetically for determinism
+  const staticRewrites = builtPaths
+    .sort((a, b) => a.localeCompare(b))
+    .map(metaPathToRewrite)
+    // Root rewrite must come first
+    .sort((a, b) => (a.source === '/' ? -1 : b.source === '/' ? 1 : 0));
+
+  // SPA routes — always appended last so static rules take priority
+  const spaRewrites = [
+    { source: '/login',            destination: '/index.html' },
+    { source: '/dashboard',        destination: '/index.html' },
+    { source: '/dashboard/:path*', destination: '/index.html' },
+  ];
+
+  const config = {
+    cleanUrls: true,
+    rewrites: [...staticRewrites, ...spaRewrites],
+  };
+
+  writeFileSync(VERCEL_JSON, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  console.log(`  ✔  vercel.json (${staticRewrites.length} static + ${spaRewrites.length} SPA routes)`);
 }
 
 // ── Build all ─────────────────────────────────────────────────────────────────
 async function buildAll() {
   const pages = discoverPages(PAGES_DIR);
   console.log(`\nBuilding ${pages.length} page(s)…`);
+  const builtPaths = [];
   for (const p of pages) {
-    await buildPage(p);
+    const path = await buildPage(p);
+    if (path) builtPaths.push(path);
   }
+  writeVercelJson(builtPaths);
   console.log('Done.\n');
 }
 

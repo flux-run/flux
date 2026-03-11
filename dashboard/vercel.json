@@ -1,23 +1,61 @@
 {
   "cleanUrls": true,
   "rewrites": [
-    { "source": "/",                    "destination": "/home.html" },
-
-    { "source": "/cli",                 "destination": "/cli.html" },
-    { "source": "/product",             "destination": "/product.html" },
-    { "source": "/how-it-works",        "destination": "/how-it-works.html" },
-
-    { "source": "/docs",                "destination": "/docs/index.html" },
-    { "source": "/docs/:page",          "destination": "/docs/:page.html" },
-
-    { "source": "/examples",            "destination": "/examples/index.html" },
-    { "source": "/examples/:page",      "destination": "/examples/:page.html" },
-
-    { "source": "/blog/:page",          "destination": "/blog/:page.html" },
-
-    { "source": "/login",               "destination": "/index.html" },
-    { "source": "/dashboard",           "destination": "/index.html" },
-    { "source": "/dashboard/:path*",    "destination": "/index.html" }
+    {
+      "source": "/",
+      "destination": "/home.html"
+    },
+    {
+      "source": "/blog/git-for-backend",
+      "destination": "/blog/git-for-backend.html"
+    },
+    {
+      "source": "/cli",
+      "destination": "/cli.html"
+    },
+    {
+      "source": "/docs/concepts",
+      "destination": "/docs/concepts.html"
+    },
+    {
+      "source": "/docs/debugging-production",
+      "destination": "/docs/debugging-production.html"
+    },
+    {
+      "source": "/docs/deployment",
+      "destination": "/docs/deployment.html"
+    },
+    {
+      "source": "/docs",
+      "destination": "/docs/index.html"
+    },
+    {
+      "source": "/docs/quickstart",
+      "destination": "/docs/quickstart.html"
+    },
+    {
+      "source": "/docs/security-and-privacy",
+      "destination": "/docs/security-and-privacy.html"
+    },
+    {
+      "source": "/how-it-works",
+      "destination": "/how-it-works.html"
+    },
+    {
+      "source": "/product",
+      "destination": "/product.html"
+    },
+    {
+      "source": "/login",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dashboard",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dashboard/:path*",
+      "destination": "/index.html"
+    }
   ]
 }
-
