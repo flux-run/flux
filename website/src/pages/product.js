@@ -13,10 +13,20 @@ export const meta = {
 
 // ── Hero ──────────────────────────────────────────────────────────────────────
 function hero() {
+  const pills = [
+    { label: '~1–3 ms overhead',         href: '/how-it-works#performance' },
+    { label: '~3–5 KB/request',           href: '/docs/security-and-privacy#storage' },
+    { label: 'async, fire-and-forget',    href: '/how-it-works#performance' },
+    { label: 'self-hosted available',     href: '/docs/deployment' },
+  ].map(p => `<a href="${p.href}" style="display:inline-block;font-size:.75rem;font-family:var(--font-mono);color:var(--muted);background:var(--bg-elevated);border:1px solid var(--border);border-radius:20px;padding:3px 12px;text-decoration:none;transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--accent)';" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)';">${p.label}</a>`).join('\n    ');
+
   return `<section class="hero" style="padding-bottom:48px;">
   <span class="eyebrow">Product</span>
   <h1 style="font-size:clamp(2rem,5vw,3rem);">Every production question,<br><span class="gradient-text">answered in one command.</span></h1>
-  <p style="max-width:580px;margin:0 auto 24px;">Fluxbase captures a deterministic record of every request and every database mutation. Then gives you tools to query that record from the terminal.</p>
+  <p style="max-width:580px;margin:0 auto 20px;">Fluxbase captures a deterministic record of every request and every database mutation. Then gives you tools to query that record from the terminal.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:28px;">
+    ${pills}
+  </div>
   <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
     <a class="btn-primary" href="/docs/quickstart">Get Started →</a>
     <a class="btn-secondary" href="/cli">CLI Reference</a>

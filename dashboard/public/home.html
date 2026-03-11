@@ -8,7 +8,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/style.css">
-  
+  <style>
+  .stats-strip > div:last-child { border-right: none; }
+  @media (max-width: 640px) {
+    .stats-strip { grid-template-columns: repeat(2,1fr) !important; }
+    .stats-strip > div:nth-child(2) { border-right: none; }
+  }
+</style>
 </head>
 <body>
 
@@ -74,6 +80,31 @@
     curl -fsSL https://fluxbase.co/install | bash
   </div>
 </section>
+
+<div style="border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--bg-surface);">
+  <div style="max-width:900px;margin:0 auto;display:grid;grid-template-columns:repeat(4,1fr);" class="stats-strip">
+    <div style="text-align:center;padding:20px 16px;border-right:1px solid var(--border);last-child:border:none;">
+    <div style="font-size:1.5rem;font-weight:800;letter-spacing:-.03em;color:var(--text);margin-bottom:4px;">~1–3 ms</div>
+    <div style="font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:2px;">overhead per request</div>
+    <div style="font-size:.72rem;color:var(--muted);opacity:.6;">async, non-blocking</div>
+  </div>
+  <div style="text-align:center;padding:20px 16px;border-right:1px solid var(--border);last-child:border:none;">
+    <div style="font-size:1.5rem;font-weight:800;letter-spacing:-.03em;color:var(--text);margin-bottom:4px;">~3–5 KB</div>
+    <div style="font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:2px;">storage per request</div>
+    <div style="font-size:.72rem;color:var(--muted);opacity:.6;">diffs, not snapshots</div>
+  </div>
+  <div style="text-align:center;padding:20px 16px;border-right:1px solid var(--border);last-child:border:none;">
+    <div style="font-size:1.5rem;font-weight:800;letter-spacing:-.03em;color:var(--text);margin-bottom:4px;">zero</div>
+    <div style="font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:2px;">instrumentation required</div>
+    <div style="font-size:.72rem;color:var(--muted);opacity:.6;">no SDK, no config</div>
+  </div>
+  <div style="text-align:center;padding:20px 16px;border-right:1px solid var(--border);last-child:border:none;">
+    <div style="font-size:1.5rem;font-weight:800;letter-spacing:-.03em;color:var(--text);margin-bottom:4px;">Rust + V8</div>
+    <div style="font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:2px;">runtime core</div>
+    <div style="font-size:.72rem;color:var(--muted);opacity:.6;">same stack as Cloudflare Workers</div>
+  </div>
+  </div>
+</div>
 
 <section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
 <div style="max-width:1040px;margin:0 auto;padding:0 24px;">

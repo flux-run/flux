@@ -52,6 +52,28 @@ ${c.cmd('$')} flux why ${c.id('550e8400')}
 </section>`;
 }
 
+// ── Credibility strip ─────────────────────────────────────────────────────────
+function credibilityStrip() {
+  const stats = [
+    { value: '~1–3 ms',    label: 'overhead per request',     note: 'async, non-blocking' },
+    { value: '~3–5 KB',    label: 'storage per request',      note: 'diffs, not snapshots' },
+    { value: 'zero',       label: 'instrumentation required',  note: 'no SDK, no config' },
+    { value: 'Rust + V8',  label: 'runtime core',             note: 'same stack as Cloudflare Workers' },
+  ];
+
+  const items = stats.map(s => `<div style="text-align:center;padding:20px 16px;border-right:1px solid var(--border);last-child:border:none;">
+    <div style="font-size:1.5rem;font-weight:800;letter-spacing:-.03em;color:var(--text);margin-bottom:4px;">${s.value}</div>
+    <div style="font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:2px;">${s.label}</div>
+    <div style="font-size:.72rem;color:var(--muted);opacity:.6;">${s.note}</div>
+  </div>`).join('\n  ');
+
+  return `<div style="border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--bg-surface);">
+  <div style="max-width:900px;margin:0 auto;display:grid;grid-template-columns:repeat(4,1fr);" class="stats-strip">
+    ${items}
+  </div>
+</div>`;
+}
+
 // ── Demo section ──────────────────────────────────────────────────────────────
 function demoSection() {
   const tailWindow = codeWindow({
@@ -343,12 +365,19 @@ function ctaSection() {
 }
 
 // ── Page styles ───────────────────────────────────────────────────────────────
-const extraHead = '';
+const extraHead = `<style>
+  .stats-strip > div:last-child { border-right: none; }
+  @media (max-width: 640px) {
+    .stats-strip { grid-template-columns: repeat(2,1fr) !important; }
+    .stats-strip > div:nth-child(2) { border-right: none; }
+  }
+</style>`;
 
 // ── Render ────────────────────────────────────────────────────────────────────
 export function render() {
   const content = [
     hero(),
+    credibilityStrip(),
     demoSection(),
     comparisonSection(),
     executionShift(),
