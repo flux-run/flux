@@ -50,8 +50,10 @@ impl DbRouter {
             project_slug.to_lowercase()
         );
         let rows = sqlx::query_scalar::<_, String>(
-            "SELECT schema_name FROM information_schema.schemata \
-             WHERE schema_name LIKE $1 ORDER BY schema_name",
+            // pg_catalog.pg_namespace is a direct catalog table; information_schema.schemata
+            // is a view with additional permission checks — slower on large clusters.
+            "SELECT nspname FROM pg_catalog.pg_namespace \
+             WHERE nspname LIKE $1 ORDER BY nspname",
         )
         .bind(&prefix)
         .fetch_all(pool)
@@ -72,7 +74,9 @@ impl DbRouter {
     pub async fn assert_exists(pool: &PgPool, schema: &str) -> Result<(), EngineError> {
         validate_identifier(schema)?;
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)",
+            // Direct catalog lookup — O(1) index scan on pg_namespace.nspname regardless
+            // of cluster size. information_schema.schemata includes visibility checks.
+            "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1)",
         )
         .bind(schema)
         .fetch_one(pool)
@@ -105,9 +109,13 @@ impl DbRouter {
         }
 
         let exists: bool = sqlx::query_scalar(
+            // pg_catalog join is a direct index lookup (pg_namespace.nspname + pg_class.relname).
+            // information_schema.tables evaluates ACL visibility for every row before filtering.
+            // relkind = 'r' restricts to plain tables (excludes views, sequences, foreign tables).
             "SELECT EXISTS(\
-               SELECT 1 FROM information_schema.tables \
-               WHERE table_schema = $1 AND table_name = $2 AND table_type = 'BASE TABLE')",
+               SELECT 1 FROM pg_catalog.pg_class c \
+               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+               WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r')",
         )
         .bind(schema)
         .bind(table)

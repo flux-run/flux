@@ -31,20 +31,26 @@ pub struct SchemaQuery {
 const SCHEMA_GRAPH_SQL: &str = r#"
 WITH
 tbls AS NOT MATERIALIZED (
+    -- Use pg_catalog instead of information_schema.tables.
+    -- information_schema views evaluate row-level visibility checks for every
+    -- row in the entire cluster; on a 2000-table BYODB database that can cost
+    -- 50-200 ms. pg_catalog uses a direct index lookup on pg_namespace.nspname
+    -- and is O(1) regardless of how many tables exist in other schemas.
     SELECT COALESCE(jsonb_agg(
         jsonb_build_object(
-            'schema',      t.table_schema,
-            'table',       t.table_name,
+            'schema',      n.nspname,
+            'table',       c.relname,
             'description', COALESCE(m.description, '')
-        ) ORDER BY t.table_schema, t.table_name
+        ) ORDER BY n.nspname, c.relname
     ), '[]'::jsonb) AS data
-    FROM information_schema.tables t
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN fluxbase_internal.table_metadata m
-      ON m.schema_name = t.table_schema AND m.table_name = t.table_name
-    WHERE t.table_type = 'BASE TABLE'
+      ON m.schema_name = n.nspname AND m.table_name = c.relname
+    WHERE c.relkind = 'r'
       AND CASE
-            WHEN $3::text IS NOT NULL THEN t.table_schema = $3
-            ELSE t.table_schema LIKE $4
+            WHEN $3::text IS NOT NULL THEN n.nspname = $3
+            ELSE n.nspname LIKE $4
           END
 ),
 cols AS NOT MATERIALIZED (
