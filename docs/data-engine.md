@@ -938,38 +938,28 @@ Without these, hook execution cannot be attributed to the request that triggered
 
 ---
 
-### Gap 3 — DB Query Trace Correlation `[blocking]`
+### Gap 3 — DB Query Trace Correlation `[resolved]`
 
-Postgres queries are not correlated to the request that issued them, making it impossible to match gateway/runtime logs to specific database operations in `pg_stat_activity`, `auto_explain`, or `pgaudit`.
-
-**Required action:** Prepend a SQL comment to every compiled query before execution:
+Every compiled query is now prefixed with:
 
 ```sql
-/* flux_req:{{request_uuid}}, span:{{span_id}} */
-SELECT ...
+/* flux_req:{{request_uuid}},span:{{span_id}},tenant:{{tenant_uuid}} */ SELECT ...
 ```
 
-Including `span:` (not just `flux_req:`) means `pg_stat_activity` can directly show which runtime span generated each in-flight query — critical for `flux trace debug` step-through mode. This is zero-overhead (the comment is stripped by the Postgres parser) and survives connection pooling unlike `SET LOCAL application_name`.
+The `span:` field allows `pg_stat_activity` and `auto_explain` to directly map each in-flight query to the runtime span that generated it — essential for `flux trace debug` step-through mode. Zero parsing overhead (comment stripped by Postgres); survives connection pooling.
 
 ---
 
-### Gap 4 — Replay Mode (`x-flux-replay`) `[blocking]`
+### Gap 4 — Replay Mode (`x-flux-replay`) `[resolved]`
 
-Replaying historical mutations would re-trigger hooks, events, workflow executions, and cron jobs, producing real side effects (emails sent, webhooks fired, etc.).
+`AuthContext.is_replay` is populated from the `x-flux-replay: true` header. The query handler suppresses the following subsystems when `is_replay` is true:
 
-**Required action:** Add an `AuthContext` flag `is_replay: bool` populated from the `x-flux-replay: true` header. In the query handler, skip the following subsystems when `is_replay` is true:
 - Before / after hook invocations
-- `EventEmitter::emit`
-- `WorkflowEngine::trigger`
-- Any cron advancement
-- External tool calls forwarded via hooks (Composio, HTTP)
+- `EventEmitter::emit` (which would trigger workflow executions and event subscriptions)
+- Any cron job advancement
+- External tool calls forwarded via hooks
 
-**Allowed in replay mode:**
-- Read/write to user tables (reconstructs data state)
-- Append to `state_mutations` (produces a new trace for the replayed execution)
-- Trace span emission (allows `flux trace diff` to compare original vs. replayed execution)
-
-See the [Replay Mode](#replay-mode) section for the full bypass table.
+State mutations, `trace_requests` writes, and trace span emission are **not** suppressed so replay produces a fully observable reconstructed data state.
 
 ---
 
@@ -1059,49 +1049,30 @@ The existing Moka L2 cache infrastructure is already in place. Extending the cac
 
 ---
 
-### Gap 12 — Deterministic Mutation Ordering `[blocking]`
+### Gap 12 — Deterministic Mutation Ordering `[resolved]`
 
-`mutation_seq BIGSERIAL` must be added to `state_mutations` so replay ordering is determined by insertion sequence, not `created_at` timestamp. Within a single transaction touching multiple tables, timestamps can be identical; `mutation_seq` provides a strict total order.
+`mutation_seq BIGSERIAL` added to `state_mutations` via migration `20260311000012`. The column is auto-populated by Postgres on every INSERT; no application-level changes were needed. `flux incident replay` and `flux trace debug` now order by `mutation_seq` for strict causal ordering within a request.
 
-**Required migration:**
-
-```sql
-ALTER TABLE fluxbase_internal.state_mutations
-    ADD COLUMN mutation_seq BIGSERIAL;
-
-CREATE INDEX idx_state_mutations_request_seq
-    ON fluxbase_internal.state_mutations(request_id, mutation_seq)
-    WHERE request_id IS NOT NULL;
-```
-
-**Required code change:** `flux incident replay` and `flux trace debug` must change their `ORDER BY` from `created_at` to `mutation_seq`.
+New indexes applied:
+- `idx_state_mutations_request_seq (request_id, mutation_seq)`
+- `idx_state_mutations_request_table (request_id, table_name)`
+- `idx_state_mutations_request_id (request_id)`
 
 ---
 
-### Gap 13 — Request Envelope Table (`trace_requests`) `[blocking]`
+### Gap 13 — Request Envelope Table (`trace_requests`) `[resolved]`
 
-The data engine currently stores mutations but not the originating request. If gateway logs expire (or are unavailable in isolated environments), `flux incident replay` cannot reconstruct the original input.
+`fluxbase_internal.trace_requests` created via migration `20260311000013`. The `POST /db/query` handler writes a row at the end of every request as a fire-and-forget `tokio::spawn`. Safe headers only (no auth tokens). Response body truncated to first 100 rows. Uses `ON CONFLICT (request_id) DO NOTHING` so re-runs are idempotent.
 
-**Required action:** Implement the `trace_requests` schema (see [`trace_requests` Table](#trace_requests-table)) and write a row at the start of every `POST /db/query` handler, before any mutation work begins. `request_id` is taken from the `x-request-id` header.
-
-**Sensitive fields:** Do not store raw `Authorization` headers or user credential values. Store only the structural headers needed for replay (`x-user-id`, `x-user-role`, `x-tenant-id`, `x-project-id`, `x-flux-replay`).
+`flux incident replay` is now self-contained and does not require gateway log retention.
 
 ---
 
-### Gap 14 — Mutation Compression (`changed_fields`) `[performance]`
+### Gap 14 — Mutation Compression (`changed_fields`) `[partial]`
 
-For UPDATE operations, before/after JSONB snapshots capture the entire row even when only one field changed. Under high write volume (10k writes/s → ~864 M rows/day), this amplifies storage significantly.
+`changed_fields TEXT[]` column added via migration `20260311000012`. The column is present and indexed, but currently `NULL` for all rows pending before-state pre-read implementation (v2 of the mutation logger). Once `db_executor.rs` does a `SELECT ... FOR UPDATE` before each UPDATE to capture the old row, the changed field names will be computed by comparing `before`/`after` JSONB keys and stored here.
 
-**Required migration:**
-
-```sql
-ALTER TABLE fluxbase_internal.state_mutations
-    ADD COLUMN changed_fields TEXT[];
-```
-
-**Required code change:** In `db_executor.rs`, when writing an UPDATE mutation, populate `changed_fields` by comparing the keys in `before` and `after` JSONB that differ. Only keys with differing values are included.
-
-**Effect on CLI:** `flux why` and `flux trace diff` can read `changed_fields` first to narrow the comparison scope, avoiding full JSON tree walks on wide rows.
+**Next step:** Add the pre-read SELECT in `executor/db_executor.rs` for UPDATE operations, compute `changed_fields` from key diff, and store in the INSERT.
 
 ---
 
