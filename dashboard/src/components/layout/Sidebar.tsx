@@ -1,4 +1,7 @@
-import { NavLink, useParams } from 'react-router-dom'
+'use client'
+
+import Link from 'next/link'
+import { useParams, usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { Zap, FolderOpen, Settings, LayoutDashboard,
   Code2, KeyRound, ShieldCheck, ScrollText, Globe,
@@ -13,31 +16,38 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useStore } from '@/state/tenantStore'
 
-const navItem = (
-  to: string,
-  Icon: React.ComponentType<{ className?: string }>,
+function NavItem({
+  href,
+  Icon,
+  label,
+}: {
+  href: string
+  Icon: React.ComponentType<{ className?: string }>
   label: string
-) => (
-  <NavLink
-    to={to}
-    className={({ isActive }) =>
-      cn(
+}) {
+  const pathname = usePathname()
+  const isActive = pathname === href || !!pathname?.startsWith(href + '/')
+
+  return (
+    <Link
+      href={href}
+      className={cn(
         'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150',
         isActive
           ? 'bg-primary/15 text-primary font-medium'
           : 'text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-white/5'
-      )
-    }
-  >
-    <Icon className="w-4 h-4 shrink-0" />
-    {label}
-  </NavLink>
-)
+      )}
+    >
+      <Icon className="w-4 h-4 shrink-0" />
+      {label}
+    </Link>
+  )
+}
 
 export function Sidebar() {
-  const { projectId: paramProjectId } = useParams<{ projectId?: string }>()
+  const params = useParams() as any
   const { projectId: storeProjectId } = useStore()
-  const projectId = paramProjectId ?? storeProjectId
+  const projectId = params?.projectId ?? storeProjectId
   const { user, signOut } = useAuth()
 
   const initials = user?.displayName
@@ -68,8 +78,8 @@ export function Sidebar() {
           <p className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/30 mb-1.5 px-2">
             Workspace
           </p>
-          {navItem('/dashboard', FolderOpen, 'Projects')}
-          {navItem('/dashboard/tenants', Settings, 'Tenant Settings')}
+          <NavItem href="/dashboard" Icon={FolderOpen} label="Projects" />
+          <NavItem href="/dashboard/tenants" Icon={Settings} label="Tenant Settings" />
         </div>
 
         {projectId && (
@@ -77,21 +87,21 @@ export function Sidebar() {
             <p className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/30 mb-1.5 px-2">
               Project
             </p>
-            {navItem(`/dashboard/projects/${projectId}/overview`,  LayoutDashboard, 'Overview')}
-            {navItem(`/dashboard/projects/${projectId}/data`,       Database,        'Data')}
-            {navItem(`/dashboard/projects/${projectId}/storage`,    HardDrive,       'Storage')}
-            {navItem(`/dashboard/projects/${projectId}/query`,      Terminal,        'Query Explorer')}
-            {navItem(`/dashboard/projects/${projectId}/schema`,      Share2,          'Schema Graph')}
-            {navItem(`/dashboard/projects/${projectId}/functions`,  Code2,           'Functions')}
-            {navItem(`/dashboard/projects/${projectId}/routes`,     Globe,           'Routes')}
-            {navItem(`/dashboard/projects/${projectId}/events`,     Bell,            'Events')}
-            {navItem(`/dashboard/projects/${projectId}/workflows`,  GitBranch,       'Workflows')}
-            {navItem(`/dashboard/projects/${projectId}/cron`,       Clock,           'Cron')}
-            {navItem(`/dashboard/projects/${projectId}/integrations`, Puzzle,        'Integrations')}
-            {navItem(`/dashboard/projects/${projectId}/secrets`,    ShieldCheck,     'Secrets')}
-            {navItem(`/dashboard/projects/${projectId}/api-keys`,   KeyRound,        'API Keys')}
-            {navItem(`/dashboard/projects/${projectId}/logs`,       ScrollText,      'Logs')}
-            {navItem(`/dashboard/projects/${projectId}/settings`,   Settings,        'Settings')}
+            <NavItem href={`/dashboard/projects/${projectId}/overview`}  Icon={LayoutDashboard} label="Overview" />
+            <NavItem href={`/dashboard/projects/${projectId}/data`}       Icon={Database}        label="Data" />
+            <NavItem href={`/dashboard/projects/${projectId}/storage`}    Icon={HardDrive}       label="Storage" />
+            <NavItem href={`/dashboard/projects/${projectId}/query`}      Icon={Terminal}        label="Query Explorer" />
+            <NavItem href={`/dashboard/projects/${projectId}/schema`}     Icon={Share2}          label="Schema Graph" />
+            <NavItem href={`/dashboard/projects/${projectId}/functions`}  Icon={Code2}           label="Functions" />
+            <NavItem href={`/dashboard/projects/${projectId}/routes`}     Icon={Globe}           label="Routes" />
+            <NavItem href={`/dashboard/projects/${projectId}/events`}     Icon={Bell}            label="Events" />
+            <NavItem href={`/dashboard/projects/${projectId}/workflows`}  Icon={GitBranch}       label="Workflows" />
+            <NavItem href={`/dashboard/projects/${projectId}/cron`}       Icon={Clock}           label="Cron" />
+            <NavItem href={`/dashboard/projects/${projectId}/integrations`} Icon={Puzzle}        label="Integrations" />
+            <NavItem href={`/dashboard/projects/${projectId}/secrets`}    Icon={ShieldCheck}     label="Secrets" />
+            <NavItem href={`/dashboard/projects/${projectId}/api-keys`}   Icon={KeyRound}        label="API Keys" />
+            <NavItem href={`/dashboard/projects/${projectId}/logs`}       Icon={ScrollText}      label="Logs" />
+            <NavItem href={`/dashboard/projects/${projectId}/settings`}   Icon={Settings}        label="Settings" />
           </div>
         )}
       </nav>

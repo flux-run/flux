@@ -1,9 +1,12 @@
+'use client'
+
 import { useEffect, useState } from 'react'
-import { Outlet, useParams } from 'react-router-dom'
+import { useParams } from 'next/navigation'
 import { useStore } from '@/state/tenantStore'
 
-export default function ProjectLayout() {
-  const { projectId } = useParams<{ projectId: string }>()
+export default function ProjectLayout({ children }: { children: React.ReactNode }) {
+  const params = useParams() as any
+  const projectId = params?.projectId
   const { projectId: storeId, setProject } = useStore()
   const [ready, setReady] = useState(false)
 
@@ -14,11 +17,7 @@ export default function ProjectLayout() {
     setReady(true)
   }, [projectId, storeId, setProject])
 
-  // Don't render outlet until the Zustand store is definitely populated.
-  // This ensures apiFetch correctly sends the X-Fluxbase-Project header.
-  if (!ready || (projectId && projectId !== useStore.getState().projectId)) {
-    return null
-  }
+  if (!ready) return null
 
-  return <Outlet />
+  return <>{children}</>
 }

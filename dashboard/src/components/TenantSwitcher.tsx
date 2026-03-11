@@ -1,3 +1,5 @@
+'use client'
+
 import { useQuery } from '@tanstack/react-query'
 import { ChevronsUpDown, Plus, Check, Building2 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'

@@ -1,3 +1,5 @@
+'use client'
+
 import { useStore } from "@/state/tenantStore";
 import { useQueryClient } from "@tanstack/react-query";
 

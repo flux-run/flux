@@ -1,7 +1,7 @@
 import { getAuth, signOut } from "firebase/auth";
 import { useStore } from "@/state/tenantStore";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
 interface FetchOptions extends RequestInit {
   skipTenant?: boolean;
@@ -69,7 +69,7 @@ export async function apiFetch<T = unknown>(
 // the gateway, which proxies internally to the Data Engine.
 // CONFIGURATION calls (CRUD) go via apiFetch → API service instead.
 
-const GATEWAY_BASE = import.meta.env.VITE_GATEWAY_URL ?? "http://localhost:8081";
+const GATEWAY_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8081";
 
 export async function gatewayFetch<T = unknown>(
   path: string,

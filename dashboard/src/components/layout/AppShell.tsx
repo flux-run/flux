@@ -1,10 +1,20 @@
-import { Navigate, Outlet } from 'react-router-dom'
+'use client'
+
+import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '@/hooks/useAuth'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Zap } from 'lucide-react'
 
-export default function AppShell() {
+export default function AppShell({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
+  const router = useRouter()
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.replace('/dashboard/login')
+    }
+  }, [user, loading, router])
 
   if (loading) {
     return (
@@ -19,15 +29,13 @@ export default function AppShell() {
     )
   }
 
-  if (!user) {
-    return <Navigate to="/dashboard/login" replace />
-  }
+  if (!user) return null
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />
       <main className="flex-1 overflow-y-auto">
-        <Outlet />
+        {children}
       </main>
     </div>
   )
