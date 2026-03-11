@@ -14,14 +14,14 @@ const inner: React.CSSProperties = {
   padding: '0 24px',
 }
 
-const label = (color: string) => ({
+const label = (color: string, bgOverride?: string): React.CSSProperties => ({
   display: 'inline-block',
   fontSize: '.72rem',
   fontWeight: 700,
   letterSpacing: '.1em',
-  textTransform: 'uppercase' as const,
+  textTransform: 'uppercase',
   color,
-  background: color === 'var(--mg-accent)' ? 'var(--mg-accent-dim)' : `${color}1a`,
+  background: bgOverride ?? 'var(--mg-accent-dim)',
   padding: '4px 12px',
   borderRadius: 20,
   marginBottom: 20,
@@ -86,6 +86,7 @@ type CommandCardProps = {
 }
 
 function CommandCard({ color, title, links }: CommandCardProps) {
+  if (links.length === 0) return null
   return (
     <div>
       <div style={{
@@ -125,16 +126,20 @@ function CommandCard({ color, title, links }: CommandCardProps) {
               fontSize: '.82rem',
               color: 'var(--mg-text)',
               textDecoration: 'none',
+              overflow: 'hidden',
             }}
           >
-            <span style={{ color, fontWeight: 700 }}>flux</span>
-            <span style={{ color: 'var(--mg-muted)' }}>{cmd}</span>
+            <span style={{ color, fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}>flux</span>
+            <span style={{ color: 'var(--mg-muted)', whiteSpace: 'nowrap', flexShrink: 0 }}>{cmd}</span>
             <span style={{
-              fontFamily: 'inherit',
+              fontFamily: 'var(--font-geist-sans, sans-serif)',
               fontSize: '.72rem',
               color: 'var(--mg-muted)',
               marginLeft: 'auto',
+              paddingLeft: 8,
               whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
             }}>{label}</span>
           </a>
         ))}
@@ -143,14 +148,22 @@ function CommandCard({ color, title, links }: CommandCardProps) {
   )
 }
 
-function SectionHeader({ color, children }: { color: string; children: string }) {
+function SectionDivider({ color, children }: { color: string; children: string }) {
   return (
-    <div style={{ maxWidth: 1040, margin: '0 auto', padding: '56px 24px 0' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <span style={{ display: 'inline-block', width: 3, height: 24, background: color, borderRadius: 2 }} />
-        <span style={{ fontSize: '.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.12em', color }}>
-          {children}
-        </span>
+    <div style={{
+      borderTop: '1px solid var(--mg-border)',
+      padding: '40px 0 0',
+    }}>
+      <div style={{ maxWidth: 1040, margin: '0 auto', padding: '0 24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ display: 'inline-block', width: 3, height: 20, background: color, borderRadius: 2 }} />
+          <span style={{
+            fontSize: '.68rem', fontWeight: 700, textTransform: 'uppercase',
+            letterSpacing: '.14em', color,
+          }}>
+            {children}
+          </span>
+        </div>
       </div>
     </div>
   )
@@ -164,6 +177,7 @@ function CommandSection({
   codeLabel,
   code,
   reverse = false,
+  grouped = false,
 }: {
   id: string
   cmd: string
@@ -172,6 +186,7 @@ function CommandSection({
   codeLabel: string
   code: string
   reverse?: boolean
+  grouped?: boolean
 }) {
   const textBlock = (
     <div>
@@ -192,7 +207,10 @@ function CommandSection({
   const codeBlock = <CodeWindow label={codeLabel}>{code}</CodeWindow>
 
   return (
-    <div id={id} style={{ ...section(), borderTop: '1px solid var(--mg-border)' }}>
+    <div id={id} style={{
+      borderTop: grouped ? '1px solid var(--mg-border)' : undefined,
+      padding: '56px 0',
+    }}>
       <div style={inner}>
         <div style={{
           display: 'grid',
@@ -275,7 +293,7 @@ export default function CLIPage() {
       {/* Installation */}
       <section style={{ ...section(), background: 'var(--mg-bg-surface)' }}>
         <div style={inner}>
-          <div style={label('var(--mg-accent)')}>Installation</div>
+          <div style={label('var(--mg-accent)', 'var(--mg-accent-dim)')}>Installation</div>
           <h2 style={{ fontSize: 'clamp(1.4rem,3vw,2rem)', fontWeight: 800, letterSpacing: '-.03em', marginBottom: 10 }}>
             One-line install.
           </h2>
@@ -291,7 +309,7 @@ export default function CLIPage() {
       {/* Tutorial */}
       <section style={{ ...section(), background: 'var(--mg-bg-surface)' }}>
         <div style={inner}>
-          <div style={{ ...label('var(--mg-green)'), background: 'rgba(61,214,140,.1)' }}>First Tutorial</div>
+          <div style={label('var(--mg-green)', 'rgba(61,214,140,.12)')}>First Tutorial</div>
           <h2 style={{ fontSize: 'clamp(1.4rem,3vw,2rem)', fontWeight: 800, letterSpacing: '-.03em', marginBottom: 10 }}>
             Debug a production bug in 30 seconds.
           </h2>
@@ -349,8 +367,8 @@ export default function CLIPage() {
         </div>
       </section>
 
-      {/* Deploy & Runtime section header */}
-      <SectionHeader color="var(--mg-green)">Deploy &amp; Runtime</SectionHeader>
+      {/* ── Deploy & Runtime ──────────────────────────────────────── */}
+      <SectionDivider color="var(--mg-green)">Deploy &amp; Runtime</SectionDivider>
 
       <CommandSection
         id="deploy"
@@ -369,16 +387,11 @@ export default function CLIPage() {
         codeLabel="flux tail"
         code={tailCode}
         reverse
+        grouped
       />
 
-      {/* Debugging section header (placeholder) */}
-      <SectionHeader color="var(--mg-accent)">Debugging</SectionHeader>
-
-      {/* Data History section header (placeholder) */}
-      <SectionHeader color="#60a5fa">Data History</SectionHeader>
-
-      {/* Incident Analysis section header */}
-      <SectionHeader color="#c084fc">Incident Analysis</SectionHeader>
+      {/* ── Incident Analysis ─────────────────────────────────────── */}
+      <SectionDivider color="#c084fc">Incident Analysis</SectionDivider>
 
       <CommandSection
         id="bug"
