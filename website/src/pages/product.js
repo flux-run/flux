@@ -224,6 +224,49 @@ function regressionDetection() {
   });
 }
 
+// ── Trust section ────────────────────────────────────────────────────────────
+function trustSection() {
+  const cards = [
+    {
+      icon: '🔒',
+      title: 'Privacy',
+      body: 'Fluxbase records execution metadata — not your database. Mutation diffs capture <code>plan: free → pro</code>, not the entire row. Sensitive fields can be masked. Request bodies are never stored.',
+      link: { href: '/docs/security-and-privacy#data-privacy', label: 'Privacy model →' },
+    },
+    {
+      icon: '💾',
+      title: 'Storage cost',
+      body: 'Typical request: ~3–5 KB (spans + mutation diffs). 1M requests/day ≈ 4 GB/day. Retention defaults to 7 days with automatic purge. Archive to S3/GCS for long-term compliance.',
+      link: { href: '/docs/security-and-privacy#storage', label: 'Storage model →' },
+    },
+    {
+      icon: '📈',
+      title: 'Scalability',
+      body: 'Gateway is stateless and horizontally scalable. All trace writes are append-only — no cross-request locking or coordination. Span emission is fire-and-forget and does not delay HTTP responses.',
+      link: { href: '/docs/security-and-privacy#scalability', label: 'Scale details →' },
+    },
+  ];
+
+  const cardHtml = cards.map(card => `<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:24px 26px;display:flex;flex-direction:column;gap:10px;">
+    <div style="font-size:1.5rem;">${card.icon}</div>
+    <h3 style="font-size:1rem;font-weight:700;margin:0;color:var(--text);">${card.title}</h3>
+    <p style="font-size:.86rem;color:var(--muted);line-height:1.7;margin:0;flex:1;">${card.body}</p>
+    <a href="${card.link.href}" style="font-size:.82rem;color:var(--accent);text-decoration:none;font-family:var(--font-mono);">${card.link.label}</a>
+  </div>`).join('\n  ');
+
+  return section({
+    bg: 'var(--bg-surface)',
+    content: `<div style="text-align:center;margin-bottom:40px;">
+  <span style="display:inline-block;font-family:var(--font-mono);font-size:.75rem;color:var(--accent);background:var(--accent-dim);border:1px solid var(--accent);border-radius:20px;padding:4px 14px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:16px;">Common Questions</span>
+  <h2 style="font-size:1.8rem;font-weight:800;margin:0 0 10px;">Privacy, storage, and scale</h2>
+  <p style="color:var(--muted);max-width:500px;margin:0 auto 8px;">Your code. Your database. Your infrastructure. Fluxbase records the execution history — not the data.</p>
+</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;">
+  ${cardHtml}
+</div>`,
+  });
+}
+
 // ── Page styles ───────────────────────────────────────────────────────────────
 const extraHead = '';
 
@@ -249,6 +292,7 @@ export function render() {
     mutationHistory(),
     incidentReplay(),
     regressionDetection(),
+    trustSection(),
     cta(),
   ].join('\n\n');
 

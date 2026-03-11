@@ -39,6 +39,12 @@ const SIDEBAR_NAV = [
       { href: '/examples/ai-backend', label: 'AI Backend'   },
     ],
   },
+  {
+    title: 'Trust',
+    links: [
+      { href: '/docs/security-and-privacy', label: 'Security & Privacy' },
+    ],
+  },
 ];
 
 /**

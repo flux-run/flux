@@ -28,7 +28,8 @@
   <span class="eyebrow">Git for Backend Execution</span>
   <h1>Debug production systems<br><span class="gradient-text">faster than local development.</span></h1>
   <p style="max-width:580px;margin:0 auto 10px;font-size:1.05rem;">Fluxbase records every backend execution — requests, data mutations, and runtime spans — so you can debug production systems the way Git debugs code.</p>
-  <p style="max-width:520px;margin:0 auto 36px;font-size:.9rem;color:var(--muted);">Root-cause any incident in seconds. Replay it safely. Find the exact commit that broke it.</p>
+  <p style="max-width:520px;margin:0 auto 12px;font-size:.9rem;color:var(--muted);">Root-cause any incident in seconds. Replay it safely. Find the exact commit that broke it.</p>
+  <p style="max-width:520px;margin:0 auto 32px;font-size:.82rem;color:var(--muted);opacity:.7;">Your code. Your database. Your infrastructure. Fluxbase records the execution history.</p>
 
   <div style="max-width:660px;margin:0 auto 40px;text-align:left;"><div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
   <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
@@ -36,18 +37,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">production debugging in 2 commands</span>
-    <button id="cw-22-copy" onclick="(function(){
-    var el=document.getElementById('cw-22');
+    <button id="cw-25-copy" onclick="(function(){
+    var el=document.getElementById('cw-25');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-22-copy');
+      var btn=document.getElementById('cw-25-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-22" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux tail
+  <pre id="cw-25" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux tail
 
   Streaming live requests…
 
@@ -89,18 +90,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux tail</span>
-    <button id="cw-23-copy" onclick="(function(){
-    var el=document.getElementById('cw-23');
+    <button id="cw-26-copy" onclick="(function(){
+    var el=document.getElementById('cw-26');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-23-copy');
+      var btn=document.getElementById('cw-26-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-23" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux tail
+  <pre id="cw-26" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux tail
 
   Streaming live requests…
 
@@ -118,18 +119,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux why 550e8400</span>
-    <button id="cw-24-copy" onclick="(function(){
-    var el=document.getElementById('cw-24');
+    <button id="cw-27-copy" onclick="(function(){
+    var el=document.getElementById('cw-27');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-24-copy');
+      var btn=document.getElementById('cw-27-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-24" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux why <span style="color:var(--accent);">550e8400</span>
+  <pre id="cw-27" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux why <span style="color:var(--accent);">550e8400</span>
 
   <span style="color:#f8f8f2;">ROOT CAUSE</span>
   Stripe API timeout after 10s
@@ -294,18 +295,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux trace 91a3f</span>
-    <button id="cw-25-copy" onclick="(function(){
-    var el=document.getElementById('cw-25');
+    <button id="cw-28-copy" onclick="(function(){
+    var el=document.getElementById('cw-28');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-25-copy');
+      var btn=document.getElementById('cw-28-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-25" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux trace <span style="color:var(--accent);">91a3f</span>
+  <pre id="cw-28" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux trace <span style="color:var(--accent);">91a3f</span>
 
   Trace <span style="color:var(--accent);">91a3f</span>  <span style="color:var(--muted);">2026-03-10 14:22 UTC</span>
   <span style="color:var(--muted);">POST /create_order · 200 OK</span>

@@ -35,7 +35,8 @@ ${c.cmd('$')} flux why ${c.id('550e8400')}
   <span class="eyebrow">Git for Backend Execution</span>
   <h1>Debug production systems<br><span class="gradient-text">faster than local development.</span></h1>
   <p style="max-width:580px;margin:0 auto 10px;font-size:1.05rem;">Fluxbase records every backend execution — requests, data mutations, and runtime spans — so you can debug production systems the way Git debugs code.</p>
-  <p style="max-width:520px;margin:0 auto 36px;font-size:.9rem;color:var(--muted);">Root-cause any incident in seconds. Replay it safely. Find the exact commit that broke it.</p>
+  <p style="max-width:520px;margin:0 auto 12px;font-size:.9rem;color:var(--muted);">Root-cause any incident in seconds. Replay it safely. Find the exact commit that broke it.</p>
+  <p style="max-width:520px;margin:0 auto 32px;font-size:.82rem;color:var(--muted);opacity:.7;">Your code. Your database. Your infrastructure. Fluxbase records the execution history.</p>
 
   <div style="max-width:660px;margin:0 auto 40px;text-align:left;">${cliMoment}</div>
 
