@@ -304,6 +304,142 @@
 </div>
 </section>
 
+<section id="why-runtime" style="border-top:1px solid var(--border); padding:80px 0;">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Why a Runtime?</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Why Fluxbase must own the runtime.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:620px;margin:0 0 40px;">The most common question from senior engineers: "Why can't this work as a library or proxy?" Three invariants require runtime ownership to be guaranteed.</p>
+<div style="display:flex;flex-direction:column;">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start;padding:40px 0;border-top:1px solid var(--border);"> 
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+        <span style="width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">1</span>
+        <h3 style="font-size:1.05rem;font-weight:700;margin:0;color:var(--accent);">Execution interception</h3>
+      </div>
+      <p style="font-size:.9rem;color:var(--muted);line-height:1.7;margin:0;">Fluxbase must intercept every <code>ctx.db</code>, <code>ctx.tool</code>, <code>ctx.workflow</code>, and <code>ctx.event</code> call to produce a complete trace. If arbitrary code can run outside the runtime, calls are invisible — and the execution graph has gaps.</p>
+    </div>
+    <div><div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">intercepted at the runtime level</span>
+    <button id="cw-34-copy" onclick="(function(){
+    var el=document.getElementById('cw-34');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-34-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-34" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Every call is intercepted — no SDK needed</span>
+
+  ctx.db.insert(users, { email })
+  <span style="color:#f9a8d4;">→</span> compile + validate     <span style="color:var(--muted);">data engine</span>
+  <span style="color:#f9a8d4;">→</span> execute SQL            <span style="color:var(--muted);">your postgres</span>
+  <span style="color:#f9a8d4;">→</span> write mutation diff    <span style="color:var(--muted);">trace store</span>
+  <span style="color:#f9a8d4;">→</span> emit span              <span style="color:var(--muted);">trace store</span>
+
+<span style="color:var(--muted);"># If this call were outside the runtime:</span>
+
+  <span style="color:var(--red);">→ no diff recorded</span>
+  <span style="color:var(--red);">→ no span emitted</span>
+  <span style="color:var(--red);">→ flux state history broken</span>
+  <span style="color:var(--red);">→ flux incident replay incomplete</span></code></pre>
+</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start;padding:40px 0;border-top:1px solid var(--border);"> 
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+        <span style="width:32px;height:32px;border-radius:50%;background:#60a5fa;color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">2</span>
+        <h3 style="font-size:1.05rem;font-weight:700;margin:0;color:#60a5fa;">Mutation completeness</h3>
+      </div>
+      <p style="font-size:.9rem;color:var(--muted);line-height:1.7;margin:0;">The mutation log is only trustworthy if <em>every</em> write passes through the Data Engine. A proxy or library can guarantee this for code that uses it — but not for direct writes, migration scripts, or other services hitting the same Postgres. Runtime ownership closes that gap.</p>
+    </div>
+    <div><div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">the mutation invariant</span>
+    <button id="cw-35-copy" onclick="(function(){
+    var el=document.getElementById('cw-35');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-35-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-35" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Required for state history + replay:</span>
+
+  ALL DB writes → Data Engine → Postgres
+                           ↓
+                    mutation diff written
+
+<span style="color:var(--green);">✔</span> same-transaction: your write + diff
+    both commit or both roll back
+
+<span style="color:var(--muted);"># What breaks without this:</span>
+
+  <span style="color:var(--red);">flux state history</span>   — incomplete row timeline
+  <span style="color:var(--red);">flux state blame</span>     — attribution missing
+  <span style="color:var(--red);">flux incident replay</span> — replays against wrong state</code></pre>
+</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start;padding:40px 0;border-top:1px solid var(--border);"> 
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+        <span style="width:32px;height:32px;border-radius:50%;background:#c084fc;color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">3</span>
+        <h3 style="font-size:1.05rem;font-weight:700;margin:0;color:#c084fc;">Replay safety</h3>
+      </div>
+      <p style="font-size:.9rem;color:var(--muted);line-height:1.7;margin:0;">Replay must re-execute production requests against your current code with all external side-effects disabled — no emails sent, no webhooks fired, no Stripe charges. This is only possible if the runtime controls execution. A sidecar or agent cannot safely intercept and suppress arbitrary outbound calls.</p>
+    </div>
+    <div><div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">replay mode — runtime-controlled</span>
+    <button id="cw-36-copy" onclick="(function(){
+    var el=document.getElementById('cw-36');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-36-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-36" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux incident replay 14:00..14:05
+
+  <span style="color:var(--muted);">Runtime flags active for this replay:</span>
+
+  hooks:     <span style="color:var(--red);">off</span>   <span style="color:var(--muted);">← email, Slack, webhooks</span>
+  events:    <span style="color:var(--red);">off</span>   <span style="color:var(--muted);">← external event bus</span>
+  cron:      <span style="color:var(--red);">off</span>   <span style="color:var(--muted);">← scheduled triggers</span>
+  db writes: <span style="color:var(--green);">on</span>    <span style="color:var(--muted);">← mutations recorded</span>
+  spans:     <span style="color:var(--green);">on</span>    <span style="color:var(--muted);">← new trace produced</span>
+
+<span style="color:var(--muted);"># Side-effects are suppressed at the call site,</span>
+<span style="color:var(--muted);"># not at the network layer. Only runtime</span>
+<span style="color:var(--green);"># interception makes this reliable.</span></code></pre>
+</div></div>
+  </div>
+</div>
+<div style="margin-top:40px;padding:22px 26px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;max-width:720px;">
+  <p style="font-weight:700;margin:0 0 8px;font-size:.95rem;">The tradeoff is intentional.</p>
+  <p style="color:var(--muted);font-size:.88rem;line-height:1.7;margin:0;">Runtime ownership introduces adoption friction — you must run your functions on Fluxbase rather than integrating with an existing backend. In exchange, you get guarantees that a library or proxy cannot provide: complete execution history, reliable mutation tracking, and safe deterministic replay. The bet is that the debugging power is worth the deployment step.</p>
+</div>
+</div>
+</section>
+
 <section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
 <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
 <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Performance</div>
@@ -316,18 +452,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">per-request overhead breakdown</span>
-    <button id="cw-34-copy" onclick="(function(){
-    var el=document.getElementById('cw-34');
+    <button id="cw-37-copy" onclick="(function(){
+    var el=document.getElementById('cw-37');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-34-copy');
+      var btn=document.getElementById('cw-37-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-34" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Time added by Fluxbase per request</span>
+  <pre id="cw-37" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Time added by Fluxbase per request</span>
 
   span recording      <span style="color:var(--yellow);">~0.3 ms</span>   <span style="color:var(--muted);">in-memory, async write</span>
   mutation logging    <span style="color:var(--yellow);">~0.7 ms</span>   <span style="color:var(--muted);">one row, same tx as user write</span>

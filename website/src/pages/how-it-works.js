@@ -197,6 +197,108 @@ ${sectionHeader({ heading: 'What happens when a request runs.' })}
   });
 }
 
+// ── Why a runtime? ────────────────────────────────────────────────────────────
+function whyRuntime() {
+  const invariants = [
+    {
+      num: '1',
+      color: 'var(--accent)',
+      title: 'Execution interception',
+      body: 'Fluxbase must intercept every <code>ctx.db</code>, <code>ctx.tool</code>, <code>ctx.workflow</code>, and <code>ctx.event</code> call to produce a complete trace. If arbitrary code can run outside the runtime, calls are invisible — and the execution graph has gaps.',
+      code: codeWindow({
+        title: 'intercepted at the runtime level',
+        content: `${c.dim('# Every call is intercepted — no SDK needed')}
+
+  ctx.db.insert(users, { email })
+  ${c.fn('→')} compile + validate     ${c.dim('data engine')}
+  ${c.fn('→')} execute SQL            ${c.dim('your postgres')}
+  ${c.fn('→')} write mutation diff    ${c.dim('trace store')}
+  ${c.fn('→')} emit span              ${c.dim('trace store')}
+
+${c.dim('# If this call were outside the runtime:')}
+
+  ${c.err('→ no diff recorded')}
+  ${c.err('→ no span emitted')}
+  ${c.err('→ flux state history broken')}
+  ${c.err('→ flux incident replay incomplete')}`,
+      }),
+    },
+    {
+      num: '2',
+      color: '#60a5fa',
+      title: 'Mutation completeness',
+      body: 'The mutation log is only trustworthy if <em>every</em> write passes through the Data Engine. A proxy or library can guarantee this for code that uses it — but not for direct writes, migration scripts, or other services hitting the same Postgres. Runtime ownership closes that gap.',
+      code: codeWindow({
+        title: 'the mutation invariant',
+        content: `${c.dim('# Required for state history + replay:')}
+
+  ALL DB writes → Data Engine → Postgres
+                           ↓
+                    mutation diff written
+
+${c.ok('✔')} same-transaction: your write + diff
+    both commit or both roll back
+
+${c.dim('# What breaks without this:')}
+
+  ${c.err('flux state history')}   — incomplete row timeline
+  ${c.err('flux state blame')}     — attribution missing
+  ${c.err('flux incident replay')} — replays against wrong state`,
+      }),
+    },
+    {
+      num: '3',
+      color: '#c084fc',
+      title: 'Replay safety',
+      body: 'Replay must re-execute production requests against your current code with all external side-effects disabled — no emails sent, no webhooks fired, no Stripe charges. This is only possible if the runtime controls execution. A sidecar or agent cannot safely intercept and suppress arbitrary outbound calls.',
+      code: codeWindow({
+        title: 'replay mode — runtime-controlled',
+        content: `${c.cmd('$')} flux incident replay 14:00..14:05
+
+  ${c.dim('Runtime flags active for this replay:')}
+
+  hooks:     ${c.err('off')}   ${c.dim('← email, Slack, webhooks')}
+  events:    ${c.err('off')}   ${c.dim('← external event bus')}
+  cron:      ${c.err('off')}   ${c.dim('← scheduled triggers')}
+  db writes: ${c.ok('on')}    ${c.dim('← mutations recorded')}
+  spans:     ${c.ok('on')}    ${c.dim('← new trace produced')}
+
+${c.dim('# Side-effects are suppressed at the call site,')}
+${c.dim('# not at the network layer. Only runtime')}
+${c.ok('# interception makes this reliable.')}`,
+      }),
+    },
+  ];
+
+  const cards = invariants.map(inv => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start;padding:40px 0;border-top:1px solid var(--border);"> 
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+        <span style="width:32px;height:32px;border-radius:50%;background:${inv.color};color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">${inv.num}</span>
+        <h3 style="font-size:1.05rem;font-weight:700;margin:0;color:${inv.color};">${inv.title}</h3>
+      </div>
+      <p style="font-size:.9rem;color:var(--muted);line-height:1.7;margin:0;">${inv.body}</p>
+    </div>
+    <div>${inv.code}</div>
+  </div>`).join('\n  ');
+
+  return section({
+    id: 'why-runtime',
+    content: `${eyebrow({ text: 'Why a Runtime?' })}
+${sectionHeader({
+  heading: 'Why Fluxbase must own the runtime.',
+  sub: 'The most common question from senior engineers: "Why can\'t this work as a library or proxy?" Three invariants require runtime ownership to be guaranteed.',
+  maxWidth: '620px',
+})}
+<div style="display:flex;flex-direction:column;">
+  ${cards}
+</div>
+<div style="margin-top:40px;padding:22px 26px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;max-width:720px;">
+  <p style="font-weight:700;margin:0 0 8px;font-size:.95rem;">The tradeoff is intentional.</p>
+  <p style="color:var(--muted);font-size:.88rem;line-height:1.7;margin:0;">Runtime ownership introduces adoption friction — you must run your functions on Fluxbase rather than integrating with an existing backend. In exchange, you get guarantees that a library or proxy cannot provide: complete execution history, reliable mutation tracking, and safe deterministic replay. The bet is that the debugging power is worth the deployment step.</p>
+</div>`,
+  });
+}
+
 // ── Performance overhead ─────────────────────────────────────────────────────
 function performanceOverhead() {
   const perfWindow = codeWindow({
@@ -311,6 +413,7 @@ export function render() {
     hero(),
     architectureDiagram(),
     stepByStep(),
+    whyRuntime(),
     performanceOverhead(),
     techStack(),
     cta(),

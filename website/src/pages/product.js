@@ -267,6 +267,56 @@ function trustSection() {
   });
 }
 
+// ── Why a runtime callout ─────────────────────────────────────────────────────
+function whyRuntimeCallout() {
+  const invariants = [
+    { icon: '🔌', label: 'Execution interception', desc: 'Every db, tool, and workflow call is intercepted at the runtime level. Nothing is invisible.' },
+    { icon: '📝', label: 'Mutation completeness', desc: 'All writes pass through the Data Engine in the same transaction. The mutation log is never partial.' },
+    { icon: '♻️', label: 'Replay safety', desc: 'Side-effects are suppressed at the call site — not at the network layer. Only possible from inside the runtime.' },
+  ];
+
+  const items = invariants.map(inv => `<div style="display:flex;gap:14px;align-items:start;">
+    <span style="font-size:1.2rem;flex-shrink:0;margin-top:2px;">${inv.icon}</span>
+    <div>
+      <div style="font-size:.9rem;font-weight:700;margin-bottom:4px;">${inv.label}</div>
+      <p style="font-size:.84rem;color:var(--muted);line-height:1.6;margin:0;">${inv.desc}</p>
+    </div>
+  </div>`).join('\n  ');
+
+  return section({
+    content: `${eyebrow({ text: 'Common Question' })}
+${sectionHeader({
+  heading: 'Why must this be a runtime?',
+  sub: 'Senior engineers will ask: "Why can\'t this work as a library or proxy on my existing backend?" Three invariants require runtime ownership to hold.',
+  maxWidth: '580px',
+})}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;max-width:960px;margin:0 auto;" class="grid-2col">
+  <div style="display:flex;flex-direction:column;gap:24px;">
+    ${items}
+    <p style="font-size:.84rem;color:var(--muted);line-height:1.65;padding:16px 18px;background:var(--bg-elevated);border-left:3px solid var(--border);border-radius:0 6px 6px 0;margin:0;">
+      The adoption step is real — you run your functions on Fluxbase rather than integrating into an existing backend. The guarantee in return is a complete, reliable execution history that a library or proxy cannot provide.
+    </p>
+    <a href="/how-it-works#why-runtime" style="font-size:.85rem;color:var(--accent);font-family:var(--font-mono);text-decoration:none;">Full technical explanation →</a>
+  </div>
+  <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;padding:28px;">
+    <p style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:0 0 16px;">What runtime ownership enables</p>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      ${[
+        ['flux why &lt;id&gt;',             'complete span graph, no gaps'],
+        ['flux state history',               'every mutation traced back to a request'],
+        ['flux trace diff',                  'span-level diff between any two requests'],
+        ['flux incident replay',             'side-effects suppressed at call site'],
+        ['flux bug bisect',                  'replay across git history reliably'],
+      ].map(([cmd, note]) => `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);">
+        <code style="font-size:.8rem;color:var(--accent);">${cmd}</code>
+        <span style="font-size:.78rem;color:var(--muted);text-align:right;">${note}</span>
+      </div>`).join('\n      ')}
+    </div>
+  </div>
+</div>`,
+  });
+}
+
 // ── Page styles ───────────────────────────────────────────────────────────────
 const extraHead = '';
 
@@ -293,6 +343,7 @@ export function render() {
     incidentReplay(),
     regressionDetection(),
     trustSection(),
+    whyRuntimeCallout(),
     cta(),
   ].join('\n\n');
 
