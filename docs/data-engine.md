@@ -1340,6 +1340,71 @@ No migration required; this is a compiler-only change.
 
 ---
 
+### Gap 19 — Postgres-level Statement Timeout (BYODB Query Safety) `[resolved]`
+
+**Problem:** Even with the complexity guard (Gap 12), LIMIT guard (Gap 18), and the Rust `tokio::timeout` wrapper, a query can still be expensive *inside Postgres*. A three-way JOIN on large BYODB tables (10 M users × 40 M orders × 200 M order_items) may trigger a hash join with temp-file disk spill that holds a Postgres backend for 30 s or more. When the Rust future is dropped (tokio timeout), the query keeps running in the database engine — CPU remains high, the backend stays active, and the customer's production database suffers.
+
+**Root cause:** The Rust-side timeout drops the TCP connection, but Postgres does not automatically cancel a query when its client disconnects in all configurations (especially PgBouncer / pgx proxy). Without an explicit `statement_timeout`, the DB backend continues until the query finishes naturally.
+
+**Fix — `SET LOCAL statement_timeout = 'Nms'` in every transaction:**
+
+Added in `executor/db_executor.rs`, immediately after `SET LOCAL search_path`:
+
+```rust
+// Gap 19: Postgres-level statement timeout
+sqlx::query(&format!("SET LOCAL statement_timeout = '{}ms'", ctx.statement_timeout_ms))
+    .execute(&mut *tx)
+    .await
+    .map_err(EngineError::Db)?;
+```
+
+`SET LOCAL` means the setting is scoped to the current transaction and resets automatically on `COMMIT` / `ROLLBACK`. It cannot leak to other connections in the pool.
+
+When the timeout fires, Postgres returns `SQLSTATE 57014` (`query_canceled`). A new `map_db_error()` helper in `db_executor.rs` intercepts this and converts it to `EngineError::QueryTimeout` (HTTP 408) rather than the generic 500:
+
+```rust
+fn map_db_error(e: sqlx::Error) -> EngineError {
+    if let sqlx::Error::Database(ref db_err) = e {
+        if db_err.code().as_deref() == Some("57014") {
+            return EngineError::QueryTimeout;
+        }
+    }
+    EngineError::Db(e)
+}
+```
+
+**Replay / internal operations** use `statement_timeout_ms × 6` (30 s by default) because replay scans many rows by design. The multiplier is applied in `query.rs` when constructing `MutationContext`.
+
+**Configuration:**
+
+| Env var | Default | Applied to |
+|---|---|---|
+| `STATEMENT_TIMEOUT_MS` | `5000` (5 s) | All standard queries |
+| — | `statement_timeout_ms × 6` | Replay (`is_replay = true`) |
+
+**Error behaviour:**
+
+| Scenario | Before | After |
+|---|---|---|
+| Long query (5 s budget) | Runs until Rust timeout (30 s); DB stays hot | Killed by Postgres at 5 s → HTTP 408 |
+| Replay query | Same 30 s Rust timeout | Postgres budget 30 s (6×5) → correct |
+| Statement canceled | `500 Internal Server Error` | `408 Request Timeout` + `{"error":"query timed out"}` |
+
+**BYODB safety layer (complete):**
+
+| Layer | What it protects against |
+|---|---|
+| QueryGuard (complexity) | Deeply nested joins / explosive O(N^k) queries |
+| NestDepth limit | Recursion into relationships beyond configured depth |
+| LIMIT guard (Gap 18) | Full table scans when `limit` omitted; OFFSET without LIMIT |
+| pg_catalog introspection (Gap 17) | Metadata scans on large clusters |
+| DB identity check (Gap 16) | Accidental cross-cluster writes |
+| Statement timeout (Gap 19) | Runaway query CPU/IO on customer's database |
+
+No migration required. Compiler-only change.
+
+---
+
 ### Other Items
 
 | Area | Item |

@@ -25,6 +25,9 @@ pub struct AppState {
     pub plan_cache: PlanCache,
     /// Complexity ceiling + timeout for all query executions.
     pub query_guard: QueryGuard,
+    /// Postgres-level statement timeout (ms) injected via SET LOCAL.
+    /// 6× this value is used for replay / internal operations.
+    pub statement_timeout_ms: u64,
 }
 
 impl AppState {
@@ -49,6 +52,7 @@ impl AppState {
             schema_cache: build_schema_cache(),
             plan_cache: build_plan_cache(),
             query_guard: QueryGuard::new(cfg.max_query_complexity, cfg.query_timeout_ms, cfg.max_nest_depth),
+            statement_timeout_ms: cfg.statement_timeout_ms,
         }
     }
 

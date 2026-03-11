@@ -211,15 +211,23 @@ pub async fn handler(
     }
 
     // Build once and share across both executor call sites below.
+    // Replay and internal ops get 6× the statement timeout — they may touch
+    // many rows or run complex aggregation that ordinary API calls never do.
+    let stmt_timeout_ms = if auth.is_replay {
+        state.statement_timeout_ms * 6
+    } else {
+        state.statement_timeout_ms
+    };
     let mut_ctx = MutationContext {
-        schema:     &schema,
-        request_id: &request_id,
-        span_id:    span_id_owned.as_deref(),
-        tenant_id:  auth.tenant_id,
-        project_id: auth.project_id,
-        table:      &req.table,
-        operation:  &req.operation,
-        user_id:    &auth.user_id,
+        schema:               &schema,
+        request_id:           &request_id,
+        span_id:              span_id_owned.as_deref(),
+        tenant_id:            auth.tenant_id,
+        project_id:           auth.project_id,
+        table:                &req.table,
+        operation:            &req.operation,
+        user_id:              &auth.user_id,
+        statement_timeout_ms: stmt_timeout_ms,
     };
 
     // 8. Execute — single SQL or batched per-level fetches.

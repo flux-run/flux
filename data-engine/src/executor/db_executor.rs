@@ -5,6 +5,18 @@ use uuid::Uuid;
 use crate::compiler::CompiledQuery;
 use crate::engine::error::EngineError;
 
+/// Map a `sqlx::Error` to `EngineError`, converting Postgres SQLSTATE `57014`
+/// (query_canceled — fired when `statement_timeout` expires) into the typed
+/// `EngineError::QueryTimeout` so the API layer returns HTTP 408 rather than 500.
+fn map_db_error(e: sqlx::Error) -> EngineError {
+    if let sqlx::Error::Database(ref db_err) = e {
+        if db_err.code().as_deref() == Some("57014") {
+            return EngineError::QueryTimeout;
+        }
+    }
+    EngineError::Db(e)
+}
+
 /// Per-request context passed to `execute` so the executor can:
 ///   • enforce a transaction-scoped `search_path`  (Gap 5)
 ///   • prepend a trace comment to every SQL statement (Gap 3)
@@ -25,6 +37,11 @@ pub struct MutationContext<'a> {
     pub operation: &'a str,
     /// Authenticated user performing the operation; stored as actor_id.
     pub user_id: &'a str,
+    /// Postgres-level statement timeout for this request in milliseconds.
+    /// Injected as `SET LOCAL statement_timeout = 'Nms'` inside the transaction
+    /// so Postgres cancels the query if it exceeds the budget, even if the
+    /// outer tokio::timeout has already dropped the Rust future.
+    pub statement_timeout_ms: u64,
 }
 
 /// Execute a `CompiledQuery` inside an explicit transaction and return the
@@ -58,6 +75,17 @@ pub async fn execute(
     .await
     .map_err(EngineError::Db)?;
 
+    // ── Gap 19: Postgres-level statement timeout (BYODB protection) ───────
+    // SET LOCAL means the timeout is scoped to this transaction and resets
+    // automatically on COMMIT/ROLLBACK — safe with connection pooling.
+    // This causes Postgres to cancel the query inside the DB engine itself
+    // (SQLSTATE 57014), protecting BYODB customer databases from runaway
+    // hash-joins and sequential scans even if the Rust timeout fires first.
+    sqlx::query(&format!("SET LOCAL statement_timeout = '{}ms'", ctx.statement_timeout_ms))
+        .execute(&mut *tx)
+        .await
+        .map_err(EngineError::Db)?;
+
     // ── Gap 14 v2: UPDATE pre-read (before-state capture) ────────────────
     // For UPDATE we SELECT the matching rows FOR UPDATE *before* running the
     // mutation so we can store before_state in state_mutations and compute
@@ -86,7 +114,7 @@ pub async fn execute(
                 let pre_row = sqlx::query_with(&outer_pre, pre_args)
                     .fetch_one(&mut *tx)
                     .await
-                    .map_err(EngineError::Db)?;
+                    .map_err(map_db_error)?;
                 let pre_result: serde_json::Value = pre_row.get(0);
                 let mut map = std::collections::HashMap::new();
                 if let Some(rows) = pre_result.as_array() {
@@ -134,7 +162,7 @@ pub async fn execute(
     let row = sqlx::query_with(&outer, args)
         .fetch_one(&mut *tx)
         .await
-        .map_err(EngineError::Db)?;
+        .map_err(map_db_error)?;
 
     let result: serde_json::Value = row.get(0);
 

@@ -18,6 +18,13 @@ pub struct Config {
     /// The timer starts after compilation and covers the full execute phase.
     /// Default: 30 000 ms (30 s).
     pub query_timeout_ms: u64,
+    /// Postgres-level statement timeout injected as `SET LOCAL statement_timeout`
+    /// inside every transaction.  Kills the query inside the DB engine itself,
+    /// protecting BYODB customers from runaway hash-joins / seq-scans even if
+    /// the Rust tokio::timeout fires first and drops the connection.
+    /// Replay and internal operations use 6× this value.
+    /// Default: 5 000 ms (5 s).
+    pub statement_timeout_ms: u64,
     /// Maximum relationship nesting depth in a single query.
     /// depth=1 is a single join, depth=4+ triggers batched execution.
     /// Requests deeper than this ceiling are rejected with HTTP 400.
@@ -57,6 +64,10 @@ pub fn load() -> Config {
             .unwrap_or_else(|_| "30000".to_string())
             .parse()
             .expect("QUERY_TIMEOUT_MS must be a non-negative integer"),
+        statement_timeout_ms: std::env::var("STATEMENT_TIMEOUT_MS")
+            .unwrap_or_else(|_| "5000".to_string())
+            .parse()
+            .expect("STATEMENT_TIMEOUT_MS must be a non-negative integer"),
         max_nest_depth: std::env::var("MAX_NEST_DEPTH")
             .unwrap_or_else(|_| "6".to_string())
             .parse()
