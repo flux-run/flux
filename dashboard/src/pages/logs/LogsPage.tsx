@@ -88,11 +88,9 @@ function formatTs(ts: string | null): string {
 
 // ─── Function Logs Tab ────────────────────────────────────────────────────────
 
-const SERVICE_TOKEN = import.meta.env.VITE_SERVICE_TOKEN as string | undefined
-
 function FunctionLogsTab() {
-  const { projectId, tenantId } = useStore()
-  const [functionId, setFunctionId] = useState('')
+  const { projectId } = useStore()
+  const [functionId, setFunctionId] = useState('all')
   const [limit, setLimit] = useState('50')
   const [filterLevel, setFilterLevel] = useState('all')
 
@@ -111,22 +109,9 @@ function FunctionLogsTab() {
     queryKey: ['function-logs', projectId, functionId, limit],
     queryFn: async () => {
       const params = new URLSearchParams({ limit })
-      if (functionId) params.set('function_id', functionId)
+      if (functionId && functionId !== 'all') params.set('function_id', functionId)
 
-      const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080'
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(SERVICE_TOKEN ? { 'X-Service-Token': SERVICE_TOKEN } : {}),
-        ...(tenantId ? { 'X-Fluxbase-Tenant': tenantId } : {}),
-        ...(projectId ? { 'X-Fluxbase-Project': projectId } : {}),
-      }
-
-      const res = await fetch(`${API_BASE}/logs?${params.toString()}`, { headers })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'unknown' }))
-        throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`)
-      }
-      return res.json() as Promise<{ logs: LogEntry[] }>
+      return apiFetch<{ logs: LogEntry[] }>(`/logs?${params.toString()}`)
     },
     enabled: !!projectId,
   })
@@ -145,7 +130,7 @@ function FunctionLogsTab() {
               <SelectValue placeholder="All functions" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="" className="text-xs">All functions</SelectItem>
+              <SelectItem value="all" className="text-xs">All functions</SelectItem>
               {(fnData?.functions ?? []).map((f) => (
                 <SelectItem key={f.id} value={f.id} className="text-xs">{f.name}</SelectItem>
               ))}
@@ -190,19 +175,6 @@ function FunctionLogsTab() {
           Refresh
         </Button>
       </div>
-
-      {/* Auth notice */}
-      {!SERVICE_TOKEN && (
-        <div className="mx-5 mt-4 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 flex items-start gap-2.5 shrink-0">
-          <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
-          <div>
-            <p className="text-xs font-medium text-amber-400 mb-0.5">Service Token Required</p>
-            <p className="text-xs text-amber-400/70">
-              Function logs use an internal service token. Set <code className="font-mono bg-white/10 px-1 rounded">VITE_SERVICE_TOKEN</code> in your <code className="font-mono bg-white/10 px-1 rounded">.env</code> to enable log access.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Error */}
       {logsError && (
