@@ -637,7 +637,7 @@ All metadata lives in the **`fluxbase_internal`** Postgres schema, never exposed
 | `workflow_executions` | Runtime execution state (current step, context, status) |
 | `cron_jobs` | Cron job definitions with schedule, action, and `next_run_at` |
 
-| `state_mutations` | Append-only log of every INSERT/UPDATE/DELETE with before/after snapshots, versioned per row, linked to `request_id` — **not yet created; required for replay** |
+| `state_mutations` | Append-only log of every INSERT/UPDATE/DELETE with before/after snapshots, versioned per row, linked to `request_id` — **live; powers `flux why`, `flux state history`, `flux state blame`, `flux trace diff`, and `flux incident replay`** |
 
 User tables live in **project-scoped schemas** named `t_{tenant_slug}_{project_slug}_{db_name}`.
 
@@ -645,7 +645,7 @@ User tables live in **project-scoped schemas** named `t_{tenant_slug}_{project_s
 
 ## Deterministic Execution & Replay
 
-This section describes what Fluxbase needs to support `flux why`, `flux trace replay`, `flux incident replay`, `flux state blame`, and `flux bug bisect`. Most of the foundation already exists; the missing piece is **state mutation capture**.
+This section documents how Fluxbase supports `flux why`, `flux trace replay`, `flux incident replay`, `flux state blame`, `flux trace diff`, and `flux bug bisect`. The `state_mutations` table is live and records every INSERT/UPDATE/DELETE within the same transaction as the user-facing operation.
 
 ---
 
@@ -670,9 +670,18 @@ Every layer references `request_id`, forming a single traceable unit across all 
 
 ---
 
-### `state_mutations` Table (planned)
+### `state_mutations` Table
 
-Every INSERT, UPDATE, and DELETE executed by the data engine must be written to an append-only mutations log **within the same transaction** as the user-facing operation. This is the foundation for all time-travel and replay features.
+Every INSERT, UPDATE, and DELETE executed by the data engine is written to an append-only mutations log **within the same transaction** as the user-facing operation. This is the foundation for all time-travel, replay, and debugging features.
+
+**This table is live as of migration `20260309000007_add_state_mutations`.** The before/after JSONB columns are what power field-level diffs: the CLI compares `before_state` and `after_state` key-by-key to produce the per-field `old → new` display in `flux why`, `flux trace diff`, and `flux state history`.
+
+`state_mutations` powers:
+- `flux why` — all mutations for a request, with field-level diffs
+- `flux state history` — version history for a single row
+- `flux state blame` — last writer per row across a table
+- `flux trace diff` — mutation comparison between two executions
+- `flux incident replay` — fetch mutations for a request or time window, then re-apply them
 
 ```sql
 CREATE TABLE fluxbase_internal.state_mutations (
@@ -822,18 +831,11 @@ Ordered by impact. Items marked **[blocking]** must be closed before production 
 
 ---
 
-### Gap 1 — State Mutation Logging `[blocking]`
+### Gap 1 — State Mutation Logging `[resolved]`
 
-The engine currently executes INSERT/UPDATE/DELETE but does not persist a record of what changed. This is the single most critical missing piece for Fluxbase's deterministic debugging vision.
+The `fluxbase_internal.state_mutations` table is live. Every INSERT/UPDATE/DELETE is captured within the same Postgres transaction as the user mutation in `db_executor.rs`. `before_state` and `after_state` JSONB columns are populated using `RETURNING` pre-images. `request_id` is populated from the `x-request-id` header. `version` is incremented per `(tenant, project, table, record_pk)` atomically.
 
-**Impact if unresolved:** `flux state blame`, `flux trace replay`, `flux incident replay`, and `flux bug bisect` cannot be implemented.
-
-**Required action:**
-- Create `fluxbase_internal.state_mutations` (schema in the [Deterministic Execution & Replay](#deterministic-execution--replay) section).
-- Write to it **within the same transaction** as the user mutation in `db_executor.rs`.
-- Capture `before` (RETURNING pre-image for UPDATE/DELETE) and `after` rows.
-- Populate `request_id` from the `x-request-id` header.
-- Increment `version` per `(tenant, project, table, record_pk)` using a sequence or `SELECT MAX(version) + 1 ... FOR UPDATE`.
+`flux why`, `flux state history`, `flux state blame`, `flux trace diff`, and `flux incident replay` all function against live production data.
 
 ---
 

@@ -74,6 +74,22 @@ flux debug <request-id>            # or jump directly to a known request
 
 ---
 
+## Git-like debugging for backend execution
+
+Fluxbase gives every backend developer the same tools that Git gives every code developer — but for production requests instead of source commits.
+
+| Git | Fluxbase | What it does |
+|-----|----------|--------------| 
+| `git blame` | `flux state blame` | Last writer per row, linked to the request that wrote it |
+| `git log` | `flux state history` | Full version history for a single row with field-level before→after diffs |
+| `git diff` | `flux trace diff` | Compare two executions: runtime status, duration, and field-level mutation diffs |
+| `git bisect` | `flux bug bisect` | Binary-search deploy history to find the first regression commit |
+| `git revert` | `flux incident replay` | Re-apply a past request with all side effects suppressed |
+
+All five commands operate on real production data. They are read-only except for `flux incident replay`, which applies mutations with `x-flux-replay: true` (no hooks, no events, no emails).
+
+---
+
 ## Global flags
 
 Apply to every command.
@@ -1905,41 +1921,45 @@ Use `flux fix` when you are in incident mode and every character counts. Use `fl
 
 ### `flux why <request-id>` ✅
 
-**The first command to run during any production incident.** Combines trace spans, state mutations, and error logs for a single request into a one-screen root cause summary.
+**The first command to run during any production incident.** Combines trace spans, state mutations, and error logs for a single request into a one-screen root cause summary. Field-level diffs are derived from the `before_state` and `after_state` columns of `fluxbase_internal.state_mutations`.
 
 ```
 flux why <request-id> [--json]
 ```
 
 ```
-$ flux why 9624a58d57e7
+$ flux why 9624a58d
 
 ✗  POST /signup → create_user  (3816ms, 500 FAILED)
-    request_id:  9624a58d57e7
+    request_id:  9624a58d
     commit:      a93f42c
     error:       RateLimitError: gmail API rate limit exceeded
                  at send_email/index.ts:34
 
-─── State changes (2 mutations) ──────────────────────────────────────────────
-  users  v1   insert  by api-key  id=7f3a8c1b
-      email:  ada@example.com
-      name:   Ada
-  users  v2   update  by api-key  id=7f3a8c1b
-      plan:   free → pro
+─── State changes ─────────────────────────────────────────────────────────────
+  users  id=42
 
-─── Suggested next steps ──────────────────────────────────────────────
-  flux debug 9624a58d57e7     deep-dive the full trace + logs
-  flux state history users 7f3a8c1b   full row version history
+    plan
+      free → pro
+
+    updated_at
+      2026-03-10 → 2026-03-11
+
+─── Suggested next steps ──────────────────────────────────────────────────────
+  flux debug 9624a58d            deep-dive the full trace + logs
+  flux state history users --id 42   full row version history
+  flux trace diff 9624a58d <replay-id>  compare executions after your fix
 ```
 
 **Pipeline:**
 1. `GET /traces/:id` — extract method, path, function, commit SHA, error spans
 2. `GET /db/mutations?request_id=` — cross-table state mutations for this request
-3. Render: status header, error message, field-level diffs per mutation, suggested next steps
+3. For each mutation: diff `before_state` vs `after_state` JSONB key-by-key; print only changed fields
+4. Render: status header, error message, per-field diffs grouped by row, suggested next steps
 
 | Flag | Description |
 |------|-------------|
-| `--json` | Output raw JSON (both trace + mutations) |
+| `--json` | Output raw JSON (trace + mutations with full before/after JSONB) |
 
 ---
 
@@ -2061,37 +2081,42 @@ Proceed? [y/N]: y
 
 ### `flux trace diff <original-id> <replay-id>` ✅
 
-Compare two executions of the same request field-by-field: runtime metrics and state mutation diffs. Typical use: compare a production failure against a replay to see exactly what changed.
+Compare two executions of the same request field-by-field: runtime metrics and state mutation diffs. Typical use: compare a production failure against a replay to confirm a fix or spot a behavior change.
 
 ```
 flux trace diff <original-id> <replay-id> [--json]
 ```
 
 ```
-$ flux trace diff 9624a58d 550e8400
+$ flux trace diff 9624a58d a12b4f8c
 
-─── DIFF SUMMARY ────────────────────────────────────────────────────────────────
+Runtime
+────────────────────────────
+status:        error → success
+duration:      3816ms → 142ms  (↓96%)
+errors:        1 → 0
 
-  endpoint:  POST /signup → create_user
-  original:  9624a58d   commit a93f42c
-  replay:    550e8400   commit a93f42c   (replay:9624a58d)
+State Diff
+────────────────────────────
+users.id=42
 
-─── Runtime ───────────────────────────────────────────────────────────────────
-  status:    500 FAILED → 200 OK    ✔ fixed
-  duration:  3816ms → 142ms        ↓ 96%
-  errors:    1 → 0
+  plan
+    original: free → pro
+    replay:   free → enterprise
 
-─── State changes ────────────────────────────────────────────────────────────
-  users  v1  insert  (same)
-
-  users  v2  update  id=42
-    plan:  original free → pro   replay → enterprise
-
-─── Verdict ───────────────────────────────────────────────────────────────────
-  ≠ BEHAVIOR CHANGED — state mutations differ
+Verdict
+────────────────────────────
+FIXED
 ```
 
-**Verdicts:** `FIXED` — `REGRESSED` — `BEHAVIOR CHANGED` — `IDENTICAL`
+**Verdicts:**
+
+| Verdict | Meaning |
+|---------|--------|
+| `FIXED` | Error gone, mutations identical |
+| `REGRESSED` | New error appeared in replay |
+| `BEHAVIOR CHANGED` | No error in either, but mutations differ |
+| `IDENTICAL` | Status, duration, and all mutations match exactly |
 
 ---
 
@@ -2114,24 +2139,26 @@ flux bug bisect --function <name> --good <sha> --bad <sha> [flags]
 ```
 $ flux bug bisect --function create_user --good a93f42c --bad 9624a58d
 
-─── Bisecting create_user ───────────────────────────────────────────────
+Analyzing 48 traces across 12 commits
 
-  timeline: 8 deployments,  good=a93f42c..bad=9624a58d  (4 to search)
+Last good commit: a93f42c
+First bad commit: b1f9e22
 
-  [1/~3]  testing 3b21aaf  2026-03-11T12:11  →  ✔ GOOD   (0/12 failed)
-  [2/~3]  testing c72de1b  2026-03-11T13:44  →  ✗ BAD    (5/9 failed)
+Sample failing request:
+request_id: 9c4d2e1f
 
-─── Result ──────────────────────────────────────────────────────────────────
-
-  first bad commit:  c72de1b   2026-03-11T13:44
-
-  ✗ BAD   c72de1b  2026-03-11T13:44  (5/9 failed)
-  ✔ GOOD  3b21aaf  2026-03-11T12:11  (0/12 failed)
-
-  sample failing request:  f8e3d9c4…  (flux why f8e3d9c4)
+Verdict: regression introduced in b1f9e22
 ```
 
-**Algorithm:** groups all traced requests by `code_sha`, sorts by `first_seen`, then binary-searches between `--good` and `--bad` in $O(\log n)$ steps. The `--threshold` flag handles noisy production data — a commit is "bad" only when its failure rate exceeds the threshold.
+**Algorithm:**
+
+1. Fetch all traces for `--function` via `GET /traces?function=&limit=500`
+2. Group traces by `code_sha`; compute failure rate per group
+3. Collect the ordered commit range between `--good` and `--bad`
+4. Binary-search the midpoint: classify as good/bad using `--threshold`
+5. Recurse until the first bad commit is isolated in $O(\log n)$ steps
+
+The `--threshold` flag handles noisy production data — a commit is "bad" only when its failure rate exceeds the threshold.
 
 ---
 

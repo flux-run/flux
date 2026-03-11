@@ -22,7 +22,8 @@ The **Runtime** is the JavaScript execution engine of Fluxbase. It receives func
 14. [Triggers](#triggers)
 15. [Deterministic Execution Model](#deterministic-execution-model)
 16. [Replay Execution Mode](#replay-execution-mode)
-17. [Observability & Logging](#observability--logging)
+17. [Execution Comparison](#execution-comparison)
+18. [Observability & Logging](#observability--logging)
 18. [Runtime Instrumentation](#runtime-instrumentation)
 19. [Performance Characteristics](#performance-characteristics)
 20. [Configuration](#configuration)
@@ -871,6 +872,60 @@ op_agent_llm_call (replay) →  read next LLM decision from trace recording
 ```
 
 The JS sandbox code (`FluxContext`) does not change between normal and replay — the swap happens entirely at the Rust op level, making the implementation clean and auditable.
+
+---
+
+## Execution Comparison
+
+`flux trace diff` compares two executions of the same request by fetching both traces from the control plane and diffing the state mutations that each produced.
+
+### How it works
+
+```
+Trace A (original)                 Trace B (replay)
+   GET /traces/:a                     GET /traces/:b
+   GET /db/mutations?request_id=a     GET /db/mutations?request_id=b
+         │                                   │
+         └──────────────┬────────────────────┘
+                        ▼
+              compare runtime spans
+              ─ status code
+              ─ total_duration_ms
+              ─ error_count
+
+              compare mutation sets
+              ─ same rows mutated?
+              ─ same operations (insert/update/delete)?
+              ─ per-field before/after JSONB diff
+                        │
+                        ▼
+                    Verdict
+                    FIXED | REGRESSED | BEHAVIOR CHANGED | IDENTICAL
+```
+
+### Verdict logic
+
+| Condition | Verdict |
+|-----------|--------|
+| A had errors, B has none, mutations identical | `FIXED` |
+| A had no errors, B has errors | `REGRESSED` |
+| Neither has errors, but mutation sets differ | `BEHAVIOR CHANGED` |
+| Status, duration within 5%, and all mutations match | `IDENTICAL` |
+
+### What makes this more powerful than `git diff`
+
+`git diff` shows you what _code_ changed between two commits. `flux trace diff` shows you what _data_ changed between two executions of the same endpoint — field by field, row by row, across every table the function touched. This is observable at the production-data layer, not just the code layer.
+
+### Implementation
+
+The diff is computed entirely in the CLI (`cli/src/trace_diff.rs`). The CLI calls:
+
+1. `GET /traces/:id` twice (once per request ID) — extracts status, duration, error spans
+2. `GET /db/mutations?request_id=` twice — gets the full mutation log for each execution
+3. Pairs mutations by `(table_name, record_pk, version)` and calls `diff_json()` on each `before_state`/`after_state` pair
+4. Classifies the verdict and renders the output
+
+No server-side diff logic is required — the raw `before_state` and `after_state` JSONB columns in `state_mutations` contain everything needed.
 
 ---
 
