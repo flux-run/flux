@@ -1,0 +1,59 @@
+[02:20:48.021] Server  ERROR   ⨯ PageNotFoundError: Cannot find module for page: route not found /_not-found/page
+[02:20:48.080] Server  ERROR   ⨯ PageNotFoundError: Cannot find module for page: route not found /_not-found/page
+[02:20:48.103] Server  ERROR   Error: ENOENT: no such file or directory, scandir '/Users/shashisharma/code/self/flowbase/dashboard/src/app'
+[02:20:48.106] Server  ERROR   ⨯ "unhandledRejection:" Error: ENOENT: no such file or directory, scandir '/Users/shashisharma/code/self/flowbase/dashboard/src/app'
+[02:20:48.109] Server  ERROR   ⨯ "unhandledRejection: " Error: ENOENT: no such file or directory, scandir '/Users/shashisharma/code/self/flowbase/dashboard/src/app'
+[02:20:48.116] Server  ERROR   ⨯ ./dashboard/_
+Module not found: Can't resolve 'next/dist/client/next-dev-turbopack.js'
+Failed to restore task data (corrupted database or bug): Meta for Request::parse_inner (TaskId 241993))
+
+Debug info:
+- Execution of <ModuleAssetContext as AssetContext>::process_resolve_result failed
+- Execution of <ModuleAssetContext as AssetContext>::process failed
+- Execution of *EcmascriptExports::split_locals_and_reexports failed
+- Execution of <EcmascriptModuleAsset as EcmascriptChunkPlaceable>::get_exports failed
+- Execution of analyze_ecmascript_module failed
+- Failed to restore task data (corrupted database or bug): Meta for Request::parse_inner (TaskId 241993))
+  
+  Caused by:
+      0: Looking up data for TaskId 241993 from database failed
+      1: Unable to open static sorted file referenced from 00000747.meta
+      2: Unable to open static sorted file 00000743.sst
+      3: No such file or directory (os error 2)
+Import map: aliased to module 'next' with subpath '/dist/client/next-dev-turbopack.js' inside of [project]/dashboard
+
+
+https://nextjs.org/docs/messages/module-not-found
+
+
+[02:20:48.159] Server  ERROR   Error: ENOENT: no such file or directory, open '/Users/shashisharma/code/self/flowbase/dashboard/.next/dev/server/pages/_app/build-manifest.json'
+[02:20:48.163] Server  ERROR   Error: ENOENT: no such file or directory, scandir '/Users/shashisharma/code/self/flowbase/dashboard/src/app'
+[02:20:48.166] Server  ERROR   ⨯ ./dashboard/_
+Module not found: Can't resolve 'next/dist/client/next-dev-turbopack.js'
+Failed to restore task data (corrupted database or bug): Meta for Request::parse_inner (TaskId 241993))
+
+Debug info:
+- Execution of <ModuleAssetContext as AssetContext>::process_resolve_result failed
+- Execution of <ModuleAssetContext as AssetContext>::process failed
+- Execution of *EcmascriptExports::split_locals_and_reexports failed
+- Execution of <EcmascriptModuleAsset as EcmascriptChunkPlaceable>::get_exports failed
+- Execution of analyze_ecmascript_module failed
+- Failed to restore task data (corrupted database or bug): Meta for Request::parse_inner (TaskId 241993))
+  
+  Caused by:
+      0: Looking up data for TaskId 241993 from database failed
+      1: Unable to open static sorted file referenced from 00000747.meta
+      2: Unable to open static sorted file 00000743.sst
+      3: No such file or directory (os error 2)
+Import map: aliased to module 'next' with subpath '/dist/client/next-dev-turbopack.js' inside of [project]/dashboard
+
+
+https://nextjs.org/docs/messages/module-not-found
+
+
+[02:20:48.220] Server  ERROR   Error: ENOENT: no such file or directory, open '/Users/shashisharma/code/self/flowbase/dashboard/.next/dev/server/pages/_app/build-manifest.json'
+[02:20:48.222] Server  ERROR   Error: ENOENT: no such file or directory, scandir '/Users/shashisharma/code/self/flowbase/dashboard/src/app'
+[02:20:48.347] Server  ERROR   Error: ENOENT: no such file or directory, scandir '/Users/shashisharma/code/self/flowbase/dashboard/src/app'
+[02:20:48.349] Server  ERROR   Error: ENOENT: no such file or directory, scandir '/Users/shashisharma/code/self/flowbase/dashboard/src/app'
+[02:20:48.367] Server  ERROR   Error: ENOENT: no such file or directory, scandir '/Users/shashisharma/code/self/flowbase/dashboard/src/app'
+[02:20:48.375] Server  ERROR   Error: ENOENT: no such file or directory, scandir '/Users/shashisharma/code/self/flowbase/dashboard/src/app'
