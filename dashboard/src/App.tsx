@@ -40,7 +40,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           {/* Public */}
-          <Route path="/login" element={<LoginPage />} />
+          <Route path="/dashboard/login" element={<LoginPage />} />
 
           {/* Protected — all under /dashboard */}
           <Route path="/dashboard" element={<AppShell />}>

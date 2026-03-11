@@ -20,7 +20,7 @@ export default function AppShell() {
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />
+    return <Navigate to="/dashboard/login" replace />
   }
 
   return (

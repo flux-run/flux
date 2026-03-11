@@ -43,7 +43,7 @@ export async function apiFetch<T = unknown>(
     try {
       await signOut(getAuth());
     } catch (_) {}
-    window.location.replace("/login");
+    window.location.replace("/dashboard/login");
     throw new Error("session_expired");
   }
 
@@ -101,7 +101,7 @@ export async function gatewayFetch<T = unknown>(
     try {
       await signOut(getAuth());
     } catch (_) {}
-    window.location.replace("/login");
+    window.location.replace("/dashboard/login");
     throw new Error("session_expired");
   }
 

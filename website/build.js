@@ -80,10 +80,9 @@ function writeVercelJson(builtPaths) {
     // Root rewrite must come first
     .sort((a, b) => (a.source === '/' ? -1 : b.source === '/' ? 1 : 0));
 
-  // SPA routes — /dashboard and /login serve the React app.
-  // All sub-paths also rewrite to index.html; React Router handles routing.
+  // SPA routes — all /dashboard paths (including /dashboard/login) serve the React app.
+  // React Router handles routing.
   const spaRewrites = [
-    { source: '/login',            destination: '/index.html' },
     { source: '/dashboard',        destination: '/index.html' },
     { source: '/dashboard/:path*', destination: '/index.html' },
   ];

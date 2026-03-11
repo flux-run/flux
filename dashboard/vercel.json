@@ -46,10 +46,6 @@
       "destination": "/product.html"
     },
     {
-      "source": "/login",
-      "destination": "/index.html"
-    },
-    {
       "source": "/dashboard",
       "destination": "/index.html"
     },
