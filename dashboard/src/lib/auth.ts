@@ -2,6 +2,7 @@ import { initializeApp, getApps } from "firebase/app";
 import {
   getAuth,
   GoogleAuthProvider,
+  GithubAuthProvider,
   signInWithPopup,
   signOut as firebaseSignOut,
 } from "firebase/auth";
@@ -23,6 +24,13 @@ export const auth = getAuth(firebaseApp);
 
 export async function signInWithGoogle() {
   const provider = new GoogleAuthProvider();
+  return signInWithPopup(auth, provider);
+}
+
+export async function signInWithGitHub() {
+  const provider = new GithubAuthProvider();
+  provider.addScope('read:user');
+  provider.addScope('user:email');
   return signInWithPopup(auth, provider);
 }
 
