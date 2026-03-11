@@ -1,61 +1,16 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Quickstart — Fluxbase</title>
-  <meta name="description" content="Deploy your first Fluxbase function, trigger a request, and debug it end to end with flux why, flux trace, and flux state history. Takes 5 minutes.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/style.css">
-  
-</head>
-<body>
+/**
+ * Quickstart — "Debugging a Production Bug in 30 Seconds"
+ */
+import { docsLayout } from '../../layouts/docs.js';
 
-<nav class="topnav">
-  <a class="logo" href="/"><span>flux</span>base</a>
-  <div class="nav-links">
-    <a href="/product">Product</a>
-    <a href="/how-it-works">How It Works</a>
-    <a href="/cli">CLI</a>
-    <a href="/docs/" class="active">Docs</a>
-  </div>
-  <a class="nav-cta" href="https://dashboard.fluxbase.co">Dashboard →</a>
-</nav>
+export const meta = {
+  title:       'Quickstart — Fluxbase',
+  description: 'Deploy your first Fluxbase function, trigger a request, and debug it end to end with flux why, flux trace, and flux state history. Takes 5 minutes.',
+  path:        'docs/quickstart.html',
+};
 
-<div class="page-wrap">
-
-  <aside class="sidebar">
-    <div class="sidebar-group">
-    <div class="sidebar-group-title">Getting Started</div>
-    <a href="/docs/">Introduction</a>
-    <a href="/docs/quickstart" class="active">Quickstart</a>
-    <a href="/docs/concepts">Core Concepts</a>
-  </div>
-  <div class="sidebar-group">
-    <div class="sidebar-group-title">Debugging</div>
-    <a href="/cli">CLI Reference</a>
-    <a href="/docs/observability">Observability</a>
-  </div>
-  <div class="sidebar-group">
-    <div class="sidebar-group-title">Architecture</div>
-    <a href="/how-it-works">How It Works</a>
-    <a href="/docs/gateway">Gateway</a>
-    <a href="/docs/runtime">Runtime</a>
-    <a href="/docs/data-engine">Data Engine</a>
-    <a href="/docs/queue">Queue</a>
-  </div>
-  <div class="sidebar-group">
-    <div class="sidebar-group-title">Examples</div>
-    <a href="/examples/">All Examples</a>
-    <a href="/examples/todo-api">Todo API</a>
-    <a href="/examples/ai-backend">AI Backend</a>
-  </div>
-  </aside>
-
-  <main class="main-content">
-    <div class="content">
-<h1>Quickstart</h1>
+export function render() {
+  const content = `<h1>Quickstart</h1>
 <p class="page-subtitle">Deploy a function and debug a production bug in 5 minutes.</p>
 
 <div class="callout callout-info">
@@ -131,7 +86,9 @@
 
 <p>In your original terminal:</p>
 
-<pre><code><span class="shell-prompt">$</span> curl -X POST https://gw.fluxbase.co/create_user     -H "Content-Type: application/json"     -d '{"email":"alice@example.com"}'
+<pre><code><span class="shell-prompt">$</span> curl -X POST https://gw.fluxbase.co/create_user \
+    -H "Content-Type: application/json" \
+    -d '{"email":"alice@example.com"}'
 
   {"userId":"u_42","status":"ok"}
   <span class="cm">x-request-id: 4f9a3b2c</span></code></pre>
@@ -154,7 +111,8 @@
 
 <p>Call it again:</p>
 
-<pre><code><span class="shell-prompt">$</span> curl -X POST https://gw.fluxbase.co/create_user     -d '{"email":"bob@example.com"}'
+<pre><code><span class="shell-prompt">$</span> curl -X POST https://gw.fluxbase.co/create_user \
+    -d '{"email":"bob@example.com"}'
 
   {"error":"internal_error"}</code></pre>
 
@@ -230,23 +188,11 @@
   <li><a href="/product#regression-detection">Bug bisect</a> — find which commit introduced a regression</li>
   <li><a href="/how-it-works">Architecture</a> — how the recording layer works</li>
   <li><a href="/examples/">Example projects</a> — Todo API, Webhook Worker, AI Backend</li>
-</ul>
-    </div>
-  </main>
+</ul>`;
 
-</div>
-
-<footer>
-  <span>© 2026 Fluxbase</span>
-  <div style="display:flex;gap:20px;flex-wrap:wrap;">
-    <a href="/product">Product</a>
-    <a href="/how-it-works">How It Works</a>
-    <a href="/cli">CLI</a>
-    <a href="/docs/">Docs</a>
-    <a href="/docs/quickstart">Quickstart</a>
-    <a href="https://dashboard.fluxbase.co">Dashboard</a>
-  </div>
-</footer>
-
-</body>
-</html>
+  return docsLayout({
+    meta,
+    activePath: '/docs/quickstart',
+    content,
+  });
+}

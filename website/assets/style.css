@@ -1,5 +1,7 @@
 /* Fluxbase Docs — shared styles
-   Minimalist, fast-loading, AI-readable static docs. */
+   Minimalist, fast-loading, AI-readable static docs.
+   Generated HTML is built via: cd website && node build.js
+   Source lives in: website/src/  */
 
 :root {
   --bg:          #0e0e10;
@@ -355,6 +357,22 @@ pre::after {
   color: var(--text);
 }
 
+/* ─── Gradient text ────────────────────────────────────────────────────────── */
+.gradient-text {
+  background: linear-gradient(135deg, #6c63ff 0%, #a78bfa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Two-column grid ────────────────────────────────────────────────────────── */
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  align-items: start;
+}
+
 /* ─── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .sidebar { display: none; }
@@ -362,4 +380,5 @@ pre::after {
   .topnav .nav-links { display: none; }
   .hero h1 { font-size: 2rem; }
   .feature-grid { grid-template-columns: 1fr; }
+  .grid-2col { grid-template-columns: 1fr; }
 }

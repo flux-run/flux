@@ -1,0 +1,91 @@
+/**
+ * Fluxbase website build system.
+ *
+ * Usage:
+ *   node build.js          — build all pages once
+ *   node build.js --watch  — watch src/ and rebuild on change
+ *
+ * Each page module in src/pages/**\/index.js (or any .js file) must export:
+ *   export const meta = { title, description, path }   // path relative to website/
+ *   export function render()                            // returns HTML string
+ */
+
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, watchFile } from 'fs';
+import { join, dirname, relative, resolve } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PAGES_DIR  = join(__dirname, 'src', 'pages');
+const OUTPUT_DIR = __dirname;   // write HTML directly into website/
+
+// ── Discover all page modules ────────────────────────────────────────────────
+function discoverPages(dir, found = []) {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) {
+      discoverPages(full, found);
+    } else if (entry.endsWith('.js')) {
+      found.push(full);
+    }
+  }
+  return found;
+}
+
+// ── Build a single page ───────────────────────────────────────────────────────
+async function buildPage(modulePath) {
+  // Break module cache by appending a timestamp (ESM dynamic import caches)
+  const url = `file://${modulePath}?t=${Date.now()}`;
+  let mod;
+  try {
+    mod = await import(url);
+  } catch (e) {
+    console.error(`  ERROR importing ${relative(__dirname, modulePath)}:`, e.message);
+    return;
+  }
+
+  if (!mod.meta || !mod.render) {
+    console.warn(`  SKIP ${relative(__dirname, modulePath)} — missing meta or render export`);
+    return;
+  }
+
+  const html = mod.render();
+  const outPath = join(OUTPUT_DIR, mod.meta.path);
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, html, 'utf8');
+  console.log(`  ✔  ${mod.meta.path}`);
+}
+
+// ── Build all ─────────────────────────────────────────────────────────────────
+async function buildAll() {
+  const pages = discoverPages(PAGES_DIR);
+  console.log(`\nBuilding ${pages.length} page(s)…`);
+  for (const p of pages) {
+    await buildPage(p);
+  }
+  console.log('Done.\n');
+}
+
+// ── Watch mode ────────────────────────────────────────────────────────────────
+function watchSrc() {
+  console.log('Watching src/ for changes…');
+  const srcDir = join(__dirname, 'src');
+  function watchDir(dir) {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        watchDir(full);
+      } else if (entry.endsWith('.js')) {
+        watchFile(full, { interval: 500 }, () => {
+          console.log(`\nChanged: ${relative(__dirname, full)}`);
+          buildAll();
+        });
+      }
+    }
+  }
+  watchDir(srcDir);
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+const isWatch = process.argv.includes('--watch');
+await buildAll();
+if (isWatch) watchSrc();

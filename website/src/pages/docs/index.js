@@ -1,61 +1,16 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Documentation — Fluxbase</title>
-  <meta name="description" content="Fluxbase documentation. Get started with deployment, understand the architecture, and master the CLI debugging tools.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/style.css">
-  
-</head>
-<body>
+/**
+ * Docs landing page — introduction and navigation.
+ */
+import { docsLayout } from '../../layouts/docs.js';
 
-<nav class="topnav">
-  <a class="logo" href="/"><span>flux</span>base</a>
-  <div class="nav-links">
-    <a href="/product">Product</a>
-    <a href="/how-it-works">How It Works</a>
-    <a href="/cli">CLI</a>
-    <a href="/docs/" class="active">Docs</a>
-  </div>
-  <a class="nav-cta" href="https://dashboard.fluxbase.co">Dashboard →</a>
-</nav>
+export const meta = {
+  title:       'Documentation — Fluxbase',
+  description: 'Fluxbase documentation. Get started with deployment, understand the architecture, and master the CLI debugging tools.',
+  path:        'docs/index.html',
+};
 
-<div class="page-wrap">
-
-  <aside class="sidebar">
-    <div class="sidebar-group">
-    <div class="sidebar-group-title">Getting Started</div>
-    <a href="/docs/" class="active">Introduction</a>
-    <a href="/docs/quickstart">Quickstart</a>
-    <a href="/docs/concepts">Core Concepts</a>
-  </div>
-  <div class="sidebar-group">
-    <div class="sidebar-group-title">Debugging</div>
-    <a href="/cli">CLI Reference</a>
-    <a href="/docs/observability">Observability</a>
-  </div>
-  <div class="sidebar-group">
-    <div class="sidebar-group-title">Architecture</div>
-    <a href="/how-it-works">How It Works</a>
-    <a href="/docs/gateway">Gateway</a>
-    <a href="/docs/runtime">Runtime</a>
-    <a href="/docs/data-engine">Data Engine</a>
-    <a href="/docs/queue">Queue</a>
-  </div>
-  <div class="sidebar-group">
-    <div class="sidebar-group-title">Examples</div>
-    <a href="/examples/">All Examples</a>
-    <a href="/examples/todo-api">Todo API</a>
-    <a href="/examples/ai-backend">AI Backend</a>
-  </div>
-  </aside>
-
-  <main class="main-content">
-    <div class="content">
-<h1>Fluxbase Documentation</h1>
+export function render() {
+  const content = `<h1>Fluxbase Documentation</h1>
 <p class="page-subtitle">Git for Backend Execution — every request recorded, every bug reproducible.</p>
 
 <p>Fluxbase is a backend runtime where every request automatically produces a complete execution trace. No instrumentation, no SDK, no configuration. Deploy TypeScript functions and gain instant observability across the entire stack.</p>
@@ -156,23 +111,11 @@
     <tr><td>Which commit broke it?</td>                <td><code>flux bug bisect --request &lt;id&gt;</code></td></tr>
     <tr><td>Preview a query before running?</td>       <td><code>flux explain &lt;query.json&gt;</code></td></tr>
   </tbody>
-</table>
-    </div>
-  </main>
+</table>`;
 
-</div>
-
-<footer>
-  <span>© 2026 Fluxbase</span>
-  <div style="display:flex;gap:20px;flex-wrap:wrap;">
-    <a href="/product">Product</a>
-    <a href="/how-it-works">How It Works</a>
-    <a href="/cli">CLI</a>
-    <a href="/docs/">Docs</a>
-    <a href="/docs/quickstart">Quickstart</a>
-    <a href="https://dashboard.fluxbase.co">Dashboard</a>
-  </div>
-</footer>
-
-</body>
-</html>
+  return docsLayout({
+    meta,
+    activePath: '/docs/',
+    content,
+  });
+}

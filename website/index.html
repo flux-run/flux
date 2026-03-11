@@ -3,815 +3,251 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Fluxbase — Observable by construction</title>
-  <meta name="description" content="Fluxbase is a backend runtime where every request automatically produces a trace across gateway, functions, database queries, tools, and async jobs — without instrumenting anything.">
+  <title>Fluxbase — Git for Backend Execution</title>
+  <meta name="description" content="Debug production systems faster than local development. Every request is recorded. Replay, diff, and root-cause any production issue with a single CLI command.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/style.css">
-  <style>
-    /* ── Gradient text ────────────────────────────────────────────────── */
-    .gradient-text {
-      background: linear-gradient(135deg, #6c63ff 0%, #a78bfa 100%);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    }
-
-    /* ── How it works flow steps ──────────────────────────────────────── */
-    .flow-step {
-      display: grid; grid-template-columns: 48px 1fr 1fr;
-      gap: 32px; align-items: start;
-      padding: 40px 0; border-bottom: 1px solid var(--border);
-    }
-    .flow-step:last-child { border-bottom: none; }
-    .flow-step-num {
-      width: 36px; height: 36px; border-radius: 50%;
-      background: var(--accent); color: #fff;
-      font-size: .85rem; font-weight: 700;
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; margin-top: 2px;
-    }
-    .flow-step-text h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 10px; }
-    .flow-step-text p  { font-size: .9rem; color: var(--muted); line-height: 1.65; margin: 0; }
-    .flow-step-code pre { margin: 0; font-size: .8rem !important; }
-    @media (max-width: 768px) {
-      .flow-step { grid-template-columns: 1fr; }
-      .flow-step-num { display: none; }
-    }
-
-    /* ── Trace window ─────────────────────────────────────────────────── */
-    .trace-window {
-      max-width: 720px; margin: 0 auto;
-      background: #0a0a0c; border: 1px solid var(--border);
-      border-radius: 10px; overflow: hidden; text-align: left;
-    }
-    .trace-titlebar {
-      background: var(--bg-elevated); border-bottom: 1px solid var(--border);
-      padding: 10px 16px; display: flex; align-items: center; gap: 8px;
-    }
-    .trace-dot { width: 10px; height: 10px; border-radius: 50%; }
-    .trace-dot.red    { background: #f87171; }
-    .trace-dot.yellow { background: var(--yellow); }
-    .trace-dot.green  { background: var(--green); }
-    .trace-title { font-size: .75rem; color: var(--muted); margin-left: 8px; font-family: var(--font-mono); }
-    .trace-body {
-      padding: 24px 28px; font-family: var(--font-mono); font-size: .82rem; line-height: 2;
-    }
-    .trace-cmd  { color: var(--green); }
-    .trace-id   { color: var(--accent); }
-    .trace-ts   { color: var(--muted); }
-    .trace-fn   { color: #f9a8d4; }
-    .trace-db   { color: #60a5fa; }
-    .trace-ms   { color: var(--yellow); }
-    .trace-warn { color: var(--red); }
-    .trace-sugg { color: var(--green); }
-    .trace-dim  { color: var(--muted); }
-
-    /* ── Interactive flow diagram ─────────────────────────────────────────── */
-    .flow-node:hover { box-shadow: 0 0 0 2px var(--accent); }
-    .trace-line { border-radius: 4px; padding: 2px 6px; margin: 0 -6px; transition: background .15s; overflow: hidden; }
-    .trace-line.active { background: rgba(108, 99, 255, 0.18); }
-
-    /* ── Responsive ───────────────────────────────────────────────────────── */
-    @media (max-width: 760px) {
-      .grid-2col { grid-template-columns: 1fr !important; }
-    }
-  </style>
+  
 </head>
 <body>
 
-<!-- ─── Nav ─────────────────────────────────────────────────────────────── -->
 <nav class="topnav">
   <a class="logo" href="/"><span>flux</span>base</a>
   <div class="nav-links">
-    <a href="/docs">Docs</a>
-    <a href="/docs/architecture">Architecture</a>
-    <a href="/examples">Examples</a>
+    <a href="/product">Product</a>
+    <a href="/how-it-works">How It Works</a>
+    <a href="/cli">CLI</a>
+    <a href="/docs/">Docs</a>
   </div>
-  <a class="nav-cta" href="/dashboard">Dashboard →</a>
+  <a class="nav-cta" href="https://dashboard.fluxbase.co">Dashboard →</a>
 </nav>
 
 <div class="landing-wrap">
+<section class="hero" style="padding-bottom:60px;">
+  <span class="eyebrow">Git for Backend Execution</span>
+  <h1>Debug production systems<br><span class="gradient-text">faster than local development.</span></h1>
+  <p style="max-width:560px;margin:0 auto 12px;">Every request is automatically recorded — gateway, functions, database queries, tool calls, async jobs — without instrumenting anything.</p>
+  <p style="max-width:560px;margin:0 auto 36px;font-size:.95rem;color:var(--muted);">Root-cause any incident in seconds. Replay it safely. Find the commit that introduced the bug.</p>
 
-<!-- ─── Hero ─────────────────────────────────────────────────────────────── -->
-<section class="hero" style="padding-bottom:48px;">
-  <span class="eyebrow">Backend Runtime · Observable by Construction</span>
-  <h1>One request ID. One command.<br><span class="gradient-text">See exactly what your backend did.</span></h1>
-  <p style="max-width:580px;margin:0 auto 12px;">Fluxbase is a backend runtime where every request automatically produces a trace across gateway, functions, database queries, tools, and async jobs.</p>
-  <p style="max-width:580px;margin:0 auto 28px;font-size:.95rem;color:var(--muted);">Without instrumenting anything.</p>
-  <div style="display:flex;flex-direction:column;align-items:center;gap:14px;">
-    <div class="install-hint">
-      <span class="prompt">$</span>
-      curl -fsSL https://fluxbase.co/install | bash
-    </div>
-    <a href="#live-demo" style="font-size:.86rem;color:var(--green);text-decoration:none;border:1px solid rgba(61,214,140,.35);padding:8px 22px;border-radius:20px;transition:background .15s;" onmouseover="this.style.background='rgba(61,214,140,.08)'" onmouseout="this.style.background='transparent'">
-      ▶ Try the live demo — trigger a real backend trace
-    </a>
+  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:32px;">
+    <a class="btn-primary" href="/docs/quickstart">Start Building →</a>
+    <a class="btn-secondary" href="/docs/">View Docs</a>
+  </div>
+
+  <div class="install-hint">
+    <span class="prompt">$</span>
+    curl -fsSL https://fluxbase.co/install | bash
+  </div>
+
+  <div style="margin-top:20px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+    <code style="font-size:.88rem;padding:6px 14px;">flux deploy</code>
+    <code style="font-size:.88rem;padding:6px 14px;">flux tail</code>
+    <code style="font-size:.88rem;padding:6px 14px;">flux why &lt;request-id&gt;</code>
   </div>
 </section>
 
-
-<!-- ─── Observable by construction ─────────────────────────────────────── -->
 <section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
 <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">The difference</div>
-  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Observable by construction.</h2>
-  <p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 48px;">Fluxbase doesn't add tracing to your backend. The runtime itself produces the trace.<br>Every flow node — gateway, function, database query, tool call, async job — emits a span automatically.</p>
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">The Debugging Workflow</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">From alert to root cause in 30 seconds.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">A user reports "signup failed". You have a request ID from <code>flux tail</code>. One more command and you know exactly what happened.</p>
 
-  <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-
-    <!-- Traditional side -->
-    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-      <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:14px 20px;">
-        <span style="font-size:.8rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Traditional backend debugging</span>
-      </div>
-      <div style="padding:24px 20px;display:flex;flex-direction:column;gap:10px;">
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);">
-          <span style="color:var(--red);">✗</span> logs (scattered across services)
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);">
-          <span style="color:var(--red);">✗</span> metrics dashboard (no request context)
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);">
-          <span style="color:var(--red);">✗</span> trace UI (requires SDK instrumentation)
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);">
-          <span style="color:var(--red);">✗</span> database console (query by query)
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);">
-          <span style="color:var(--red);">✗</span> queue monitor (separate tool)
-        </div>
-        <div style="margin-top:8px;padding:12px 16px;background:var(--bg-surface);border-radius:8px;font-size:.82rem;color:var(--muted);font-style:italic;">
-          Bug report: "order failed" → where do you even start?
-        </div>
-      </div>
-    </div>
-
-    <!-- Fluxbase side -->
-    <div style="border:1px solid var(--accent);border-radius:10px;overflow:hidden;">
-      <div style="background:var(--accent-dim);border-bottom:1px solid var(--accent);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:.8rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;">Fluxbase</span>
-        <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);">one command</span>
-      </div>
-      <div style="padding:20px 20px 0;background:#0a0a0c;">
-        <div style="font-family:var(--font-mono);font-size:.8rem;line-height:1.9;">
-          <span style="color:var(--green);">$</span> flux trace <span style="color:var(--accent);">91a3f</span><br>
-          <br>
-          <span style="color:var(--muted);">  Bug report: "order failed"</span><br>
-          <br>
-          <span style="color:#f9a8d4);">  gateway</span>                    <span style="color:var(--yellow);">2ms</span><br>
-          <span style="color:#f9a8d4);">  └─ create_order</span>             <span style="color:var(--yellow);">8ms</span><br>
-          <span style="color:#60a5fa;">     ├─ db.insert</span>              <span style="color:var(--yellow);">4ms</span><br>
-          <span style="color:#60a5fa;">     ├─ stripe.charge</span>          <span style="color:var(--yellow);">180ms</span><br>
-          <span style="color:var(--red);">     └─ send_slack</span>             <span style="color:var(--red);">error: rate limited</span><br>
-          <br>
-          <span style="color:var(--muted);">  ── root cause: Slack API rate limit ─</span><br>
-        </div>
-      </div>
-      <div style="padding:14px 20px;background:var(--accent-dim);border-top:1px solid var(--accent);">
-        <span style="font-size:.82rem;color:var(--accent);">✓ one command. root cause found.</span>
-      </div>
-    </div>
-
+<div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start;">
+  <div>
+    <p style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px;">Step 1 — spot the failure</p>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">flux tail</span>
   </div>
+  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
+<span style="color:var(--green);">$</span> flux tail
+
+  Streaming live requests…
+
+  <span style="color:var(--green);">✔</span>  POST /signup      201   88ms  <span style="color:var(--muted);">req:4f9a3b2c</span>
+  <span style="color:var(--green);">✔</span>  GET  /users       200   12ms  <span style="color:var(--muted);">req:a3c91ef0</span>
+  <span style="color:var(--red);">✗</span>  POST /signup      500   44ms  <span style="color:var(--accent);">req:550e8400</span>
+     <span style="color:var(--red);">└─ Error: Stripe API timeout</span>
+  </div>
+</div>
+  </div>
+  <div>
+    <p style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px;">Step 2 — understand it</p>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">flux why 550e8400</span>
+  </div>
+  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
+<span style="color:var(--green);">$</span> flux why <span style="color:var(--accent);">550e8400</span>
+
+  <span style="color:#f8f8f2;">ROOT CAUSE</span>
+  Stripe API timeout after 10s
+
+  <span style="color:#f8f8f2;">LOCATION</span>
+  payments/create.ts:42
+
+  <span style="color:#f8f8f2;">DATA CHANGES</span>
+  <span style="color:#60a5fa;">users</span> id=42  plan: free <span style="color:var(--red);">→ null</span>  <span style="color:var(--muted);">(rolled back)</span>
+
+  <span style="color:#f8f8f2;">SUGGESTION</span>
+  <span style="color:var(--green);">→</span> Add 5s timeout + idempotency key retry
+  </div>
+</div>
+  </div>
+</div>
+
+<p style="margin-top:20px;text-align:center;font-size:.85rem;color:var(--muted);">
+  Want to go deeper? <a href="/cli" style="color:var(--accent);">flux trace diff</a>, <a href="/cli" style="color:var(--accent);">flux state history</a>, and <a href="/cli" style="color:var(--accent);">flux incident replay</a> give you full production time-travel.
+</p>
 </div>
 </section>
 
-<!-- ─── What is a backend flow? ──────────────────────────────────────────── -->
 <section style="border-top:1px solid var(--border); padding:80px 0;">
 <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">The concept</div>
-  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">A backend request is a flow.</h2>
-  <p style="color:var(--muted);font-size:.95rem;max-width:580px;margin:0 0 48px;">Not a single function call — a chain of steps: routing, logic, data, side-effects. Fluxbase runs that chain and traces every step automatically. <strong style="color:var(--text);">Hover a step to see its span.</strong></p>
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">The Difference</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">You shouldn't need 5 tools to debug one request.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Traditional backends scatter evidence across logs, metrics, and traces — each in a different tool without shared context. Fluxbase records everything in one place, queryable by request ID.</p>
 
-  <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-
-    <!-- Interactive flow diagram -->
-    <div id="flow-diagram">
-      <p style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">User signup — example flow</p>
-      <div style="display:flex;flex-direction:column;">
-
-        <div class="flow-node" data-node="gateway" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);cursor:default;transition:box-shadow .15s;">
-          <span>🛡️</span>
-          <div>
-            <div style="font-size:.88rem;font-weight:600;color:var(--accent);">Gateway</div>
-            <div style="font-size:.75rem;color:var(--muted);">auth · rate limit · route → <em>span</em></div>
-          </div>
-        </div>
-        <div style="height:24px;display:flex;align-items:stretch;padding:0 30px;"><div style="width:2px;background:var(--border);"></div></div>
-
-        <div class="flow-node" data-node="create_user" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);cursor:default;transition:box-shadow .15s;">
-          <span>⚡</span>
-          <div>
-            <div style="font-size:.88rem;font-weight:600;color:var(--accent);">create_user</div>
-            <div style="font-size:.75rem;color:var(--muted);">your TypeScript logic → <em>span</em></div>
-          </div>
-        </div>
-        <div style="height:24px;display:flex;align-items:stretch;padding:0 30px;"><div style="width:2px;background:var(--border);"></div></div>
-
-        <div class="flow-node" data-node="db" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);cursor:default;transition:box-shadow .15s;">
-          <span>🗄️</span>
-          <div>
-            <div style="font-size:.88rem;font-weight:600;color:var(--accent);">db.insert(users)</div>
-            <div style="font-size:.75rem;color:var(--muted);">database write → <em>span</em></div>
-          </div>
-        </div>
-        <div style="height:24px;display:flex;align-items:stretch;padding:0 30px;"><div style="width:2px;background:var(--border);"></div></div>
-
-        <div class="flow-node" data-node="send_welcome" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);cursor:default;transition:box-shadow .15s;">
-          <span>📬</span>
-          <div>
-            <div style="font-size:.88rem;font-weight:600;">send_welcome</div>
-            <div style="font-size:.75rem;color:var(--muted);">async background step → <em>span</em></div>
-          </div>
-        </div>
-
-      </div>
+<div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
+  <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+    <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:14px 20px;">
+      <span style="font-size:.8rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Traditional backend debugging</span>
     </div>
-
-    <!-- Interactive trace terminal -->
-    <div>
-      <p style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">flux trace 4f9a3b2c</p>
-      <div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-        <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-          <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;"></span>
-          <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;"></span>
-          <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;"></span>
-          <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">trace output</span>
-        </div>
-        <div style="padding:20px 24px;font-family:var(--font-mono);font-size:.8rem;line-height:2.2;">
-          <div class="trace-line" data-trace="gateway" style="display:flex;justify-content:space-between;">
-            <span style="color:#f9a8d4;">▸ gateway</span><span style="color:var(--yellow);">3ms</span>
-          </div>
-          <div class="trace-line" data-trace="create_user" style="display:flex;justify-content:space-between;">
-            <span style="color:#f9a8d4;">▸ create_user</span><span style="color:var(--yellow);">81ms</span>
-          </div>
-          <div class="trace-line" data-trace="db" style="display:flex;justify-content:space-between;padding-left:16px;">
-            <span style="color:#60a5fa;">▸ db.insert(users)</span><span style="color:var(--yellow);">14ms</span>
-          </div>
-          <div class="trace-line" data-trace="send_welcome" style="display:flex;justify-content:space-between;">
-            <span style="color:#f9a8d4;">▸ send_welcome</span><span style="color:var(--muted);">async → queued</span>
-          </div>
-          <div style="color:var(--muted);border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:.76rem;">── total: 98ms ──────────────────────</div>
-        </div>
-      </div>
-      <p style="font-size:.78rem;color:var(--muted);margin-top:12px;">← Hover a step to highlight its span</p>
+    <div style="padding:24px 20px;display:flex;flex-direction:column;gap:10px;">
+      <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> logs — scattered across services</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> metrics dashboard — no request context</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> trace UI — requires manual SDK instrumentation</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> DB console — query by query</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> queue monitor — separate tool</div>
     </div>
-
   </div>
+
+  <div style="border:1px solid var(--accent);border-radius:10px;overflow:hidden;">
+    <div style="background:var(--accent-dim);border-bottom:1px solid var(--accent);padding:14px 20px;">
+      <span style="font-size:.8rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;">Fluxbase</span>
+    </div>
+    <div style="padding:24px 20px;display:flex;flex-direction:column;gap:10px;">
+      <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux why &lt;id&gt;</code> — root cause, one command</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux trace &lt;id&gt;</code> — full span tree, latencies</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux state history</code> — every row mutation</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux incident replay</code> — safe re-execution</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux bug bisect</code> — which commit broke it</div>
+    </div>
+  </div>
+</div>
 </div>
 </section>
 
-<!-- ─── Immediate proof: deploy → invoke → trace ─────────────────────────── -->
+<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Capabilities</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Production debugging, not just monitoring.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Monitoring tells you something is wrong. Fluxbase tells you why, shows you what changed, and lets you replay it.</p>
+<div class="feature-grid" style="padding-bottom:0;">
+  <div class="feature-card">
+  <div class="icon">🔍</div>
+  <h3>Time-Travel Debugging <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">flux trace debug</span></h3>
+  <p>Step through a production request span by span. See the exact input, output, and state at every point in execution.</p>
+</div>
+    <div class="feature-card">
+  <div class="icon">📜</div>
+  <h3>Mutation History <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">flux state history</span></h3>
+  <p>Every database write is logged with its request ID. See the full history of any row — what changed, when, and which request caused it.</p>
+</div>
+    <div class="feature-card">
+  <div class="icon">♻️</div>
+  <h3>Incident Replay <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">flux incident replay</span></h3>
+  <p>Re-run a production time window with side-effects disabled. Test your fix against exactly the requests that caused the incident.</p>
+</div>
+    <div class="feature-card">
+  <div class="icon">🔎</div>
+  <h3>Regression Detection <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">flux bug bisect</span></h3>
+  <p>Binary-searches your git history to find the first commit where a request started failing. Like <code>git bisect</code>, but for production behaviour.</p>
+</div>
+    <div class="feature-card">
+  <div class="icon">🛡️</div>
+  <h3>Deterministic Execution <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">recorded by default</span></h3>
+  <p>Every request captures a complete trace automatically — no instrumentation, no SDKs, no config. The runtime produces the trace.</p>
+</div>
+    <div class="feature-card">
+  <div class="icon">🔷</div>
+  <h3>Observable by Construction <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">zero config</span></h3>
+  <p>Gateway, functions, database queries, tool calls, async jobs — every layer emits spans automatically. <code>flux trace</code> reconstructs the full picture.</p>
+</div>
+</div>
+</div>
+</section>
+
 <section style="border-top:1px solid var(--border); padding:80px 0;">
 <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--green);background:rgba(61,214,140,.1);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Proof</div>
-  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Three commands. Full observability.</h2>
-  <p style="color:var(--muted);font-size:.95rem;max-width:520px;margin:0 0 40px;">Deploy a function, invoke it, then run <code>flux trace</code> with the request ID from the response header. You get a complete picture of every step — immediately, without instrumenting anything.</p>
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--bg-elevated);padding:4px 12px;border-radius:20px;margin-bottom:20px;">How It Works</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">One request ID covers the entire stack.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Client → Gateway → Runtime → Data Engine → Your PostgreSQL. Every hop records a span. <code>flux trace</code> reassembles them in order.</p>
 
-  <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start;">
-    <div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-      <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-        <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;"></span>
-        <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;"></span>
-        <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;"></span>
-        <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">deploy + invoke</span>
-      </div>
-      <div style="padding:20px 24px;font-family:var(--font-mono);font-size:.8rem;line-height:1.9;white-space:pre;"><span style="color:var(--green);">$</span> flux deploy
-
-  Deploying 2 functions...
-
-  <span style="color:var(--green);">✔</span> create_user  <span style="color:var(--muted);">→ gw.fluxbase.co/create_user</span>
-  <span style="color:var(--green);">✔</span> send_welcome <span style="color:var(--muted);">(async)</span>
-
-  <span style="color:var(--green);">✔</span> Deployed in 18s
-
-<span style="color:var(--green);">$</span> curl -X POST https://gw.fluxbase.co/create_user \
-    -d <span style="color:var(--accent);">'{"email":"alice@example.com"}'</span>
-
-  <span style="color:var(--green);">{"userId":"u_99a1","status":"ok"}</span>
-  <span style="color:var(--muted);">x-request-id: 4f9a3b2c</span></div>
+<div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;">
+  <div style="display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);">
+      <span style="font-size:.9rem;font-weight:600;">Client</span>
+      
     </div>
-
-    <div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-      <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-        <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;"></span>
-        <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;"></span>
-        <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;"></span>
-        <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux trace 4f9a3b2c</span>
-      </div>
-      <div style="padding:20px 24px;font-family:var(--font-mono);font-size:.8rem;line-height:1.9;white-space:pre;"><span style="color:var(--green);">$</span> flux trace <span style="color:var(--accent);">4f9a3b2c</span>
-
-  Trace <span style="color:var(--accent);">4f9a3b2c</span>  <span style="color:var(--muted);">2026-03-10 14:22:01 UTC</span>
-
-  <span style="color:#f9a8d4;">▸ gateway</span>                    <span style="color:var(--yellow);">3ms</span>
-    <span style="color:var(--muted);">auth ✔  rate_limit ✔  cors ✔</span>
-
-  <span style="color:#f9a8d4;">▸ create_user</span>                <span style="color:var(--yellow);">81ms</span>
-    <span style="color:#60a5fa;">▸ db:select(users)</span>          <span style="color:var(--yellow);">11ms</span>
-    <span style="color:#60a5fa;">▸ db:insert(users)</span>          <span style="color:var(--yellow);">14ms</span>
-
-  <span style="color:#f9a8d4;">▸ send_welcome</span>   <span style="color:var(--muted);">async →</span>  <span style="color:var(--yellow);">queued</span>
-
-  <span style="color:var(--muted);">── total: 98ms ──────────────────────</span></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);">
+      <span style="font-size:.9rem;font-weight:600;">Gateway</span>
+      <span style="font-size:.73rem;font-family:var(--font-mono);color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:20px;">→ span</span>
     </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);">
+      <span style="font-size:.9rem;font-weight:600;">Runtime</span>
+      <span style="font-size:.73rem;font-family:var(--font-mono);color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:20px;">→ span</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);">
+      <span style="font-size:.9rem;font-weight:600;">Data Engine</span>
+      <span style="font-size:.73rem;font-family:var(--font-mono);color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:20px;">→ span</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);">
+      <span style="font-size:.9rem;font-weight:600;">Your PostgreSQL</span>
+      <span style="font-size:.73rem;font-family:var(--font-mono);color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:20px;">→ span</span>
+    </div>
+    <a class="btn-secondary" href="/how-it-works" style="display:inline-block;margin-top:8px;font-size:.85rem;text-align:center;">Full architecture →</a>
   </div>
+  <div><div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">flux trace 91a3f</span>
+  </div>
+  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
+<span style="color:var(--green);">$</span> flux trace <span style="color:var(--accent);">91a3f</span>
+
+  Trace <span style="color:var(--accent);">91a3f</span>  <span style="color:var(--muted);">2026-03-10 14:22 UTC</span>
+  <span style="color:var(--muted);">POST /create_order · 200 OK</span>
+
+  <span style="color:#f9a8d4;">gateway</span>                      <span style="color:var(--yellow);">2ms</span>
+  <span style="color:#f9a8d4;">└─ create_order</span>              <span style="color:var(--yellow);">8ms</span>
+  <span style="color:#60a5fa;">   ├─ db.insert(orders)</span>       <span style="color:var(--yellow);">4ms</span>
+  <span style="color:#60a5fa;">   ├─ stripe.charge</span>           <span style="color:var(--yellow);">180ms</span>
+  <span style="color:var(--red);">   └─ send_slack</span>              <span style="color:var(--red);">error: rate limited</span>
+
+  <span style="color:var(--muted);">── Suggestion ──────────────────────────</span>
+  <span style="color:var(--green);">→ Move send_slack to async background step</span>
+  </div>
+</div></div>
+</div>
 </div>
 </section>
 
-<!-- ─── How it works ─────────────────────────────────────────────────────── -->
-<section id="how-it-works" style="border-top:1px solid var(--border); padding:80px 0;">
-<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">How it works</div>
-  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:48px;">Write logic. Deploy. Trace.</h2>
-
-  <div style="display:flex;flex-direction:column;gap:0;">
-
-    <div class="flow-step">
-      <div class="flow-step-num">1</div>
-      <div class="flow-step-text">
-        <h3>Write a step</h3>
-        <p>A function is a step in a flow. It receives <code>input</code> and a <code>ctx</code> — database, secrets, logging, tools. No boilerplate, no imports, no configuration files.</p>
-      </div>
-      <div class="flow-step-code">
-        <pre><code><span class="kw">export default</span> <span class="fn">defineFunction</span>({
-  name: <span class="str">"create_user"</span>,
-
-  handler: <span class="kw">async</span> ({ input, ctx }) => {
-    <span class="kw">const</span> [user] = <span class="kw">await</span> ctx.db.<span class="fn">query</span>({
-      table: <span class="str">"users"</span>,
-      operation: <span class="str">"insert"</span>,
-      data: { email: input.email },
-    });
-    ctx.<span class="fn">log</span>(<span class="str">"user created"</span>, { id: user.id });
-    <span class="kw">return</span> { userId: user.id };
-  },
-});</code></pre>
-      </div>
-    </div>
-
-    <div class="flow-step">
-      <div class="flow-step-num">2</div>
-      <div class="flow-step-text">
-        <h3>Deploy the flow</h3>
-        <p>Run <code>flux deploy</code>. Every function is bundled and live in under 30 seconds. The gateway — auth, rate limiting, routing — is wired automatically. Mark a function <code>async: true</code> and it becomes a background flow step: queued, traced, observable.</p>
-      </div>
-      <div class="flow-step-code">
-        <pre><code><span class="shell-prompt">$</span> flux deploy
-
-  Deploying 3 functions...
-
-  <span class="str">✔</span> create_user   → gw.fluxbase.co/create_user
-  <span class="str">✔</span> list_users    → gw.fluxbase.co/list_users
-  <span class="str">✔</span> send_welcome  <span class="cm">(async background step)</span>
-
-  <span class="str">✔</span> Deployed in 22s</code></pre>
-      </div>
-    </div>
-
-    <div class="flow-step">
-      <div class="flow-step-num">3</div>
-      <div class="flow-step-text">
-        <h3>Trace the flow</h3>
-        <p>Every response has an <code>x-request-id</code> header. Run <code>flux trace &lt;id&gt;</code> and see the full chain: which steps ran, every database query, how long each took, what was slow, and index suggestions.</p>
-      </div>
-      <div class="flow-step-code">
-        <pre><code><span class="shell-prompt">$</span> flux trace 4f9a3b2c
-
-  <span class="trace-fn">▸ gateway</span>               <span class="trace-ms"> 3ms</span>
-  <span class="trace-fn">▸ create_user</span>           <span class="trace-ms">81ms</span>
-    <span class="trace-db">▸ db:insert(users)</span>    <span class="trace-ms">14ms</span>
-  <span class="trace-fn">▸ send_welcome</span>  <span class="trace-dim">async →</span>  <span class="trace-ms">queued</span>
-
-  <span class="trace-dim">── total: 98ms ─────────────────</span></code></pre>
-      </div>
-    </div>
-
-  </div>
-</div>
-</section>
-
-<!-- ─── Deep trace demo ───────────────────────────────────────────────────── -->
-<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
-<div style="max-width:1040px;margin:0 auto;padding:0 24px;text-align:center;">
-  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--green);background:rgba(61,214,140,.1);padding:4px 12px;border-radius:20px;margin-bottom:20px;">flux trace</div>
-  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">One command. Root cause found.</h2>
-  <p style="color:var(--muted);font-size:.95rem;max-width:520px;margin:0 auto 40px;">Real bug. Real scenario. User reports "order failed" — no stack trace, no error email, just a vague complaint. This is what you run.</p>
-
-  <div class="trace-window">
-    <div class="trace-titlebar">
-      <span class="trace-dot red"></span>
-      <span class="trace-dot yellow"></span>
-      <span class="trace-dot green"></span>
-      <span class="trace-title">flux trace 91a3f</span>
-    </div>
-    <div class="trace-body" style="text-align:left;">
-<span class="trace-cmd">$</span> flux trace <span class="trace-id">91a3f</span><br>
-<br>
-  Trace <span class="trace-id">91a3f</span>  <span class="trace-ts">2026-03-10 14:22:01 UTC</span><br>
-  <span class="trace-ts">POST /create_order · 200 OK</span><br>
-<br>
-  <span class="trace-fn">gateway</span>                      <span class="trace-ms">2ms</span><br>
-  <span class="trace-fn">└─ create_order</span>              <span class="trace-ms">8ms</span><br>
-  <span class="trace-db">   ├─ db.insert(orders)</span>       <span class="trace-ms">4ms</span><br>
-  <span class="trace-db">   ├─ stripe.charge</span>           <span class="trace-ms">180ms</span><br>
-  <span class="trace-warn">   └─ send_slack</span>              <span class="trace-warn">error: rate limited</span><br>
-<br>
-  <span class="trace-dim">── Errors ─────────────────────────────────────</span><br>
-  <span class="trace-warn">  send_slack   429 Too Many Requests</span><br>
-  <span class="trace-warn">  Slack API rate limit exceeded for channel #orders</span><br>
-<br>
-  <span class="trace-dim">── Timeline ───────────────────────────────────</span><br>
-  <span class="trace-dim">  Status 200 returned before send_slack error</span><br>
-  <span class="trace-dim">  Order was inserted · charge succeeded · notification dropped</span><br>
-<br>
-  <span class="trace-dim">── Suggestion ─────────────────────────────────</span><br>
-  <span class="trace-sugg">  → Move send_slack to async background step</span><br>
-    </div>
-  </div>
-  <p style="margin-top:20px;font-size:.82rem;color:var(--muted);max-width:520px;margin-left:auto;margin-right:auto;">The trace ID comes back in the <code>x-request-id</code> response header on every request.</p>
-</div>
-</section>
-
-<!-- ─── Live demo ─────────────────────────────────────────────────────────── -->
-<section id="live-demo" style="border-top:1px solid var(--border); padding:80px 0; background:#0a0a0c;">
-<div style="max-width:860px;margin:0 auto;padding:0 24px;text-align:center;">
-
-  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--green);background:rgba(61,214,140,.1);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Try it live</div>
-  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:12px;color:#f8f8f2;">Run a real backend trace right now.</h2>
-  <p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 auto 40px;">Enter your name and email. We'll trigger a real Fluxbase function — database write, email send, full trace — and show you every span as it happens.<br><span style="font-size:.82rem;opacity:.7;">No sign-up required. You'll receive a real email.</span></p>
-
-  <!-- Form -->
-  <div id="demo-form-wrap" style="display:flex;flex-direction:column;align-items:center;gap:16px;max-width:420px;margin:0 auto 32px;">
-    <input id="demo-name"  type="text"  placeholder="Your name"        autocomplete="name"  style="width:100%;padding:12px 16px;border-radius:8px;border:1px solid var(--border);background:#111115;color:#f8f8f2;font-size:.95rem;box-sizing:border-box;outline:none;" />
-    <input id="demo-email" type="email" placeholder="your@email.com"   autocomplete="email" style="width:100%;padding:12px 16px;border-radius:8px;border:1px solid var(--border);background:#111115;color:#f8f8f2;font-size:.95rem;box-sizing:border-box;outline:none;" />
-    <button id="demo-btn" onclick="runLiveDemo()" style="width:100%;padding:13px 24px;border-radius:8px;border:none;background:var(--green);color:#0a0a0c;font-size:.95rem;font-weight:700;cursor:pointer;transition:opacity .15s;letter-spacing:.01em;">
-      Run Demo →
-    </button>
-    <p id="demo-error" style="display:none;color:#ff6b6b;font-size:.82rem;margin:0;"></p>
-  </div>
-
-  <!-- Terminal window (hidden until demo starts) -->
-  <div id="demo-terminal" style="display:none;text-align:left;max-width:620px;margin:0 auto;">
-
-    <!-- macOS-style chrome -->
-    <div style="background:#1a1a1f;border:1px solid #2a2a35;border-radius:10px;overflow:hidden;">
-      <div style="display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #2a2a35;background:#161619;">
-        <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57;display:inline-block;"></span>
-        <span style="width:12px;height:12px;border-radius:50%;background:#febc2e;display:inline-block;"></span>
-        <span style="width:12px;height:12px;border-radius:50%;background:#28c840;display:inline-block;"></span>
-        <span id="demo-title" style="margin-left:8px;font-size:.78rem;font-family:var(--font-mono);color:#6b7280;">flux trace</span>
-      </div>
-      <div id="demo-output" style="padding:20px 20px 24px;font-family:var(--font-mono);font-size:.82rem;line-height:1.8;white-space:pre;min-height:100px;"></div>
-    </div>
-
-    <!-- Email confirmation (shown after 'ready') -->
-    <p id="demo-email-confirm" style="display:none;margin-top:16px;font-size:.84rem;color:var(--muted);text-align:center;"></p>
-
-  </div>
-
-</div>
-</section>
-
-<style>
-/* Live demo terminal colours */
-#demo-output .d-cmd   { color: #8be9fd; }
-#demo-output .d-dim   { color: #6b7280; }
-#demo-output .d-id    { color: #bd93f9; font-weight:600; }
-#demo-output .d-ok    { color: #50fa7b; }
-#demo-output .d-span  { color: #f8f8f2; }
-#demo-output .d-ms    { color: #ffb86c; }
-#demo-output .d-label { color: #8be9fd; display:inline-block; min-width:220px; }
-#demo-output .d-err   { color: #ff5555; }
-#demo-output .d-blink { animation: blink .9s step-end infinite; }
-@keyframes blink { 50% { opacity:0; } }
-</style>
-
-<script>
-const DEMO_API = 'https://api.fluxbase.co';
-let _demoPolling = null;
-
-async function runLiveDemo() {
-  const nameEl  = document.getElementById('demo-name');
-  const emailEl = document.getElementById('demo-email');
-  const btn     = document.getElementById('demo-btn');
-  const errEl   = document.getElementById('demo-error');
-
-  const name  = (nameEl.value  || '').trim();
-  const email = (emailEl.value || '').trim();
-
-  // Basic client-side validation
-  errEl.style.display = 'none';
-  if (!name)  return showDemoErr('Please enter your name.');
-  if (!email || !email.includes('@')) return showDemoErr('Please enter a valid email address.');
-
-  btn.disabled  = true;
-  btn.textContent = 'Running…';
-
-  // Show the terminal immediately
-  const terminal = document.getElementById('demo-terminal');
-  terminal.style.display = 'block';
-  terminal.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-  const out = document.getElementById('demo-output');
-  setOutput(out, [
-    `<span class="d-cmd">$</span> curl https://demo.fluxbase.co/create_user \\`,
-    `  <span class="d-dim">-d '{"name":"${esc(name)}","email":"${esc(email)}"}'</span>`,
-    ``,
-    `<span class="d-dim">Sending request…  <span class="d-blink">▋</span></span>`,
-  ]);
-
-  try {
-    const res = await fetch(`${DEMO_API}/demo/signup`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ name, email }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      const msg = data.message || data.error || 'Request failed';
-      return showDemoErr(msg);
-    }
-
-    const requestId = data.request_id;
-    document.getElementById('demo-title').textContent = `flux trace ${requestId}`;
-
-    setOutput(out, [
-      `<span class="d-cmd">$</span> curl https://demo.fluxbase.co/create_user \\`,
-      `  <span class="d-dim">-d '{"name":"${esc(name)}","email":"${esc(email)}"}'</span>`,
-      ``,
-      `<span class="d-dim">{"status":"ok","x-request-id":"<span class="d-id">${requestId}</span>"}</span>`,
-      ``,
-      `<span class="d-cmd">$</span> flux trace <span class="d-id">${requestId}</span>`,
-      ``,
-      `<span class="d-dim">  Waiting for spans…  <span class="d-blink">▋</span></span>`,
-    ]);
-
-    // Poll for trace
-    pollTrace(requestId, name, email, out);
-
-  } catch (e) {
-    showDemoErr('Network error — please try again.');
-    btn.disabled = false;
-    btn.textContent = 'Run Demo →';
-  }
-}
-
-function pollTrace(requestId, name, email, out) {
-  let attempts = 0;
-  const maxAttempts = 30; // 30 × 1.5s = 45s timeout
-
-  if (_demoPolling) clearInterval(_demoPolling);
-
-  _demoPolling = setInterval(async () => {
-    attempts++;
-    if (attempts > maxAttempts) {
-      clearInterval(_demoPolling);
-      appendLine(out, `<span class="d-err">  Trace timeout — check back in a moment.</span>`);
-      return;
-    }
-
-    try {
-      const res  = await fetch(`${DEMO_API}/demo/trace/${requestId}`);
-      const data = await res.json();
-
-      if (data.status === 'pending') return; // not started yet
-
-      if (data.spans && data.spans.length > 0) {
-        renderTrace(requestId, data, out, name, email);
-
-        if (data.status === 'ready') {
-          clearInterval(_demoPolling);
-          _demoPolling = null;
-        }
-      }
-    } catch (_) {}
-  }, 1500);
-}
-
-function renderTrace(requestId, data, out, name, email) {
-  const lines = [
-    `<span class="d-cmd">$</span> flux trace <span class="d-id">${requestId}</span>`,
-    ``,
-    `  <span class="d-dim">Trace  <span class="d-id">${requestId}</span>  POST /create_user</span>`,
-    ``,
-  ];
-
-  for (const span of (data.spans || [])) {
-    const label   = span.name.padEnd(28);
-    const dur     = span.duration_ms ? `${span.duration_ms}ms` : '';
-    lines.push(
-      `  <span class="d-label">${esc(label)}</span>  <span class="d-ms">${esc(dur)}</span>`
-    );
-  }
-
-  lines.push(``);
-  lines.push(`  <span class="d-dim">───────────────────────────────────────</span>`);
-
-  if (data.total_duration_ms != null) {
-    lines.push(`  Total: <span class="d-ms">${data.total_duration_ms}ms</span>`);
-  }
-
-  if (data.status === 'ready') {
-    lines.push(``);
-    lines.push(`  <span class="d-ok">✔ Email sent to ${esc(email)}</span>`);
-    lines.push(``);
-    lines.push(`<span class="d-cmd">$</span> <span class="d-dim">_</span>`);
-
-    const confirm = document.getElementById('demo-email-confirm');
-    confirm.innerHTML = `Check <strong>${esc(email)}</strong> — a real email from the Fluxbase runtime just landed.`;
-    confirm.style.display = 'block';
-
-    const btn = document.getElementById('demo-btn');
-    btn.disabled = false;
-    btn.textContent = 'Run Again →';
-  } else {
-    lines.push(`  <span class="d-dim">Running…  <span class="d-blink">▋</span></span>`);
-  }
-
-  setOutput(out, lines);
-}
-
-function setOutput(el, lines) {
-  el.innerHTML = lines.join('\n');
-}
-function appendLine(el, line) {
-  el.innerHTML += '\n' + line;
-}
-function showDemoErr(msg) {
-  const e = document.getElementById('demo-error');
-  e.textContent = msg;
-  e.style.display = 'block';
-  const btn = document.getElementById('demo-btn');
-  btn.disabled = false;
-  btn.textContent = 'Run Demo →';
-}
-function esc(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-</script>
-
-<!-- ─── What you can build ────────────────────────────────────────────────── -->
-<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
-<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Capabilities</div>
-  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Everything participates in the trace.</h2>
-  <p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Every flow node — request, async job, workflow step, database query, tool call — emits a span. <code>flux trace</code> reconstructs the complete picture from any of them.</p>
-  <div class="feature-grid" style="padding-bottom:0;">
-
-    <div class="feature-card">
-      <div class="icon">⚡</div>
-      <h3>Request flows <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">traced</span></h3>
-      <p>A function runs, queries the database, returns a result. Gateway, function, every db query — each emits a span. One request ID covers all of it.</p>
-    </div>
-    <div class="feature-card">
-      <div class="icon">🔀</div>
-      <h3>Async jobs <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">traced</span></h3>
-      <p>Mark a function <code>async: true</code>. It becomes a queued background step — fire-and-forget from the caller's perspective, but still fully traced and observable.</p>
-    </div>
-    <div class="feature-card">
-      <div class="icon">🔗</div>
-      <h3>Workflow steps <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">traced</span></h3>
-      <p>Chain steps into a named flow with <code>ctx.workflow.run()</code>. Each step sees the previous output. The entire chain, sequential or parallel, appears in one trace.</p>
-    </div>
-    <div class="feature-card">
-      <div class="icon">🛠️</div>
-      <h3>Tool calls <span style="font-size:.72rem;font-family:var(--font-mono);color:var(--accent);font-weight:400;margin-left:6px;">traced</span></h3>
-      <p>Every external call — Stripe, Slack, a third-party API — is a named tool call. Latency, status, errors. All in the trace, automatically.</p>
-    </div>
-
-  </div>
-</div>
-</section>
-
-<!-- ─── Examples ─────────────────────────────────────────────────────────── -->
-<section class="examples-strip">
-  <h2>Example flows</h2>
-  <p>Each example shows a complete flow: the steps, the trace output, and the code.</p>
-  <div class="example-cards">
-    <a class="example-card" href="/examples/todo-api">
-      <div class="tag">Request flow</div>
-      <h3>Todo API</h3>
-      <p>Create, list, update, delete. Four functions. One Postgres table. Trace every query.</p>
-    </a>
-    <a class="example-card" href="/examples/webhook-worker">
-      <div class="tag">Async flow</div>
-      <h3>Webhook Worker</h3>
-      <p>Validate synchronously, process as a background flow step. Trace the hand-off.</p>
-    </a>
-    <a class="example-card" href="/examples/ai-backend">
-      <div class="tag">Agent flow</div>
-      <h3>AI Backend</h3>
-      <p>LLM decides the next tool call. Each step — LLM call, tool call, database write — appears in the trace.</p>
-    </a>
-  </div>
-</section>
-
-<!-- ─── Architecture ──────────────────────────────────────────────────────── -->
-<section style="border-top:1px solid var(--border); padding:80px 0;">
-<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--bg-elevated);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Architecture</div>
-  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Every layer emits trace spans.</h2>
-  <p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;"><code>flux trace</code> reconstructs the entire flow by replaying every span in order — gateway to function to database to tools. You don't configure tracing. It's built into the runtime.</p>
-
-  <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-
-    <!-- Layer list with span arrows -->
-    <div style="display:flex;flex-direction:column;gap:10px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);">
-        <span style="font-size:.9rem;font-weight:600;">Gateway</span>
-        <span style="font-size:.75rem;font-family:var(--font-mono);color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:20px;">→ span</span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);">
-        <div>
-          <span style="font-size:.9rem;font-weight:600;">Function runtime</span>
-          <span style="font-size:.72rem;color:var(--accent);margin-left:10px;">← you write here</span>
-        </div>
-        <span style="font-size:.75rem;font-family:var(--font-mono);color:var(--accent);background:rgba(108,99,255,.15);padding:3px 10px;border-radius:20px;">→ span</span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);">
-        <span style="font-size:.9rem;font-weight:600;">Database (Postgres)</span>
-        <span style="font-size:.75rem;font-family:var(--font-mono);color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:20px;">→ span</span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);">
-        <span style="font-size:.9rem;font-weight:600;">Tool calls</span>
-        <span style="font-size:.75rem;font-family:var(--font-mono);color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:20px;">→ span</span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);">
-        <span style="font-size:.9rem;font-weight:600;">Async jobs / workflows</span>
-        <span style="font-size:.75rem;font-family:var(--font-mono);color:var(--accent);background:var(--accent-dim);padding:3px 10px;border-radius:20px;">→ span</span>
-      </div>
-    </div>
-
-    <!-- Reconstructed trace terminal -->
-    <div>
-      <p style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:16px;">flux trace reconstructs:</p>
-      <div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-        <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-          <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;"></span>
-          <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;"></span>
-          <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;"></span>
-          <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">the full flow</span>
-        </div>
-        <div style="padding:20px 24px;font-family:var(--font-mono);font-size:.8rem;line-height:2;">
-          <span style="color:#f9a8d4;">▸ gateway:route</span><span style="color:var(--muted);padding-left:24px;">3ms</span><br>
-          <span style="color:#f9a8d4;">▸ function:create_order</span><span style="color:var(--muted);padding-left:8px;">8ms</span><br>
-          <span style="color:#60a5fa;padding-left:16px;">▸ db.insert(orders)</span><span style="color:var(--muted);padding-left:8px;">4ms</span><br>
-          <span style="color:#a78bfa;padding-left:16px;">▸ stripe.charge</span><span style="color:var(--muted);padding-left:8px;">180ms</span><br>
-          <span style="color:var(--red);padding-left:16px;">▸ send_slack</span><span style="color:var(--red);padding-left:8px;">error: rate limited</span><br>
-          <span style="color:var(--muted);">── total: 194ms ──────────────────</span>
-        </div>
-      </div>
-      <a class="btn-secondary" href="/docs/architecture" style="display:inline-block;margin-top:20px;font-size:.85rem;">Read the architecture →</a>
-    </div>
-
-  </div>
-</div>
-</section>
-
-<!-- ─── Portability ───────────────────────────────────────────────────────── -->
-<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
-<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-  <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--bg-elevated);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Foundations</div>
-  <h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Built on open foundations.</h2>
-  <p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Fluxbase gives you a runtime and a tracing layer. Your code and your data remain portable.</p>
-
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:40px;">
-    <div style="padding:20px 24px;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);">
-      <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px;">Functions</div>
-      <div style="font-size:1rem;font-weight:700;">TypeScript</div>
-      <div style="font-size:.82rem;color:var(--muted);margin-top:4px;">standard TS, no proprietary wrappers</div>
-    </div>
-    <div style="padding:20px 24px;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);">
-      <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px;">Runtime</div>
-      <div style="font-size:1rem;font-weight:700;">Deno</div>
-      <div style="font-size:.82rem;color:var(--muted);margin-top:4px;">secure, sandboxed execution</div>
-    </div>
-    <div style="padding:20px 24px;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);">
-      <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px;">Data</div>
-      <div style="font-size:1rem;font-weight:700;">Postgres</div>
-      <div style="font-size:.82rem;color:var(--muted);margin-top:4px;">standard SQL, export anytime</div>
-    </div>
-    <div style="padding:20px 24px;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);">
-      <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px;">Requests</div>
-      <div style="font-size:1rem;font-weight:700;">HTTP</div>
-      <div style="font-size:.82rem;color:var(--muted);margin-top:4px;">plain HTTP, any client</div>
-    </div>
-  </div>
-</div>
-</section>
-
-<!-- ─── CTA ─────────────────────────────────────────────────────────────── -->
 <section class="cta-strip">
-  <h2>Deploy your first flow in 5 minutes.</h2>
-  <p>Install the CLI, scaffold a project, run <code>flux deploy</code>. You'll have a live API with a full trace before you finish your coffee.</p>
+  <h2>Debug your first production bug in 5 minutes.</h2>
+  <p style="max-width:520px;margin:0 auto 32px;">Install the CLI, deploy a function, trigger a request. You'll have a full trace before you finish reading the quickstart.</p>
   <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:24px;">
     <a class="btn-primary" href="/docs/quickstart">Start the quickstart →</a>
-    <a class="btn-secondary" href="/docs/architecture">Architecture</a>
+    <a class="btn-secondary" href="/product">See all features</a>
   </div>
   <div style="display:flex;justify-content:center;">
     <div class="install-hint">
@@ -820,33 +256,18 @@ function esc(str) {
     </div>
   </div>
 </section>
-
 <footer>
   <span>© 2026 Fluxbase</span>
   <div style="display:flex;gap:20px;flex-wrap:wrap;">
-    <a href="/docs">Docs</a>
-    <a href="/docs/architecture">Architecture</a>
+    <a href="/product">Product</a>
+    <a href="/how-it-works">How It Works</a>
+    <a href="/cli">CLI</a>
+    <a href="/docs/">Docs</a>
     <a href="/docs/quickstart">Quickstart</a>
-    <a href="/examples">Examples</a>
-    <a href="/docs/cli">CLI</a>
-    <a href="/dashboard">Dashboard</a>
+    <a href="https://dashboard.fluxbase.co">Dashboard</a>
   </div>
 </footer>
+</div>
 
-</div><!-- .landing-wrap -->
-
-<script>
-  // Interactive flow diagram: hover a step → highlight its trace span
-  document.querySelectorAll('.flow-node').forEach(function(node) {
-    var key = node.dataset.node;
-    var traceLine = document.querySelector('.trace-line[data-trace="' + key + '"]');
-    node.addEventListener('mouseenter', function() {
-      if (traceLine) traceLine.classList.add('active');
-    });
-    node.addEventListener('mouseleave', function() {
-      if (traceLine) traceLine.classList.remove('active');
-    });
-  });
-</script>
 </body>
 </html>
