@@ -88,18 +88,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">what is recorded</span>
-    <button id="cw-16-copy" onclick="(function(){
-    var el=document.getElementById('cw-16');
+    <button id="cw-25-copy" onclick="(function(){
+    var el=document.getElementById('cw-25');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-16-copy');
+      var btn=document.getElementById('cw-25-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-16" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Recorded by Fluxbase</span>
+  <pre id="cw-25" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Recorded by Fluxbase</span>
 
   trace_requests   request_id, method, path, duration, status
   execution_spans  span_id, request_id, name, duration, error
@@ -141,18 +141,18 @@ ALTER TABLE users ENABLE FLUXBASE AUDIT MASK (password_hash, ssn);</code></pre>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">storage per request</span>
-    <button id="cw-17-copy" onclick="(function(){
-    var el=document.getElementById('cw-17');
+    <button id="cw-26-copy" onclick="(function(){
+    var el=document.getElementById('cw-26');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-17-copy');
+      var btn=document.getElementById('cw-26-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-17" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Typical request breakdown</span>
+  <pre id="cw-26" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Typical request breakdown</span>
 
   trace_requests row     ~1 KB
   execution spans        ~2 KB   <span style="color:var(--muted);">(3–5 spans typical)</span>
@@ -206,18 +206,18 @@ ALTER TABLE users ENABLE FLUXBASE AUDIT MASK (password_hash, ssn);</code></pre>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">request path — no coordination</span>
-    <button id="cw-18-copy" onclick="(function(){
-    var el=document.getElementById('cw-18');
+    <button id="cw-27-copy" onclick="(function(){
+    var el=document.getElementById('cw-27');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-18-copy');
+      var btn=document.getElementById('cw-27-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-18" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code>HTTP request
+  <pre id="cw-27" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code>HTTP request
   │
   ▼
 Gateway (horizontal)

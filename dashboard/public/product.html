@@ -100,18 +100,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">automatic recording</span>
-    <button id="cw-30-copy" onclick="(function(){
-    var el=document.getElementById('cw-30');
+    <button id="cw-39-copy" onclick="(function(){
+    var el=document.getElementById('cw-39');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-30-copy');
+      var btn=document.getElementById('cw-39-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-30" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Every request produces:</span>
+  <pre id="cw-39" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Every request produces:</span>
 
   trace_requests      <span style="color:var(--green);">→</span> span tree (gateway to db)
   state_mutations     <span style="color:var(--green);">→</span> every row change + request link
@@ -133,18 +133,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux trace debug 550e8400</span>
-    <button id="cw-31-copy" onclick="(function(){
-    var el=document.getElementById('cw-31');
+    <button id="cw-40-copy" onclick="(function(){
+    var el=document.getElementById('cw-40');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-31-copy');
+      var btn=document.getElementById('cw-40-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-31" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux trace debug <span style="color:var(--accent);">550e8400</span>
+  <pre id="cw-40" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux trace debug <span style="color:var(--accent);">550e8400</span>
 
   <span style="color:var(--muted);">Step 1/4  gateway</span>
   <span style="color:var(--muted);">─────────────────────────────────────</span>
@@ -173,18 +173,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux state history users --id 42</span>
-    <button id="cw-32-copy" onclick="(function(){
-    var el=document.getElementById('cw-32');
+    <button id="cw-41-copy" onclick="(function(){
+    var el=document.getElementById('cw-41');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-32-copy');
+      var btn=document.getElementById('cw-41-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-32" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux state history users --id 42
+  <pre id="cw-41" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux state history users --id 42
 
   <span style="color:#f8f8f2;">users id=42</span>  (7 mutations)
 
@@ -211,18 +211,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux incident replay 14:00..14:05</span>
-    <button id="cw-33-copy" onclick="(function(){
-    var el=document.getElementById('cw-33');
+    <button id="cw-42-copy" onclick="(function(){
+    var el=document.getElementById('cw-42');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-33-copy');
+      var btn=document.getElementById('cw-42-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-33" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux incident replay 14:00..14:05
+  <pre id="cw-42" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux incident replay 14:00..14:05
 
   Replaying 23 requests from 14:00–14:05…
 
@@ -249,18 +249,18 @@
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
     <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux bug bisect</span>
-    <button id="cw-34-copy" onclick="(function(){
-    var el=document.getElementById('cw-34');
+    <button id="cw-43-copy" onclick="(function(){
+    var el=document.getElementById('cw-43');
     var txt=el.innerText||el.textContent;
     navigator.clipboard.writeText(txt).then(function(){
-      var btn=document.getElementById('cw-34-copy');
+      var btn=document.getElementById('cw-43-copy');
       btn.textContent='Copied!';
       btn.style.color='var(--green)';
       setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-34" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux bug bisect --request <span style="color:var(--accent);">550e8400</span>
+  <pre id="cw-43" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux bug bisect --request <span style="color:var(--accent);">550e8400</span>
 
   Bisecting 42 commits (2026-03-01..2026-03-10)…
 
