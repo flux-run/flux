@@ -257,7 +257,20 @@ export default function TracesPage() {
   })
 
   const allLogs = data?.logs ?? []
-  const logs = filter === 'all' ? allLogs : allLogs.filter((l) => l.level === filter)
+
+  // Compute summary stats from parsed entries
+  const parsedAll = allLogs.map((l) => parseEntry(l, fnMap[l.function_id ?? '']))
+  const errorCount = allLogs.filter((l, i) => l.level === 'error' || parsedAll[i]?.status >= 500).length
+  const slowCount  = parsedAll.filter((e) => e.durationMs >= 1000).length
+  const avgMs      = parsedAll.length > 0
+    ? Math.round(parsedAll.reduce((s, e) => s + e.durationMs, 0) / parsedAll.length)
+    : 0
+
+  const logs =
+    filter === 'errors' ? allLogs.filter((l, i) => l.level === 'error' || parsedAll[i]?.status >= 500) :
+    filter === 'slow'   ? allLogs.filter((_, i) => parsedAll[i]?.durationMs >= 1000) :
+    filter === 'all'    ? allLogs :
+    allLogs.filter((l) => l.level === filter)
 
   const handleSelect = useCallback((log: LogEntry) => {
     setSelected((prev) => (prev?.id === log.id ? null : log))
@@ -295,18 +308,67 @@ export default function TracesPage() {
           </p>
         </div>
 
+        {/* Summary stats */}
+        {allLogs.length > 0 && (
+          <div className="flex items-center gap-4 px-6 pb-3 shrink-0 flex-wrap">
+            <div className="flex items-center gap-1.5 text-xs">
+              <Activity className="w-3 h-3 text-muted-foreground/50" />
+              <span className="tabular-nums font-medium">{allLogs.length}</span>
+              <span className="text-muted-foreground/50">requests</span>
+            </div>
+            <div className={cn('flex items-center gap-1.5 text-xs', errorCount > 0 ? 'text-red-400' : 'text-muted-foreground/50')}>
+              <XCircle className="w-3 h-3" />
+              <span className="tabular-nums font-medium">{errorCount}</span>
+              <span className="opacity-70">error{errorCount !== 1 ? 's' : ''}</span>
+              {allLogs.length > 0 && (
+                <span className="opacity-50">({Math.round((errorCount / allLogs.length) * 100)}%)</span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground/50">
+              <Clock className="w-3 h-3" />
+              <span className="tabular-nums font-medium text-foreground/70">{avgMs}ms</span>
+              <span>avg</span>
+            </div>
+            {slowCount > 0 && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-400">
+                <AlertTriangle className="w-3 h-3" />
+                <span className="tabular-nums font-medium">{slowCount}</span>
+                <span className="opacity-70">slow (&gt;1s)</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Toolbar */}
-        <div className="flex items-center gap-3 px-6 pb-3 shrink-0 flex-wrap">
-          <Select value={filter} onValueChange={setFilter}>
-            <SelectTrigger className="h-7 text-xs w-28 bg-white/5 border-white/10">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {['all', 'info', 'warn', 'error', 'debug'].map((l) => (
-                <SelectItem key={l} value={l} className="text-xs capitalize">{l}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="flex items-center gap-2 px-6 pb-3 shrink-0 flex-wrap">
+          {/* Quick filter tabs */}
+          <div className="flex gap-1 p-1 rounded-lg bg-white/[0.04] border border-white/8">
+            {[
+              { val: 'all',    label: 'All' },
+              { val: 'errors', label: 'Errors', count: errorCount },
+              { val: 'slow',   label: 'Slow >1s', count: slowCount },
+            ].map((f) => (
+              <button
+                key={f.val}
+                onClick={() => setFilter(f.val)}
+                className={cn(
+                  'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all',
+                  filter === f.val
+                    ? f.val === 'errors' ? 'bg-red-500/20 text-red-400'
+                      : f.val === 'slow' ? 'bg-amber-500/20 text-amber-400'
+                      : 'bg-[#6c63ff]/20 text-[#a78bfa]'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {f.label}
+                {f.count != null && f.count > 0 && (
+                  <span className={cn('text-[10px] rounded-full px-1 min-w-4 text-center', filter === f.val ? 'bg-white/10' : 'bg-white/5')}>
+                    {f.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
           <Select value={limit} onValueChange={setLimit}>
             <SelectTrigger className="h-7 text-xs w-24 bg-white/5 border-white/10">
               <SelectValue />

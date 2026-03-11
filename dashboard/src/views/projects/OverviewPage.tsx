@@ -6,9 +6,8 @@ import Link from 'next/link'
 import {
   Code2, ShieldCheck, KeyRound, Globe,
   ArrowRight, CheckCircle2, Circle,
-  Info, AlertTriangle, AlertCircle, Bug,
   Database, GitBranch, Zap, Activity,
-  ChevronRight, Terminal,
+  ChevronRight, Terminal, Search,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useStore } from '@/state/tenantStore'
@@ -335,10 +334,39 @@ export default function OverviewPage() {
         {/* Left: activity feed */}
         <ActivityFeed projectId={projectId} />
 
-        {/* Right: onboarding OR topology */}
+        {/* Right column */}
         <div className="space-y-4">
           <OnboardingChecklist hasFunctions={hasFunctions} hasRoutes={hasRoutes} />
           <ExecutionTopology projectId={projectId} />
+
+          {/* Magic moment card */}
+          <Card className="border-[#6c63ff]/20 bg-[#6c63ff]/[0.03]">
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <Search className="w-3.5 h-3.5 text-[#a78bfa]" />
+                <CardTitle className="text-sm font-semibold">Debug any failure</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Every request has a full execution trace. Get root-cause analysis in seconds —
+                spans, inputs, outputs, errors, and file/line.
+              </p>
+              <div className="rounded-lg bg-black/30 border border-white/5 px-3 py-2.5 space-y-1 font-mono text-xs">
+                <p className="text-muted-foreground/40 text-[10px]">CLI</p>
+                <p className="text-emerald-400">flux why &lt;request-id&gt;</p>
+                <p className="text-[#a78bfa]">flux trace &lt;request-id&gt;</p>
+                <p className="text-sky-400">flux tail</p>
+              </div>
+              <Link
+                href={`/dashboard/projects/${projectId}/traces`}
+                className="flex items-center gap-1.5 text-xs text-[#a78bfa] hover:opacity-80 transition-opacity"
+              >
+                View execution timeline
+                <ArrowRight className="w-3 h-3" />
+              </Link>
+            </CardContent>
+          </Card>
         </div>
       </div>
 
