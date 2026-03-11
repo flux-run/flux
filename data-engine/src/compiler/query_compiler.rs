@@ -61,10 +61,18 @@ pub struct Filter {
 }
 
 /// A fully compiled SQL statement ready for execution, plus ordered bind values.
+///
+/// `schema` identifies the PostgreSQL schema this query targets. It is set at
+/// compile time from the authenticated request's `DbRouter::schema_name()` result
+/// and used by `db_executor::execute()` to enforce `SET LOCAL search_path` for
+/// the transaction, providing a database-level defense against cross-tenant access.
 #[derive(Debug)]
 pub struct CompiledQuery {
     pub sql: String,
     pub params: Vec<serde_json::Value>,
+    /// The PostgreSQL schema this query was compiled to target.
+    /// Must match the tenant+project the caller authenticated as.
+    pub schema: String,
 }
 
 /// A computed column to be injected into SELECT expressions.
@@ -232,7 +240,7 @@ fn compile_select(
         let batched_plan =
             build_batched_plan(schema, &req.table, nested_sels, &opts.relationships);
         return Ok(CompileResult::Batched {
-            root: CompiledQuery { sql, params: params.clone() },
+            root: CompiledQuery { sql, params: params.clone(), schema: schema.to_string() },
             plan: batched_plan,
         });
     }
@@ -350,7 +358,7 @@ fn compile_select(
         *next += 1;
     }
 
-    Ok(CompileResult::Single(CompiledQuery { sql, params: params.clone() }))
+    Ok(CompileResult::Single(CompiledQuery { sql, params: params.clone(), schema: schema.to_string() }))
 }
 
 fn compile_insert(
@@ -395,7 +403,7 @@ fn compile_insert(
         placeholders.join(", "),
     );
 
-    Ok(CompiledQuery { sql, params: params.clone() })
+    Ok(CompiledQuery { sql, params: params.clone(), schema: schema.to_string() })
 }
 
 fn compile_update(
@@ -440,7 +448,7 @@ fn compile_update(
     }
     sql.push_str(" RETURNING *");
 
-    Ok(CompiledQuery { sql, params: params.clone() })
+    Ok(CompiledQuery { sql, params: params.clone(), schema: schema.to_string() })
 }
 
 fn compile_delete(
@@ -462,7 +470,7 @@ fn compile_delete(
     }
     sql.push_str(" RETURNING *");
 
-    Ok(CompiledQuery { sql, params: params.clone() })
+    Ok(CompiledQuery { sql, params: params.clone(), schema: schema.to_string() })
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ use crate::{
     },
     engine::{auth_context::AuthContext, error::EngineError},
     events::EventEmitter,
-    executor,
+    executor::{self, MutationContext},
     hooks::{HookEngine, HookEvent},
     policy::PolicyEngine,
     router::DbRouter,
@@ -130,7 +130,7 @@ pub async fn handler(
                 let params = cache::extract_select_params(
                     &req, &policy, opts.default_limit, opts.max_limit,
                 );
-                let root_cq = CompiledQuery { sql: plan.sql, params };
+                let root_cq = CompiledQuery { sql: plan.sql, params, schema: schema.clone() };
                 if plan.is_batched {
                     // Rebuild BatchedPlan from schema-cached relationships.
                     let batched_plan = build_batched_plan(
@@ -175,16 +175,34 @@ pub async fn handler(
         .await?;
     }
 
+    // Pull request_id from headers once; used in trace comment + mutation log.
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
+
+    // Build once and share across both executor call sites below.
+    let mut_ctx = MutationContext {
+        schema:     &schema,
+        request_id: &request_id,
+        tenant_id:  auth.tenant_id,
+        project_id: auth.project_id,
+        table:      &req.table,
+        operation:  &req.operation,
+        user_id:    &auth.user_id,
+    };
+
     // 8. Execute — single SQL or batched per-level fetches.
     //    Wrapped in a timeout so runaway queries don't hold connections forever.
     let t_exec = std::time::Instant::now();
     let result = state.query_guard.with_timeout(async {
         match compile_result {
             CompileResult::Single(ref cq) => {
-                executor::execute(&state.pool, cq).await
+                executor::execute(&state.pool, cq, &mut_ctx).await
             }
             CompileResult::Batched { ref root, ref plan } => {
-                let root_result = executor::execute(&state.pool, root).await?;
+                let root_result = executor::execute(&state.pool, root, &mut_ctx).await?;
                 let mut rows = root_result.as_array().cloned().unwrap_or_default();
                 executor::execute_batched(&state.pool, &mut rows, &plan.stages).await?;
                 Ok(serde_json::Value::Array(rows))
@@ -202,11 +220,6 @@ pub async fn handler(
         CompileResult::Batched { root, .. } => root.sql.clone(),
     };
     let rows_returned = result.as_array().map_or(0, |a| a.len());
-    let request_id = headers
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("-")
-        .to_string();
     tracing::info!(
         op    = %req.operation,
         table = %req.table,
