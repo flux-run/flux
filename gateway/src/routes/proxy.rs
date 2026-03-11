@@ -210,7 +210,7 @@ pub async fn proxy_handler(
             .unwrap_or("unknown");
         
         let limit_key = format!("{}:{}", route.id, client_ip);
-        if !crate::middleware::rate_limit::check_rate_limit(&limit_key, limit) {
+        if !crate::middleware::rate_limit::check_rate_limit(&limit_key, limit.max(0) as u32) {
             return (
                 axum::http::StatusCode::TOO_MANY_REQUESTS,
                 Json(serde_json::json!({ "error": "rate_limit_exceeded", "message": "Too many requests. Please try again later." }))

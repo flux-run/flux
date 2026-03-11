@@ -10,6 +10,10 @@ pub struct Config {
     pub port: u16,
     /// Fluxbase API base URL — used to proxy SSE event streams and management calls.
     pub api_url: String,
+    /// Per-tenant request rate limit (requests per second). Default: 50.
+    pub rate_limit_per_sec: u32,
+    /// Per-tenant maximum concurrent in-flight queries. Default: 20.
+    pub max_concurrent_per_tenant: usize,
 }
 
 impl Config {
@@ -26,6 +30,14 @@ impl Config {
                 .parse()
                 .expect("PORT must be a number"),
             api_url: env::var("API_URL").unwrap_or_else(|_| "http://localhost:8080".to_string()),
+            rate_limit_per_sec: env::var("RATE_LIMIT_PER_SEC")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(50),
+            max_concurrent_per_tenant: env::var("MAX_CONCURRENT_PER_TENANT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(20),
         }
     }
 }

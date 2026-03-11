@@ -207,6 +207,50 @@ pub async fn proxy_handler(
     };
     let query_start = Instant::now();
 
+    // ── Improvement #1: Per-tenant rate limiting ───────────────────────────────
+    // Token bucket fills at rate_limit_per_sec tokens/second; burst = limit.
+    // Keyed by tenant_id to isolate tenants from each other.
+    let rate_key = span_tenant_id
+        .map(|t| t.to_string())
+        .or_else(|| {
+            in_headers
+                .get("x-fluxbase-tenant")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "anonymous".to_string());
+
+    if !crate::middleware::rate_limit::check_rate_limit(&rate_key, state.rate_limit_per_sec) {
+        tracing::warn!(tenant = %rate_key, "gateway: rate limit exceeded");
+        let body = serde_json::json!({
+            "error": "rate_limited",
+            "message": "Too many requests. Please slow down and retry."
+        });
+        let mut resp = (axum::http::StatusCode::TOO_MANY_REQUESTS, axum::Json(body)).into_response();
+        resp.headers_mut().extend(cors_headers());
+        return Ok(resp);
+    }
+
+    // ── Improvement #2: Query structural validation ──────────────────────────
+    // Cheap O(columns) check applied before forwarding to the data-engine.
+    // Rejects: too many columns, too-deeply-nested selectors, too many filters.
+    // Malformed JSON is passed through so the data-engine returns a consistent error.
+    if uri.path().ends_with("/db/query") && !body_bytes.is_empty() {
+        if let Err((status, msg)) = crate::middleware::query_guard::validate_query_body(
+            &body_bytes,
+            &state.query_guard_config,
+        ) {
+            tracing::warn!(tenant = %rate_key, %msg, "gateway: query too complex");
+            let body = serde_json::json!({
+                "error": "query_too_complex",
+                "message": msg
+            });
+            let mut resp = (status, axum::Json(body)).into_response();
+            resp.headers_mut().extend(cors_headers());
+            return Ok(resp);
+        }
+    }
+
     // Headers to forward to the data-engine.
     let forward_headers: Vec<(String, String)> = in_headers
         .iter()
@@ -285,6 +329,34 @@ pub async fn proxy_handler(
                 }
                 return Ok(resp);
             }
+
+            // ── Improvement #3: Tenant concurrency budget ───────────────────
+            // Cache HITs bypass this entirely (no DB touch).
+            // try_acquire_owned() never queues — returns 429 when at capacity.
+            let _tenant_permit = {
+                let sem = state
+                    .tenant_semaphores
+                    .entry(rate_key.clone())
+                    .or_insert_with(|| {
+                        std::sync::Arc::new(tokio::sync::Semaphore::new(
+                            state.max_concurrent_per_tenant,
+                        ))
+                    })
+                    .clone();
+                match sem.try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::warn!(tenant = %rate_key, "gateway: concurrency limit exceeded");
+                        let body = serde_json::json!({
+                            "error": "concurrency_limit",
+                            "message": "Too many concurrent requests for this tenant. Retry shortly."
+                        });
+                        let mut resp = (axum::http::StatusCode::TOO_MANY_REQUESTS, axum::Json(body)).into_response();
+                        resp.headers_mut().extend(cors_headers());
+                        return Ok(resp);
+                    }
+                }
+            };
 
             // ── Single-flight MISS — coalesce concurrent requests ─────────
             // Capture everything the future needs as owned values so it is 'static.
@@ -369,6 +441,31 @@ pub async fn proxy_handler(
     }
 
     // ── Non-cacheable path (writes, file ops, missing project header) ─────
+    // ── Improvement #3: Tenant concurrency budget (non-cacheable path) ────
+    let _tenant_permit_nc = {
+        let sem = state
+            .tenant_semaphores
+            .entry(rate_key.clone())
+            .or_insert_with(|| {
+                std::sync::Arc::new(tokio::sync::Semaphore::new(
+                    state.max_concurrent_per_tenant,
+                ))
+            })
+            .clone();
+        match sem.try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::warn!(tenant = %rate_key, "gateway: concurrency limit exceeded (non-cacheable)");
+                let body = serde_json::json!({
+                    "error": "concurrency_limit",
+                    "message": "Too many concurrent requests for this tenant. Retry shortly."
+                });
+                let mut resp = (axum::http::StatusCode::TOO_MANY_REQUESTS, axum::Json(body)).into_response();
+                resp.headers_mut().extend(cors_headers());
+                return Ok(resp);
+            }
+        }
+    };
     let req_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 

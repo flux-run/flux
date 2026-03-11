@@ -68,6 +68,17 @@ async fn main() -> anyhow::Result<()> {
         jwks_cache,
         api_url: config.api_url,
         metric_tx,
+        rate_limit_per_sec: config.rate_limit_per_sec,
+        max_concurrent_per_tenant: config.max_concurrent_per_tenant,
+        tenant_semaphores: Arc::new(dashmap::DashMap::new()),
+        query_guard_config: middleware::query_guard::QueryGuardConfig {
+            max_columns: std::env::var("MAX_QUERY_COLUMNS")
+                .ok().and_then(|s| s.parse().ok()).unwrap_or(100),
+            max_selector_depth: std::env::var("MAX_SELECTOR_DEPTH")
+                .ok().and_then(|s| s.parse().ok()).unwrap_or(6),
+            max_filters: std::env::var("MAX_QUERY_FILTERS")
+                .ok().and_then(|s| s.parse().ok()).unwrap_or(20),
+        },
         query_cache: {
             let cache = cache::query_cache::QueryCache::new(
                 std::env::var("QUERY_CACHE_TTL_SECS")
