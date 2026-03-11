@@ -524,17 +524,21 @@ pub async fn get_trace(
 
 // ─── GET /traces  (list recent requests, project-scoped, Firebase auth) ───────
 //
-// Query params:
-//   before  — ISO-8601 timestamp; return request IDs whose first span is older
-//   exclude — request_id to skip (typically the one currently being inspected)
+// Dual-mode:
+//   ?since=<ISO-8601>   → forward: requests that *started after* since (flux tail)
+//   ?before=<ISO-8601>  → backward: requests that *started before* before (flux why)
+//
+// Additional params:
+//   exclude — request_id to skip (used by flux why to exclude current request)
 //   limit   — default 5, max 20
 //
-// Used by `flux why` to surface the "PREVIOUS REQUEST" block — what request
-// ran just before the one being debugged.
+// Each trace object includes: request_id, started_at, duration_ms, method, path,
+// status, function, error (first error message if status >= 400).
 
 #[derive(Deserialize)]
 pub struct ListTracesQuery {
     pub before:  Option<String>,
+    pub since:   Option<String>,
     pub exclude: Option<String>,
     pub limit:   Option<i64>,
 }
@@ -547,52 +551,67 @@ pub async fn list_traces(
     let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
     let pool       = &state.pool;
     let limit      = params.limit.unwrap_or(5).min(20);
+    let exclude    = params.exclude.unwrap_or_default();
 
-    let before: chrono::DateTime<chrono::Utc> = params.before.as_deref()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-        .unwrap_or_else(chrono::Utc::now);
-
-    let exclude = params.exclude.unwrap_or_default();
-
-    // Step 1 — find the N most-recent *distinct* request_ids whose first span
-    // started before `before`, excluding the current request being debugged.
+    // ── Step 1: find distinct request windows ─────────────────────────────────
     #[derive(sqlx::FromRow)]
-    struct ReqWindow { request_id: String, started_at: chrono::DateTime<chrono::Utc>, ended_at: chrono::DateTime<chrono::Utc> }
+    struct ReqWindow {
+        request_id: String,
+        started_at: chrono::DateTime<chrono::Utc>,
+        ended_at:   chrono::DateTime<chrono::Utc>,
+    }
 
-    let windows = sqlx::query_as::<_, ReqWindow>(
-        "SELECT request_id, MIN(timestamp) AS started_at, MAX(timestamp) AS ended_at \
-         FROM platform_logs \
-         WHERE project_id = $1 \
-           AND request_id IS NOT NULL \
-           AND request_id != '' \
-           AND ($3 = '' OR request_id != $3) \
-           AND timestamp < $2 \
-         GROUP BY request_id \
-         ORDER BY started_at DESC \
-         LIMIT $4",
-    )
-    .bind(project_id)
-    .bind(before)
-    .bind(&exclude)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .map_err(|_| db_err())?;
+    let since_ts = params.since.as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    let windows: Vec<ReqWindow> = if let Some(ts) = since_ts {
+        // Forward mode: tail polling — requests whose first span arrived AFTER ts
+        sqlx::query_as::<_, ReqWindow>(
+            "SELECT request_id, MIN(timestamp) AS started_at, MAX(timestamp) AS ended_at \
+             FROM platform_logs \
+             WHERE project_id = $1 \
+               AND request_id IS NOT NULL AND request_id != '' \
+               AND timestamp > $2 \
+             GROUP BY request_id \
+             ORDER BY started_at ASC \
+             LIMIT $3",
+        )
+        .bind(project_id).bind(ts).bind(limit)
+        .fetch_all(pool).await.map_err(|_| db_err())?
+    } else {
+        // Backward mode: why — requests whose first span started BEFORE before_ts
+        let before_ts: chrono::DateTime<chrono::Utc> = params.before.as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+
+        sqlx::query_as::<_, ReqWindow>(
+            "SELECT request_id, MIN(timestamp) AS started_at, MAX(timestamp) AS ended_at \
+             FROM platform_logs \
+             WHERE project_id = $1 \
+               AND request_id IS NOT NULL AND request_id != '' \
+               AND ($3 = '' OR request_id != $3) \
+               AND timestamp < $2 \
+             GROUP BY request_id \
+             ORDER BY started_at DESC \
+             LIMIT $4",
+        )
+        .bind(project_id).bind(before_ts).bind(&exclude).bind(limit)
+        .fetch_all(pool).await.map_err(|_| db_err())?
+    };
 
     if windows.is_empty() {
         return Ok(ApiResponse::new(serde_json::json!({ "traces": [] })));
     }
 
-    // Step 2 — for each request_id, fetch one gateway span to get method/path/status.
-    // We use a single IN query to avoid N+1.
+    // ── Step 2: batch-fetch gateway span (method/path/status) ─────────────────
     let ids: Vec<String> = windows.iter().map(|w| w.request_id.clone()).collect();
     let id_list = ids.iter().map(|id| format!("'{id}'")).collect::<Vec<_>>().join(",");
 
     #[derive(sqlx::FromRow)]
     struct GatewaySpan { request_id: String, metadata: Option<serde_json::Value> }
 
-    // DISTINCT ON guarantees one representative gateway span per request_id.
     let gw_sql = format!(
         "SELECT DISTINCT ON (request_id) request_id, metadata \
          FROM platform_logs \
@@ -602,18 +621,74 @@ pub async fn list_traces(
     );
     let gw_spans = sqlx::query_as::<_, GatewaySpan>(&gw_sql)
         .bind(project_id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+        .fetch_all(pool).await.unwrap_or_default();
 
     let gw_map: std::collections::HashMap<String, serde_json::Value> = gw_spans
         .into_iter()
         .filter_map(|s| s.metadata.map(|m| (s.request_id, m)))
         .collect();
 
+    // ── Step 3: batch-fetch function name + first error message ───────────────
+    // A single query returns: runtime spans (→ function name via resource_id)
+    // and error spans (→ error message). DISTINCT ON picks the best row per
+    // (request_id, priority) — errors take priority 1, runtime takes 2.
+    #[derive(sqlx::FromRow)]
+    struct EnrichSpan {
+        request_id:  String,
+        source:      Option<String>,
+        resource_id: Option<String>,
+        message:     Option<String>,
+        level:       Option<String>,
+        span_type:   Option<String>,
+    }
+
+    let enrich_sql = format!(
+        "SELECT DISTINCT ON (request_id, pr) request_id, source, resource_id, message, level, span_type \
+         FROM ( \
+           SELECT request_id, source, resource_id, message, level, span_type, \
+                  CASE WHEN level='error' OR span_type='error' THEN 1 \
+                       WHEN source='runtime' THEN 2 \
+                       ELSE 3 END AS pr \
+           FROM platform_logs \
+           WHERE project_id = $1 AND request_id IN ({id_list}) \
+             AND (level='error' OR span_type='error' OR source='runtime') \
+         ) sub \
+         ORDER BY request_id, pr, timestamp ASC",
+    );
+    let enrich_rows = sqlx::query_as::<_, EnrichSpan>(&enrich_sql)
+        .bind(project_id)
+        .fetch_all(pool).await.unwrap_or_default();
+
+    // Build maps: request_id → function_name, request_id → error_message
+    let mut fn_map:  std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut err_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    for row in enrich_rows {
+        let is_error = row.level.as_deref() == Some("error")
+            || row.span_type.as_deref() == Some("error");
+        if is_error {
+            err_map.entry(row.request_id.clone()).or_insert_with(|| {
+                row.message.unwrap_or_default()
+            });
+        }
+        if row.source.as_deref() == Some("runtime") {
+            fn_map.entry(row.request_id.clone()).or_insert_with(|| {
+                row.resource_id.unwrap_or_default()
+            });
+        }
+    }
+
+    // ── Assemble response ─────────────────────────────────────────────────────
     let traces: Vec<serde_json::Value> = windows.iter().map(|w| {
-        let meta = gw_map.get(&w.request_id).cloned().unwrap_or_default();
+        let meta        = gw_map.get(&w.request_id).cloned().unwrap_or_default();
         let duration_ms = (w.ended_at - w.started_at).num_milliseconds();
+        let status      = meta.get("status").and_then(|v| v.as_i64()).unwrap_or(0)
+            // some gateways write "status_code"
+            .max(meta.get("status_code").and_then(|v| v.as_i64()).unwrap_or(0));
+        let function    = fn_map.get(&w.request_id).cloned()
+            .or_else(|| meta.get("function").and_then(|v| v.as_str()).map(str::to_string))
+            .unwrap_or_default();
+        let error       = err_map.get(&w.request_id).cloned().unwrap_or_default();
 
         serde_json::json!({
             "request_id":  w.request_id,
@@ -621,7 +696,10 @@ pub async fn list_traces(
             "duration_ms": duration_ms,
             "method":      meta.get("method").and_then(|v| v.as_str()).unwrap_or("?"),
             "path":        meta.get("path").and_then(|v| v.as_str()).unwrap_or("?"),
-            "status":      meta.get("status").and_then(|v| v.as_i64()).unwrap_or(0),
+            "status":      status,
+            "function":    function,
+            "error":       error,
+            "is_error":    status >= 400 || !error.is_empty(),
         })
     }).collect();
 

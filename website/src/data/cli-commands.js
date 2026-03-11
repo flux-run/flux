@@ -20,15 +20,23 @@ export const CLI_COMMANDS = [
   {
     cmd:     'flux tail',
     summary: 'Stream live request logs',
-    desc:    'Opens a real-time log stream from the gateway. Every incoming request prints its method, path, status, and latency. Errors are highlighted red. Press Ctrl-C to stop.',
+    desc:    'Real-time request stream with inline data mutations and error messages. Every request shows method, path, duration, and the rows it changed. Errors show the reason immediately.',
     example: `$ flux tail
 
-  Streaming logs…
+METHOD   ROUTE                         FUNCTION               DURATION   STATUS
+────────────────────────────────────────────────────────────────────────────────
+POST     /login                        auth_user              38ms       ✔
+   users.id=7f3a  last_login_at → 2026-03-11T…
 
-  ✔  POST /create_user   201   98ms  req:4f9a3b2c
-  ✔  GET  /list_users    200   12ms  req:a3c91ef0
-  ✗  POST /signup        500   44ms  req:550e8400
-     └─ Error: Stripe timeout`,
+POST     /checkout                     create_order           121ms      ✔
+   orders.id=82b1  insert
+   cart_items.id=a2f1  insert
+
+POST     /signup                       create_user            3.2s       ✗ 500
+   error: Stripe timeout after 10000ms
+   → flux why 550e8400
+   ⚠ same row as previous request
+   users.id=7f3a  plan free → pro`,
   },
   {
     cmd:     'flux why <request-id>',
@@ -36,9 +44,15 @@ export const CLI_COMMANDS = [
     desc:    "Fetches the full trace for a request, identifies the first failing span, and explains the cause in plain language — plus shows what request ran just before it.",
     example: `$ flux why 550e8400
 
-✗  POST /signup → create_user  (142ms, 500 FAILED)
+✗  POST /signup → create_user  (3200ms, 500 FAILED)
     request_id:  550e8400-e29b-41d4-a716-446655440000
-    error:       TypeError: Cannot read properties of undefined (reading 'id')
+    error:       Stripe timeout after 10000ms
+
+─── Execution graph ────────────────────────────────────────────────────────
+  gateway     POST /signup                    2ms
+  runtime     create_user                     1ms
+  db          users (SELECT)                  12ms
+  tool        stripe.charge                   3200ms  ⚠ slow
 
 ─── State changes (1 mutation) ─────────────────────────────────────────────
   users  v1  INSERT  by api-key  id=7f3a…

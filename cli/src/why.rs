@@ -207,6 +207,63 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
         }
     }
 
+    // ── Execution graph ───────────────────────────────────────────────────────
+    // Condense spans into a timeline table — source / resource / duration / slow mark.
+    // Only includes spans that represent meaningful work (skips raw log entries).
+    {
+        let graph_types = [
+            "request", "gateway_request", "http_request",
+            "function", "db", "db_query",
+            "tool", "workflow_step", "agent_step",
+        ];
+        let mut graph_spans: Vec<&Value> = spans.iter()
+            .filter(|s| {
+                let st = s["span_type"].as_str().unwrap_or("");
+                graph_types.contains(&st)
+            })
+            .collect();
+
+        // Sort by start offset: elapsed_ms - delta_ms
+        graph_spans.sort_by_key(|s| {
+            let elapsed = s["elapsed_ms"].as_i64().unwrap_or(0);
+            let delta   = s["delta_ms"].as_i64().unwrap_or(0);
+            elapsed - delta
+        });
+        graph_spans.truncate(12);
+
+        if !graph_spans.is_empty() {
+            println!();
+            println!(
+                "{}",
+                "─── Execution graph ────────────────────────────────────────────────────────".dimmed()
+            );
+            for s in &graph_spans {
+                let src = s["source"].as_str().unwrap_or("?");
+                let res = s["resource"].as_str().unwrap_or("?");
+                let ms  = s["delta_ms"].as_i64()
+                    .filter(|&v| v > 0)
+                    .unwrap_or_else(|| s["elapsed_ms"].as_i64().unwrap_or(0));
+                let is_s = s["is_slow"].as_bool().unwrap_or(false) || ms > 500;
+
+                let ms_str = if ms >= 1_000 {
+                    format!("{:.1}s", ms as f64 / 1_000.0)
+                } else {
+                    format!("{}ms", ms)
+                };
+
+                let slow_suffix = if is_s { "  ⚠ slow".yellow().to_string() } else { String::new() };
+
+                println!(
+                    "  {}  {}  {}{}",
+                    format!("{:<10}", src).dimmed(),
+                    format!("{:<32}", trunc(res, 32)),
+                    if is_s { ms_str.yellow().to_string() } else { ms_str.dimmed().to_string() },
+                    slow_suffix,
+                );
+            }
+        }
+    }
+
     // ── State mutations ──────────────────────────────────────────────────────
     let mutations = mut_body
         .get("mutations")

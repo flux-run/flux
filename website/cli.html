@@ -206,7 +206,7 @@
       <div>
         <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:10px;">flux tail</div>
         <h3 style="font-size:1.2rem;font-weight:700;margin-bottom:12px;">Stream live request logs</h3>
-        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Opens a real-time log stream from the gateway. Every incoming request prints its method, path, status, and latency. Errors are highlighted red. Press Ctrl-C to stop.</p>
+        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Real-time request stream with inline data mutations and error messages. Every request shows method, path, duration, and the rows it changed. Errors show the reason immediately.</p>
       </div>
       <div><div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
     <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
@@ -217,12 +217,20 @@
     </div>
     <pre style="margin:0;border:none;border-radius:0;padding:20px 24px;background:#0a0a0c;"><code style="font-size:.82rem;line-height:1.85;">$ flux tail
 
-  Streaming logs…
+METHOD   ROUTE                         FUNCTION               DURATION   STATUS
+────────────────────────────────────────────────────────────────────────────────
+POST     /login                        auth_user              38ms       ✔
+   users.id=7f3a  last_login_at → 2026-03-11T…
 
-  ✔  POST /create_user   201   98ms  req:4f9a3b2c
-  ✔  GET  /list_users    200   12ms  req:a3c91ef0
-  ✗  POST /signup        500   44ms  req:550e8400
-     └─ Error: Stripe timeout</code></pre>
+POST     /checkout                     create_order           121ms      ✔
+   orders.id=82b1  insert
+   cart_items.id=a2f1  insert
+
+POST     /signup                       create_user            3.2s       ✗ 500
+   error: Stripe timeout after 10000ms
+   → flux why 550e8400
+   ⚠ same row as previous request
+   users.id=7f3a  plan free → pro</code></pre>
   </div></div>
     </div>
   </div>
