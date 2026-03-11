@@ -188,6 +188,15 @@ fn compile_select(
     next: &mut usize,
     opts: &CompilerOptions,
 ) -> Result<CompileResult, EngineError> {
+    // Guard: OFFSET without an explicit LIMIT is ambiguous — the caller has no
+    // stable contract for what rows they'll receive because the default limit
+    // may change.  Require an explicit limit whenever an offset is supplied.
+    if req.offset.is_some() && req.limit.is_none() {
+        return Err(EngineError::MissingField(
+            "limit is required when offset is specified".into(),
+        ));
+    }
+
     // ── Batched execution path (depth ≥ BATCH_DEPTH_THRESHOLD) ─────────────
     //
     // When the selector tree is deeper than the CTE threshold, PostgreSQL's

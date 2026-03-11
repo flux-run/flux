@@ -1292,6 +1292,54 @@ Latency is now constant and independent of how many schemas/tables exist in the 
 
 ---
 
+### Gap 18 — Automatic LIMIT Guard on SELECT Queries `[resolved]`
+
+**Problem:** A BYODB table with 10 M+ rows and no explicit `limit` in the query request would issue an unbounded `SELECT … FROM schema.table` and stream the entire result set through the data engine, exhausting memory and connection time on both sides. Additionally, a caller could supply `offset` without `limit`, creating ambiguous pagination with no stable row contract.
+
+**Root cause:** The query compiler accepted `QueryRequest.limit = null` and passed it straight to the SQL template with no default injection. Callers that omitted `limit` received whatever Postgres returned, which is every row.
+
+**Fix — two layers, both in `query_compiler.rs`:**
+
+1. **OFFSET-without-LIMIT guard** (new) — At the top of `compile_select`, before any SQL is built:
+   ```rust
+   if req.offset.is_some() && req.limit.is_none() {
+       return Err(EngineError::MissingField(
+           "limit is required when offset is specified".into(),
+       ));
+   }
+   ```
+   Returns HTTP 400 immediately. Callers that rely on `limit=null` for offset-based pagination are broken by design and must be fixed.
+
+2. **Automatic LIMIT injection** (was already present in both paths) — When `limit` is present but omitted, `default_limit` (default 100) is injected. When a caller-supplied `limit` exceeds `max_limit` (default 5 000), it is silently clamped:
+   ```rust
+   let effective_limit = match req.limit {
+       Some(l) => l.min(opts.max_limit).max(1),
+       None    => opts.default_limit,
+   };
+   ```
+   This runs in both the batched (depth ≥ `BATCH_DEPTH_THRESHOLD`) and the non-batched SELECT path.
+
+**Configuration:**
+
+| Env var | Default | Description |
+|---|---|---|
+| `DEFAULT_QUERY_LIMIT` | `100` | Applied when `limit` is omitted |
+| `MAX_QUERY_LIMIT` | `5000` | Maximum rows any single SELECT may return |
+
+**Behaviour summary:**
+
+| Request | Result |
+|---|---|
+| `limit=null, offset=null` | Injects `LIMIT 100` |
+| `limit=50, offset=null` | Uses `LIMIT 50` |
+| `limit=10000, offset=null` | Clamped to `LIMIT 5000` |
+| `limit=null, offset=200` | **400 Bad Request** — limit is required |
+| `limit=50, offset=200` | `LIMIT 50 OFFSET 200` — valid |
+
+No migration required; this is a compiler-only change.
+
+---
+
 ### Other Items
 
 | Area | Item |
