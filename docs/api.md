@@ -281,7 +281,9 @@ Request
   │
   ▼  CORS (tower-http CorsLayer) ← handle OPTIONS preflight before auth
   │
-  ▼  DefaultBodyLimit (1 MB)
+  ▼  DefaultBodyLimit (1 MB)        ← global cap; /functions/deploy overrides to 10 MB
+  │                                    ⚠ watch: schema/OpenAPI generation for large
+  │                                      projects can approach 1 MB — see §13
   │
   ▼  verify_auth                 ← Firebase JWT or flux_* API key
   │
@@ -340,8 +342,25 @@ Three scopes, enforced at the middleware layer:
 | Tenant   | + `X-Fluxbase-Tenant: <uuid>`                        | Row in `tenant_members` for (tenant_id, user_id)        |
 | Project  | + `X-Fluxbase-Project: <uuid>`                       | Row in `projects` WHERE tenant_id matches               |
 
-Role is preserved in `context.role` (`owner` / `member` / `viewer`). Individual
-handlers are responsible for enforcing role-level restrictions beyond scope.
+Role is preserved in `context.role` (`owner` / `member` / `viewer`).
+
+**Role enforcement policy**: Destructive and sensitive operations use a shared helper
+`require_role(context, &["owner"])` (implemented in `middleware/internal_auth.rs`) so
+role checks never live only in leaf handler bodies. This prevents an audit gap where
+a new handler could forget to check role:
+
+| Operation | Required role |
+|-----------|---------------|
+| DELETE `/tenants/{id}` | `owner` |
+| DELETE `/projects/{id}` | `owner` |
+| DELETE `/functions/{id}` | `owner` or `member` |
+| POST `/secrets` / PUT / DELETE | `owner` or `member` |
+| POST `/api-keys` | `owner` or `member` |
+| DELETE `/api-keys/{id}` | `owner` |
+| GET, list operations | any authenticated role |
+
+Finer-grained policy (e.g., viewer can read but not write) is enforced at the handler
+level after the scope guard passes.
 
 ---
 
@@ -651,6 +670,19 @@ Returns a flat map:
 
 This is fetched by the runtime before invoking a function handler.
 
+**Security — two-layer protection** (a leaked token alone is not sufficient for access):
+
+1. **`X-Service-Token` header** — must match `INTERNAL_SERVICE_TOKEN` env var. Validated
+   via constant-time compare to prevent timing attacks.
+2. **Network restriction (required in production)** — `/internal/*` endpoints must only be
+   reachable from the internal subnet (Runtime, Gateway, Queue). Configure Cloud Run
+   ingress to `internal-and-cloud-load-balancing` and restrict `/internal/` via VPC
+   connector or allow-list. If a token is leaked, network isolation prevents an external
+   caller from ever reaching the endpoint.
+
+> Without network isolation, a single leaked `INTERNAL_SERVICE_TOKEN` exposes decrypted
+> secrets for every tenant on the platform.
+
 ---
 
 ## 12. API Keys Management
@@ -664,6 +696,18 @@ See [Authentication § 8.2](#82-api-keys-flux_) for the cryptographic details.
 | Create    | `POST /api-keys`          | Project | Returns plaintext key **once**              |
 | List      | `GET /api-keys`           | Project | Returns metadata — `key_hash` not exposed   |
 | Revoke    | `DELETE /api-keys/{id}`   | Tenant  | Soft-delete (`revoked = true`)              |
+
+**Roadmap — key scopes**: All keys are currently full project-scope (read + write + deploy).
+Future work will add a `scope` field to `api_keys`:
+
+| Scope | Permissions |
+|-------|-------------|
+| `read` | GET endpoints only — schema, logs, traces |
+| `deploy` | read + `POST /functions/deploy` |
+| `admin` | full project access including secret management |
+
+This enables issuing CI/CD tokens (`deploy` scope) and monitoring tokens (`read`
+scope) separately from full admin credentials.
 
 ---
 
@@ -688,6 +732,11 @@ The schema graph contains:
 Generates a typed TypeScript client from the live schema graph.
 
 - Cached in `AppState.sdk_cache` keyed by `"{project_id}:{schema_hash}"`.
+- **Schema hash is recomputed on every request** by fetching fresh schema from the Data
+  Engine and hashing it. This is the only correct way to detect schema changes — a
+  stale hash in the key would serve outdated SDK code to new callers. The hash derivation
+  cost is a single Data Engine round-trip (~10–20ms), which is amortized by the hit path
+  being a pure in-memory HashMap lookup.
 - Cache is auto-invalidated when the schema changes (new hash ≠ cached key).
 - Generated code includes typed query functions, table interfaces, and type-safe event subscriptions.
 
@@ -726,7 +775,39 @@ gateway_routes
 | Update    | PATCH `/routes/{id}` — partial update via JSON merge                        |
 | Delete    | DELETE `/routes/{id}` — removes route; gateway picks up change at next poll |
 
-The Gateway service polls or watches this table to build its routing table.
+The Gateway service polls this table (60s interval) to build its routing snapshot.
+
+**Roadmap — instant propagation via LISTEN/NOTIFY**:
+
+The current poll-based model causes up to 60s lag when a route is created or deleted.
+Migration path:
+
+```sql
+-- Postgres trigger on gateway_routes writes to a notification channel
+CREATE OR REPLACE FUNCTION notify_route_change() RETURNS TRIGGER AS $$
+BEGIN
+  PERFORM pg_notify('gateway_routes_changed', NEW.id::text);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER route_change_trigger
+AFTER INSERT OR UPDATE OR DELETE ON gateway_routes
+FOR EACH ROW EXECUTE FUNCTION notify_route_change();
+```
+
+The gateway subscribes via `LISTEN gateway_routes_changed` and triggers an immediate
+snapshot reload on notification. This reduces route propagation from 60s to <1s.
+
+**Alternative — route version table** (lower DB overhead):
+
+```sql
+CREATE TABLE routes_version (id SERIAL PRIMARY KEY, version BIGINT);
+```
+
+Gateway polls `SELECT version FROM routes_version` (cheap, 1-row read) every 5s.
+Only triggers a full route reload when the version changes. Reduces DB load from
+the current full-table scan on every 60s tick.
 
 ---
 
@@ -800,6 +881,16 @@ shared demo accounts.
 
 Real-time table-change events are distributed using an in-process broadcast channel
 (capacity: 1024 messages).
+
+> **Scalability note**: The in-process `tokio::broadcast` channel works correctly for
+> a single API instance. When the API scales to multiple replicas, events emitted to
+> one replica are not visible to clients connected to another. Migration path:
+> 1. **Redis PubSub** — `PUBLISH project:{id} {event}` from any replica; each replica
+>    subscribes and fans out to its local SSE connections. Simple and sufficient for
+>    most production workloads.
+> 2. **NATS** / **Kafka** — for ordered guarantees and at-least-once delivery.
+>
+> For single-instance deployment the current model is correct and production-ready.
 
 ### Architecture
 
@@ -895,6 +986,14 @@ is called to page through cold-tier S3 objects transparently.
 Returns all log spans with the given `request_id` across all services and sources,
 ordered by timestamp. Used to reconstruct the full execution path of a single
 request across API → Gateway → Runtime → Data Engine.
+
+**Request envelope storage** — The API is the correct service for trace reconstruction
+because it already owns `platform_logs`, log archival, and distributed trace queries.
+The raw request envelope (method, path, headers, body) is stored by the **Gateway** in
+`trace_requests` before forwarding to runtime. The API retrieves this envelope as part
+of `GET /traces/{request_id}` so the full replay context is always available even if
+gateway log retention is short. This is what makes `flux incident replay` and
+`flux bug bisect` work reliably — the control plane holds the replay source of truth.
 
 ### `x-request-id` propagation
 
