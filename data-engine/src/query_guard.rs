@@ -116,7 +116,7 @@ impl QueryGuard {
 // ─── Scorer ──────────────────────────────────────────────────────────────────
 
 /// Compute the complexity score for a [`QueryRequest`].
-fn score_request(req: &QueryRequest) -> u64 {
+pub fn score_request(req: &QueryRequest) -> u64 {
     // Each filter term costs 2 (it adds one WHERE predicate + bind param).
     let filter_score: u64 = req.filters.as_deref().map_or(0, |f| f.len() as u64 * 2);
 

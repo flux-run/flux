@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::{
     api::{
-        handlers::{cron, databases, debug, files, history, hooks, mutations, policies, query, relationships, schema, subscriptions, tables, workflows},
+        handlers::{cron, databases, debug, explain, files, history, hooks, mutations, policies, query, relationships, schema, subscriptions, tables, workflows},
         middleware::service_auth::require_service_token,
     },
     state::AppState,
@@ -48,7 +48,8 @@ pub fn build(state: Arc<AppState>) -> Router {
         // ── Schema introspection ───────────────────────────────────────────────
         .route("/db/schema", get(schema::introspect))
         // ── Debug / engine introspection ────────────────────────────────────────
-        .route("/db/debug", get(debug::handler))
+        .route("/db/debug",   get(debug::handler))
+        .route("/db/explain", post(explain::handler))
         // ── File presigned URLs ───────────────────────────────────────────────
         .route("/files/upload-url",   post(files::upload_url))
         .route("/files/download-url", post(files::download_url))

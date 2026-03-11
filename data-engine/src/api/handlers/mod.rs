@@ -1,6 +1,7 @@
 pub mod cron;
 pub mod databases;
 pub mod debug;
+pub mod explain;
 pub mod files;
 pub mod history;
 pub mod hooks;

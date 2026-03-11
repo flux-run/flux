@@ -309,7 +309,7 @@ POST /db/query
   │     ├─ Complexity score check  → HTTP 400 if over ceiling
   │     └─ Nesting depth check     → HTTP 400 if too deep
   │
-  ├─ 5. Schema existence check (information_schema)  → HTTP 404 if missing
+  ├─ 5. Schema existence check (pg_catalog)            → HTTP 404 if missing
   │
   ├─ 6. Table existence check                        → HTTP 404 if missing
   │

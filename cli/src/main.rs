@@ -17,6 +17,7 @@ mod doctor;
 mod env_cmd;
 mod errors;
 mod event;
+mod explain;
 mod functions;
 mod gateway;
 mod incident;
@@ -195,6 +196,21 @@ enum Commands {
         gateway_url: Option<String>,
         #[arg(long, value_name = "URL")]
         runtime_url: Option<String>,
+    },
+
+    /// Dry-run a query: show the compiler output, applied policies, complexity score, and
+    /// compiled SQL without executing against the database.
+    ///
+    /// Examples:
+    ///   flux explain request.json
+    ///   flux explain -          (read JSON from stdin)
+    ///   flux explain request.json --json
+    Explain {
+        /// Path to a JSON query file (use "-" for stdin)
+        file: Option<std::path::PathBuf>,
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Compare two executions of the same request: duration, status, and field-level state diffs.
@@ -615,6 +631,7 @@ async fn main() -> anyhow::Result<()> {
                 bisect::execute(function, good, bad, threshold, json).await?,
         },
         Commands::Why  { request_id, json } => why::execute(request_id, json).await?,
+        Commands::Explain { file, json } => explain::execute(file, json).await?,
         Commands::State    { command } => state::execute(command).await?,
         Commands::Incident { command } => incident::execute(command).await?,
 
