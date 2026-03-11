@@ -1,13 +1,15 @@
 /// OpenAPI 3.0 generator.
 ///
-/// GET /openapi.json
+/// GET /openapi.json  — machine-readable spec (project-scoped, authenticated)
+/// GET /openapi/ui    — Swagger UI browser, project-bounded + pre-authenticated
+///                      via ?token=&tenant=&project= query params
 ///
-/// Generates a complete OpenAPI 3.0 specification from the live schema graph
-/// (tables, columns, functions) for the current project. This is suitable for
-/// importing into Postman, Insomnia, Swagger UI, or code generator tooling.
-use axum::extract::{Extension, State};
+/// The spec is generated from the live schema graph (DB tables + functions)
+/// and is suitable for Postman, Insomnia, Swagger UI, and code generators.
+use axum::extract::{Extension, Query, State};
 use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::{
@@ -19,6 +21,138 @@ use crate::{
 };
 
 use super::sdk::fetch_schema_graph_pub;
+
+// ─── Swagger UI page ──────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct UiQuery {
+    /// API key or Bearer token — pre-populated as the default Authorization value
+    pub token:   Option<String>,
+    /// Tenant UUID — injected into every request header automatically
+    pub tenant:  Option<String>,
+    /// Project UUID — injected into every request header automatically
+    pub project: Option<String>,
+}
+
+/// GET /openapi/ui
+///
+/// Serves an interactive Swagger UI page scoped to a single project.
+/// The client is fully authenticated: the token, tenant ID, and project ID
+/// are injected via a requestInterceptor into every request Swagger makes,
+/// including the initial spec load.
+///
+/// Share URL format:
+///   https://api.fluxbase.co/openapi/ui?token=flux_...&tenant=<tid>&project=<pid>
+pub async fn ui(Query(params): Query<UiQuery>) -> impl IntoResponse {
+    let token   = params.token.unwrap_or_default();
+    let tenant  = params.tenant.unwrap_or_default();
+    let project = params.project.unwrap_or_default();
+
+    let html = format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fluxbase API Explorer</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d0d0d; color: #e0e0e0; }}
+    #top-bar {{
+      background: #111; border-bottom: 1px solid #222;
+      padding: 12px 24px; display: flex; align-items: center; gap: 16px;
+    }}
+    #top-bar .logo {{ font-weight: 700; font-size: 1rem; color: #fff; letter-spacing: -.02em; }}
+    #top-bar .badge {{
+      font-size: .72rem; background: #1a1a1a; border: 1px solid #333;
+      border-radius: 4px; padding: 2px 8px; color: #aaa; font-family: monospace;
+    }}
+    #top-bar .auth-status {{
+      margin-left: auto; font-size: .78rem;
+      color: {auth_color};
+    }}
+    #swagger-ui {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
+    /* Dark-mode overrides */
+    .swagger-ui .topbar {{ display: none; }}
+    .swagger-ui {{ color: #e0e0e0; }}
+    .swagger-ui .info .title {{ color: #fff; }}
+    .swagger-ui .scheme-container {{ background: #111; border-bottom: 1px solid #222; }}
+    .swagger-ui .opblock-tag {{ color: #ccc; border-bottom: 1px solid #222; }}
+    .swagger-ui .opblock .opblock-summary-method {{ font-weight: 700; }}
+    .swagger-ui input[type=text], .swagger-ui textarea {{ background: #1a1a1a; color: #e0e0e0; border-color: #333; }}
+    .swagger-ui select {{ background: #1a1a1a; color: #e0e0e0; border-color: #333; }}
+    .swagger-ui .btn {{ border-color: #444; color: #ccc; }}
+    .swagger-ui .btn.authorize {{ border-color: #4ade80; color: #4ade80; }}
+    .swagger-ui .auth-wrapper {{ background: #111; border-color: #333; }}
+    .swagger-ui section.models {{ background: #111; border-color: #222; }}
+    .swagger-ui .model-box {{ background: #0d0d0d; }}
+    .swagger-ui .opblock {{ background: #111; border-color: #222; }}
+    .swagger-ui .opblock.opblock-get {{ border-color: #1d4ed8; background: rgba(29,78,216,.06); }}
+    .swagger-ui .opblock.opblock-post {{ border-color: #15803d; background: rgba(21,128,61,.06); }}
+    .swagger-ui .opblock.opblock-patch {{ border-color: #b45309; background: rgba(180,83,9,.06); }}
+    .swagger-ui .opblock.opblock-delete {{ border-color: #b91c1c; background: rgba(185,28,28,.06); }}
+  </style>
+</head>
+<body>
+  <div id="top-bar">
+    <span class="logo">Fluxbase</span>
+    <span class="badge">API Explorer</span>
+    {project_badge}
+    <span class="auth-status">{auth_label}</span>
+  </div>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+  <script>
+    const TOKEN   = {token_js};
+    const TENANT  = {tenant_js};
+    const PROJECT = {project_js};
+
+    const ui = SwaggerUIBundle({{
+      url:     '/openapi.json',
+      dom_id:  '#swagger-ui',
+      presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+      layout:  'StandaloneLayout',
+      persistAuthorization: true,
+      deepLinking: true,
+      defaultModelsExpandDepth: 1,
+      defaultModelExpandDepth: 2,
+
+      // Inject auth headers into every request, including the spec load itself.
+      requestInterceptor: (req) => {{
+        if (TOKEN)   req.headers['Authorization']       = 'Bearer ' + TOKEN;
+        if (TENANT)  req.headers['X-Fluxbase-Tenant']  = TENANT;
+        if (PROJECT) req.headers['X-Fluxbase-Project'] = PROJECT;
+        return req;
+      }},
+
+      onComplete: () => {{
+        // Pre-populate the Authorization field in Swagger's auth dialog
+        if (TOKEN) {{
+          ui.preauthorizeApiKey('bearerAuth', TOKEN);
+        }}
+      }},
+    }});
+  </script>
+</body>
+</html>
+"#,
+        auth_color   = if token.is_empty() { "#f87171" } else { "#4ade80" },
+        auth_label   = if token.is_empty() {
+            "⚠ No token — add ?token=flux_... to the URL".to_string()
+        } else {
+            format!("✓ Authenticated · token …{}", &token[token.len().saturating_sub(6)..])
+        },
+        project_badge = if project.is_empty() { String::new() } else {
+            format!("<span class=\"badge\">project: {}…</span>", &project[..8.min(project.len())])
+        },
+        token_js   = if token.is_empty()   { "null".to_string() } else { format!("'{}'", token) },
+        tenant_js  = if tenant.is_empty()  { "null".to_string() } else { format!("'{}'", tenant) },
+        project_js = if project.is_empty() { "null".to_string() } else { format!("'{}'", project) },
+    );
+
+    Html(html)
+}
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 

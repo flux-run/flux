@@ -11,5 +11,6 @@ pub mod events;
 pub mod openapi;
 pub mod schema;
 pub mod sdk;
+pub mod spec;
 pub mod tools;
 pub mod demo;

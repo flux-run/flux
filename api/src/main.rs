@@ -195,6 +195,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/sdk/typescript",  get(routes::sdk::typescript))
         // OpenAPI 3.0 spec — generated from live schema.
         .route("/openapi.json",    get(routes::openapi::spec))
+        // Comprehensive project spec for agents, CLI, and dashboard docs.
+        .route("/spec",            get(routes::spec::project_spec))
         // Realtime SSE — subscribe to table-change events.
         .route("/events/stream",   get(routes::events::stream))
         // Function logs — project-scoped, supports ?function=&limit=&since=
@@ -264,6 +266,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/demo/trace/{request_id}", get(routes::demo::demo_trace))
         // OAuth callback — Composio redirects here after provider OAuth; no auth required
         .route("/tools/oauth/callback", get(routes::tools::oauth_callback))
+        // Swagger UI explorer — public page shell; auth injected via ?token=&tenant=&project= params
+        .route("/openapi/ui",           get(routes::openapi::ui))
         .route("/health", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
         .route("/version", get(|| async {
             Json(serde_json::json!({
