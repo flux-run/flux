@@ -323,6 +323,19 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
             _         => "✗".red().bold(),
         };
 
+        // How long before this request did the previous one start?
+        let gap_label: Option<String> = prev["started_at"].as_str().and_then(|prev_ts| {
+            let t0 = chrono::DateTime::parse_from_rfc3339(&first_span_ts).ok()?;
+            let t1 = chrono::DateTime::parse_from_rfc3339(prev_ts).ok()?;
+            let ms = (t0 - t1).num_milliseconds();
+            if ms <= 0 { return None; }
+            Some(if ms < 1_000 {
+                format!("{}ms before", ms)
+            } else {
+                format!("{:.1}s before", ms as f64 / 1000.0)
+            })
+        });
+
         // Rows that this request mutated — check if the previous request touched any.
         let mutated_rows: Vec<String> = mutations.iter().filter_map(|m| {
             let table = m["table_name"].as_str()?;
@@ -339,13 +352,17 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
             "{}",
             "─── Previous request ─────────────────────────────────────────────────────".dimmed()
         );
+        let gap_suffix = gap_label
+            .map(|g| format!("  ({})", g))
+            .unwrap_or_default();
         println!(
-            "  {} {}  {} {}  {}ms",
+            "  {} {}  {} {}  {}ms{}",
             p_icon,
             trunc(p_id, 12).dimmed(),
             p_method.bold(),
             trunc(p_path, 40),
             p_ms,
+            gap_suffix.dimmed(),
         );
         for row in &mutated_rows {
             println!(

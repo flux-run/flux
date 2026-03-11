@@ -46,7 +46,7 @@ export const CLI_COMMANDS = [
     plan:    free
 
 ─── Previous request ───────────────────────────────────────────────────────
-  ✔ 3c9f1a2b  POST /login  38ms
+  ✔ 3c9f1a2b  POST /login  38ms  (0.2s before)
   ⚠ also modified  users.id=7f3a…
 
 ─── Suggested next steps ───────────────────────────────────────────────────
