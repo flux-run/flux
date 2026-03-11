@@ -88,7 +88,6 @@ function writeVercelJson(builtPaths) {
   ];
 
   const config = {
-    cleanUrls: true,
     rewrites: [...staticRewrites, ...spaRewrites],
   };
 
