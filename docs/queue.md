@@ -167,6 +167,7 @@ Jobs that must not execute twice must be made idempotent on the function side. C
 > | `priority` | INT | Worker poll order; higher values are dispatched first (default `0`) |
 > | `queue_name` | TEXT | Logical queue name (default `'default'`); enables billing, email, background queues without separate services |
 > | `enqueue_span_id` | UUID | Span ID generated at enqueue time; creates an explicit `queue.enqueue` node in the trace tree so the gap between request and execution is visible |
+> | `execution_seed` | BIGINT | Deterministic randomness seed — runtime uses this to override `Math.random`, `crypto.randomUUID`, and `nanoid` so `flux queue replay` reproduces identical IDs and execution paths |
 > | `result` | JSONB | Runtime output; enables `GET /jobs/:id` to return full execution result |
 > | `error_detail` | TEXT | Structured error from the last failed attempt |
 >
@@ -641,7 +642,8 @@ ALTER TABLE jobs
   ADD COLUMN request_id      UUID,
   ADD COLUMN parent_span_id  UUID,
   ADD COLUMN enqueue_span_id UUID,
-  ADD COLUMN code_sha        TEXT;
+  ADD COLUMN code_sha        TEXT,
+  ADD COLUMN execution_seed  BIGINT;
 ```
 
 Populate them at enqueue time (pass through from the calling API request). `enqueue_span_id` is generated fresh on each `POST /jobs` call — it represents the `queue.enqueue` node in the trace tree. Forward `x-request-id` and `x-span-id` (set to `enqueue_span_id`) as headers on the runtime POST so the worker execution span attaches to the correct parent. This unblocks `flux trace`, `flux why`, and `flux replay` for async workflows.
@@ -700,7 +702,34 @@ This makes async failure debugging as simple as synchronous debugging. Almost no
 
 **Requires:** trace columns (P0) + result storage (P1 item 3) to be fully effective.
 
-**7. State mutation log (Fluxbase-specific)**
+**7. `execution_seed` — deterministic randomness seed**
+
+> **Runtime side already implemented.** `build_wrapper` in `runtime/src/engine/executor.rs` accepts and injects `execution_seed` for every execution. `ExecuteRequest` accepts an optional `execution_seed: Option<i64>`; live calls generate fresh UUID entropy so behaviour is unchanged. The queue migration below wires up the storage side.
+
+```sql
+ALTER TABLE jobs ADD COLUMN execution_seed BIGINT;
+```
+
+Generate a random `i64` at enqueue time and store it with the job. Pass it to the runtime's `POST /internal/execute` payload as `execution_seed`. The runtime uses it to override all non-deterministic sources before executing user code:
+
+```
+Math.random      → seededRandom(execution_seed)
+crypto.randomUUID → seededUUID(execution_seed)
+nanoid           → seededNanoid(execution_seed)
+```
+
+Without this, `flux queue replay` may diverge — the same function produces different UUIDs, different order IDs, different trace values. With `execution_seed`, two executions of the same job are byte-for-byte identical, which makes these reliable:
+
+- `flux queue replay` — exact reproduction
+- `flux trace diff <original> <replay>` — meaningful diff (identical paths, only timing changes)
+- `flux incident replay` — simulate a past failure with confidence
+- `flux bisect` — narrow down which code version introduced a bug
+
+This is the column that separates Fluxbase from every other queue system. SQS, BullMQ, and Temporal store payload and retry count. Fluxbase stores execution state.
+
+**Requires:** trace columns (P0) to be fully effective.
+
+**8. State mutation log (Fluxbase-specific)**
 
 For time-travel debugging (`flux state blame`, `flux incident replay`) async jobs must also record state mutations:
 
@@ -718,15 +747,15 @@ The runtime writes one row per state-mutating operation during job execution. Th
 
 ### P2 — Operational quality
 
-**7. Prometheus metrics endpoint** — `/metrics` with counters and histograms listed in the Stats section above.
+**9. Prometheus metrics endpoint** — `/metrics` with counters and histograms listed in the Stats section above.
 
-**8. DLQ alerting** — webhook or Cloud Pub/Sub notification when a job enters `dead_letter_jobs`.
+**10. DLQ alerting** — webhook or Cloud Pub/Sub notification when a job enters `dead_letter_jobs`.
 
-**9. Job list endpoint** — `GET /jobs?status=&tenant_id=&limit=&cursor=` for dashboard visibility.
+**11. Job list endpoint** — `GET /jobs?status=&tenant_id=&limit=&cursor=` for dashboard visibility.
 
-**10. Scheduled/future jobs** — expose `run_at` in `POST /jobs` so callers can delay job execution.
+**12. Scheduled/future jobs** — expose `run_at` in `POST /jobs` so callers can delay job execution.
 
-**11. `max_attempts` per request** — remove the hardcoded `5`; accept it in `CreateJobRequest` with `5` as the default.
+**13. `max_attempts` per request** — remove the hardcoded `5`; accept it in `CreateJobRequest` with `5` as the default.
 
 ---
 

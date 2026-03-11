@@ -490,12 +490,13 @@ pub struct LogLine {
 /// - On timeout the caller (`IsolatePool`) marks the runtime for recreation so
 ///   the next call on that worker gets a fresh isolate (V8 won't be stuck).
 pub async fn execute_with_runtime(
-    rt:          &mut JsRuntime,
-    code:        String,
-    secrets:     HashMap<String, String>,
-    payload:     serde_json::Value,
-    tenant_id:   String,
-    tenant_slug: String,
+    rt:             &mut JsRuntime,
+    code:           String,
+    secrets:        HashMap<String, String>,
+    payload:        serde_json::Value,
+    tenant_id:      String,
+    tenant_slug:    String,
+    execution_seed: i64,
 ) -> Result<ExecutionResult, String> {
     // ── Per-request OpState injection ─────────────────────────────────────────
     // Use try_take + put to handle both the first call and subsequent reuse.
@@ -525,7 +526,7 @@ pub async fn execute_with_runtime(
     let transformed_code = code;
 
     let wrapper = build_wrapper(
-        &secrets_json, &payload_json, &transformed_code, &tenant_id, &tenant_slug,
+        &secrets_json, &payload_json, &transformed_code, &tenant_id, &tenant_slug, execution_seed,
     );
 
     let res = timeout(Duration::from_secs(30), async {
@@ -559,11 +560,12 @@ pub async fn execute_with_runtime(
 }
 
 pub async fn execute_function(
-    code:        String,
-    secrets:     HashMap<String, String>,
-    payload:     serde_json::Value,
-    tenant_id:   String,
-    tenant_slug: String,
+    code:           String,
+    secrets:        HashMap<String, String>,
+    payload:        serde_json::Value,
+    tenant_id:      String,
+    tenant_slug:    String,
+    execution_seed: i64,
 ) -> Result<ExecutionResult, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -611,7 +613,7 @@ pub async fn execute_function(
 
             let secrets_json = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
             let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-            let wrapper = build_wrapper(&secrets_json, &payload_json, &code, &tenant_id, &tenant_slug);
+            let wrapper = build_wrapper(&secrets_json, &payload_json, &code, &tenant_id, &tenant_slug, execution_seed);
 
             let res = timeout(Duration::from_secs(30), async {
                 let res = rt.execute_script("<anon>", wrapper)

@@ -12,10 +12,15 @@ use crate::secrets::secrets_client::SecretsClient;
 
 #[derive(Deserialize)]
 pub struct ExecuteRequest {
-    pub function_id: String,
-    pub tenant_id: Uuid,
-    pub project_id: Option<Uuid>,
-    pub payload: Value,
+    pub function_id:     String,
+    pub tenant_id:       Uuid,
+    pub project_id:      Option<Uuid>,
+    pub payload:         Value,
+    /// Deterministic randomness seed stored alongside the job in the queue.
+    /// When present (replay path), Math.random / crypto.randomUUID / nanoid
+    /// are seeded so the same execution_seed produces identical values.
+    /// Omit for live invocations — the runtime generates a fresh seed.
+    pub execution_seed:  Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -166,6 +171,14 @@ pub async fn execute_handler(
     // We use a mutable binding so we can add code_sha once the bundle code is available.
     let mut trace_ctx = TraceCtx { parent_span_id, code_sha: None };
 
+    // Deterministic replay seed — provided by queue worker for flux queue replay,
+    // generated fresh (from UUID entropy) for every live invocation.
+    let __seed_bytes = uuid::Uuid::new_v4().into_bytes();
+    let execution_seed = req.execution_seed.unwrap_or_else(|| i64::from_le_bytes([
+        __seed_bytes[0], __seed_bytes[1], __seed_bytes[2], __seed_bytes[3],
+        __seed_bytes[4], __seed_bytes[5], __seed_bytes[6], __seed_bytes[7],
+    ]));
+
     let start_time = std::time::Instant::now();
 
     // ── Function-level bundle cache (skips control plane + S3 entirely) ──
@@ -199,6 +212,7 @@ pub async fn execute_handler(
             req.payload,
             tenant_id_header.to_string(),
             tenant_slug_header.to_string(),
+            execution_seed,
         ).await {
             Ok(r) => r,
             Err(e) => {
@@ -436,6 +450,7 @@ pub async fn execute_handler(
         req.payload,
         tenant_id_header.to_string(),
         tenant_slug_header.to_string(),
+        execution_seed,
     ).await {
         Ok(r) => r,
         Err(e) => {

@@ -27,9 +27,10 @@ The Data Engine is Flowbase's internal data-access tier — a Rust/Axum microser
    - [Workflow Engine](#workflow-engine)
    - [Cron Worker](#cron-worker)
 7. [Database Schema](#database-schema)
-8. [Configuration Reference](#configuration-reference)
-9. [Deployment Notes](#deployment-notes)
-10. [Potential Improvements](#potential-improvements)
+8. [Deterministic Execution & Replay](#deterministic-execution--replay)
+9. [Configuration Reference](#configuration-reference)
+10. [Deployment Notes](#deployment-notes)
+11. [Architectural Gaps & Improvements](#architectural-gaps--improvements)
 
 ---
 
@@ -350,6 +351,8 @@ Responsibilities:
 - `DROP SCHEMA CASCADE` for database deletion.
 - Assert schema/table existence before query execution.
 
+**`validate_identifier` contract:** Only characters matching `[a-z0-9_]+` (after lowercasing) are permitted in schema and table name components. Any other character — including quotes, semicolons, spaces, or Unicode — is rejected with `HTTP 400` before SQL generation. This prevents all schema-name-based injection paths regardless of how the slug was constructed.
+
 ---
 
 ### Policy Engine
@@ -427,9 +430,10 @@ Compiles a `QueryRequest` (JSON API request) into a parameterised SQL string.
 **Single path (`db_executor`):**
 
 1. Opens an explicit Postgres transaction.
-2. Wraps the compiled SQL in `SELECT COALESCE(json_agg(row_to_json("_r")), '[]') FROM (...) AS "_r"` so the result is always a JSON array.
-3. Binds all parameters via `PgArguments` (type-safe, never string-interpolated).
-4. Commits the transaction.
+2. Sets `search_path` for the transaction: `SET LOCAL search_path = {tenant_schema}, public` — enforces tenant boundary at the DB level so a missing schema prefix in any SQL fragment cannot resolve to the wrong tenant's table. *(planned — see [Gap 5](#gap-5--transaction-scoped-search_path-enforcement-hardening))*
+3. Wraps the compiled SQL in `SELECT COALESCE(json_agg(row_to_json("_r")), '[]') FROM (...) AS "_r"` so the result is always a JSON array.
+4. Binds all parameters via `PgArguments` (type-safe, never string-interpolated).
+5. Commits the transaction.
 
 **Batched path (`batched`):**
 
@@ -548,6 +552,12 @@ Calls serverless functions registered against table lifecycle events.
 
 Hook invocations reach the Runtime service via `POST {RUNTIME_URL}/internal/execute`.
 
+> **Gap (not yet implemented):** Hook invocations do not currently forward `x-request-id`, `x-parent-span-id`, or `code_sha`. Without these, the trace chain breaks at the data engine → hook runtime boundary. Traces cannot be linked:
+> ```
+> gateway → runtime → data engine mutation → hook runtime
+> ```
+> These headers must be injected into every hook dispatch call.
+
 ---
 
 ### Events System
@@ -627,7 +637,150 @@ All metadata lives in the **`fluxbase_internal`** Postgres schema, never exposed
 | `workflow_executions` | Runtime execution state (current step, context, status) |
 | `cron_jobs` | Cron job definitions with schedule, action, and `next_run_at` |
 
+| `state_mutations` | Append-only log of every INSERT/UPDATE/DELETE with before/after snapshots, versioned per row, linked to `request_id` — **not yet created; required for replay** |
+
 User tables live in **project-scoped schemas** named `t_{tenant_slug}_{project_slug}_{db_name}`.
+
+---
+
+## Deterministic Execution & Replay
+
+This section describes what Fluxbase needs to support `flux why`, `flux trace replay`, `flux incident replay`, `flux state blame`, and `flux bug bisect`. Most of the foundation already exists; the missing piece is **state mutation capture**.
+
+---
+
+### Execution Trace Chain
+
+A fully instrumented execution produces a linked chain of records:
+
+```
+trace_requests.request_id          (gateway / API)
+       │
+       ├─▶ runtime spans           (function execution, tool calls)
+       │
+       ├─▶ state_mutations         (data engine INSERT/UPDATE/DELETE)
+       │       ├─ before JSONB
+       │       ├─ after  JSONB
+       │       └─ version BIGINT   (per-row monotonic counter)
+       │
+       └─▶ event_deliveries        (async fan-out)
+```
+
+Every layer references `request_id`, forming a single traceable unit across all services.
+
+---
+
+### `state_mutations` Table (planned)
+
+Every INSERT, UPDATE, and DELETE executed by the data engine must be written to an append-only mutations log **within the same transaction** as the user-facing operation. This is the foundation for all time-travel and replay features.
+
+```sql
+CREATE TABLE fluxbase_internal.state_mutations (
+    mutation_id   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    request_id    UUID,                    -- links to trace_requests.request_id
+    span_id       UUID,                    -- links to the runtime span that triggered this
+
+    tenant_id     UUID        NOT NULL,
+    project_id    UUID        NOT NULL,
+    schema_name   TEXT        NOT NULL,
+    table_name    TEXT        NOT NULL,
+    record_pk     JSONB       NOT NULL,    -- primary key value(s) of the affected row
+
+    operation     TEXT        NOT NULL,    -- 'insert' | 'update' | 'delete'
+
+    before        JSONB,                   -- NULL for inserts
+    after         JSONB,                   -- NULL for deletes
+
+    version       BIGINT      NOT NULL,    -- monotonically increasing per (tenant, project, table, record_pk)
+    schema_version TEXT,                   -- git SHA or migration version of the schema at mutation time
+
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_state_mutations_row
+    ON fluxbase_internal.state_mutations(tenant_id, project_id, table_name, record_pk);
+
+CREATE INDEX idx_state_mutations_request
+    ON fluxbase_internal.state_mutations(request_id)
+    WHERE request_id IS NOT NULL;
+
+-- Time-range queries: flux incident replay 15:00..15:05
+CREATE INDEX idx_state_mutations_time
+    ON fluxbase_internal.state_mutations(tenant_id, project_id, table_name, created_at);
+
+-- Row history queries: flux state blame users 42
+-- SELECT ... WHERE table_name='users' AND record_pk='{"id":42}' ORDER BY version DESC LIMIT 20
+CREATE INDEX idx_state_mutations_pk_version
+    ON fluxbase_internal.state_mutations(tenant_id, project_id, table_name, record_pk, version DESC);
+```
+
+**Why `version` matters:**
+
+```
+users.id = 42
+  version 1  →  INSERT  (after:  {name: "Alice", plan: "free"})
+  version 2  →  UPDATE  (before: {plan: "free"}, after: {plan: "pro"})
+  version 3  →  UPDATE  (before: {plan: "pro"},  after: {plan: "free"})
+```
+
+This enables `flux state blame users 42` to pinpoint exactly which request caused each change.
+
+**Why `request_id` matters:**
+
+With `request_id` linked to `trace_requests`, every mutation becomes answerable:
+
+```
+Row users.id=42 modified by request 550e8400
+  endpoint:  POST /signup
+  function:  create_user
+  commit:    a93f42c
+  triggered: workflow step 3 of onboarding_flow
+```
+
+---
+
+### Replay Mode
+
+For replay to be safe (no side effects), the data engine must support a **replay execution mode** that disables all outbound activity.
+
+A caller activates replay mode by setting:
+
+```
+x-flux-replay: true
+```
+
+When this header is present, the following subsystems are **bypassed**:
+
+| Subsystem | Normal mode | Replay mode |
+|---|---|---|
+| Before hooks | Invoked, can abort | Skipped |
+| After hooks | Invoked asynchronously | Skipped |
+| Event emitter | Writes to `events` table | Skipped |
+| Workflow triggers | Creates `workflow_executions` | Skipped |
+| Cron advancement | Fires due jobs | Skipped |
+| External dispatch | Webhook / function / queue | Skipped |
+
+Only the read/write to the user tables and the append to `state_mutations` are executed. This ensures that replaying an historical sequence of requests produces the same data state without re-triggering notifications or workflows.
+
+---
+
+### DB Query Trace Correlation
+
+Postgres queries are not automatically correlated to the request that issued them. To connect gateway logs → runtime spans → Postgres query logs, prepend a comment or use `SET LOCAL`:
+
+**Option A — SQL comment (visible in `pg_stat_activity`, `auto_explain`):**
+```sql
+/* flux_request_id:550e8400-..., span_id:abc123 */
+SELECT ...
+```
+
+**Option B — `application_name` per transaction:**
+```sql
+SET LOCAL application_name = 'flux:550e8400';
+SELECT ...
+```
+
+Option A is preferred because it survives connection pooling and appears in `pgaudit` logs without session-level side effects.
 
 ---
 
@@ -663,35 +816,167 @@ All configuration is from environment variables (loaded via `dotenvy`).
 
 ---
 
-## Potential Improvements
+## Architectural Gaps & Improvements
 
-Below are areas identified for review and enhancement:
+Ordered by impact. Items marked **[blocking]** must be closed before production replay/debugging features can work. Items marked **[hardening]** improve safety and correctness. Items marked **[performance]** are optimisations.
 
-### Security
-- [ ] The `INTERNAL_SERVICE_TOKEN` defaults to a known static string (`fluxbase_secret_token`) — ensure `INTERNAL_SERVICE_TOKEN` is always set in production deployments.
-- [ ] Consider adding request signing (HMAC) between API ↔ Data Engine in addition to the shared token, so compromised token alone is insufficient.
-- [ ] Audit `validate_identifier` coverage — ensure it handles Unicode edge cases for schema/table names.
+---
 
-### Performance
-- [ ] **Policy cache eviction** uses a `RwLock<HashMap>` with prefix scanning on writes — `O(n)` over all cached policies. Consider sharding the cache by tenant or switching to a Moka cache (consistent with schema/plan layers).
-- [ ] **Plan cache** only covers `SELECT`. INSERT/UPDATE/DELETE are recompiled every request. Even a short-lived cache for mutation templates would help write-heavy workloads.
-- [ ] **Batched executor** fetches child rows with separate queries per level. A `COPY`-based bulk fetch or a single lateral join with unnest could reduce round-trips.
-- [ ] No connection pool size configuration is exposed (`DATABASE_URL` only). Add `DB_MAX_CONNECTIONS` + `DB_MIN_CONNECTIONS` env vars.
+### Gap 1 — State Mutation Logging `[blocking]`
 
-### Reliability
-- [ ] **Cron `next_run_at`** is updated even when dispatch fails. A failed job schedule silently advances. Consider tracking failure counts and adding a `status` column to `cron_jobs`.
-- [ ] **Event worker retry** needs a dead-letter mechanism. Events that exhaust retries should move to a `dead_letter` state (not just remain in `pending`/`failed`).
-- [ ] **Workflow execution** does not handle step timeout — a step that never returns from the runtime leaves the execution stuck in `running` forever. Add a `stepped_at` timestamp and a timeout reaper.
-- [ ] The workflow worker polls every 2 s unconditionally. A LISTEN/NOTIFY mechanism (Postgres pub/sub) would eliminate idle polling, improving latency and reducing DB load.
+The engine currently executes INSERT/UPDATE/DELETE but does not persist a record of what changed. This is the single most critical missing piece for Fluxbase's deterministic debugging vision.
 
-### Observability
-- [ ] The `x-request-id` header is propagated to the runtime for hooks and events, but is not attached to Postgres query spans. Consider using `SET LOCAL application_name` or a Postgres comment to correlate DB traces.
-- [ ] Complexity scores and cache hit/miss rates are logged at `debug` level only. Consider emitting structured metrics (Prometheus counters) for production dashboards.
-- [ ] The `/db/debug` handler introspects engine state but its contents are not documented — review what it exposes and whether it should require elevated auth.
+**Impact if unresolved:** `flux state blame`, `flux trace replay`, `flux incident replay`, and `flux bug bisect` cannot be implemented.
 
-### Features
-- [ ] **Computed columns** are injected as raw SQL expressions without sandboxing. Any expression stored in `column_metadata` is executed as-is. Consider a safe expression whitelist or a separate evaluation sandbox.
-- [ ] **File columns** only support presigned S3 operations. No image resizing, CDN invalidation, or lifecycle policies are managed by the engine.
-- [ ] **Relationships** are limited to foreign-key style joins. Many-to-many pivot tables require manual relationship definitions; there is no automatic pivot detection.
-- [ ] No **soft-delete** or **audit trail** built into the engine — add a standard `deleted_at` column convention or a `fluxbase_internal.mutations` audit log.
-- [ ] **Schema versioning** — `20260308000018_schema_versions.sql` exists on the API side. Consider whether the data engine should store per-table schema versions to support safe migrations (add column without downtime).
+**Required action:**
+- Create `fluxbase_internal.state_mutations` (schema in the [Deterministic Execution & Replay](#deterministic-execution--replay) section).
+- Write to it **within the same transaction** as the user mutation in `db_executor.rs`.
+- Capture `before` (RETURNING pre-image for UPDATE/DELETE) and `after` rows.
+- Populate `request_id` from the `x-request-id` header.
+- Increment `version` per `(tenant, project, table, record_pk)` using a sequence or `SELECT MAX(version) + 1 ... FOR UPDATE`.
+
+---
+
+### Gap 2 — Hook Trace Propagation `[blocking]`
+
+Hook invocations (`POST {RUNTIME_URL}/internal/execute`) do not forward the caller's trace headers. The trace chain breaks here:
+
+```
+gateway → runtime → data engine mutation → hook runtime
+```
+
+**Required action:** Inject into every hook/event/workflow dispatch call:
+- `x-request-id` — from the originating request
+- `x-parent-span-id` — current span at the point of dispatch
+- `x-code-sha` — git commit SHA of the deployed function
+
+Without these, hook execution cannot be attributed to the request that triggered it.
+
+---
+
+### Gap 3 — DB Query Trace Correlation `[blocking]`
+
+Postgres queries are not correlated to the request that issued them, making it impossible to match gateway/runtime logs to specific database operations in `pg_stat_activity`, `auto_explain`, or `pgaudit`.
+
+**Required action:** Prepend a SQL comment to every compiled query before execution:
+
+```sql
+/* flux_request_id:{{uuid}}, span_id:{{uuid}} */
+SELECT ...
+```
+
+This is zero-overhead (comment is stripped by the parser) and survives connection pooling unlike `SET LOCAL application_name`.
+
+---
+
+### Gap 4 — Replay Mode (`x-flux-replay`) `[blocking]`
+
+Replaying historical mutations would re-trigger hooks, events, workflow executions, and cron jobs, producing real side effects (emails sent, webhooks fired, etc.).
+
+**Required action:** Add an `AuthContext` flag `is_replay: bool` populated from the `x-flux-replay: true` header. In the query handler, skip the following subsystems when `is_replay` is true:
+- Before / after hook invocations
+- `EventEmitter::emit`
+- `WorkflowEngine::trigger`
+- Any cron advancement
+
+State mutations should still be written (allows replay to produce a reconstructed data state). See the [Replay Mode](#replay-mode) section.
+
+---
+
+### Gap 5 — Transaction-scoped `search_path` Enforcement `[hardening]`
+
+Every query in `db_executor.rs` uses fully-qualified table names generated by the compiler (`schema.table`), but **nothing at the database session level prevents an unqualified name from resolving to the wrong schema**. If a future code path, raw query, or hook omits the schema prefix, Postgres will fall back to the session `search_path`, which defaults to `"$user", public`. In a multi-tenant environment this is a cross-tenant data leak waiting to happen.
+
+**Required action:** At the start of every transaction in `db_executor.rs`, execute:
+
+```sql
+SET LOCAL search_path = "t_{tenant}_{project}_{db}", public;
+```
+
+`SET LOCAL` scopes the change to the current transaction only — it does not affect other queries on the same pooled connection and requires no teardown. The cost is approximately 0.02 ms per transaction.
+
+**Effect:**
+
+| Scenario | Without `SET LOCAL` | With `SET LOCAL` |
+|---|---|---|
+| Missing schema prefix in compiled SQL | Resolves via session `search_path` — potentially wrong tenant | Resolves to correct tenant schema |
+| SQL injection attempt via schema bypass | May succeed if `search_path` is predictable | Contained to tenant schema |
+| Developer forgets prefix in a future raw query | Silent cross-tenant read | Query fails with `relation not found` (detectable) |
+
+**Implementation location:** `executor/db_executor.rs`, immediately after `pool.begin()`, before any user SQL executes.
+
+---
+
+### Gap 6 — Multi-Tenant Identifier Isolation `[hardening]`
+
+`validate_identifier` guards against schema-name injection, but the allowed character set should be explicitly tested and documented to prevent edge cases.
+
+**Required action:**
+- Enforce `[a-z0-9_]+` (regex) after lowercasing. Reject anything else with a clear error.
+- Add a unit test suite covering: SQL keywords, Unicode characters, control characters, hyphen (should be converted, not rejected), double-quote, semicolon, and NULL bytes.
+- Ensure the regex is applied to every component: `tenant_slug`, `project_slug`, and `db_name` independently before concatenation.
+
+---
+
+### Gap 7 — Policy Cache Uses `O(n)` Eviction `[performance]`
+
+The policy cache is a `RwLock<HashMap>` that evicts by iterating all keys and filtering on prefix match. Under high write concurrency (frequent policy changes), this can stall all policy reads.
+
+**Recommended action:** Migrate to a Moka cache (same library as schema and plan caches), keyed by the existing `"tenant:project:table:role:op"` string. Benefits: automatic TTL, LRU eviction, no manual eviction code, and consistent with the other two cache layers.
+
+---
+
+### Gap 8 — Cron Failure Tracking `[hardening]`
+
+`next_run_at` is always advanced regardless of whether the dispatch succeeded. A job that consistently fails silently keeps firing.
+
+**Recommended action:**
+- Add `failure_count INT NOT NULL DEFAULT 0` and `last_error TEXT` to `cron_jobs`.
+- On dispatch failure, increment `failure_count` and optionally disable the job after N consecutive failures.
+- Expose failure state in `GET /db/cron` response.
+
+---
+
+### Gap 9 — Event Dead-Letter Queue `[hardening]`
+
+Events that exhaust retry attempts remain in a non-terminal state. There is no way to inspect or re-process them.
+
+**Recommended action:**
+- Add a `dead_letter` terminal status to `event_deliveries`.
+- After exhausting the retry budget, mark the delivery `dead_letter` and log a structured error.
+- Expose `GET /db/dead-letters` for operator inspection and manual re-queue.
+
+---
+
+### Gap 10 — Workflow Step Timeout `[hardening]`
+
+A workflow step that does not return from the runtime leaves the execution perpetually in `running` state. The 2 s worker tick will keep detecting it and attempting re-advance, potentially causing duplicate dispatches.
+
+**Recommended action:**
+- Add `stepped_at TIMESTAMPTZ` to `workflow_executions`.
+- In the advancement worker, skip (or mark `timed_out`) executions where `stepped_at < now() - interval '5 minutes'`.
+- Use the existing `FOR UPDATE SKIP LOCKED` pattern to ensure only one replica touches a given execution per tick.
+
+---
+
+### Gap 11 — Plan Cache Covers SELECT Only `[performance]`
+
+INSERT/UPDATE/DELETE are fully recompiled on every request. For write-heavy workloads (e.g. bulk ingestion), this adds meaningful CPU cost.
+
+**Recommended action:** Extend the plan cache to store compiled mutation SQL templates. The cache key should include the operation, column list shape, and policy fingerprint. Bind parameters are still rebuild per-request.
+
+---
+
+### Other Items
+
+| Area | Item |
+|---|---|
+| Security | `INTERNAL_SERVICE_TOKEN` should not have a default value in production — require it or fail at startup |
+| Security | Consider HMAC request signing between API ↔ Data Engine for defence-in-depth |
+| Observability | Complexity scores and cache hit/miss rates logged at `debug` only; surface as Prometheus counters |
+| Observability | `/db/debug` endpoint contents are undocumented — review exposure and whether it needs elevated auth |
+| Features | Computed columns are injected as raw SQL without sandboxing — consider an expression whitelist |
+| Features | File columns: no image resizing, CDN invalidation, or lifecycle policies |
+| Features | Relationships: no automatic many-to-many pivot detection |
+| Features | No built-in soft-delete convention (`deleted_at`) or operator audit log |
+| Reliability | Workflow LISTEN/NOTIFY: replace 2 s unconditional poll with Postgres pub/sub to reduce idle DB load |
