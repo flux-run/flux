@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { FolderOpen, Settings, LayoutDashboard,
   Code2, KeyRound, ShieldCheck, ScrollText, Globe,
   Database, HardDrive, Bell, GitBranch, Clock, Terminal, Share2, Puzzle,
-  Activity, Network,
+  Activity, Network, Brain,
 } from 'lucide-react'
 import { FluxLogo } from '@/components/FluxLogo'
 import { TenantSwitcher } from '@/components/TenantSwitcher'
@@ -101,6 +101,7 @@ export function Sidebar() {
             <NavItem href={`/dashboard/projects/${projectId}/api-keys`}   Icon={KeyRound}        label="API Keys" />
             <NavItem href={`/dashboard/projects/${projectId}/logs`}       Icon={ScrollText}      label="Logs" />
             <NavItem href={`/dashboard/projects/${projectId}/traces`}     Icon={Activity}        label="Traces" />
+            <NavItem href={`/dashboard/projects/${projectId}/agents`}     Icon={Brain}           label="Agent Runs" />
             <NavItem href={`/dashboard/projects/${projectId}/topology`}   Icon={Network}         label="Topology" />
             <NavItem href={`/dashboard/projects/${projectId}/settings`}   Icon={Settings}        label="Settings" />
           </div>
