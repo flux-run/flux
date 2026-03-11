@@ -1022,13 +1022,13 @@ The following items were identified during code review. Prioritised for discussi
 
 ### High priority
 
-| # | Area | Issue | Suggested fix |
-|---|------|-------|---------------|
-| 1 | **Event bus** | `POST /functions` and `POST /deployments` have `// TODO: Publish to actual event bus` + `println!` stubs | Wire to `AppState.event_tx` or an external queue (NATS / PubSub) |
-| 2 | **Role enforcement** | Tenant `role` is stored in context but **no handler checks it** — all members can do owner actions | Add role guards to destructive operations (delete tenant, remove member) |
-| 3 | **Internal route auth** | `/internal/logs` (GET) does not check `X-Service-Token` — only the POST and secrets endpoints do | Add token check consistently to all `/internal/*` routes |
-| 4 | **Secret key** | `SECRET_ENCRYPTION_KEY` falls back to a dev stub in several paths — encryption silently uses weak key in dev | Fail-fast in non-`test` builds if key is missing or < 32 bytes |
-| 5 | **Multipart bundle size** | CLI deploy accepts `bundle` bytes without size validation — only the global 1 MB body limit applies | Add per-field size check; consider raising the global limit for deploy only |
+| # | Area | Issue | Status |
+|---|------|-------|--------|
+| 1 | **Event bus** | `POST /functions` and `POST /deployments` have `// TODO: Publish to actual event bus` + `println!` stubs | Open — wire to `AppState.event_tx` or NATS/PubSub |
+| 2 | **Role enforcement** | **Fixed.** `delete_function` and `revoke_api_key` had no role check; all other destructive operations already guarded | ✅ Resolved (SHA `f462b56`) |
+| 3 | **Internal route auth** | **Fixed.** Central `require_service_token` middleware applied to all `/internal/*` routes; `GET /bundle` and `POST /events/emit` were previously unprotected | ✅ Resolved (SHA `f462b56`) |
+| 4 | **Secret key** | `SECRET_ENCRYPTION_KEY` falls back to a dev stub in several paths — encryption silently uses weak key in dev | Open — fail-fast in non-test builds if key is missing or < 32 bytes |
+| 5 | **Multipart bundle size** | **Fixed.** `POST /functions/deploy` now has a per-route 10 MB `DefaultBodyLimit`; global 1 MB still applies everywhere else | ✅ Resolved (SHA `f462b56`) |
 
 ### Medium priority
 
@@ -1046,6 +1046,6 @@ The following items were identified during code review. Prioritised for discussi
 |---|------|-------|
 | 11 | **Secrets versioning** | Old secret versions are never pruned — table grows unbounded over time |
 | 12 | **`revoked` API keys** | Revoked keys remain queryable; no scheduled cleanup or TTL |
-| 13 | **CORS origin match** | `origin_lc.ends_with(".fluxbase.co")` would match `evilfluxbase.co` — use exact subdomain check |
+| 13 | **CORS origin match** | `origin_lc.ends_with(".fluxbase.co")` is correct — the **leading dot** prevents `evilfluxbase.co` from matching. Already secure; comment in code now makes this explicit | —
 | 14 | **Deployment delete** | No `DELETE /deployments/{id}` endpoint — removing a function leaves orphaned R2 objects |
 | 15 | **Structured event schema** | SSE messages are freeform JSON strings — no schema validation or versioning |

@@ -1,4 +1,4 @@
-import { getAuth } from "firebase/auth";
+import { getAuth, signOut } from "firebase/auth";
 import { useStore } from "@/state/tenantStore";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8080";
@@ -38,6 +38,14 @@ export async function apiFetch<T = unknown>(
     ...options,
     headers,
   });
+
+  if (res.status === 401) {
+    try {
+      await signOut(getAuth());
+    } catch (_) {}
+    window.location.replace("/login");
+    throw new Error("session_expired");
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "unknown_error" }));
@@ -88,6 +96,14 @@ export async function gatewayFetch<T = unknown>(
   };
 
   const res = await fetch(`${GATEWAY_BASE}${path}`, { ...options, headers });
+
+  if (res.status === 401) {
+    try {
+      await signOut(getAuth());
+    } catch (_) {}
+    window.location.replace("/login");
+    throw new Error("session_expired");
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: "unknown_error" }));
