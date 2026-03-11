@@ -92,9 +92,9 @@ fn info(text: &str) {
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
-pub async fn execute(request_id: Option<String>) -> anyhow::Result<()> {
+pub async fn execute(request_id: Option<String>, json_output: bool) -> anyhow::Result<()> {
     if let Some(rid) = request_id {
-        return execute_diagnosis(rid).await;
+        return execute_diagnosis(rid, json_output).await;
     }
     println!();
     println!("{}", "Fluxbase CLI doctor".bold());
@@ -310,7 +310,7 @@ fn trunc_d(s: &str, n: usize) -> String {
     if s.len() > n { format!("{}…", &s[..n]) } else { s.to_string() }
 }
 
-async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
+async fn execute_diagnosis(request_id: String, json_output: bool) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
     // ── Fetch trace + mutations + previous request ────────────────────────
@@ -372,6 +372,8 @@ async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
     // ── Heuristics ────────────────────────────────────────────────────────
     struct Finding {
         emoji:       &'static str,
+        /// machine-readable tag used in --json output and color lookup
+        tag:         &'static str,
         root_cause:  String,
         likely:      String,
         actions:     Vec<String>,
@@ -411,6 +413,7 @@ async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
         if is_timeout { acts.push("Check network latency to the external service".to_string()); }
         findings.push(Finding {
             emoji: "⚡",
+            tag:   "external_latency",
             root_cause: cause,
             likely: "External tool latency exceeded threshold.".to_string(),
             actions: acts,
@@ -428,6 +431,7 @@ async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
         let table = s["resource"].as_str().unwrap_or("unknown table");
         findings.push(Finding {
             emoji: "🗄",
+            tag:   "slow_db",
             root_cause: format!("Database query on {} took {}ms", trunc_d(table, 30), ms),
             likely: "Missing index or expensive scan.".to_string(),
             actions: vec![
@@ -444,6 +448,7 @@ async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
        error_msg.contains("Cannot read") {
         findings.push(Finding {
             emoji: "⚠",
+            tag:   "null_access",
             root_cause: trunc_d(error_msg, 80).to_string(),
             likely: "Null or undefined access in function code.".to_string(),
             actions: vec![
@@ -474,6 +479,7 @@ async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
         let row = &mutated_row_keys[0];
         findings.push(Finding {
             emoji: "⚠",
+            tag:   "race_condition",
             root_cause: format!("Previous request also modified {}", row),
             likely: "Possible race condition or state dependency between requests.".to_string(),
             actions: vec![
@@ -484,7 +490,7 @@ async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
         });
     }
 
-    // H5 — generic 5xx with no other finding  
+    // H5 — generic 5xx with no other finding
     if findings.is_empty() && is_error {
         let cause = if !error_msg.is_empty() {
             trunc_d(error_msg, 80).to_string()
@@ -493,6 +499,7 @@ async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
         };
         findings.push(Finding {
             emoji: "✗",
+            tag:   "unknown_error",
             root_cause: cause,
             likely: if status == 500 {
                 "Unhandled exception in function.".to_string()
@@ -504,6 +511,30 @@ async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
                 format!("View full log context: flux why {}", &request_id[..request_id.len().min(12)]),
             ],
         });
+    }
+
+    // ─── JSON output ──────────────────────────────────────────────────────
+    if json_output {
+        let evidence: Vec<serde_json::Value> = work_spans.iter().take(8).map(|s| {
+            let name = s["resource"].as_str().or_else(|| s["source"].as_str()).unwrap_or("?");
+            let ms   = s["delta_ms"].as_i64().unwrap_or(0).max(s["elapsed_ms"].as_i64().unwrap_or(0));
+            serde_json::json!({ "span": name, "duration_ms": ms, "slow": ms > 500 })
+        }).collect();
+        let actions: Vec<&str> = findings.iter()
+            .flat_map(|f| f.actions.iter().map(|a| a.as_str()))
+            .collect();
+        let out = serde_json::json!({
+            "request_id": request_id,
+            "method": method, "path": path, "function": function,
+            "duration_ms": elapsed, "status": status,
+            "likely_issue": findings.first().map(|f| f.tag).unwrap_or("none"),
+            "root_cause": findings.first().map(|f| f.root_cause.as_str()).unwrap_or(error_msg),
+            "evidence": evidence,
+            "mutations": mutations.len(),
+            "suggested_actions": actions,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
     }
 
     // ─── Print ────────────────────────────────────────────────────────────
@@ -530,21 +561,39 @@ async fn execute_diagnosis(request_id: String) -> anyhow::Result<()> {
         else { status_str.green().to_string() }
     );
 
+    // helper: color a string by heuristic tag
+    let finding_color = |tag: &str, s: &str| -> String {
+        match tag {
+            "external_latency" => s.yellow().to_string(),
+            "slow_db"          => s.blue().to_string(),
+            "race_condition"   => s.magenta().to_string(),
+            _                  => s.red().to_string(),
+        }
+    };
+
     // ROOT CAUSE + LIKELY ISSUE
     if let Some(f) = findings.first() {
         println!();
         println!("{}", "ROOT CAUSE".bold());
         println!("{}", sep.dimmed());
-        println!("  {} {}", f.emoji, f.root_cause.red());
+        println!("  {} {}", finding_color(f.tag, f.emoji), finding_color(f.tag, &f.root_cause));
         println!();
         println!("{}", "LIKELY ISSUE".bold());
         println!("{}", sep.dimmed());
-        println!("  {}", f.likely);
+        println!("  {}", finding_color(f.tag, &f.likely));
     } else if !error_msg.is_empty() {
         println!();
         println!("{}", "ROOT CAUSE".bold());
         println!("{}", sep.dimmed());
         println!("  {}", error_msg.red());
+    } else {
+        // No anomalies detected — healthy request
+        println!();
+        println!("{}", "LIKELY ISSUE".bold());
+        println!("{}", sep.dimmed());
+        println!("  {}", "No clear root cause detected.".dimmed());
+        println!("  {}",
+            format!("Try: flux trace debug {}", &request_id[..request_id.len().min(12)]).dimmed());
     }
 
     // EVIDENCE

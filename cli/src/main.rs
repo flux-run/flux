@@ -679,7 +679,7 @@ async fn main() -> anyhow::Result<()> {
             StackCommand::Seed  { file }              => stack::execute_seed(file).await?,
         },
 
-        Commands::Doctor { request_id } => doctor::execute(request_id).await?,
+        Commands::Doctor { request_id } => doctor::execute(request_id, cli.json).await?,
         Commands::Open { command } => match command {
             Some(cmd) => open::execute(cmd).await?,
             None      => open::execute_default().await?,
