@@ -58,6 +58,55 @@ pub async fn execute(
     .await
     .map_err(EngineError::Db)?;
 
+    // ── Gap 14 v2: UPDATE pre-read (before-state capture) ────────────────
+    // For UPDATE we SELECT the matching rows FOR UPDATE *before* running the
+    // mutation so we can store before_state in state_mutations and compute
+    // changed_fields.  The pre-read uses its own param list (fresh $N indices
+    // with no SET params) that was built alongside the UPDATE SQL in the
+    // compiler.  FOR UPDATE in the pre-read also serialises concurrent writes
+    // to the same rows, eliminating lost-update races in the mutation log.
+    let pre_read_map: std::collections::HashMap<String, serde_json::Value> =
+        if ctx.operation == "update" {
+            if let Some(ref pre_sql) = query.pre_read_sql {
+                let mut pre_args = PgArguments::default();
+                for param in &query.pre_read_params {
+                    bind_value(&mut pre_args, param).map_err(EngineError::Internal)?;
+                }
+                let traced_pre = format!(
+                    "/* flux_req:{req},span:{span},tenant:{tenant} */ {sql}",
+                    req    = ctx.request_id,
+                    span   = ctx.span_id.unwrap_or("-"),
+                    tenant = ctx.tenant_id,
+                    sql    = pre_sql,
+                );
+                let outer_pre = format!(
+                    r#"SELECT COALESCE(json_agg(row_to_json("_r")), '[]'::json) FROM ({}) AS "_r""#,
+                    traced_pre
+                );
+                let pre_row = sqlx::query_with(&outer_pre, pre_args)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(EngineError::Db)?;
+                let pre_result: serde_json::Value = pre_row.get(0);
+                let mut map = std::collections::HashMap::new();
+                if let Some(rows) = pre_result.as_array() {
+                    for row in rows {
+                        let pk_key = if row.get("id").is_some() {
+                            serde_json::json!({ "id": row["id"] })
+                        } else {
+                            row.clone()
+                        };
+                        map.insert(pk_key.to_string(), row.clone());
+                    }
+                }
+                map
+            } else {
+                std::collections::HashMap::new()
+            }
+        } else {
+            std::collections::HashMap::new()
+        };
+
     let mut args = PgArguments::default();
     for param in &query.params {
         bind_value(&mut args, param).map_err(EngineError::Internal)?;
@@ -106,12 +155,16 @@ pub async fn execute(
 
                 // Assign before/after based on operation semantics:
                 //   INSERT → no prior state    (before = NULL)
-                //   UPDATE → after = new state (before = NULL in v1; pre-read added in v2)
+                //   UPDATE → before = pre-read snapshot; after = new state (Gap 14 v2)
                 //   DELETE → row is gone       (after  = NULL)
                 let (before_state, after_state): (Option<serde_json::Value>, Option<serde_json::Value>) =
                     match ctx.operation {
                         "insert" => (None, Some(affected_row.clone())),
-                        "update" => (None, Some(affected_row.clone())),
+                        "update" => {
+                            // Look up the row we captured in the pre-read by its pk key.
+                            let before = pre_read_map.get(&record_pk.to_string()).cloned();
+                            (before, Some(affected_row.clone()))
+                        }
                         "delete" => (Some(affected_row.clone()), None),
                         _ => continue,
                     };
@@ -137,11 +190,36 @@ pub async fn execute(
                 .await
                 .map_err(EngineError::Db)?;
 
-                // changed_fields: populated for UPDATE once before-state
-                // pre-read is implemented (v2).  NULL for INSERT/DELETE.
-                // When before_state is available, this will be:
-                //   before.iter().filter(|(k,v)| after[k] != v).map(|(k,_)| k).collect()
-                let changed_fields: Option<Vec<String>> = None;
+                // changed_fields: for UPDATE, compare before/after JSONB key-by-key
+                // and store only the names of columns whose values changed.
+                // Sorted for deterministic output — enables efficient CLI diffing
+                // without a full JSON comparison at read time.
+                // NULL for INSERT (no prior state) and DELETE (no new state).
+                let changed_fields: Option<Vec<String>> = if ctx.operation == "update" {
+                    before_state.as_ref().and_then(|before| {
+                        after_state.as_ref().map(|after| {
+                            let keys: std::collections::HashSet<String> = before
+                                .as_object()
+                                .into_iter()
+                                .flat_map(|o| o.keys().cloned())
+                                .chain(
+                                    after
+                                        .as_object()
+                                        .into_iter()
+                                        .flat_map(|o| o.keys().cloned()),
+                                )
+                                .collect();
+                            let mut fields: Vec<String> = keys
+                                .into_iter()
+                                .filter(|k| before.get(k) != after.get(k))
+                                .collect();
+                            fields.sort();
+                            fields
+                        })
+                    })
+                } else {
+                    None
+                };
 
                 sqlx::query(
                     r#"

@@ -1068,11 +1068,30 @@ New indexes applied:
 
 ---
 
-### Gap 14 — Mutation Compression (`changed_fields`) `[partial]`
+### Gap 14 — Mutation Compression (`changed_fields`) `[resolved]`
 
-`changed_fields TEXT[]` column added via migration `20260311000012`. The column is present and indexed, but currently `NULL` for all rows pending before-state pre-read implementation (v2 of the mutation logger). Once `db_executor.rs` does a `SELECT ... FOR UPDATE` before each UPDATE to capture the old row, the changed field names will be computed by comparing `before`/`after` JSONB keys and stored here.
+`changed_fields TEXT[]` column added via migration `20260311000012`. Fully populated as of Gap 14 v2 implementation.
 
-**Next step:** Add the pre-read SELECT in `executor/db_executor.rs` for UPDATE operations, compute `changed_fields` from key diff, and store in the INSERT.
+**How it works (end-to-end):**
+
+1. **Compiler** (`compiler/query_compiler.rs`) — `compile_update()` now builds a second SQL statement alongside the main UPDATE: `SELECT * FROM schema.table WHERE {same conditions} FOR UPDATE` with its own `pre_read_params` list (fresh `$N` indices, no SET params mixed in). Both are stored in `CompiledQuery.pre_read_sql` / `pre_read_params`.
+
+2. **Executor** (`executor/db_executor.rs`) — For UPDATE operations only, immediately after `SET LOCAL search_path`, the executor runs the pre-read SELECT inside the same transaction. The `FOR UPDATE` clause locks the matching rows *before* the mutation, eliminating lost-update races. Results are stored in a `HashMap<String, serde_json::Value>` keyed by `record_pk`.
+
+3. **Mutation log write** — In the `state_mutations` INSERT loop, each UPDATE row's `before_state` is fetched from the pre-read map (keyed by the row's pk). `changed_fields` is computed by union-diffing the two JSONB objects key-by-key:
+   ```rust
+   keys = before.keys ∪ after.keys
+   changed_fields = keys.filter(|k| before[k] != after[k]).sorted()
+   ```
+   Result: `changed_fields` is a sorted `TEXT[]` of every column whose value differed, or `NULL` if `before_state` was not found (e.g. first mutation on a record with no prior log entry).
+
+**What is stored:**
+
+| operation | before_state | after_state | changed_fields |
+|---|---|---|---|
+| INSERT | NULL | full new row | NULL |
+| UPDATE | full old row (pre-read) | full new row (RETURNING) | sorted column names that changed |
+| DELETE | full deleted row (RETURNING) | NULL | NULL |
 
 ---
 

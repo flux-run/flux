@@ -73,6 +73,12 @@ pub struct CompiledQuery {
     /// The PostgreSQL schema this query was compiled to target.
     /// Must match the tenant+project the caller authenticated as.
     pub schema: String,
+    /// UPDATE only: a `SELECT * FROM schema.table WHERE {same conditions} FOR UPDATE`
+    /// statement with its own param list (fresh $N indices, no SET params).
+    /// The executor runs this inside the transaction before the UPDATE to capture
+    /// before_state and compute changed_fields.  None for SELECT/INSERT/DELETE.
+    pub pre_read_sql: Option<String>,
+    pub pre_read_params: Vec<serde_json::Value>,
 }
 
 /// A computed column to be injected into SELECT expressions.
@@ -170,7 +176,7 @@ impl QueryCompiler {
     }
 }
 
-// ─── Operation compilers ──────────────────────────────────────────────────────
+// --- Operation compilers ---
 
 fn compile_select(
     req: &QueryRequest,
@@ -240,7 +246,7 @@ fn compile_select(
         let batched_plan =
             build_batched_plan(schema, &req.table, nested_sels, &opts.relationships);
         return Ok(CompileResult::Batched {
-            root: CompiledQuery { sql, params: params.clone(), schema: schema.to_string() },
+            root: CompiledQuery { sql, params: params.clone(), schema: schema.to_string(), pre_read_sql: None, pre_read_params: vec![] },
             plan: batched_plan,
         });
     }
@@ -358,7 +364,7 @@ fn compile_select(
         *next += 1;
     }
 
-    Ok(CompileResult::Single(CompiledQuery { sql, params: params.clone(), schema: schema.to_string() }))
+    Ok(CompileResult::Single(CompiledQuery { sql, params: params.clone(), schema: schema.to_string(), pre_read_sql: None, pre_read_params: vec![] }))
 }
 
 fn compile_insert(
@@ -403,7 +409,7 @@ fn compile_insert(
         placeholders.join(", "),
     );
 
-    Ok(CompiledQuery { sql, params: params.clone(), schema: schema.to_string() })
+    Ok(CompiledQuery { sql, params: params.clone(), schema: schema.to_string(), pre_read_sql: None, pre_read_params: vec![] })
 }
 
 fn compile_update(
@@ -448,7 +454,30 @@ fn compile_update(
     }
     sql.push_str(" RETURNING *");
 
-    Ok(CompiledQuery { sql, params: params.clone(), schema: schema.to_string() })
+    // ── Pre-read SELECT (before-state capture) ─────────────────────────────────
+    // Rebuild WHERE with a fresh $N counter that starts at 1 (no SET params).
+    // The executor runs this inside the same transaction BEFORE the UPDATE
+    // with FOR UPDATE to lock the rows, then stores the result as before_state.
+    let mut pre_params: Vec<serde_json::Value> = policy.row_condition_params.clone();
+    let mut pre_next = pre_params.len() + 1;
+    let pre_where_parts = build_where(policy, req.filters.as_deref(), &mut pre_params, &mut pre_next)
+        .unwrap_or_default();
+    let pre_read_sql = {
+        let mut s = format!("SELECT * FROM {}.{}", quote_ident(schema), quote_ident(&req.table));
+        if !pre_where_parts.is_empty() {
+            s.push_str(&format!(" WHERE {}", pre_where_parts.join(" AND ")));
+        }
+        s.push_str(" FOR UPDATE");
+        s
+    };
+
+    Ok(CompiledQuery {
+        sql,
+        params: params.clone(),
+        schema: schema.to_string(),
+        pre_read_sql: Some(pre_read_sql),
+        pre_read_params: pre_params,
+    })
 }
 
 fn compile_delete(
@@ -470,7 +499,7 @@ fn compile_delete(
     }
     sql.push_str(" RETURNING *");
 
-    Ok(CompiledQuery { sql, params: params.clone(), schema: schema.to_string() })
+    Ok(CompiledQuery { sql, params: params.clone(), schema: schema.to_string(), pre_read_sql: None, pre_read_params: vec![] })
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

@@ -149,7 +149,7 @@ pub async fn handler(
                 let params = cache::extract_select_params(
                     &req, &policy, opts.default_limit, opts.max_limit,
                 );
-                let root_cq = CompiledQuery { sql: plan.sql, params, schema: schema.clone() };
+                let root_cq = CompiledQuery { sql: plan.sql, params, schema: schema.clone(), pre_read_sql: None, pre_read_params: vec![] };
                 if plan.is_batched {
                     // Rebuild BatchedPlan from schema-cached relationships.
                     let batched_plan = build_batched_plan(
