@@ -130,7 +130,7 @@ function stepByStep() {
     {
       num: '3',
       heading: 'Mutation logging',
-      body: 'Every database write goes through the Data Engine, which applies schema validation, column policies, and row-level security before executing the SQL. After execution, it writes a mutation record: which table, which row, old value, new value, and the request ID that caused it.',
+      body: 'Every database write goes through the Data Engine, which applies schema validation, column policies, and row-level security before executing the SQL. After execution, it writes a mutation record: which table, which row, old value, new value, and the request ID that caused it.<br><br><span style="font-size:.85rem;color:var(--muted);"><strong style="color:var(--text);">Invariant:</strong> All database writes must pass through the Data Engine for mutation history to remain complete. Writes made directly to Postgres — bypassing the Data Engine — are not recorded.</span>',
       code: codeWindow({
         title: 'data engine → mutation log',
         content: `${c.dim('# Mutation record:')}
@@ -164,7 +164,7 @@ function stepByStep() {
     {
       num: '5',
       heading: 'Deterministic replay',
-      body: 'Because every span includes its full input and output, any request can be replayed deterministically. <code>flux incident replay</code> re-executes against the current code with side-effects disabled. <code>flux bug bisect</code> replays across your git history to find regressions.',
+      body: 'Because every span includes its full input and output, any request can be replayed against the current code. <code>flux incident replay</code> re-executes with side-effects disabled. <code>flux bug bisect</code> replays across your git history to find regressions.<br><br><span style="font-size:.85rem;color:var(--muted);"><strong style="color:var(--text);">What replay guarantees:</strong> database state transitions are reproduced exactly. External side effects — emails, webhooks, third-party API calls — are skipped during replay. Non-deterministic values like <code>random()</code> or <code>Date.now()</code> inside your own code may differ; the recorded data state will not.</span>',
       code: codeWindow({
         title: 'replay — side-effects off',
         content: `${c.cmd('$')} flux incident replay 14:00..14:05
@@ -193,6 +193,59 @@ function stepByStep() {
     content: `${eyebrow({ text: 'Step by Step' })}
 ${sectionHeader({ heading: 'What happens when a request runs.' })}
 <div style="display:flex;flex-direction:column;">${stepEls}
+</div>`,
+  });
+}
+
+// ── Performance overhead ─────────────────────────────────────────────────────
+function performanceOverhead() {
+  const perfWindow = codeWindow({
+    title: 'per-request overhead breakdown',
+    content: `${c.dim('# Time added by Fluxbase per request')}
+
+  span recording      ${c.ms('~0.3 ms')}   ${c.dim('in-memory, async write')}
+  mutation logging    ${c.ms('~0.7 ms')}   ${c.dim('one row, same tx as user write')}
+  trace storage       ${c.ms('~0.4 ms')}   ${c.dim('fire-and-forget, non-blocking')}
+                      ─────────
+  total               ${c.ok('~1–3 ms')}   ${c.dim('p95 overhead')}
+
+${c.dim('# Your user write and the mutation diff')}
+${c.dim('# commit in the same Postgres transaction.')}
+
+  user write     ─────────────────► Postgres
+  mutation diff  ─── same tx  ────► trace store
+
+${c.ok('# Slow trace write does not delay HTTP response.')}`,
+  });
+
+  const properties = [
+    { icon: '⚡', label: 'In-memory spans', desc: 'Spans are assembled in-memory during execution. A single batch insert commits them after the response is sent.' },
+    { icon: '📝', label: 'Same-transaction diffs', desc: 'Mutation diffs are appended in the same Postgres transaction as the user write — no extra round-trip to the database.' },
+    { icon: '🔥', label: 'Fire-and-forget trace write', desc: 'The span batch insert is non-blocking. A slow trace write cannot delay the HTTP response to your client.' },
+    { icon: '🚫', label: 'No cross-request locking', desc: 'Each request writes its own rows independently. There is no global lock, no shared state between concurrent requests.' },
+  ];
+
+  const cards = properties.map(p => `<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:20px 22px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <span style="font-size:1.1rem;">${p.icon}</span>
+      <strong style="font-size:.9rem;">${p.label}</strong>
+    </div>
+    <p style="font-size:.84rem;color:var(--muted);line-height:1.6;margin:0;">${p.desc}</p>
+  </div>`).join('\n    ');
+
+  return section({
+    bg: 'var(--bg-surface)',
+    content: `${eyebrow({ text: 'Performance' })}
+${sectionHeader({
+  heading: 'Typical overhead: 1–3 ms per request.',
+  sub: 'Span recording is in-memory and non-blocking. Mutation logging shares the same Postgres transaction as your own write. No synchronous tracing pipeline. No global locks.',
+  maxWidth: '620px',
+})}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;" class="grid-2col">
+  <div>${perfWindow}</div>
+  <div style="display:grid;gap:12px;">
+    ${cards}
+  </div>
 </div>`,
   });
 }
@@ -258,6 +311,7 @@ export function render() {
     hero(),
     architectureDiagram(),
     stepByStep(),
+    performanceOverhead(),
     techStack(),
     cta(),
   ].join('\n\n');

@@ -267,6 +267,31 @@ Your PostgreSQL
 
 <hr class="doc-divider">
 
+<h2 id="replay-guarantees">Replay Guarantees</h2>
+
+<p>Replay re-executes a recorded request against the current version of your code using the stored span inputs. It is designed to reproduce the <strong>data state</strong> of the original request — not every non-deterministic value your code might compute.</p>
+
+<h3>What replay does guarantee</h3>
+
+<ul>
+  <li><strong>Database state transitions are reproduced.</strong> The same rows are written, the same mutations are applied. The before/after diff recorded in the original request is used to drive the re-execution path.</li>
+  <li><strong>External side effects are disabled.</strong> Email sends, webhook calls, Stripe charges, and any registered tool calls are intercepted and skipped. Your data store changes; the outside world does not.</li>
+  <li><strong>All spans are re-recorded.</strong> The replay run produces a fresh trace that can be compared span-by-span against the original — including latency, errors, and per-step output.</li>
+</ul>
+
+<h3>What replay does not guarantee</h3>
+
+<ul>
+  <li><strong>Non-deterministic values.</strong> If your function calls <code>Date.now()</code>, <code>Math.random()</code>, or reads from an external source, those values will differ in the replay run. This is expected and does not affect data state reproduction.</li>
+  <li><strong>Reads from untracked external state.</strong> If your function reads from a third-party API or a cache that is not part of the Fluxbase trace, replay uses the live value at the time it runs.</li>
+</ul>
+
+<p style="margin-top:16px;padding:14px 18px;background:var(--bg-elevated);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;font-size:.88rem;line-height:1.65;">
+  <strong>In short:</strong> replay guarantees data state reproduction, not perfect code determinism. For debugging — which is the primary use case — reproducing the data transitions is what matters.
+</p>
+
+<hr class="doc-divider">
+
 <h2 id="data-residency">Data residency</h2>
 
 <p>Fluxbase is deployed in GCP <code>asia-south1</code> by default. The trace and mutation data is stored in your own PostgreSQL database — which you can host in any region on any cloud.</p>
