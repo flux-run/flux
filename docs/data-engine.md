@@ -727,10 +727,17 @@ CREATE INDEX idx_state_mutations_request
 CREATE INDEX idx_state_mutations_time
     ON fluxbase_internal.state_mutations(mutation_ts);
 
--- Row history queries: flux state blame users 42
--- SELECT ... WHERE table_name='users' AND record_pk='{"id":42}' ORDER BY version DESC LIMIT 20
-CREATE INDEX idx_state_mutations_pk_version
-    ON fluxbase_internal.state_mutations(tenant_id, project_id, table_name, record_pk, version DESC);
+-- flux state blame / state history: O(log N) latest-mutation lookup per record.
+-- Composite order (tenant → project → table → record_pk → newest-first) means
+-- Postgres reads exactly one index leaf and stops for LIMIT 1 queries.
+CREATE INDEX idx_state_mutations_pk_latest
+    ON fluxbase_internal.state_mutations (
+        tenant_id,
+        project_id,
+        table_name,
+        record_pk,
+        mutation_seq DESC
+    );
 
 -- Deterministic replay ordering within a request: ORDER BY mutation_seq replaces timestamp heuristics
 CREATE INDEX idx_state_mutations_request_seq
@@ -1070,6 +1077,7 @@ New indexes applied:
 - `idx_state_mutations_request_table (request_id, table_name)` — targeted table replay
 - `idx_state_mutations_request_id (request_id)` — trace_requests join
 - `idx_state_mutations_time (mutation_ts)` — time-windowed incident queries
+- `idx_state_mutations_pk_latest (tenant_id, project_id, table_name, record_pk, mutation_seq DESC)` — O(log N) `flux state blame` / `flux state history`
 
 ---
 
@@ -1114,6 +1122,15 @@ New indexes applied:
 | `flux incident replay 15:00..15:05` | `mutation_ts` | time-windowed scan without full table read |
 | `flux trace diff` | `changed_fields` | field-level diff without full JSONB comparison |
 | `flux state blame` / replay | `schema_name` | full `(schema, table, pk)` identity for cross-tenant correctness |
+
+**Index coverage** — all access patterns are O(log N):
+
+| CLI feature | Index used |
+|---|---|
+| `flux trace debug` | `idx_state_mutations_request_seq` |
+| `flux incident replay 15:00..15:05` | `idx_state_mutations_time` |
+| `flux trace diff` | `idx_state_mutations_request_table` |
+| `flux state blame` / `flux state history` | `idx_state_mutations_pk_latest` |
 
 ---
 
