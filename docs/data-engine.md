@@ -693,6 +693,7 @@ Every INSERT, UPDATE, and DELETE executed by the data engine is written to an ap
 CREATE TABLE fluxbase_internal.state_mutations (
     mutation_id    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     mutation_seq   BIGSERIAL,               -- global monotonic sequence; ORDER BY mutation_seq for deterministic replay
+    mutation_ts    TIMESTAMPTZ DEFAULT now(), -- wall-clock time of the mutation; powers time-windowed incident replay
     request_id     UUID,                    -- links to trace_requests.request_id
     span_id        TEXT,                    -- links to the runtime span that triggered this (added: 20260309000011_span_id)
 
@@ -721,9 +722,10 @@ CREATE INDEX idx_state_mutations_request
     ON fluxbase_internal.state_mutations(request_id)
     WHERE request_id IS NOT NULL;
 
--- Time-range queries: flux incident replay 15:00..15:05
+-- Time-range queries: flux incident replay 2026-03-09T15:00..15:05
+-- WHERE mutation_ts BETWEEN $from AND $to ORDER BY mutation_seq
 CREATE INDEX idx_state_mutations_time
-    ON fluxbase_internal.state_mutations(tenant_id, project_id, table_name, created_at);
+    ON fluxbase_internal.state_mutations(mutation_ts);
 
 -- Row history queries: flux state blame users 42
 -- SELECT ... WHERE table_name='users' AND record_pk='{"id":42}' ORDER BY version DESC LIMIT 20
@@ -1053,10 +1055,21 @@ The existing Moka L2 cache infrastructure is already in place. Extending the cac
 
 `mutation_seq BIGSERIAL` added to `state_mutations` via migration `20260311000012`. The column is auto-populated by Postgres on every INSERT; no application-level changes were needed. `flux incident replay` and `flux trace debug` now order by `mutation_seq` for strict causal ordering within a request.
 
+`mutation_ts TIMESTAMPTZ DEFAULT now()` added via migration `20260311000014`. Enables time-windowed incident replay without a full table scan:
+
+```sql
+SELECT * FROM fluxbase_internal.state_mutations
+WHERE  mutation_ts BETWEEN $from AND $to
+ORDER  BY mutation_seq;
+```
+
+Storage cost: 8 bytes per row. Index `idx_state_mutations_time (mutation_ts)` added.
+
 New indexes applied:
-- `idx_state_mutations_request_seq (request_id, mutation_seq)`
-- `idx_state_mutations_request_table (request_id, table_name)`
-- `idx_state_mutations_request_id (request_id)`
+- `idx_state_mutations_request_seq (request_id, mutation_seq)` — replay within a request
+- `idx_state_mutations_request_table (request_id, table_name)` — targeted table replay
+- `idx_state_mutations_request_id (request_id)` — trace_requests join
+- `idx_state_mutations_time (mutation_ts)` — time-windowed incident queries
 
 ---
 
@@ -1092,6 +1105,15 @@ New indexes applied:
 | INSERT | NULL | full new row | NULL |
 | UPDATE | full old row (pre-read) | full new row (RETURNING) | sorted column names that changed |
 | DELETE | full deleted row (RETURNING) | NULL | NULL |
+
+**Debugging column matrix** — all four columns are now live:
+
+| CLI feature | Column used | Why |
+|---|---|---|
+| `flux trace debug` | `mutation_seq` | strict step-through order within a request |
+| `flux incident replay 15:00..15:05` | `mutation_ts` | time-windowed scan without full table read |
+| `flux trace diff` | `changed_fields` | field-level diff without full JSONB comparison |
+| `flux state blame` / replay | `schema_name` | full `(schema, table, pk)` identity for cross-tenant correctness |
 
 ---
 
