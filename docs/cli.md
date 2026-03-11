@@ -19,6 +19,7 @@
 - `flux incident replay --request-id <id>` — re-apply a past request with side effects suppressed (`x-flux-replay: true`)
 - `flux incident replay <from..to>` — replay all requests in a time window in chronological order
 - `flux trace diff <id> <replay-id>` — compare two executions field-by-field: runtime status/duration, **execution graph** (which tool calls changed, which were skipped), and state mutation diffs. **This is what Git diff would look like if Git could see runtime behavior, not just code.**
+- `flux trace debug <id>` — step-through a past production request span-by-span, showing which database mutations happened at each step and the cumulative backend state. With `--at <step>` you can inspect state halfway through execution.
 - `flux bug bisect --function <name> --good <sha> --bad <sha>` — binary-search commit history to find the first regression (read-only, no replays)
 
 **Design principles:**
@@ -83,6 +84,7 @@ Fluxbase gives every backend developer the same tools that Git gives every code 
 | `git blame` | `flux state blame` | Last writer per row, linked to the request that wrote it |
 | `git log` | `flux state history` | Full version history for a single row with field-level before→after diffs |
 | `git diff` | `flux trace diff` | Compare two executions: runtime status, **which tool/db/workflow spans changed behavior**, and field-level mutation diffs |
+| `gdb` / step-through | `flux trace debug` | Walk a past production request step-by-step; see exact database state at each span |
 | `git bisect` | `flux bug bisect` | Binary-search deploy history to find the first regression commit |
 | `git revert` | `flux incident replay` | Re-apply a past request with all side effects suppressed |
 
@@ -2138,7 +2140,82 @@ FIXED
 **Execution Graph rules:**
 - Only spans that _differ_ between the two executions are shown
 - Spans are grouped by name (tool action, table, workflow step)
-- A span is flagged if: status differs, one side skipped it, or duration changed by ≥20%
+- A span is flagged if: status differs, one side skipped it, or **duration changed by ≥100ms absolute OR ≥20% relative** (the absolute guard prevents small spans like 10ms→20ms from appearing as noise)
+
+---
+
+### `flux trace debug <trace-id>` ✅
+
+Step-through debugger for a past production request. Walks the execution graph span-by-span and shows which database mutations happened at each step — reconstructing the complete backend state at every point during execution.
+
+This is possible because every mutation in `fluxbase_internal.state_mutations` now carries a `span_id` column linking it to the span that caused it. `flux trace debug` uses that column to partition mutations into execution steps.
+
+```
+flux trace debug <trace-id> [--at <step>] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--at <step>` | Inspect state at exactly this step number (1-based) and stop |
+| `--json` | Output raw JSON (trace + mutations) |
+
+```
+$ flux trace debug 9624a58d
+
+  endpoint:  POST /auth/signup → create_user
+  request:   9624a58d  2026-03-11 14:23:07
+  summary:   1200ms  ·  200 OK  ·  4 steps
+
+─────────────────────────────────────────────
+ Step 1 of 4  ·  db.insert (users)       42ms
+─────────────────────────────────────────────
+  + users.id=42
+      email:      alice@example.com
+      plan:       free
+
+─────────────────────────────────────────────
+ Step 2 of 4  ·  stripe.charge          380ms
+─────────────────────────────────────────────
+  no state changes in this step
+
+─────────────────────────────────────────────
+ Step 3 of 4  ·  db.update (users)       18ms
+─────────────────────────────────────────────
+  ~ users.id=42
+      plan:  free → pro
+
+─────────────────────────────────────────────
+ Step 4 of 4  ·  gmail.send_email       210ms
+─────────────────────────────────────────────
+  no state changes in this step
+
+─────────────────────────────────────────────
+ Final state after request 9624a58d
+─────────────────────────────────────────────
+  users.id=42
+    email: alice@example.com
+    plan:  pro
+```
+
+**Inspect state at a specific step** — did the user already exist before the Stripe call?
+
+```
+$ flux trace debug 9624a58d --at 2
+
+─────────────────────────────────────────────
+ State after step 2 (stripe.charge)
+─────────────────────────────────────────────
+  users.id=42
+    email: alice@example.com
+    plan:  free       ← upgrade hasn't happened yet
+```
+
+**What this unlocks:**
+- Reproduce _ordering bugs_: mutation happened before vs. after a span
+- Confirm upstream state at the point a third-party API was called
+- Verify that a refactor preserved mutation ordering, not just final state
+
+**How it works:** `state_mutations.span_id` (column added in migration `20260309000011_span_id`) links every mutation row to the runtime span that caused it. The CLI fetches all mutations for the request and partitions them into steps by matching `span_id` to span objects in the trace tree. For older rows without `span_id`, mutations are distributed proportionally across steps as a best-effort fallback.
 
 ---
 

@@ -36,6 +36,7 @@ pub struct MutationRow {
     pub before_state: Option<serde_json::Value>,
     pub after_state:  Option<serde_json::Value>,
     pub actor_id:     Option<String>,
+    pub span_id:      Option<String>,
     pub version:      i64,
     pub created_at:   DateTime<Utc>,
 }
@@ -60,6 +61,7 @@ pub async fn handler(
             before_state,
             after_state,
             actor_id,
+            span_id,
             version,
             created_at
         FROM fluxbase_internal.state_mutations

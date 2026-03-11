@@ -637,7 +637,7 @@ All metadata lives in the **`fluxbase_internal`** Postgres schema, never exposed
 | `workflow_executions` | Runtime execution state (current step, context, status) |
 | `cron_jobs` | Cron job definitions with schedule, action, and `next_run_at` |
 
-| `state_mutations` | Append-only log of every INSERT/UPDATE/DELETE with before/after snapshots, versioned per row, linked to `request_id` — **live; powers `flux why`, `flux state history`, `flux state blame`, `flux trace diff`, and `flux incident replay`** |
+| `state_mutations` | Append-only log of every INSERT/UPDATE/DELETE with before/after snapshots, versioned per row, linked to `request_id` and `span_id` — **live; powers `flux why`, `flux state history`, `flux state blame`, `flux trace diff`, `flux trace debug`, and `flux incident replay`** |
 
 User tables live in **project-scoped schemas** named `t_{tenant_slug}_{project_slug}_{db_name}`.
 
@@ -645,7 +645,7 @@ User tables live in **project-scoped schemas** named `t_{tenant_slug}_{project_s
 
 ## Deterministic Execution & Replay
 
-This section documents how Fluxbase supports `flux why`, `flux trace replay`, `flux incident replay`, `flux state blame`, `flux trace diff`, and `flux bug bisect`. The `state_mutations` table is live and records every INSERT/UPDATE/DELETE within the same transaction as the user-facing operation.
+This section documents how Fluxbase supports `flux why`, `flux trace replay`, `flux incident replay`, `flux state blame`, `flux trace diff`, `flux trace debug`, and `flux bug bisect`. The `state_mutations` table is live and records every INSERT/UPDATE/DELETE within the same transaction as the user-facing operation. The `span_id` column (migration `20260309000011_span_id`) links each mutation to the runtime span that caused it, enabling intra-request time-travel.
 
 ---
 
@@ -681,13 +681,14 @@ Every INSERT, UPDATE, and DELETE executed by the data engine is written to an ap
 - `flux state history` — version history for a single row
 - `flux state blame` — last writer per row across a table
 - `flux trace diff` — mutation comparison between two executions
+- **`flux trace debug` — step-through a production request; reconstructs backend state at every span using `span_id`**
 - `flux incident replay` — fetch mutations for a request or time window, then re-apply them
 
 ```sql
 CREATE TABLE fluxbase_internal.state_mutations (
     mutation_id   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     request_id    UUID,                    -- links to trace_requests.request_id
-    span_id       UUID,                    -- links to the runtime span that triggered this
+    span_id       TEXT,                    -- links to the runtime span that triggered this (added: 20260309000011_span_id)
 
     tenant_id     UUID        NOT NULL,
     project_id    UUID        NOT NULL,

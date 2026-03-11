@@ -194,8 +194,9 @@ pub async fn execute(
             // Duration change, if both ran and differed meaningfully
             if let (Some(od), Some(rd)) = (sd.orig_ms, sd.rep_ms) {
                 if od > 0 {
-                    let delta_pct = ((rd - od) * 100) / od;
-                    if delta_pct.abs() >= 20 {
+                    let abs_diff = (rd - od).abs();
+                    let delta_pct = (abs_diff * 100) / od;
+                    if abs_diff >= 100 || delta_pct >= 20 {
                         let arrow = if delta_pct < 0 {
                             format!("↓{}%", -delta_pct).green().to_string()
                         } else {
@@ -443,9 +444,14 @@ fn diff_spans(orig: &[Value], rep: &[Value]) -> Vec<SpanDiff> {
         // Status changed, or one side is absent (skipped vs executed)
         let status_diff = orig_status != rep_status || oe.is_none() != re.is_none();
 
-        // Duration changed by >= 20%
+        // Duration changed by >= 100ms absolute OR >= 20% relative.
+        // The absolute guard prevents small spans (10ms → 20ms) from appearing as noise.
         let dur_diff = match (orig_ms, rep_ms) {
-            (Some(o), Some(r)) if o > 0 => ((r - o) * 100 / o).abs() >= 20,
+            (Some(o), Some(r)) if o > 0 => {
+                let abs_diff = (r - o).abs();
+                let pct_diff = (abs_diff * 100) / o;
+                abs_diff >= 100 || pct_diff >= 20
+            }
             _ => false,
         };
 

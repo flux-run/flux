@@ -36,6 +36,7 @@ mod tail;
 mod tenant;
 mod tool;
 mod trace;
+mod trace_debug;
 mod trace_diff;
 mod upgrade;
 mod version_cmd;
@@ -208,6 +209,26 @@ enum Commands {
         original_id: String,
         /// Second request ID to compare against (typically a replay)
         replay_id: String,
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Step-through debugger for a past production request.
+    ///
+    /// Walks the execution graph span-by-span, showing which database mutations
+    /// happened at each step.  Reconstructs backend state at any point in execution.
+    ///
+    /// Examples:
+    ///   flux trace debug 9624a58d
+    ///   flux trace debug 9624a58d --at 2
+    ///   flux trace debug 9624a58d --json
+    TraceDebug {
+        /// Request ID to debug
+        trace_id: String,
+        /// Inspect state at exactly this step number (1-based)
+        #[arg(long, value_name = "STEP")]
+        at: Option<usize>,
         /// Output raw JSON
         #[arg(long)]
         json: bool,
@@ -581,6 +602,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Commands::TraceDiff { original_id, replay_id, json } => trace_diff::execute(original_id, replay_id, json).await?,
+        Commands::TraceDebug { trace_id, at, json } => trace_debug::execute(trace_id, at, json).await?,
         Commands::Bug { command } => match command {
             BugCommands::Bisect { function, good, bad, threshold, json } =>
                 bisect::execute(function, good, bad, threshold, json).await?,

@@ -160,12 +160,17 @@ pub async fn handler(
         QueryCompiler::compile(&req, &policy, &schema, &opts)?
     };
 
-    // Pull request_id from headers early — needed by hooks, executor, and emitter.
+    // Pull request_id and span_id from headers — forwarded by the runtime for
+    // every DB call so mutations can be linked back to the span that caused them.
     let request_id = headers
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("-")
         .to_string();
+    let span_id_owned = headers
+        .get("x-span-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
     // 7. Before hook (runs before the SQL; can abort the operation).
     //    Skipped in replay mode — hooks must not fire again on replayed mutations.
@@ -190,6 +195,7 @@ pub async fn handler(
     let mut_ctx = MutationContext {
         schema:     &schema,
         request_id: &request_id,
+        span_id:    span_id_owned.as_deref(),
         tenant_id:  auth.tenant_id,
         project_id: auth.project_id,
         table:      &req.table,

@@ -14,6 +14,9 @@ pub struct MutationContext<'a> {
     pub schema: &'a str,
     /// Forwarded from `x-request-id`; used in SQL comment + state_mutations.request_id.
     pub request_id: &'a str,
+    /// Forwarded from `x-span-id`; links each mutation to the span that caused it.
+    /// Enables intra-request time-travel: reconstruct state at any point in execution.
+    pub span_id: Option<&'a str>,
     pub tenant_id: Uuid,
     pub project_id: Uuid,
     /// User-facing table name (not schema-qualified).
@@ -136,8 +139,8 @@ pub async fn execute(
                     INSERT INTO fluxbase_internal.state_mutations
                         (tenant_id, project_id, table_name, record_pk,
                          operation, before_state, after_state,
-                         version, actor_id, request_id)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                         version, actor_id, request_id, span_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     "#,
                 )
                 .bind(ctx.tenant_id)
@@ -150,6 +153,7 @@ pub async fn execute(
                 .bind(version)
                 .bind(ctx.user_id)
                 .bind(ctx.request_id)
+                .bind(ctx.span_id)
                 .execute(&mut *tx)
                 .await
                 .map_err(EngineError::Db)?;
