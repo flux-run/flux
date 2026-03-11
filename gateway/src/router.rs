@@ -28,6 +28,13 @@ pub fn create_router(state: SharedState) -> Router {
         .route("/internal/cache/invalidate", post(crate::routes::cache::invalidate_handler))
         .route("/internal/cache/stats",      get(crate::routes::cache::stats_handler));
 
+    // Execution-plane documentation — tenant-scoped OpenAPI + Swagger UI + agent schema.
+    // These must be registered BEFORE the catch-all fn_routes so they are matched first.
+    let docs_routes = Router::new()
+        .route("/openapi.json", axum::routing::get(crate::routes::openapi::openapi_json))
+        .route("/docs",        axum::routing::get(crate::routes::openapi::docs_ui))
+        .route("/agent-schema", axum::routing::get(crate::routes::openapi::agent_schema));
+
     // Serverless-function invocation routes — existing proxy with identity middleware.
     let fn_routes = Router::new()
         .route("/{*path}", any(proxy_handler))
@@ -77,6 +84,7 @@ pub fn create_router(state: SharedState) -> Router {
         .merge(engine_routes)
         .merge(event_routes)
         .merge(internal_routes)
+        .merge(docs_routes)
         .merge(fn_routes)
         .layer(cors)
         .layer(axum::extract::DefaultBodyLimit::max(1 * 1024 * 1024)) // 1 MB
