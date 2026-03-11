@@ -18,7 +18,7 @@
 **Incident replay and regression finding:**
 - `flux incident replay --request-id <id>` — re-apply a past request with side effects suppressed (`x-flux-replay: true`)
 - `flux incident replay <from..to>` — replay all requests in a time window in chronological order
-- `flux trace diff <id> <replay-id>` — compare two executions field-by-field: status, duration, mutation diffs, verdict
+- `flux trace diff <id> <replay-id>` — compare two executions field-by-field: runtime status/duration, **execution graph** (which tool calls changed, which were skipped), and state mutation diffs. **This is what Git diff would look like if Git could see runtime behavior, not just code.**
 - `flux bug bisect --function <name> --good <sha> --bad <sha>` — binary-search commit history to find the first regression (read-only, no replays)
 
 **Design principles:**
@@ -82,7 +82,7 @@ Fluxbase gives every backend developer the same tools that Git gives every code 
 |-----|----------|--------------| 
 | `git blame` | `flux state blame` | Last writer per row, linked to the request that wrote it |
 | `git log` | `flux state history` | Full version history for a single row with field-level before→after diffs |
-| `git diff` | `flux trace diff` | Compare two executions: runtime status, duration, and field-level mutation diffs |
+| `git diff` | `flux trace diff` | Compare two executions: runtime status, **which tool/db/workflow spans changed behavior**, and field-level mutation diffs |
 | `git bisect` | `flux bug bisect` | Binary-search deploy history to find the first regression commit |
 | `git revert` | `flux incident replay` | Re-apply a past request with all side effects suppressed |
 
@@ -2081,7 +2081,9 @@ Proceed? [y/N]: y
 
 ### `flux trace diff <original-id> <replay-id>` ✅
 
-Compare two executions of the same request field-by-field: runtime metrics and state mutation diffs. Typical use: compare a production failure against a replay to confirm a fix or spot a behavior change.
+Compare two executions of the same request field-by-field: runtime metrics, per-span execution graph diff, and state mutation diffs. Typical use: compare a production failure against a replay to confirm a fix or spot a behavior change.
+
+Because Fluxbase owns the entire execution stack (gateway → runtime → tools → db → workflows), the diff can show _why_ behavior changed — not just _what_ changed. `stripe.charge` timing out vs. succeeding is a fact you can read directly from the Execution Graph section.
 
 ```
 flux trace diff <original-id> <replay-id> [--json]
@@ -2090,19 +2092,34 @@ flux trace diff <original-id> <replay-id> [--json]
 ```
 $ flux trace diff 9624a58d a12b4f8c
 
+  endpoint:  POST /signup → create_user
+  original:  9624a58d  commit a93f42c
+  replay:    a12b4f8c  commit a93f42c
+
 Runtime
 ────────────────────────────
-status:        error → success
-duration:      3816ms → 142ms  (↓96%)
-errors:        1 → 0
+status:    error → success  ✔ fixed
+duration:  3816ms → 142ms  (↓96%)
+errors:    1 → 0
+
+Execution Graph
+────────────────────────────
+stripe.charge
+    original:  timeout
+    replay:    success
+    duration:  3200ms → 98ms  (↗97%)
+
+gmail.send_email
+    original:  executed
+    replay:    skipped
 
 State Diff
 ────────────────────────────
-users.id=42
+users.id=42  update
 
-  plan
-    original: free → pro
-    replay:   free → enterprise
+    plan
+      original: free → pro
+      replay:   free → enterprise
 
 Verdict
 ────────────────────────────
@@ -2115,8 +2132,13 @@ FIXED
 |---------|--------|
 | `FIXED` | Error gone, mutations identical |
 | `REGRESSED` | New error appeared in replay |
-| `BEHAVIOR CHANGED` | No error in either, but mutations differ |
-| `IDENTICAL` | Status, duration, and all mutations match exactly |
+| `BEHAVIOR CHANGED` | No error in either, but span behavior or mutations differ |
+| `IDENTICAL` | Status, duration, spans, and all mutations match exactly |
+
+**Execution Graph rules:**
+- Only spans that _differ_ between the two executions are shown
+- Spans are grouped by name (tool action, table, workflow step)
+- A span is flagged if: status differs, one side skipped it, or duration changed by ≥20%
 
 ---
 

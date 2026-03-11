@@ -877,7 +877,7 @@ The JS sandbox code (`FluxContext`) does not change between normal and replay �
 
 ## Execution Comparison
 
-`flux trace diff` compares two executions of the same request by fetching both traces from the control plane and diffing the state mutations that each produced.
+`flux trace diff` compares two executions of the same request by fetching both traces and diffing (1) runtime metrics, (2) execution spans, and (3) state mutations.
 
 ### How it works
 
@@ -888,20 +888,44 @@ Trace A (original)                 Trace B (replay)
          │                                   │
          └──────────────┬────────────────────┘
                         ▼
-              compare runtime spans
-              ─ status code
-              ─ total_duration_ms
-              ─ error_count
-
-              compare mutation sets
-              ─ same rows mutated?
-              ─ same operations (insert/update/delete)?
-              ─ per-field before/after JSONB diff
+         ┌───────────────────────────────┐
+         │  1. Runtime diff           │
+         │   ─ status code            │
+         │   ─ total_duration_ms      │
+         │   ─ error_count            │
+         ├───────────────────────────────┤
+         │  2. Execution Graph diff   │
+         │   ─ group spans by name    │
+         │   ─ compare status/dur     │
+         │   ─ show only changed spans│
+         ├───────────────────────────────┤
+         │  3. State mutation diff    │
+         │   ─ before/after JSONB diff │
+         │   ─ per-field changes       │
+         └───────────────────────────────┘
                         │
                         ▼
                     Verdict
-                    FIXED | REGRESSED | BEHAVIOR CHANGED | IDENTICAL
+           FIXED | REGRESSED | BEHAVIOR CHANGED | IDENTICAL
 ```
+
+### Execution Graph diff
+
+The Execution Graph section is what makes this more powerful than `git diff`. Git can show that a timeout value changed in source; Fluxbase can show that `stripe.charge` timed out in one execution and succeeded in the other.
+
+Span types that are diffed:
+
+| Span type | Example names |
+|-----------|-------------|
+| `tool` | `stripe.charge`, `gmail.send_email`, `slack.post_message` |
+| `db` | table name (e.g. `users`, `orders`) |
+| `workflow_step` | step name from `ctx.workflow.run` |
+| `agent_step` | LLM reasoning step |
+
+A span is included in the Execution Graph diff output when:
+- Its `status` differs between traces (e.g. `timeout` → `success`)
+- One execution skipped it entirely (present in A, absent in B)
+- Its `duration_ms` changed by ≥20%
 
 ### Verdict logic
 
@@ -909,23 +933,20 @@ Trace A (original)                 Trace B (replay)
 |-----------|--------|
 | A had errors, B has none, mutations identical | `FIXED` |
 | A had no errors, B has errors | `REGRESSED` |
-| Neither has errors, but mutation sets differ | `BEHAVIOR CHANGED` |
-| Status, duration within 5%, and all mutations match | `IDENTICAL` |
-
-### What makes this more powerful than `git diff`
-
-`git diff` shows you what _code_ changed between two commits. `flux trace diff` shows you what _data_ changed between two executions of the same endpoint — field by field, row by row, across every table the function touched. This is observable at the production-data layer, not just the code layer.
+| Neither has errors, but spans or mutations differ | `BEHAVIOR CHANGED` |
+| Status, duration within 5%, spans identical, mutations identical | `IDENTICAL` |
 
 ### Implementation
 
-The diff is computed entirely in the CLI (`cli/src/trace_diff.rs`). The CLI calls:
+The diff is computed entirely in the CLI ([cli/src/trace_diff.rs](cli/src/trace_diff.rs)). The CLI calls:
 
-1. `GET /traces/:id` twice (once per request ID) — extracts status, duration, error spans
+1. `GET /traces/:id` twice — extracts status, duration, error spans, and all execution spans
 2. `GET /db/mutations?request_id=` twice — gets the full mutation log for each execution
-3. Pairs mutations by `(table_name, record_pk, version)` and calls `diff_json()` on each `before_state`/`after_state` pair
-4. Classifies the verdict and renders the output
+3. `diff_spans()` — groups both span lists by name, compares status and duration per span
+4. `diff_json()` on each mutation's `before_state`/`after_state` JSONB pair
+5. Classifies the verdict and renders the output
 
-No server-side diff logic is required — the raw `before_state` and `after_state` JSONB columns in `state_mutations` contain everything needed.
+No server-side diff logic is required.
 
 ---
 

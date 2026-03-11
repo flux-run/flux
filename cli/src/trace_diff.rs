@@ -1,30 +1,38 @@
 //! `flux trace diff <original-id> <replay-id>` — compare two executions of the same request.
 //!
 //! Shows how behavior diverged between the original production run and a replay:
-//! duration, status, error presence, and state mutation field diffs.
+//! runtime metrics, per-span execution graph diff, and state mutation field diffs.
 //!
 //! ```text
-//! $ flux trace diff 9624a58d 550e8400
+//! $ flux trace diff 9624a58d a12b4f8c
 //!
-//! ─── DIFF SUMMARY ────────────────────────────────────────────────
+//! Runtime
+//! ────────────────────────────
+//! status:        error → success
+//! duration:      3816ms → 142ms  (↓96%)
+//! errors:        1 → 0
 //!
-//!   endpoint:   POST /signup → create_user
-//!   original:   9624a58d    commit a93f42c
-//!   replay:     550e8400    commit a93f42c   (replay:9624a58d)
+//! Execution Graph
+//! ────────────────────────────
+//! stripe.charge
+//!   original: timeout
+//!   replay:   success
 //!
-//! ─── Runtime ─────────────────────────────────────────────────────
-//!   status:    500 FAILED → 200 OK            ✔ fixed
-//!   duration:  3816ms → 142ms                 ↓ 96%
-//!   errors:    1 → 0
+//! gmail.send_email
+//!   original: executed
+//!   replay:   skipped
 //!
-//! ─── State changes ───────────────────────────────────────────────
-//!   users  v1  INSERT  (same)
+//! State Diff
+//! ────────────────────────────
+//! users.id=42
 //!
-//!   users  v2  UPDATE  id=42
-//!     plan:    free ─ original           replay: free → enterprise
+//!   plan
+//!     original: free → pro
+//!     replay:   free → enterprise
 //!
-//! ─── Verdict ─────────────────────────────────────────────────────
-//!   BEHAVIOR CHANGED  — state mutations differ
+//! Verdict
+//! ────────────────────────────
+//! FIXED
 //! ```
 
 use colored::Colorize;
@@ -81,14 +89,13 @@ pub async fn execute(
     let rep_ms  = rep_trace ["total_ms"].as_i64().unwrap_or(0);
 
     let empty_spans: Vec<Value> = vec![];
-    let orig_errors = orig_trace["spans"].as_array().unwrap_or(&empty_spans)
-        .iter().filter(|s| s["span_type"] == "error").count();
-    let rep_errors  = rep_trace["spans"].as_array().unwrap_or(&empty_spans)
-        .iter().filter(|s| s["span_type"] == "error").count();
+    let orig_spans_all = orig_trace["spans"].as_array().unwrap_or(&empty_spans);
+    let rep_spans_all  = rep_trace["spans"].as_array().unwrap_or(&empty_spans);
+
+    let orig_errors = orig_spans_all.iter().filter(|s| s["span_type"] == "error").count();
+    let rep_errors  = rep_spans_all .iter().filter(|s| s["span_type"] == "error").count();
 
     // ── Print header ─────────────────────────────────────────────────────────
-    println!();
-    println!("{}", "─── DIFF SUMMARY ────────────────────────────────────────────────────────────".bold());
     println!();
     println!("  {}  {} {} → {}", "endpoint:".dimmed(), method.bold(), path.bold(), function.cyan().bold());
     println!("  {}  {}  commit {}", "original:".dimmed(), trunc(&original_id, 12).yellow(), orig_commit.dimmed());
@@ -96,7 +103,8 @@ pub async fn execute(
     println!();
 
     // ── Runtime section ──────────────────────────────────────────────────────
-    println!("{}", "─── Runtime ─────────────────────────────────────────────────────────────────".bold());
+    println!("{}", "Runtime".bold());
+    println!("{}", "─".repeat(28).dimmed());
 
     // Status
     let status_changed = orig_status != rep_status;
@@ -116,10 +124,9 @@ pub async fn execute(
     } else {
         "changed".yellow().to_string()
     };
-    println!("  {}  {} {} → {}  {} {}",
+    println!("  {}  {} → {}  {} {}",
         "status:  ".dimmed(),
         format_status(orig_status).yellow(),
-        "→".dimmed(),
         format_status(rep_status).cyan(),
         status_icon,
         verdict_label,
@@ -129,9 +136,9 @@ pub async fn execute(
     let ms_pct = if orig_ms > 0 {
         let delta = rep_ms - orig_ms;
         let pct   = (delta * 100) / orig_ms;
-        if delta < 0 { format!("↓ {}%", -pct).green().to_string() }
+        if delta < 0 { format!("(↓{}%)", -pct).green().to_string() }
         else if delta == 0 { "(same)".dimmed().to_string() }
-        else               { format!("↑ {}%", pct).red().to_string() }
+        else               { format!("(↑{}%)", pct).red().to_string() }
     } else {
         String::new()
     };
@@ -158,17 +165,63 @@ pub async fn execute(
     );
     println!();
 
+    // ── Execution Graph section ───────────────────────────────────────────────
+    let span_diffs = diff_spans(orig_spans_all, rep_spans_all);
+    let any_span_diff = span_diffs.iter().any(|d| d.changed);
+
+    if any_span_diff {
+        println!("{}", "Execution Graph".bold());
+        println!("{}", "─".repeat(28).dimmed());
+
+        for sd in span_diffs.iter().filter(|d| d.changed) {
+            println!();
+            println!("  {}", sd.name.cyan().bold());
+            match (&sd.orig_status, &sd.rep_status) {
+                (Some(o), Some(r)) => {
+                    println!("  {}  {}", "  original:".dimmed(), color_status_label(o));
+                    println!("  {}  {}", "  replay:  ".dimmed(), color_status_label(r));
+                }
+                (Some(o), None) => {
+                    println!("  {}  {}", "  original:".dimmed(), color_status_label(o));
+                    println!("  {}  {}", "  replay:  ".dimmed(), "skipped".dimmed());
+                }
+                (None, Some(r)) => {
+                    println!("  {}  {}", "  original:".dimmed(), "skipped".dimmed());
+                    println!("  {}  {}", "  replay:  ".dimmed(), color_status_label(r));
+                }
+                (None, None) => {}
+            }
+            // Duration change, if both ran and differed meaningfully
+            if let (Some(od), Some(rd)) = (sd.orig_ms, sd.rep_ms) {
+                if od > 0 {
+                    let delta_pct = ((rd - od) * 100) / od;
+                    if delta_pct.abs() >= 20 {
+                        let arrow = if delta_pct < 0 {
+                            format!("↓{}%", -delta_pct).green().to_string()
+                        } else {
+                            format!("↑{}%", delta_pct).red().to_string()
+                        };
+                        println!("  {}  {}ms → {}ms  {}",
+                            "  duration:".dimmed(), od, rd, arrow);
+                    }
+                }
+            }
+        }
+        println!();
+    }
+
     // ── State changes ────────────────────────────────────────────────────────
     let empty_arr = vec![];
     let orig_muts_arr = orig_muts["mutations"].as_array().unwrap_or(&empty_arr);
     let rep_muts_arr  = rep_muts ["mutations"].as_array().unwrap_or(&empty_arr);
 
-    println!("{}", "─── State changes ───────────────────────────────────────────────────────────".bold());
+    println!("{}", "State Diff".bold());
+    println!("{}", "─".repeat(28).dimmed());
 
     if orig_muts_arr.is_empty() && rep_muts_arr.is_empty() {
         println!("  {}", "no mutations in either execution".dimmed());
     } else {
-        // Walk original mutations; match with replay mutations by (table, pk, op)
+        // Walk original mutations; match with replay mutations by position
         let max = orig_muts_arr.len().max(rep_muts_arr.len());
         for i in 0..max {
             let om = orig_muts_arr.get(i);
@@ -192,16 +245,13 @@ pub async fn execute(
                     let same_label = if mutations_match { "  (same)".dimmed().to_string() } else { String::new() };
 
                     println!();
-                    println!("  {}  v{}  {}{}",
+                    println!("  {}.{}{}  {}{}",
                         table.cyan(),
-                        ver,
+                        if row_id.is_empty() { format!("v{ver}") } else { format!("id={row_id}") },
+                        String::new(),
                         color_op(op),
                         same_label,
                     );
-
-                    if !row_id.is_empty() {
-                        println!("  {}", format!("  id={row_id}").dimmed());
-                    }
 
                     if !mutations_match && op == "update" {
                         // Side-by-side field diff
@@ -219,37 +269,36 @@ pub async fn execute(
                             let r_change = r_diffs.iter().find(|(k,_,_)| k == &key);
 
                             match (o_change, r_change) {
-                                (Some((_, ob, oa)), Some((_, rb, ra))) if oa == ra => {
-                                    // Identical change
+                                (Some((_, ob, oa)), Some((_, _rb, ra))) if oa == ra => {
                                     println!("    {}  {} → {}  (same)",
                                         format!("{key}:").dimmed(),
                                         ob.yellow(), ra.green());
                                 }
-                                (Some((_, ob, oa)), Some((_, _, ra))) => {
-                                    // Different result
-                                    println!("    {}  original {} → {}   replay → {}",
-                                        format!("{key}:").dimmed(),
-                                        ob.yellow(),
-                                        oa.red(),
-                                        ra.green().bold(),
-                                    );
+                                (Some((_, ob, oa)), Some((_, rb, ra))) => {
+                                    println!();
+                                    println!("    {}", key.bold());
+                                    println!("    {}  {} → {}",
+                                        "  original:".dimmed(), ob.yellow(), oa.red());
+                                    println!("    {}  {} → {}",
+                                        "  replay:  ".dimmed(), rb.yellow(), ra.green().bold());
                                 }
                                 (Some((_, ob, oa)), None) => {
-                                    println!("    {}  {} → {}  replay: {}",
-                                        format!("{key}:").dimmed(),
-                                        ob.yellow(), oa.red(),
-                                        "(no change)".dimmed());
+                                    println!();
+                                    println!("    {}", key.bold());
+                                    println!("    {}  {} → {}",
+                                        "  original:".dimmed(), ob.yellow(), oa.red());
+                                    println!("    {}  {}", "  replay:  ".dimmed(), "(no change)".dimmed());
                                 }
                                 (None, Some((_, _, ra))) => {
-                                    println!("    {}  original: {}  replay → {}",
-                                        format!("{key}:").dimmed(),
-                                        "(no change)".dimmed(), ra.green());
+                                    println!();
+                                    println!("    {}", key.bold());
+                                    println!("    {}  {}", "  original:".dimmed(), "(no change)".dimmed());
+                                    println!("    {}  → {}", "  replay:  ".dimmed(), ra.green().bold());
                                 }
                                 _ => {}
                             }
                         }
                     } else if !mutations_match && op == "insert" {
-                        // Show notable field diffs for inserts
                         let diffs = diff_json(&r["after_state"], &o["after_state"]);
                         for (key, rval, oval) in diffs.iter().take(5) {
                             println!("    {}  original: {}   replay: {}",
@@ -277,29 +326,138 @@ pub async fn execute(
     println!();
 
     // ── Verdict ──────────────────────────────────────────────────────────────
-    println!("{}", "─── Verdict ─────────────────────────────────────────────────────────────────".bold());
+    println!("{}", "Verdict".bold());
+    println!("{}", "─".repeat(28).dimmed());
 
-    let behavior_changed = status_changed
-        || orig_errors != rep_errors
-        || orig_muts_arr.len() != rep_muts_arr.len()
+    let state_changed = orig_muts_arr.len() != rep_muts_arr.len()
         || orig_muts_arr.iter().zip(rep_muts_arr.iter())
             .any(|(o, r)| o["after_state"] != r["after_state"]);
 
+    let behavior_changed = status_changed || orig_errors != rep_errors || state_changed || any_span_diff;
+
     if behavior_changed {
         let (icon, label) = if !is_error(rep_status) && is_error(orig_status) {
-            ("✔".green().bold().to_string(), "FIXED — replay succeeded".green().bold().to_string())
+            ("✔".green().bold().to_string(), "FIXED".green().bold().to_string())
         } else if is_error(rep_status) && !is_error(orig_status) {
-            ("✗".red().bold().to_string(), "REGRESSED — replay introduced error".red().bold().to_string())
+            ("✗".red().bold().to_string(), "REGRESSED".red().bold().to_string())
         } else {
-            ("≠".yellow().bold().to_string(), "BEHAVIOR CHANGED — state mutations differ".yellow().bold().to_string())
+            ("≠".yellow().bold().to_string(), "BEHAVIOR CHANGED".yellow().bold().to_string())
         };
         println!("  {} {}", icon, label);
     } else {
-        println!("  {} {}", "═".dimmed(), "IDENTICAL — same state outcome in both executions".dimmed());
+        println!("  {} {}", "═".dimmed(), "IDENTICAL".dimmed());
     }
 
     println!();
     Ok(())
+}
+
+// ── Span diff ────────────────────────────────────────────────────────────────
+
+/// Summary of a single span's observable behaviour across one execution.
+#[derive(Debug, Default)]
+struct SpanEntry {
+    status: Option<String>,
+    ms:     Option<i64>,
+}
+
+/// One row in the execution-graph diff table.
+struct SpanDiff {
+    name:        String,
+    orig_status: Option<String>,
+    rep_status:  Option<String>,
+    orig_ms:     Option<i64>,
+    rep_ms:      Option<i64>,
+    /// True when the two executions differ in a user-visible way.
+    changed:     bool,
+}
+
+/// Compare the span arrays from two traces.
+/// Returns one `SpanDiff` per span name that appears in at least one trace,
+/// ordered by first appearance in the original.
+fn diff_spans(orig: &[Value], rep: &[Value]) -> Vec<SpanDiff> {
+    fn relevant(s: &Value) -> bool {
+        matches!(
+            s["span_type"].as_str().unwrap_or(""),
+            "tool" | "db" | "workflow_step" | "agent_step"
+        )
+    }
+
+    fn span_key(s: &Value) -> String {
+        let kind = s["span_type"].as_str().unwrap_or("span");
+        // Prefer a human-readable name from common fields, fall back to span_type
+        let name = s["data"]["action"].as_str()
+            .or_else(|| s["data"]["tool"].as_str())
+            .or_else(|| s["data"]["table"].as_str())
+            .or_else(|| s["message"].as_str())
+            .or_else(|| s["name"].as_str())
+            .unwrap_or(kind);
+        name.to_string()
+    }
+
+    fn span_status(s: &Value) -> Option<String> {
+        s["status"].as_str()
+            .or_else(|| if s["span_type"] == "error" { Some("error") } else { None })
+            .or_else(|| if s["data"]["success"].as_bool() == Some(false) { Some("error") } else { None })
+            .map(|s| s.to_string())
+            .or_else(|| Some("executed".to_string()))
+    }
+
+    fn collect(spans: &[Value]) -> Vec<(String, SpanEntry)> {
+        let mut vec: Vec<(String, SpanEntry)> = Vec::new();
+        for s in spans.iter().filter(|s| relevant(s)) {
+            let key = span_key(s);
+            if let Some((_, e)) = vec.iter_mut().find(|(k, _)| k == &key) {
+                e.status = span_status(s);
+                e.ms = s["duration_ms"].as_i64().or(e.ms);
+            } else {
+                vec.push((key, SpanEntry {
+                    status: span_status(s),
+                    ms:     s["duration_ms"].as_i64(),
+                }));
+            }
+        }
+        vec
+    }
+
+    let orig_vec = collect(orig);
+    let rep_vec  = collect(rep);
+
+    // Union of all keys, original order first, then replay-only keys
+    let mut all_keys: Vec<String> = orig_vec.iter().map(|(k, _)| k.clone()).collect();
+    for (k, _) in &rep_vec {
+        if !all_keys.contains(k) {
+            all_keys.push(k.clone());
+        }
+    }
+
+    all_keys.into_iter().map(|name| {
+        let oe = orig_vec.iter().find(|(k, _)| k == &name).map(|(_, e)| e);
+        let re = rep_vec .iter().find(|(k, _)| k == &name).map(|(_, e)| e);
+
+        let orig_status = oe.and_then(|e| e.status.clone());
+        let rep_status  = re.and_then(|e| e.status.clone());
+        let orig_ms     = oe.and_then(|e| e.ms);
+        let rep_ms      = re.and_then(|e| e.ms);
+
+        // Status changed, or one side is absent (skipped vs executed)
+        let status_diff = orig_status != rep_status || oe.is_none() != re.is_none();
+
+        // Duration changed by >= 20%
+        let dur_diff = match (orig_ms, rep_ms) {
+            (Some(o), Some(r)) if o > 0 => ((r - o) * 100 / o).abs() >= 20,
+            _ => false,
+        };
+
+        SpanDiff {
+            name,
+            orig_status,
+            rep_status,
+            orig_ms,
+            rep_ms,
+            changed: status_diff || dur_diff,
+        }
+    }).collect()
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -310,6 +468,15 @@ async fn fetch_json(client: &ApiClient, url: &str) -> anyhow::Result<Value> {
         Ok(res.json().await.unwrap_or_default())
     } else {
         Ok(Value::Null)
+    }
+}
+
+fn color_status_label(s: &str) -> colored::ColoredString {
+    match s {
+        "error" | "timeout" | "failed" => s.red().bold(),
+        "success" | "executed"         => s.green(),
+        "skipped"                      => s.dimmed(),
+        _                              => s.normal(),
     }
 }
 
