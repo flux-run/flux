@@ -13,6 +13,18 @@ The **Gateway** is the **edge runtime orchestrator** and primary control plane e
 
 **Core Design Philosophy**: Observable by construction. Every request generates a trace root that automatically propagates through Runtime → Data-Engine → Storage/Tools, capturing the complete execution graph.
 
+### Platform Service Roles
+
+| Service | Exposed to internet | Responsibility |
+|---------|--------------------|-|
+| **Gateway** | ✅ Yes (only one) | Edge routing, authentication, caching, rate limiting, trace root creation |
+| **Runtime** | ❌ No | Serverless function execution, tool dispatch, workflow chaining |
+| **Data Engine** | ❌ No | Structured DB queries, file operations, state mutation recording |
+| **API** | ❌ No | Management plane: deploy functions, configure routes, SSE event bus, trace reconstruction |
+| **Queue** | ❌ No | Async job execution, at-least-once delivery, replay coordination |
+
+**Trust boundary**: Only the Gateway is exposed to the public internet. All other services (Runtime, Data-Engine, Queue, API) must only accept traffic from the internal network (verified via `x-service-token`).
+
 The gateway achieves low-latency, high-reliability request handling through:
 - **In-memory routing snapshot** — All routes cache in memory, refreshed every 60 seconds (O(1) lookup)
 - **Single-flight concurrency** — Multiple identical queries coalesce into one backend call (prevents cache stampede)
@@ -564,6 +576,19 @@ When a request arrives at the gateway:
    - Every service appends spans with the same `request_id`
    - Result: unified trace tree
 
+### Table Responsibilities: trace_requests vs platform_logs
+
+These two tables serve different purposes and are commonly confused:
+
+| Table | Written by | Contents | Purpose |
+|-------|-----------|----------|---------|
+| `trace_requests` | **Gateway only** | Request envelope — method, path, headers (redacted), body, tenant/project, `request_id` | Replay source of truth: exact input needed to re-execute any request deterministically |
+| `platform_logs` | **All services** (gateway, runtime, data-engine, queue, api) | Span tree — `span_type`, `source`, `parent_span_id`, `duration_ms`, `message` | Observability: reconstructs the full execution tree for debugging and profiling |
+
+**Key rule**: `trace_requests` is written **before** runtime dispatch (so replay works even if runtime crashes mid-execution). `platform_logs` spans are written at each step of execution.
+
+---
+
 ### Trace Propagation Chain
 
 ```
@@ -631,6 +656,7 @@ Request IDs are the golden thread of observability. The gateway enforces a stric
 **Incoming Request Processing**:
 
 1. **If `x-request-id` header is present**:
+   - **Length guard first**: if `header.len() > 64` → return `400 Bad Request` immediately (prevents allocation of arbitrarily long strings before UUID parsing)
    - Validate it is a properly formatted UUID (uuid::Error parsing)
    - Reject malformed values with 400 Bad Request
    - Parse as `UUID` type (not String)
@@ -771,8 +797,8 @@ The gateway maintains a memory snapshot of all routes. The consistency model bal
 1. **Periodic Refresh** (every 60 seconds):
    - Background task queries `routes` table from database
    - Atomic swap: old snapshot → new snapshot
-   - In-flight requests continue using old snapshot
-   - New requests use new snapshot immediately
+   - **Snapshots are immutable.** In-flight requests hold a reference to the previous snapshot and continue using it until completion — no mid-request route mutation possible
+   - New requests use new snapshot immediately after the swap
 
 2. **Future: Event-Driven Refresh**:
    - Listen to `platform_logs` for route mutations
@@ -824,6 +850,27 @@ Client Request
 - If Queue crashes, jobs are replayed until success
 - If Runtime crashes mid-execution, job restarred
 - Client never knows about retries (202 response is final)
+
+**Trace Propagation to Queue**:
+
+When the gateway enqueues an async job, it explicitly forwards trace headers so queue workers can parent their spans correctly:
+
+```
+Gateway → Queue Service (enqueue):
+  x-request-id:     <request_id>          // same golden thread
+  x-parent-span-id: <gateway_span_id>     // enqueue span is child of gateway span
+  x-code-sha:       <code_sha>            // code version for deterministic replay
+```
+
+The queue worker creates a span `queue.worker.execute` with `parent_span_id = <enqueue_span_id>`, linking async execution back to the original client request in the trace tree.
+
+```
+trace tree (async path):
+  gateway.receive                [0ms]
+  └─ gateway.enqueue_job         [2ms]
+     └─ queue.worker.execute     [250ms - background]
+        └─ runtime.execute_fn    [255ms]
+```
 
 ---
 
@@ -916,6 +963,10 @@ RouteRecord {
 2. CACHE MISS (inflight)
    ├─ Multiple concurrent requests → single backend call (single-flight)
    ├─ All await same Future<Shared>
+   ├─ **Inflight lock timeout = 5s** — if the backend call hangs beyond 5s, the shared
+   │   future is dropped and all waiting requests fall through to a fresh backend call.
+   │   Prevents a single slow Data-Engine query from stalling an unbounded queue of
+   │   waiters indefinitely.
    └─ Response: X-Cache: MISS
 
 3. CACHE BYPASS
@@ -956,6 +1007,14 @@ RouteRecord {
 - Load distributed to edge gateway service
 - Long-lived HTTP connections don't block unrelated routes
 
+**Connection Limit**:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MAX_SSE_CONNECTIONS` | `10000` | Global cap on concurrent SSE connections. Requests beyond this limit receive `503 Service Unavailable`. Prevents a single tenant from exhausting gateway file descriptors via stream flooding |
+
+SSE connections count against the global limit, not per-tenant. Per-tenant limits should be enforced at the API layer.
+
 ---
 
 ### 5. Authentication & Authorization
@@ -987,6 +1046,7 @@ RouteRecord {
 - Per-route limit (requests/minute) stored in route config
 - Checked per identity (tenant + route)
 - Stateful buckets in `RateLimiter` (DashMap)
+- **Idle bucket eviction** — Buckets where `last_seen > 10 minutes` are removed by a background cleanup task. Prevents unbounded `DashMap` growth when tenants stop sending traffic (e.g., nightly quiet periods)
 
 **Bucket Capacity** (**CRITICAL FIX**):
 - Capacity = route rate_limit (e.g., 100 req/min = 100 tokens max)
@@ -1034,7 +1094,72 @@ VALUES (..., 'gateway', <function_id>, 'info', 'route matched: POST /api/users/c
 
 ---
 
+### 8. x-code-sha Propagation
+
+The gateway reads `code_sha` from the route snapshot (populated during deployment) and injects it as `x-code-sha` on every forwarded request. This header travels the full internal service chain:
+
+```
+Gateway  ──x-code-sha──►  Runtime  ──x-code-sha──►  Data-Engine
+                                   └──x-code-sha──►  Queue
+```
+
+**Why it matters**: Every span in `platform_logs` that includes `code_sha` can be replayed deterministically — even after future deployments. Without this header, replay would re-run against the **latest** code, not the code that originally ran.
+
+**Header format**:
+```
+x-code-sha: a93f42c   // short SHA of the deployed bundle
+```
+
+Downstream services (Runtime, Data-Engine, Queue) attach this value to every span they write so the trace carries full code attribution end-to-end.
+
+---
+
+### 9. x-span-id Generation
+
+The gateway generates a `gateway_span_id` using `uuid_v7()` and forwards it as `x-span-id`. This becomes the `parent_span_id` for all runtime spans, forming the correct trace hierarchy:
+
+```
+gateway_span_id = uuid_v7()                // created at gateway
+x-span-id header → runtime                 // forwarded downstream
+runtime: parent_span_id = x-span-id       // links runtime spans to gateway root
+```
+
+**Header propagation**:
+```
+Request arrives at gateway
+  ↓
+gateway generates: gateway_span_id = uuid_v7()
+  ↓
+forwards to runtime:
+  x-request-id:    <request_id>
+  x-parent-span-id: <gateway_span_id>   ← runtime sets parent_span_id = this value
+  x-span-id:       <gateway_span_id>    ← alias for clarity
+  x-code-sha:      <code_sha>
+```
+
+This ensures the trace tree is accurately reconstructed in `platform_logs` even when multiple services write spans concurrently.
+
+---
+
 ## Security Model
+
+### Service Trust Boundary
+
+> **Only the Gateway is exposed to the public internet.**
+
+All other Fluxbase services — Runtime, Data-Engine, Queue, API — **must only accept traffic from the internal network**. They are not configured with TLS termination for public traffic and do not perform their own client-identity validation.
+
+| Service | Network exposure | Traffic source |
+|---------|----------------|----------------|
+| Gateway | Public internet + internal | Any client |
+| Runtime | Internal only | Gateway, Queue |
+| Data Engine | Internal only | Runtime, Gateway (data proxy) |
+| Queue | Internal only | Gateway, Runtime |
+| API | Internal only | Dashboard, SDK (via Gateway for data ops) |
+
+Enforcement: Internal services validate `x-service-token` on every request. Requests without a valid service token are rejected with `401 Unauthorized`. Cloud Run / Kubernetes policies should additionally restrict network ingress to internal CIDR ranges only.
+
+---
 
 ### Host Header Validation
 
@@ -1522,6 +1647,7 @@ Result:
 | `QUERY_CACHE_TTL_SECS` | `30` | Cache entry lifetime in seconds |
 | `QUERY_CACHE_MAX_ENTRIES` | `4096` | Maximum cached query responses |
 | `QUERY_CACHE_MAX_RESPONSE_SIZE` | `1MB` | **Max response size to cache** (prevents bloat; responses > 1MB bypass cache) |
+| `QUERY_CACHE_MAX_BYTES` | `512MB` | **Global memory cap** for the entire query cache. When exceeded, LRU entries are evicted. Without this cap, 4096 entries × 1MB each = 4GB worst-case footprint |
 | `JWKS_CACHE_TTL_SECS` | `300` | JWKS refresh interval in seconds (5 minutes) |
 | `PLATFORM_LOGS_POOL_SIZE` | `20` | connection pool size for trace writes |
 | `TRACE_SAMPLING_ERROR_RATE` | `1.0` | Always sample errors / 500s (1.0 = 100%) |
@@ -1788,6 +1914,45 @@ curl http://localhost:8081/health
 - **Zero-copy response sharing** — Arc pointers, no data duplication
 - **Non-blocking logging** — platform_logs inserts spawned as detached tasks
 
+### Failure Scenarios
+
+| Failure | Gateway behavior | Status returned |
+|---------|-----------------|----------------|
+| Runtime timeout (> configured deadline) | Abort upstream, return error | `504 Gateway Timeout` |
+| Runtime 5xx | Propagate status code + body unchanged | `5xx` (as received) |
+| Runtime unreachable | Connection refused or DNS failure | `502 Bad Gateway` |
+| Data-Engine timeout | Abort upstream query | `502 Bad Gateway` |
+| Queue unreachable | Cannot enqueue async job | `503 Service Unavailable` |
+| Snapshot not loaded at startup | All function routes blocked | `503 Service Unavailable` |
+| Rate limit exceeded | Instant reject, no backend call | `429 Too Many Requests` |
+| Auth failure (bad JWT / revoked key) | Instant reject, no backend call | `401 Unauthorized` |
+| Route not found in snapshot | No backend call | `404 Not Found` |
+
+### End-to-End Latency Example (p95, warm cache)
+
+A typical synchronous function call with JWT auth and Data-Engine read:
+
+```
+Stage                    Latency    Notes
+─────────────────────── ────────── ──────────────────────────────────────────
+Gateway receive            1ms      Parse headers, extract host
+Identity resolution        0.1ms    Subdomain → tenant_id (HashMap)
+Route lookup               0.1ms    (tenant_id, method, path) → RouteRecord
+JWT validation             6ms      JWKS cached; RS256 verify ~100-200µs
+Rate limit check           0.1ms    DashMap token bucket
+trace_requests INSERT      2ms      Async (non-blocking), overlaps forward
+Forward to runtime         1ms      HTTP dispatch
+Runtime execution        120ms      Function code + tool calls
+→ Data-Engine call         45ms     SQL query (within runtime)
+→ Tool call (e.g. email)   40ms     External API (concurrent with fn)
+Gateway response           2ms      Copy headers, stream body
+─────────────────────── ────────── ──────────────────────────────────────────
+Total (typical)          ~175ms
+
+Cache hit path (data-engine cached):
+  ~25ms    (gateway overhead + runtime only, no data-engine roundtrip)
+```
+
 ---
 
 ## State Mutations: Event-Sourced Observability (Git for Backend State)
@@ -1797,6 +1962,8 @@ The revolutionary piece that enables true time-travel debugging for entire backe
 **Record every state mutation as an append-only event linked to request_id.**
 
 This automatically transforms Fluxbase into an event-sourced system, without forcing developers to design around it.
+
+> **Ownership note**: The full `state_mutations` schema, mutation capture middleware, and query API are documented in [`data-engine.md`](./data-engine.md). The gateway's role is narrow: it writes the **request envelope** to `trace_requests` before dispatch (replay source of truth), and the **Data Engine** writes `state_mutations` rows as SQL operations execute. The gateway never writes directly to `state_mutations`.
 
 ### Schema: State Mutation Log
 
