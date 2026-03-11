@@ -55,9 +55,10 @@ Once trace propagation columns are added, the full distributed trace tree become
 gateway.request           ← request_id origin
   └─ runtime.function
         └─ queue.enqueue       ← enqueue_span_id
-              └─ worker.execution  ← parent_span_id = enqueue_span_id
-                    └─ runtime.function
-                          └─ db mutation
+              └─ queue.wait        ← duration = started_at - created_at
+                    └─ worker.execution  ← parent_span_id = enqueue_span_id
+                          └─ runtime.function
+                                └─ db mutation
 ```
 
 This makes async jobs visible to `flux trace`, `flux why`, `flux incident replay`, and `flux bisect` — capabilities that most async platforms (Temporal, BullMQ, SQS) cannot offer out of the box.
@@ -646,11 +647,35 @@ ALTER TABLE jobs
   ADD COLUMN execution_seed  BIGINT;
 ```
 
-Populate them at enqueue time (pass through from the calling API request). `enqueue_span_id` is generated fresh on each `POST /jobs` call — it represents the `queue.enqueue` node in the trace tree. Forward `x-request-id` and `x-span-id` (set to `enqueue_span_id`) as headers on the runtime POST so the worker execution span attaches to the correct parent. This unblocks `flux trace`, `flux why`, and `flux replay` for async workflows.
+Populate them at enqueue time. The exact header flow:
+
+**Runtime → Queue (at `ctx.queue.enqueue()` time)**
+
+| Header | Value |
+|--------|-------|
+| `x-request-id` | forwarded from the originating gateway request |
+| `x-span-id` | current runtime span ID (becomes `parent_span_id` on the job row) |
+| `x-code-sha` | bundle SHA of the enqueuing function |
+
+Queue creates `enqueue_span_id = uuid()` and stores: `request_id`, `parent_span_id = x-span-id`, `enqueue_span_id`, `code_sha`, `execution_seed`.
+
+**Worker → Runtime (when dispatching the job)**
+
+| Header | Value |
+|--------|-------|
+| `x-request-id` | forwarded from job row |
+| `x-parent-span-id` | `enqueue_span_id` (links worker execution to the enqueue node) |
+| `x-code-sha` | forwarded from job row |
+
+Worker also emits a synthetic `queue.wait` log span before calling the runtime with `duration_ms = started_at - created_at`. This makes queue backlog visible in `flux trace`.
+
+Body field: `execution_seed` (from job row) passed in the runtime POST body so randomness is deterministic on replay.
+
+This unblocks `flux trace`, `flux why`, and `flux replay` for async workflows.
 
 **2. Worker fairness (Option A)**
 
-One-line change in `queue/src/queue/fetch_jobs.rs`: add `tenant_id` to the inner `ORDER BY` clause to interleave tenants in each polled batch.
+One-line change in `queue/src/queue/fetch_jobs.rs`: change the inner `ORDER BY` to `tenant_id, priority DESC, run_at`. This interleaves tenants in each polled batch while respecting priority within each tenant's jobs — no high-priority job from a noisy tenant can starve a lower-priority job from a quieter one.
 
 ### P1 — High value
 
@@ -684,7 +709,31 @@ CREATE INDEX idx_jobs_pending_priority ON jobs(queue_name, status, priority DESC
 
 Update the inner `ORDER BY` to `priority DESC, run_at`. Combined with `queue_name`, this enables fine-grained dispatch without separate services.
 
-**6. `flux queue replay` (Fluxbase-specific)**
+**6. Worker heartbeat (timeout safety)**
+
+```sql
+ALTER TABLE jobs ADD COLUMN heartbeat_at TIMESTAMP;
+```
+
+The worker loop updates `heartbeat_at = now()` every ~10 seconds while processing a long-running job. The timeout recovery query in `timeout_recovery.rs` changes from:
+
+```sql
+WHERE status = 'running'
+  AND started_at < now() - max_runtime_seconds * interval '1 second'
+```
+
+to:
+
+```sql
+WHERE status = 'running'
+  AND heartbeat_at < now() - max_runtime_seconds * interval '1 second'
+```
+
+Without heartbeats a job running close to the `max_runtime_seconds` boundary is recovered and retried even if it would complete in seconds. With heartbeats, recovery only fires when the worker has actually stopped updating.
+
+**Crash detection:** a separate sweep catches `heartbeat_at IS NULL AND started_at < now() - interval '2 minutes'` — workers that crashed before writing their first heartbeat.
+
+**7. `flux queue replay` (Fluxbase-specific)**
 
 Because each job will carry `code_sha`, `payload`, `request_id`, and `parent_span_id`, the CLI can re-execute a failed or past job deterministically:
 
@@ -702,7 +751,7 @@ This makes async failure debugging as simple as synchronous debugging. Almost no
 
 **Requires:** trace columns (P0) + result storage (P1 item 3) to be fully effective.
 
-**7. `execution_seed` — deterministic randomness seed**
+**8. `execution_seed` — deterministic randomness seed**
 
 > **Runtime side already implemented.** `build_wrapper` in `runtime/src/engine/executor.rs` accepts and injects `execution_seed` for every execution. `ExecuteRequest` accepts an optional `execution_seed: Option<i64>`; live calls generate fresh UUID entropy so behaviour is unchanged. The queue migration below wires up the storage side.
 
@@ -729,7 +778,7 @@ This is the column that separates Fluxbase from every other queue system. SQS, B
 
 **Requires:** trace columns (P0) to be fully effective.
 
-**8. State mutation log (Fluxbase-specific)**
+**9. State mutation log (Fluxbase-specific)**
 
 For time-travel debugging (`flux state blame`, `flux incident replay`) async jobs must also record state mutations:
 
@@ -738,24 +787,111 @@ CREATE TABLE job_state_mutations (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   job_id     UUID REFERENCES jobs(id) ON DELETE CASCADE,
   request_id UUID,
+  span_id    UUID,
   mutation   JSONB NOT NULL,
   ts         TIMESTAMP NOT NULL DEFAULT now()
 );
 ```
 
-The runtime writes one row per state-mutating operation during job execution. This gives the same replay capability as synchronous requests.
+The runtime writes one row per state-mutating operation during job execution. `span_id` links the mutation to the exact worker execution span so `flux state blame` can reconstruct the exact state at any point in the trace tree. This gives the same replay capability as synchronous requests.
 
 ### P2 — Operational quality
 
-**9. Prometheus metrics endpoint** — `/metrics` with counters and histograms listed in the Stats section above.
+**10. Prometheus metrics endpoint** — `/metrics` with counters and histograms listed in the Stats section above. Key metrics: `queue_jobs_total{status}`, `queue_jobs_running`, `queue_dead_letter_total`, `queue_retries_total`, `queue_wait_duration_ms` (histogram), `queue_execution_duration_ms` (histogram).
 
-**10. DLQ alerting** — webhook or Cloud Pub/Sub notification when a job enters `dead_letter_jobs`.
+**11. DLQ alerting** — webhook or Cloud Pub/Sub notification when a job enters `dead_letter_jobs`.
 
-**11. Job list endpoint** — `GET /jobs?status=&tenant_id=&limit=&cursor=` for dashboard visibility.
+**12. Job list endpoint** — `GET /jobs?status=&tenant_id=&limit=&cursor=` for dashboard visibility.
 
-**12. Scheduled/future jobs** — expose `run_at` in `POST /jobs` so callers can delay job execution.
+**13. `LISTEN`/`NOTIFY` poller**
 
-**13. `max_attempts` per request** — remove the hardcoded `5`; accept it in `CreateJobRequest` with `5` as the default.
+Replace the 200 ms poll loop with PostgreSQL notifications:
+
+```sql
+CREATE OR REPLACE FUNCTION notify_job_inserted() RETURNS TRIGGER AS $$
+BEGIN
+  PERFORM pg_notify('queue_job_inserted', NEW.id::text);
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_job_inserted
+  AFTER INSERT ON jobs FOR EACH ROW
+  EXECUTE FUNCTION notify_job_inserted();
+```
+
+Worker subscribes with `LISTEN queue_job_inserted` and wakes immediately on insert instead of waiting up to 200 ms. Poll fallback remains for missed notifications after reconnects. Eliminates >90% of idle DB queries under low load.
+
+**14. Retry jitter**
+
+Change `worker/backoff.rs` from:
+```rust
+Duration::from_secs(5 * 2u64.pow(attempts))
+```
+to:
+```rust
+let base   = Duration::from_secs(5 * 2u64.pow(attempts));
+let jitter = Duration::from_millis(rand::random::<u64>() % 3000);
+base + jitter
+```
+
+Without jitter all jobs at the same `attempts` count retry simultaneously, spiking DB load. Jitter spreads retries across a 3-second window.
+
+**15. Dead letter recovery endpoint**
+
+```http
+POST /jobs/:id/recover
+```
+
+Moves a job from `dead_letter_jobs` back to `jobs` with `status = 'pending'` and `attempts = 0`. Use after fixing the bug that caused the failure. Should require the same internal service-token auth as other queue endpoints.
+
+**16. Worker identity**
+
+```sql
+ALTER TABLE jobs ADD COLUMN worker_id TEXT;
+```
+
+Worker sets `worker_id = hostname + ":" + pid` when it claims a job. Enables live debugging: `SELECT worker_id, count(*) FROM jobs WHERE status = 'running' GROUP BY 1` immediately shows which workers are saturated or stuck. Also surfaces ghost workers that claimed jobs before a crash.
+
+**17. Job retention policy**
+
+Add a periodic sweep (background task or cron) to prevent unbounded table growth:
+
+```sql
+DELETE FROM jobs
+WHERE status IN ('completed', 'cancelled')
+  AND updated_at < now() - interval '7 days';
+
+DELETE FROM dead_letter_jobs
+  WHERE created_at < now() - interval '30 days';
+```
+
+For long-term auditing, archive to a `jobs_archive` table before deleting rather than dropping rows outright.
+
+**18. Replay safety mode**
+
+When the runtime receives the header `x-flux-replay: true`, it should disable side-effectful tool calls (webhook fanout, email sends, external API writes) while still running state mutations and emitting trace spans.
+
+Worker sends this header when executing a `flux queue replay` job (identified by the presence of a `replay_of` job ID in the request). Without it, replays produce duplicate emails, duplicate webhooks, and duplicate charges.
+
+Implementation: gate `ctx.tools.run()` in `executor.rs`; emit a `warn` span (`tool skipped in replay mode`) instead of calling the tool.
+
+**19. Batch execution (future throughput)**
+
+Allow the runtime to execute a batch of small jobs in one HTTP call:
+
+```json
+POST /internal/execute/batch
+[
+  { "function_id": "...", "payload": {...}, "execution_seed": 123 },
+  ...
+]
+```
+
+Each job in the batch still produces its own trace span, result row, and state mutations. Primarily useful for: email batch sending, analytics aggregation, bulk DB operations. Not needed until sustained throughput exceeds ~500 jobs/sec.
+
+**20. Scheduled/future jobs** — expose `run_at` in `POST /jobs` so callers can delay job execution.
+
+**21. `max_attempts` per request** — remove the hardcoded `5`; accept it in `CreateJobRequest` with `5` as the default.
 
 ---
 
