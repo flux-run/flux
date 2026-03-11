@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PAGES_DIR  = join(__dirname, 'src', 'pages');
-const OUTPUT_DIR = __dirname;   // write HTML directly into website/
+const OUTPUT_DIR = resolve(__dirname, '../dashboard/public');  // write directly into Vercel-served public/
 
 // ── Discover all page modules ────────────────────────────────────────────────
 function discoverPages(dir, found = []) {

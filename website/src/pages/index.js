@@ -8,7 +8,7 @@ import { eyebrow, section, sectionHeader, featureCard, comparisonGrid } from '..
 export const meta = {
   title:       'Fluxbase — Git for Backend Execution',
   description: 'Debug production systems faster than local development. Every request is recorded. Replay, diff, and root-cause any production issue with a single CLI command.',
-  path:        'index.html',
+  path:        'home.html',
 };
 
 // ── Hero ──────────────────────────────────────────────────────────────────────

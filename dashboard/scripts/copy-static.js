@@ -32,16 +32,16 @@ function copyDir(src, dest) {
   }
 }
 
-// Directories to copy from website/ into public/
+// NOTE: docs/ and page HTML files are generated directly into public/ by
+// running `node build.js` in the website/ directory. Only copy static assets
+// that are not part of the build system.
 const copies = [
-  ["docs",     "docs"],
   ["examples", "examples"],
   ["assets",   "assets"],
 ];
 
 // Individual files
 const files = [
-  ["index.html",  "home.html"],   // renamed to avoid overwriting Vite's built dist/index.html
   ["install.sh",  "install.sh"],
 ];
 
