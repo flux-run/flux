@@ -13,21 +13,43 @@ export const meta = {
 };
 
 // ── Hero ──────────────────────────────────────────────────────────────────────
-function hero() {
-  const cmds = CLI_COMMANDS.map(cmd =>
-    `<a href="#${cmd.cmd.split(' ')[1]}" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="${cmd.summary}">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">${cmd.cmd.replace('flux ', '')}</span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">${cmd.summary}</span>
-    </a>`
-  ).join('\n    ');
+const HERO_GROUPS = [
+  { label: 'Deploy & Runtime',  color: 'var(--green)',          cmds: ['flux deploy', 'flux tail'] },
+  { label: 'Debugging',         color: 'var(--accent)',         cmds: ['flux why', 'flux trace', 'flux trace debug', 'flux trace diff'] },
+  { label: 'Data History',      color: '#60a5fa',               cmds: ['flux state history', 'flux state blame'] },
+  { label: 'Incident Analysis', color: '#c084fc',               cmds: ['flux incident replay', 'flux bug bisect', 'flux explain'] },
+];
 
-  return `<section class="hero" style="padding-bottom:48px;">
+function hero() {
+  const groups = HERO_GROUPS.map(g => {
+    const links = g.cmds.map(name => {
+      const cmd = CLI_COMMANDS.find(c => c.cmd === name);
+      if (!cmd) return '';
+      const anchor = cmd.cmd.split(' ')[1];
+      return `<a href="#${anchor}" style="display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:.82rem;color:var(--text);text-decoration:none;transition:border-color .15s;" onmouseenter="this.style.borderColor='${g.color}'" onmouseleave="this.style.borderColor='var(--border)'">
+        <span style="color:${g.color};font-weight:700;">flux</span><span style="color:var(--muted);">${cmd.cmd.replace('flux ', '')}</span>
+        <span style="font-family:var(--font);font-size:.72rem;color:var(--muted);margin-left:auto;white-space:nowrap;">${cmd.summary}</span>
+      </a>`;
+    }).join('\n      ');
+
+    return `<div>
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:${g.color};margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+        <span style="display:inline-block;width:2px;height:12px;background:${g.color};border-radius:1px;"></span>
+        ${g.label}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${links}
+      </div>
+    </div>`;
+  }).join('\n  ');
+
+  return `<section class="hero" style="padding-bottom:56px;">
   <span class="eyebrow">CLI Reference</span>
   <h1 style="font-size:clamp(2rem,5vw,3rem);">Developers live<br><span class="gradient-text">in the terminal.</span></h1>
-  <p style="max-width:560px;margin:0 auto 36px;">Every debugging operation — from deploying a function to bisecting a production regression — is a single <code>flux</code> command.</p>
+  <p style="max-width:560px;margin:0 auto 40px;">Every debugging operation — from deploying a function to bisecting a production regression — is a single <code>flux</code> command.</p>
 
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;max-width:900px;margin:0 auto;text-align:left;">
-    ${cmds}
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:24px;max-width:1000px;margin:0 auto;text-align:left;">
+    ${groups}
   </div>
 </section>`;
 }
@@ -144,15 +166,57 @@ ${sectionHeader({
 // ── Page styles ───────────────────────────────────────────────────────────────
 const extraHead = '';
 
+// ── Command groups ────────────────────────────────────────────────────────────
+const CMD_GROUPS = [
+  {
+    label: 'Deploy & Runtime',
+    color: 'var(--green)',
+    commands: ['flux deploy', 'flux tail'],
+  },
+  {
+    label: 'Debugging',
+    color: 'var(--accent)',
+    commands: ['flux why', 'flux trace debug', 'flux trace diff', 'flux trace'],
+  },
+  {
+    label: 'Data History',
+    color: 'var(--blue,#60a5fa)',
+    commands: ['flux state history', 'flux state blame'],
+  },
+  {
+    label: 'Incident Analysis',
+    color: 'var(--purple,#c084fc)',
+    commands: ['flux incident replay', 'flux bug bisect', 'flux explain'],
+  },
+];
+
+function groupedCommandSections() {
+  return CMD_GROUPS.map(group => {
+    const matchedCmds = group.commands
+      .map(name => CLI_COMMANDS.find(c => c.cmd === name))
+      .filter(Boolean);
+
+    const sections = matchedCmds.map(commandSection).join('\n');
+
+    return `<div style="padding:56px 0 0;">
+  <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:0;">
+      <span style="display:inline-block;width:3px;height:24px;background:${group.color};border-radius:2px;"></span>
+      <span style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:${group.color};">${group.label}</span>
+    </div>
+  </div>
+  ${sections}
+</div>`;
+  }).join('\n\n');
+}
+
 // ── Render ────────────────────────────────────────────────────────────────────
 export function render() {
-  const cmds = CLI_COMMANDS.map(commandSection).join('\n');
-
   const content = [
     hero(),
     installation(),
     tutorialCallout(),
-    cmds,
+    groupedCommandSections(),
     `<section class="cta-strip">
   <h2>Ready to try it?</h2>
   <p style="max-width:480px;margin:0 auto 32px;">Install the CLI, deploy your first function, and trace it end to end in 5 minutes.</p>

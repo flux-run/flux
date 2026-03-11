@@ -16,6 +16,7 @@ const SIDEBAR_NAV = [
   {
     title: 'Debugging',
     links: [
+      { href: '/docs/debugging-production', label: 'Production Debugging' },
       { href: '/cli',               label: 'CLI Reference'  },
       { href: '/docs/observability',label: 'Observability'  },
     ],

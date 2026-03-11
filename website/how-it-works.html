@@ -93,10 +93,19 @@
     <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">flux trace 4f9a3b2c</span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux trace 4f9a3b2c</span>
+    <button id="cw-10-copy" onclick="(function(){
+    var el=document.getElementById('cw-10');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-10-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
-<span style="color:var(--green);">$</span> flux trace <span style="color:var(--accent);">4f9a3b2c</span>
+  <pre id="cw-10" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux trace <span style="color:var(--accent);">4f9a3b2c</span>
 
   Trace <span style="color:var(--accent);">4f9a3b2c</span>  <span style="color:var(--muted);">POST /create_user  200</span>
 
@@ -109,8 +118,7 @@
 
   <span style="color:#f9a8d4;">▸ send_welcome</span>  <span style="color:var(--muted);">async →</span>  <span style="color:var(--yellow);">queued</span>
 
-  <span style="color:var(--muted);">── total: 98ms ─────────────────────</span>
-  </div>
+  <span style="color:var(--muted);">── total: 98ms ─────────────────────</span></code></pre>
 </div></div>
 </div>
 </div>
@@ -133,10 +141,19 @@
     <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">gateway → span</span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">gateway → span</span>
+    <button id="cw-11-copy" onclick="(function(){
+    var el=document.getElementById('cw-11');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-11-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
-<span style="color:var(--muted);"># Gateway emits:</span>
+  <pre id="cw-11" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Gateway emits:</span>
 {
   request_id: <span style="color:var(--accent);">"4f9a3b2c"</span>,
   span: <span style="color:var(--green);">"gateway"</span>,
@@ -144,8 +161,7 @@
   path: <span style="color:var(--green);">"/create_user"</span>,
   auth: <span style="color:var(--green);">"ok"</span>,
   duration_ms: 3
-}
-  </div>
+}</code></pre>
 </div></div>
   </div>
   <div style="display:grid;grid-template-columns:48px 1fr 1fr;gap:32px;align-items:start;padding:40px 0;border-bottom:1px solid var(--border);">
@@ -159,10 +175,19 @@
     <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">runtime → spans</span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">runtime → spans</span>
+    <button id="cw-12-copy" onclick="(function(){
+    var el=document.getElementById('cw-12');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-12-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
-<span style="color:var(--muted);"># Runtime emits per call:</span>
+  <pre id="cw-12" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Runtime emits per call:</span>
 {
   request_id: <span style="color:var(--accent);">"4f9a3b2c"</span>,
   span: <span style="color:var(--green);">"create_user"</span>,
@@ -171,8 +196,7 @@
     { span: <span style="color:#60a5fa;">"db:insert(users)"</span>, <span style="color:var(--yellow);">14ms</span> }
   ],
   duration_ms: 81
-}
-  </div>
+}</code></pre>
 </div></div>
   </div>
   <div style="display:grid;grid-template-columns:48px 1fr 1fr;gap:32px;align-items:start;padding:40px 0;border-bottom:1px solid var(--border);">
@@ -186,10 +210,19 @@
     <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">data engine → mutation log</span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">data engine → mutation log</span>
+    <button id="cw-13-copy" onclick="(function(){
+    var el=document.getElementById('cw-13');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-13-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
-<span style="color:var(--muted);"># Mutation record:</span>
+  <pre id="cw-13" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Mutation record:</span>
 {
   request_id: <span style="color:var(--accent);">"4f9a3b2c"</span>,
   table: <span style="color:var(--green);">"users"</span>,
@@ -197,8 +230,7 @@
   operation: <span style="color:var(--green);">"insert"</span>,
   data: { email: <span style="color:var(--green);">"a@b.com"</span>, plan: <span style="color:var(--green);">"free"</span> },
   timestamp: <span style="color:var(--muted);">"2026-03-10T14:22:01Z"</span>
-}
-  </div>
+}</code></pre>
 </div></div>
   </div>
   <div style="display:grid;grid-template-columns:48px 1fr 1fr;gap:32px;align-items:start;padding:40px 0;border-bottom:1px solid var(--border);">
@@ -212,10 +244,19 @@
     <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">trace store → rendered</span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">trace store → rendered</span>
+    <button id="cw-14-copy" onclick="(function(){
+    var el=document.getElementById('cw-14');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-14-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
-<span style="color:var(--green);">$</span> flux trace 4f9a3b2c
+  <pre id="cw-14" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux trace 4f9a3b2c
 
   <span style="color:#f9a8d4;">gateway</span>           <span style="color:var(--yellow);">3ms</span>
   <span style="color:#f9a8d4;">create_user</span>      <span style="color:var(--yellow);">81ms</span>
@@ -223,8 +264,7 @@
     <span style="color:#60a5fa;">db:insert</span>       <span style="color:var(--yellow);">14ms</span>
   <span style="color:#f9a8d4;">send_welcome</span>  <span style="color:var(--muted);">async → queued</span>
 
-  <span style="color:var(--muted);">total: 98ms</span>
-  </div>
+  <span style="color:var(--muted);">total: 98ms</span></code></pre>
 </div></div>
   </div>
   <div style="display:grid;grid-template-columns:48px 1fr 1fr;gap:32px;align-items:start;padding:40px 0;border-bottom:1px solid var(--border);">
@@ -238,18 +278,26 @@
     <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">replay — side-effects off</span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">replay — side-effects off</span>
+    <button id="cw-15-copy" onclick="(function(){
+    var el=document.getElementById('cw-15');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-15-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
-<span style="color:var(--green);">$</span> flux incident replay 14:00..14:05
+  <pre id="cw-15" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux incident replay 14:00..14:05
 
   <span style="color:var(--muted);">hooks: off · events: off · cron: off</span>
   <span style="color:var(--muted);">db writes: on · mutation log: on</span>
 
   <span style="color:var(--green);">✔</span> 22/23 passing
   <span style="color:var(--red);">✗</span>  req:550e8400 still fails
-     <span style="color:var(--red);">Stripe timeout at payments/create.ts:42</span>
-  </div>
+     <span style="color:var(--red);">Stripe timeout at payments/create.ts:42</span></code></pre>
 </div></div>
   </div>
 </div>

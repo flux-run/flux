@@ -13,13 +13,32 @@ export const meta = {
 
 // ── Hero ──────────────────────────────────────────────────────────────────────
 function hero() {
+  const cliMoment = codeWindow({
+    title: 'production debugging in 2 commands',
+    content: `${c.cmd('$')} flux tail
+
+  Streaming live requests…
+
+  ${c.ok('✔')}  POST /signup      201  ${c.ms('88ms')}  ${c.dim('req:4f9a3b2c')}
+  ${c.err('✗')}  POST /signup      500  ${c.ms('44ms')}  ${c.id('req:550e8400')}
+     ${c.err('└─ Error: Stripe API timeout')}
+
+${c.cmd('$')} flux why ${c.id('550e8400')}
+
+  ${c.white('ROOT CAUSE')}    Stripe API timeout
+  ${c.white('LOCATION')}     payments/create.ts:42
+  ${c.white('DATA CHANGES')}  users.id=42  plan: free ${c.err('→ null')}  ${c.dim('(rolled back)')}
+  ${c.white('SUGGESTION')}   ${c.ok('→')} Add 5s timeout + idempotency key retry`,
+  });
+
   return `<section class="hero" style="padding-bottom:60px;">
   <span class="eyebrow">Git for Backend Execution</span>
   <h1>Debug production systems<br><span class="gradient-text">faster than local development.</span></h1>
-  <p style="max-width:560px;margin:0 auto 12px;">Every request is automatically recorded — gateway, functions, database queries, tool calls, async jobs — without instrumenting anything.</p>
-  <p style="max-width:560px;margin:0 auto 36px;font-size:.95rem;color:var(--muted);">Root-cause any incident in seconds. Replay it safely. Find the commit that introduced the bug.</p>
+  <p style="max-width:560px;margin:0 auto 36px;">Every request is automatically recorded. Root-cause any incident in seconds, replay it safely, and find the exact commit that broke it.</p>
 
-  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:32px;">
+  <div style="max-width:660px;margin:0 auto 40px;text-align:left;">${cliMoment}</div>
+
+  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:28px;">
     <a class="btn-primary" href="/docs/quickstart">Start Building →</a>
     <a class="btn-secondary" href="/docs/">View Docs</a>
   </div>
@@ -27,12 +46,6 @@ function hero() {
   <div class="install-hint">
     <span class="prompt">$</span>
     curl -fsSL https://fluxbase.co/install | bash
-  </div>
-
-  <div style="margin-top:20px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-    <code style="font-size:.88rem;padding:6px 14px;">flux deploy</code>
-    <code style="font-size:.88rem;padding:6px 14px;">flux tail</code>
-    <code style="font-size:.88rem;padding:6px 14px;">flux why &lt;request-id&gt;</code>
   </div>
 </section>`;
 }

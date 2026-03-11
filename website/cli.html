@@ -24,56 +24,64 @@
 </nav>
 
 <div class="landing-wrap">
-<section class="hero" style="padding-bottom:48px;">
+<section class="hero" style="padding-bottom:56px;">
   <span class="eyebrow">CLI Reference</span>
   <h1 style="font-size:clamp(2rem,5vw,3rem);">Developers live<br><span class="gradient-text">in the terminal.</span></h1>
-  <p style="max-width:560px;margin:0 auto 36px;">Every debugging operation — from deploying a function to bisecting a production regression — is a single <code>flux</code> command.</p>
+  <p style="max-width:560px;margin:0 auto 40px;">Every debugging operation — from deploying a function to bisecting a production regression — is a single <code>flux</code> command.</p>
 
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;max-width:900px;margin:0 auto;text-align:left;">
-    <a href="#deploy" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Deploy functions to production">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">deploy</span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Deploy functions to production</span>
-    </a>
-    <a href="#tail" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Stream live request logs">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">tail</span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Stream live request logs</span>
-    </a>
-    <a href="#why" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Root cause a failed request">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">why <request-id></span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Root cause a failed request</span>
-    </a>
-    <a href="#trace" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Full trace for any request">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">trace <request-id></span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Full trace for any request</span>
-    </a>
-    <a href="#trace" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Compare two request traces">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">trace diff <id-a> <id-b></span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Compare two request traces</span>
-    </a>
-    <a href="#trace" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Step through a trace interactively">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">trace debug <request-id></span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Step through a trace interactively</span>
-    </a>
-    <a href="#state" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="See every mutation to a row">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">state history <table> --id <row-id></span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">See every mutation to a row</span>
-    </a>
-    <a href="#state" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Find which request owns a row's current state">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">state blame <table> --id <row-id></span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Find which request owns a row's current state</span>
-    </a>
-    <a href="#incident" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Replay production requests safely">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">incident replay <from>..<to></span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Replay production requests safely</span>
-    </a>
-    <a href="#bug" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Find the commit that introduced a bug">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">bug bisect</span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Find the commit that introduced a bug</span>
-    </a>
-    <a href="#explain" style="display:block;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);color:var(--text);font-size:.85rem;font-family:var(--font-mono);transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'" title="Dry-run a database query">
-      <span style="color:var(--green);">flux</span> <span style="color:var(--accent);">explain <query-file></span>
-      <span style="display:block;font-family:var(--font);font-size:.78rem;color:var(--muted);margin-top:2px;">Dry-run a database query</span>
-    </a>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:24px;max-width:1000px;margin:0 auto;text-align:left;">
+    <div>
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--green);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+        <span style="display:inline-block;width:2px;height:12px;background:var(--green);border-radius:1px;"></span>
+        Deploy & Runtime
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <a href="#deploy" style="display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:.82rem;color:var(--text);text-decoration:none;transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--green)'" onmouseleave="this.style.borderColor='var(--border)'">
+        <span style="color:var(--green);font-weight:700;">flux</span><span style="color:var(--muted);">deploy</span>
+        <span style="font-family:var(--font);font-size:.72rem;color:var(--muted);margin-left:auto;white-space:nowrap;">Deploy functions to production</span>
+      </a>
+      <a href="#tail" style="display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:.82rem;color:var(--text);text-decoration:none;transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--green)'" onmouseleave="this.style.borderColor='var(--border)'">
+        <span style="color:var(--green);font-weight:700;">flux</span><span style="color:var(--muted);">tail</span>
+        <span style="font-family:var(--font);font-size:.72rem;color:var(--muted);margin-left:auto;white-space:nowrap;">Stream live request logs</span>
+      </a>
+      </div>
+    </div>
+  <div>
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+        <span style="display:inline-block;width:2px;height:12px;background:var(--accent);border-radius:1px;"></span>
+        Debugging
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        
+      
+      
+      
+      </div>
+    </div>
+  <div>
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#60a5fa;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+        <span style="display:inline-block;width:2px;height:12px;background:#60a5fa;border-radius:1px;"></span>
+        Data History
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        
+      
+      </div>
+    </div>
+  <div>
+      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#c084fc;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+        <span style="display:inline-block;width:2px;height:12px;background:#c084fc;border-radius:1px;"></span>
+        Incident Analysis
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        
+      <a href="#bug" style="display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:.82rem;color:var(--text);text-decoration:none;transition:border-color .15s;" onmouseenter="this.style.borderColor='#c084fc'" onmouseleave="this.style.borderColor='var(--border)'">
+        <span style="color:#c084fc;font-weight:700;">flux</span><span style="color:var(--muted);">bug bisect</span>
+        <span style="font-family:var(--font);font-size:.72rem;color:var(--muted);margin-left:auto;white-space:nowrap;">Find the commit that introduced a bug</span>
+      </a>
+      
+      </div>
+    </div>
   </div>
 </section>
 
@@ -87,10 +95,19 @@
     <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);">install</span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">install</span>
+    <button id="cw-1-copy" onclick="(function(){
+    var el=document.getElementById('cw-1');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-1-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <div style="padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;">
-<span style="color:var(--green);">$</span> curl -fsSL https://fluxbase.co/install | bash
+  <pre id="cw-1" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> curl -fsSL https://fluxbase.co/install | bash
 
   Installing flux CLI…
 
@@ -102,8 +119,7 @@
 
   <span style="color:var(--green);">$</span> flux login
   Opening browser… <span style="color:var(--muted);">(or set FLUX_API_KEY env var)</span>
-  <span style="color:var(--green);">✔</span>  Logged in as alice@example.com
-  </div>
+  <span style="color:var(--green);">✔</span>  Logged in as alice@example.com</code></pre>
 </div></div>
 </div>
 </section>
@@ -149,7 +165,14 @@
 </div>
 </section>
 
-<div id="deploy" style="padding:56px 0;border-top:1px solid var(--border);">
+<div style="padding:56px 0 0;">
+  <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:0;">
+      <span style="display:inline-block;width:3px;height:24px;background:var(--green);border-radius:2px;"></span>
+      <span style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--green);">Deploy & Runtime</span>
+    </div>
+  </div>
+  <div id="deploy" style="padding:56px 0;border-top:1px solid var(--border);">
   <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
     <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
       <div>
@@ -204,210 +227,36 @@
     </div>
   </div>
 </div>
-<div id="why" style="padding:56px 0;border-top:1px solid var(--border);">
+</div>
+
+<div style="padding:56px 0 0;">
   <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-    <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-      <div>
-        <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:10px;">flux why <request-id></div>
-        <h3 style="font-size:1.2rem;font-weight:700;margin-bottom:12px;">Root cause a failed request</h3>
-        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Fetches the full trace for a request, identifies the first failing span, and explains the cause in plain language. This is the fastest way to answer 'why did this request fail?'</p>
-      </div>
-      <div><div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-    <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-      <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-      <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux why <request-id></span>
-    </div>
-    <pre style="margin:0;border:none;border-radius:0;padding:20px 24px;background:#0a0a0c;"><code style="font-size:.82rem;line-height:1.85;">$ flux why 550e8400
-
-  ROOT CAUSE
-  Stripe API timeout after 10s
-
-  LOCATION
-  payments/create.ts:42
-
-  SPAN
-  stripe.charge  POST /v1/charges  10002ms  ✗ timeout
-
-  DATABASE CHANGES
-  users id=42  plan: free → null  (rolled back)
-
-  SUGGESTION
-  → Add a 5s timeout and retry with idempotency key</code></pre>
-  </div></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:0;">
+      <span style="display:inline-block;width:3px;height:24px;background:var(--accent);border-radius:2px;"></span>
+      <span style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);">Debugging</span>
     </div>
   </div>
+  
 </div>
-<div id="trace" style="padding:56px 0;border-top:1px solid var(--border);">
+
+<div style="padding:56px 0 0;">
   <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-    <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-      <div>
-        <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:10px;">flux trace <request-id></div>
-        <h3 style="font-size:1.2rem;font-weight:700;margin-bottom:12px;">Full trace for any request</h3>
-        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Shows every span for a request in order: gateway auth, function execution, each database query, tool calls, async jobs. Latencies in yellow, errors in red.</p>
-      </div>
-      <div><div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-    <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-      <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-      <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux trace <request-id></span>
-    </div>
-    <pre style="margin:0;border:none;border-radius:0;padding:20px 24px;background:#0a0a0c;"><code style="font-size:.82rem;line-height:1.85;">$ flux trace 4f9a3b2c
-
-  Trace 4f9a3b2c  POST /create_user  200
-
-  ▸ gateway                    3ms
-    auth ✔  rate_limit ✔
-  ▸ create_user               81ms
-    ▸ db:select(users)        11ms
-    ▸ db:insert(users)        14ms
-  ▸ send_welcome  async →   queued
-
-  ── total: 98ms ──────────────────</code></pre>
-  </div></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:0;">
+      <span style="display:inline-block;width:3px;height:24px;background:var(--blue,#60a5fa);border-radius:2px;"></span>
+      <span style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--blue,#60a5fa);">Data History</span>
     </div>
   </div>
+  
 </div>
-<div id="trace" style="padding:56px 0;border-top:1px solid var(--border);">
+
+<div style="padding:56px 0 0;">
   <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-    <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-      <div>
-        <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:10px;">flux trace diff <id-a> <id-b></div>
-        <h3 style="font-size:1.2rem;font-weight:700;margin-bottom:12px;">Compare two request traces</h3>
-        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Diffs two traces side by side. Changed spans are highlighted. Useful for comparing a passing and a failing request to find what changed.</p>
-      </div>
-      <div><div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-    <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-      <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-      <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux trace diff <id-a> <id-b></span>
-    </div>
-    <pre style="margin:0;border:none;border-radius:0;padding:20px 24px;background:#0a0a0c;"><code style="font-size:.82rem;line-height:1.85;">$ flux trace diff 4f9a3b2c 550e8400
-
-  SPAN                  A        B        DELTA
-  gateway               3ms      4ms      +1ms
-  create_user          81ms     44ms     -37ms
-  stripe.charge        12ms   10002ms  +9990ms  ✗
-  send_welcome       queued    SKIP
-
-  → stripe.charge regressed by 9990ms</code></pre>
-  </div></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:0;">
+      <span style="display:inline-block;width:3px;height:24px;background:var(--purple,#c084fc);border-radius:2px;"></span>
+      <span style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--purple,#c084fc);">Incident Analysis</span>
     </div>
   </div>
-</div>
-<div id="trace" style="padding:56px 0;border-top:1px solid var(--border);">
-  <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-    <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-      <div>
-        <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:10px;">flux trace debug <request-id></div>
-        <h3 style="font-size:1.2rem;font-weight:700;margin-bottom:12px;">Step through a trace interactively</h3>
-        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Opens an interactive step-by-step view of a request. Use arrow keys to navigate spans. Each span shows its input, output, duration, and any errors.</p>
-      </div>
-      <div><div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-    <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-      <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-      <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux trace debug <request-id></span>
-    </div>
-    <pre style="margin:0;border:none;border-radius:0;padding:20px 24px;background:#0a0a0c;"><code style="font-size:.82rem;line-height:1.85;">$ flux trace debug 550e8400
-
-  Step 1/4  gateway
-  ─────────────────────────────────────
-  Input:  POST /signup  { email: "a@b.com" }
-  Output: { tenant_id: "t_123", passed: true }
-  Time:   4ms
-
-  ↓  next span  ↑  prev  q quit</code></pre>
-  </div></div>
-    </div>
-  </div>
-</div>
-<div id="state" style="padding:56px 0;border-top:1px solid var(--border);">
-  <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-    <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-      <div>
-        <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:10px;">flux state history <table> --id <row-id></div>
-        <h3 style="font-size:1.2rem;font-weight:700;margin-bottom:12px;">See every mutation to a row</h3>
-        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Shows a timestamped history of every INSERT, UPDATE, and DELETE that touched a specific row. Each entry links back to the request that caused it.</p>
-      </div>
-      <div><div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-    <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-      <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-      <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux state history <table> --id <row-id></span>
-    </div>
-    <pre style="margin:0;border:none;border-radius:0;padding:20px 24px;background:#0a0a0c;"><code style="font-size:.82rem;line-height:1.85;">$ flux state history users --id 42
-
-  users id=42  (7 mutations)
-
-  2026-03-10 14:21:55  INSERT   email=a@b.com, plan=free
-  2026-03-10 14:22:01  UPDATE   plan: free → pro   req:4f9a3b2c
-  2026-03-10 14:22:01  UPDATE   plan: pro  → null  req:550e8400  ✗ rolled back</code></pre>
-  </div></div>
-    </div>
-  </div>
-</div>
-<div id="state" style="padding:56px 0;border-top:1px solid var(--border);">
-  <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-    <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-      <div>
-        <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:10px;">flux state blame <table> --id <row-id></div>
-        <h3 style="font-size:1.2rem;font-weight:700;margin-bottom:12px;">Find which request owns a row's current state</h3>
-        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Shows the last mutation per column for a row, annotated with the request ID and timestamp. Answers 'who set this field to this value?'</p>
-      </div>
-      <div><div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-    <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-      <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-      <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux state blame <table> --id <row-id></span>
-    </div>
-    <pre style="margin:0;border:none;border-radius:0;padding:20px 24px;background:#0a0a0c;"><code style="font-size:.82rem;line-height:1.85;">$ flux state blame users --id 42
-
-  users id=42
-
-  email    a@b.com         req:4f9a3b2c  2026-03-10 14:21:55
-  plan     free            req:550e8400  2026-03-10 14:22:01  ✗ rolled back
-  name     Alice Smith     req:a3c91ef0  2026-03-10 12:00:00</code></pre>
-  </div></div>
-    </div>
-  </div>
-</div>
-<div id="incident" style="padding:56px 0;border-top:1px solid var(--border);">
-  <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-    <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-      <div>
-        <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:10px;">flux incident replay <from>..<to></div>
-        <h3 style="font-size:1.2rem;font-weight:700;margin-bottom:12px;">Replay production requests safely</h3>
-        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Re-executes all requests from a time window against the current code. Side-effects (emails, Slack, webhooks, cron) are disabled. Database writes and mutation logs are enabled. Use this to test a fix against the exact requests that caused an incident.</p>
-      </div>
-      <div><div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-    <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-      <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-      <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux incident replay <from>..<to></span>
-    </div>
-    <pre style="margin:0;border:none;border-radius:0;padding:20px 24px;background:#0a0a0c;"><code style="font-size:.82rem;line-height:1.85;">$ flux incident replay 14:00..14:05
-
-  Replaying 23 requests from 14:00–14:05…
-
-  ✔  req:4f9a3b2c  POST /create_user   200  81ms
-  ✔  req:a3c91ef0  GET  /list_users    200  12ms
-  ✗  req:550e8400  POST /signup        500  44ms
-     └─ Still failing: Stripe timeout
-
-  23 replayed · 1 still failing</code></pre>
-  </div></div>
-    </div>
-  </div>
-</div>
-<div id="bug" style="padding:56px 0;border-top:1px solid var(--border);">
+  <div id="bug" style="padding:56px 0;border-top:1px solid var(--border);">
   <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
     <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
       <div>
@@ -436,46 +285,6 @@
     </div>
   </div>
 </div>
-<div id="explain" style="padding:56px 0;border-top:1px solid var(--border);">
-  <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-    <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
-      <div>
-        <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:10px;">flux explain <query-file></div>
-        <h3 style="font-size:1.2rem;font-weight:700;margin-bottom:12px;">Dry-run a database query</h3>
-        <p style="color:var(--muted);font-size:.92rem;line-height:1.7;">Sends a query to the Data Engine dry-run endpoint. Returns the compiled SQL, applied row policies, column access rules, and query complexity score — without executing anything.</p>
-      </div>
-      <div><div style="background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
-    <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:9px 14px;display:flex;align-items:center;gap:7px;">
-      <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
-      <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-      <span style="font-family:var(--font-mono);font-size:.73rem;color:var(--muted);margin-left:8px;">flux explain <query-file></span>
-    </div>
-    <pre style="margin:0;border:none;border-radius:0;padding:20px 24px;background:#0a0a0c;"><code style="font-size:.82rem;line-height:1.85;">$ flux explain query.json
-
-  ── Query Plan ──────────────────────────────
-  Table:      users
-  Operation:  select
-  Schema:     public
-
-  ── Policies Applied ────────────────────────
-  Role:       admin
-  Columns:    id, email, plan, created_at
-  Row filter: tenant_id = $1
-
-  ── Compiled SQL ────────────────────────────
-  SELECT id, email, plan, created_at
-  FROM users
-  WHERE tenant_id = $1
-  LIMIT 100
-
-  ── QueryGuard Score ────────────────────────
-  Complexity: 3/100  ✓
-  Depth:      1/6    ✓
-  Filters:    1/20   ✓</code></pre>
-  </div></div>
-    </div>
-  </div>
 </div>
 
 <section class="cta-strip">
