@@ -64,11 +64,14 @@ pub async fn execute(
     }
 
     // ── Gap 3: SQL trace comment ──────────────────────────────────────────
-    // Prepend a comment to the SQL so the query appears in pg_stat_activity
-    // and any DB-level logging tool with full request context.
+    // Prepend a comment so the query appears in pg_stat_activity,
+    // auto_explain, and pgaudit with full request + span context.
+    // span: allows pg_stat_activity to show *which runtime span* generated
+    // each in-flight query — critical for flux trace debug step-through mode.
     let traced_sql = format!(
-        "/* flux_req:{req},tenant:{tenant} */ {sql}",
+        "/* flux_req:{req},span:{span},tenant:{tenant} */ {sql}",
         req    = ctx.request_id,
+        span   = ctx.span_id.unwrap_or("-"),
         tenant = ctx.tenant_id,
         sql    = query.sql,
     );
@@ -134,22 +137,30 @@ pub async fn execute(
                 .await
                 .map_err(EngineError::Db)?;
 
+                // changed_fields: populated for UPDATE once before-state
+                // pre-read is implemented (v2).  NULL for INSERT/DELETE.
+                // When before_state is available, this will be:
+                //   before.iter().filter(|(k,v)| after[k] != v).map(|(k,_)| k).collect()
+                let changed_fields: Option<Vec<String>> = None;
+
                 sqlx::query(
                     r#"
                     INSERT INTO fluxbase_internal.state_mutations
-                        (tenant_id, project_id, table_name, record_pk,
-                         operation, before_state, after_state,
+                        (tenant_id, project_id, schema_name, table_name, record_pk,
+                         operation, before_state, after_state, changed_fields,
                          version, actor_id, request_id, span_id)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                     "#,
                 )
                 .bind(ctx.tenant_id)
                 .bind(ctx.project_id)
+                .bind(ctx.schema)
                 .bind(ctx.table)
                 .bind(&record_pk)
                 .bind(ctx.operation)
                 .bind(&before_state)
                 .bind(&after_state)
+                .bind(changed_fields)
                 .bind(version)
                 .bind(ctx.user_id)
                 .bind(ctx.request_id)

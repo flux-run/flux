@@ -33,7 +33,7 @@ pub enum CompileResult {
 
 // ─── Public request / response types ─────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct QueryRequest {
     /// Name of the project database (maps to a Postgres schema).
     pub database: String,

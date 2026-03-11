@@ -28,6 +28,11 @@ The Data Engine is Flowbase's internal data-access tier — a Rust/Axum microser
    - [Cron Worker](#cron-worker)
 7. [Database Schema](#database-schema)
 8. [Deterministic Execution & Replay](#deterministic-execution--replay)
+   - [Execution Trace Chain](#execution-trace-chain)
+   - [`state_mutations` Table](#state_mutations-table)
+   - [`trace_requests` Table](#trace_requests-table)
+   - [Replay Mode](#replay-mode)
+   - [DB Query Trace Correlation](#db-query-trace-correlation)
 9. [Configuration Reference](#configuration-reference)
 10. [Deployment Notes](#deployment-notes)
 11. [Architectural Gaps & Improvements](#architectural-gaps--improvements)
@@ -636,8 +641,8 @@ All metadata lives in the **`fluxbase_internal`** Postgres schema, never exposed
 | `workflow_steps` | Ordered steps for each workflow (`action_type`, `action_config`) |
 | `workflow_executions` | Runtime execution state (current step, context, status) |
 | `cron_jobs` | Cron job definitions with schedule, action, and `next_run_at` |
-
-| `state_mutations` | Append-only log of every INSERT/UPDATE/DELETE with before/after snapshots, versioned per row, linked to `request_id` and `span_id` — **live; powers `flux why`, `flux state history`, `flux state blame`, `flux trace diff`, `flux trace debug`, and `flux incident replay`** |
+| `state_mutations` | Append-only log of every INSERT/UPDATE/DELETE with before/after snapshots, versioned per row; includes `mutation_seq BIGSERIAL` for deterministic replay ordering, `changed_fields TEXT[]` for cheap field-level diffs, linked to `request_id` and `span_id` — **live; powers `flux why`, `flux state history`, `flux state blame`, `flux trace diff`, `flux trace debug`, and `flux incident replay`** |
+| `trace_requests` | Request envelope store — captures `method`, `path`, `headers`, `body`, `response_status`, `response_body`, `duration_ms` per `request_id`; ensures replay never depends on gateway log retention |
 
 User tables live in **project-scoped schemas** named `t_{tenant_slug}_{project_slug}_{db_name}`.
 
@@ -686,25 +691,27 @@ Every INSERT, UPDATE, and DELETE executed by the data engine is written to an ap
 
 ```sql
 CREATE TABLE fluxbase_internal.state_mutations (
-    mutation_id   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    request_id    UUID,                    -- links to trace_requests.request_id
-    span_id       TEXT,                    -- links to the runtime span that triggered this (added: 20260309000011_span_id)
+    mutation_id    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    mutation_seq   BIGSERIAL,               -- global monotonic sequence; ORDER BY mutation_seq for deterministic replay
+    request_id     UUID,                    -- links to trace_requests.request_id
+    span_id        TEXT,                    -- links to the runtime span that triggered this (added: 20260309000011_span_id)
 
-    tenant_id     UUID        NOT NULL,
-    project_id    UUID        NOT NULL,
-    schema_name   TEXT        NOT NULL,
-    table_name    TEXT        NOT NULL,
-    record_pk     JSONB       NOT NULL,    -- primary key value(s) of the affected row
+    tenant_id      UUID        NOT NULL,
+    project_id     UUID        NOT NULL,
+    schema_name    TEXT        NOT NULL,
+    table_name     TEXT        NOT NULL,
+    record_pk      JSONB       NOT NULL,    -- primary key value(s) of the affected row
 
-    operation     TEXT        NOT NULL,    -- 'insert' | 'update' | 'delete'
+    operation      TEXT        NOT NULL,    -- 'insert' | 'update' | 'delete'
 
-    before        JSONB,                   -- NULL for inserts
-    after         JSONB,                   -- NULL for deletes
+    before         JSONB,                   -- NULL for inserts; compressed by Postgres TOAST
+    after          JSONB,                   -- NULL for deletes; compressed by Postgres TOAST
+    changed_fields TEXT[],                  -- names of fields that changed (UPDATE only); enables cheap diff without JSON comparison
 
-    version       BIGINT      NOT NULL,    -- monotonically increasing per (tenant, project, table, record_pk)
-    schema_version TEXT,                   -- git SHA or migration version of the schema at mutation time
+    version        BIGINT      NOT NULL,    -- monotonically increasing per (tenant, project, table, record_pk)
+    schema_version TEXT,                    -- git SHA or migration version of the schema at mutation time
 
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_state_mutations_row
@@ -722,6 +729,16 @@ CREATE INDEX idx_state_mutations_time
 -- SELECT ... WHERE table_name='users' AND record_pk='{"id":42}' ORDER BY version DESC LIMIT 20
 CREATE INDEX idx_state_mutations_pk_version
     ON fluxbase_internal.state_mutations(tenant_id, project_id, table_name, record_pk, version DESC);
+
+-- Deterministic replay ordering within a request: ORDER BY mutation_seq replaces timestamp heuristics
+CREATE INDEX idx_state_mutations_request_seq
+    ON fluxbase_internal.state_mutations(request_id, mutation_seq)
+    WHERE request_id IS NOT NULL;
+
+-- Incident replay filtered by table: flux incident replay --request-id ... --table users
+CREATE INDEX idx_state_mutations_request_table
+    ON fluxbase_internal.state_mutations(request_id, table_name)
+    WHERE request_id IS NOT NULL;
 ```
 
 **Why `version` matters:**
@@ -735,6 +752,29 @@ users.id = 42
 
 This enables `flux state blame users 42` to pinpoint exactly which request caused each change.
 
+**Why `mutation_seq` matters:**
+
+Within a single request that touches multiple rows across multiple tables, `created_at` timestamps can collide (sub-millisecond writes in the same transaction). `mutation_seq` is a `BIGSERIAL` that guarantees global ordering:
+
+```sql
+-- Deterministic replay: apply mutations in the exact order they were written
+SELECT * FROM fluxbase_internal.state_mutations
+WHERE request_id = $1
+ORDER BY mutation_seq;
+```
+
+This replaces timestamp heuristics in `flux trace debug` and `flux incident replay` with a strict causal order.
+
+**Why `changed_fields` matters:**
+
+For UPDATE operations, `changed_fields` stores only the names of modified columns (e.g. `["plan", "updated_at"]`). The CLI can compute `flux why` field-level diffs by reading `changed_fields` first and then extracting only those keys from the `before`/`after` JSONB — no full JSON comparison needed:
+
+```
+users.id = 42  version 2  changed_fields: ["plan", "updated_at"]
+  plan:       "free"  →  "pro"
+  updated_at: 2026-03-10T09:00:00Z  →  2026-03-11T14:22:01Z
+```
+
 **Why `request_id` matters:**
 
 With `request_id` linked to `trace_requests`, every mutation becomes answerable:
@@ -746,6 +786,46 @@ Row users.id=42 modified by request 550e8400
   commit:    a93f42c
   triggered: workflow step 3 of onboarding_flow
 ```
+
+---
+
+### `trace_requests` Table
+
+The `trace_requests` table stores the full request envelope for every operation processed by the data engine. This makes replay completely self-contained — the original request input is preserved locally and does not depend on gateway log retention (which may expire or be unavailable during incident investigation).
+
+```sql
+CREATE TABLE fluxbase_internal.trace_requests (
+    request_id      UUID        PRIMARY KEY,
+    tenant_id       UUID        NOT NULL,
+    project_id      UUID        NOT NULL,
+
+    method          TEXT        NOT NULL,   -- 'POST', 'GET', etc.
+    path            TEXT        NOT NULL,   -- e.g. '/db/query'
+    headers         JSONB,                  -- relevant headers (x-user-id, x-user-role, etc.); exclude auth tokens
+    body            JSONB,                  -- request body (QueryRequest), compressed via TOAST
+
+    response_status INT,                    -- HTTP status returned to caller
+    response_body   JSONB,                  -- response payload; may be truncated for large results
+    duration_ms     INT,                    -- end-to-end latency
+
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_trace_requests_tenant
+    ON fluxbase_internal.trace_requests(tenant_id, project_id, created_at DESC);
+```
+
+**Replay pipeline with `trace_requests`:**
+
+```
+trace_requests             ← original input (method, path, body, headers)
+       ↓
+state_mutations            ← mutations ordered by mutation_seq
+       ↓
+execution replay           ← re-apply mutations in order, skipping side effects
+```
+
+Without this table, `flux incident replay` must fall back to whatever gateway retained, which may be incomplete, expired, or unavailable in air-gapped environments.
 
 ---
 
@@ -769,6 +849,7 @@ When this header is present, the following subsystems are **bypassed**:
 | Workflow triggers | Creates `workflow_executions` | Skipped |
 | Cron advancement | Fires due jobs | Skipped |
 | External dispatch | Webhook / function / queue | Skipped |
+| External tool calls | Composio / HTTP tools in hooks | Skipped |
 
 Only the read/write to the user tables and the append to `state_mutations` are executed. This ensures that replaying an historical sequence of requests produces the same data state without re-triggering notifications or workflows.
 
@@ -780,7 +861,7 @@ Postgres queries are not automatically correlated to the request that issued the
 
 **Option A — SQL comment (visible in `pg_stat_activity`, `auto_explain`):**
 ```sql
-/* flux_request_id:550e8400-..., span_id:abc123 */
+/* flux_req:550e8400-..., span:abc123 */
 SELECT ...
 ```
 
@@ -864,11 +945,11 @@ Postgres queries are not correlated to the request that issued them, making it i
 **Required action:** Prepend a SQL comment to every compiled query before execution:
 
 ```sql
-/* flux_request_id:{{uuid}}, span_id:{{uuid}} */
+/* flux_req:{{request_uuid}}, span:{{span_id}} */
 SELECT ...
 ```
 
-This is zero-overhead (comment is stripped by the parser) and survives connection pooling unlike `SET LOCAL application_name`.
+Including `span:` (not just `flux_req:`) means `pg_stat_activity` can directly show which runtime span generated each in-flight query — critical for `flux trace debug` step-through mode. This is zero-overhead (the comment is stripped by the Postgres parser) and survives connection pooling unlike `SET LOCAL application_name`.
 
 ---
 
@@ -881,8 +962,14 @@ Replaying historical mutations would re-trigger hooks, events, workflow executio
 - `EventEmitter::emit`
 - `WorkflowEngine::trigger`
 - Any cron advancement
+- External tool calls forwarded via hooks (Composio, HTTP)
 
-State mutations should still be written (allows replay to produce a reconstructed data state). See the [Replay Mode](#replay-mode) section.
+**Allowed in replay mode:**
+- Read/write to user tables (reconstructs data state)
+- Append to `state_mutations` (produces a new trace for the replayed execution)
+- Trace span emission (allows `flux trace diff` to compare original vs. replayed execution)
+
+See the [Replay Mode](#replay-mode) section for the full bypass table.
 
 ---
 
@@ -967,6 +1054,72 @@ A workflow step that does not return from the runtime leaves the execution perpe
 INSERT/UPDATE/DELETE are fully recompiled on every request. For write-heavy workloads (e.g. bulk ingestion), this adds meaningful CPU cost.
 
 **Recommended action:** Extend the plan cache to store compiled mutation SQL templates. The cache key should include the operation, column list shape, and policy fingerprint. Bind parameters are still rebuild per-request.
+
+The existing Moka L2 cache infrastructure is already in place. Extending the cache key struct to cover mutations is a one-field change (`operation: QueryOperation`).
+
+---
+
+### Gap 12 — Deterministic Mutation Ordering `[blocking]`
+
+`mutation_seq BIGSERIAL` must be added to `state_mutations` so replay ordering is determined by insertion sequence, not `created_at` timestamp. Within a single transaction touching multiple tables, timestamps can be identical; `mutation_seq` provides a strict total order.
+
+**Required migration:**
+
+```sql
+ALTER TABLE fluxbase_internal.state_mutations
+    ADD COLUMN mutation_seq BIGSERIAL;
+
+CREATE INDEX idx_state_mutations_request_seq
+    ON fluxbase_internal.state_mutations(request_id, mutation_seq)
+    WHERE request_id IS NOT NULL;
+```
+
+**Required code change:** `flux incident replay` and `flux trace debug` must change their `ORDER BY` from `created_at` to `mutation_seq`.
+
+---
+
+### Gap 13 — Request Envelope Table (`trace_requests`) `[blocking]`
+
+The data engine currently stores mutations but not the originating request. If gateway logs expire (or are unavailable in isolated environments), `flux incident replay` cannot reconstruct the original input.
+
+**Required action:** Implement the `trace_requests` schema (see [`trace_requests` Table](#trace_requests-table)) and write a row at the start of every `POST /db/query` handler, before any mutation work begins. `request_id` is taken from the `x-request-id` header.
+
+**Sensitive fields:** Do not store raw `Authorization` headers or user credential values. Store only the structural headers needed for replay (`x-user-id`, `x-user-role`, `x-tenant-id`, `x-project-id`, `x-flux-replay`).
+
+---
+
+### Gap 14 — Mutation Compression (`changed_fields`) `[performance]`
+
+For UPDATE operations, before/after JSONB snapshots capture the entire row even when only one field changed. Under high write volume (10k writes/s → ~864 M rows/day), this amplifies storage significantly.
+
+**Required migration:**
+
+```sql
+ALTER TABLE fluxbase_internal.state_mutations
+    ADD COLUMN changed_fields TEXT[];
+```
+
+**Required code change:** In `db_executor.rs`, when writing an UPDATE mutation, populate `changed_fields` by comparing the keys in `before` and `after` JSONB that differ. Only keys with differing values are included.
+
+**Effect on CLI:** `flux why` and `flux trace diff` can read `changed_fields` first to narrow the comparison scope, avoiding full JSON tree walks on wide rows.
+
+---
+
+### Gap 15 — Mutation Integrity Check `[hardening]`
+
+Version sequences per row should be strictly monotonic with no gaps (`1 → 2 → 3`). A gap (`1 → 3`) indicates a lost write — either a crashed transaction that didn't roll back cleanly, or a migration that skipped increment logic.
+
+**Recommended action:** Add a periodic background check (or an on-demand CLI command `flux db integrity-check`) that runs:
+
+```sql
+SELECT record_pk, array_agg(version ORDER BY version) AS versions
+FROM fluxbase_internal.state_mutations
+WHERE tenant_id = $1 AND project_id = $2 AND table_name = $3
+GROUP BY record_pk
+HAVING count(*) != (max(version) - min(version) + 1);
+```
+
+Any row returned has a version gap — log as a structured warning keyed on `(tenant_id, project_id, table_name, record_pk)`. This is rare but critical to detect before it silently corrupts replay output.
 
 ---
 

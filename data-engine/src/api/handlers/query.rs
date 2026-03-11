@@ -20,6 +20,25 @@ use crate::{
     transform::TransformEngine,
 };
 
+/// Extract only the safe, non-sensitive headers needed for replay.
+/// Never stores Authorization or any credential header.
+fn safe_headers(headers: &HeaderMap) -> serde_json::Value {
+    let keys = [
+        "x-tenant-id", "x-project-id", "x-tenant-slug", "x-project-slug",
+        "x-user-id",   "x-user-role",  "x-request-id",  "x-span-id",
+        "x-flux-replay", "content-type",
+    ];
+    let map: serde_json::Map<String, serde_json::Value> = keys
+        .iter()
+        .filter_map(|k| {
+            headers.get(*k)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| (k.to_string(), serde_json::Value::String(v.to_string())))
+        })
+        .collect();
+    serde_json::Value::Object(map)
+}
+
 /// Map operation string to the before/after hook event pair.
 fn hook_events(op: &str) -> Option<(HookEvent, HookEvent)> {
     match op {
@@ -291,6 +310,53 @@ pub async fn handler(
             )
             .await;
         }
+    }
+
+    // 12. Persist request envelope to trace_requests (fire-and-forget).
+    //     Enables flux incident replay without depending on gateway log retention.
+    //     Non-fatal: failure is logged as a warning; the user response is unaffected.
+    {
+        let pool2      = state.pool.clone();
+        let rid        = request_id.clone();
+        let tenant_id  = auth.tenant_id;
+        let project_id = auth.project_id;
+        let safe_hdrs  = safe_headers(&headers);
+        let body_val   = serde_json::to_value(&req).unwrap_or(serde_json::Value::Null);
+        // Truncate result to first 100 rows to cap storage overhead.
+        let resp_val = match result.as_array() {
+            Some(arr) if arr.len() > 100 => {
+                serde_json::Value::Array(arr[..100].to_vec())
+            }
+            _ => result.clone(),
+        };
+        let dur = elapsed_ms as i32;
+        tokio::spawn(async move {
+            let res = sqlx::query(
+                r#"
+                INSERT INTO fluxbase_internal.trace_requests
+                    (request_id, tenant_id, project_id,
+                     method, path, headers, body,
+                     response_status, response_body, duration_ms)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (request_id) DO NOTHING
+                "#,
+            )
+            .bind(&rid)
+            .bind(tenant_id)
+            .bind(project_id)
+            .bind("POST")
+            .bind("/db/query")
+            .bind(&safe_hdrs)
+            .bind(&body_val)
+            .bind(200_i32)
+            .bind(&resp_val)
+            .bind(dur)
+            .execute(&pool2)
+            .await;
+            if let Err(e) = res {
+                tracing::warn!(error = %e, request_id = %rid, "trace_requests write failed");
+            }
+        });
     }
 
     Ok(Json(json!({
