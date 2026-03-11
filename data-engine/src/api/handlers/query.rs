@@ -168,19 +168,22 @@ pub async fn handler(
         .to_string();
 
     // 7. Before hook (runs before the SQL; can abort the operation).
+    //    Skipped in replay mode — hooks must not fire again on replayed mutations.
     let hook_events = hook_events(&req.operation);
-    if let Some((before, _)) = hook_events {
-        HookEngine::run(
-            &state.pool,
-            &state.http_client,
-            &state.runtime_url,
-            &auth,
-            &req.table,
-            before,
-            &req.data.clone().unwrap_or(serde_json::Value::Null),
-            &request_id,
-        )
-        .await?;
+    if !auth.is_replay {
+        if let Some((before, _)) = hook_events {
+            HookEngine::run(
+                &state.pool,
+                &state.http_client,
+                &state.runtime_url,
+                &auth,
+                &req.table,
+                before,
+                &req.data.clone().unwrap_or(serde_json::Value::Null),
+                &request_id,
+            )
+            .await?;
+        }
     }
 
     // Build once and share across both executor call sites below.
@@ -233,20 +236,23 @@ pub async fn handler(
     );
 
     // 9. After hook (non-fatal: errors are logged, response still returns data).
-    if let Some((_, after)) = hook_events {
-        if let Err(e) = HookEngine::run(
-            &state.pool,
-            &state.http_client,
-            &state.runtime_url,
-            &auth,
-            &req.table,
-            after,
-            &result,
-            &request_id,
-        )
-        .await
-        {
-            tracing::warn!(error = %e, "after-hook failed (non-fatal)");
+    //    Skipped in replay mode — same reason as before-hook.
+    if !auth.is_replay {
+        if let Some((_, after)) = hook_events {
+            if let Err(e) = HookEngine::run(
+                &state.pool,
+                &state.http_client,
+                &state.runtime_url,
+                &auth,
+                &req.table,
+                after,
+                &result,
+                &request_id,
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "after-hook failed (non-fatal)");
+            }
         }
     }
 
@@ -264,18 +270,21 @@ pub async fn handler(
     };
 
     // 11. Emit event for mutations (INSERT / UPDATE / DELETE).
-    if let Some(op) = EventEmitter::verb_for(&req.operation) {
-        let record_id = EventEmitter::extract_record_id(&result);
-        EventEmitter::emit(
-            &state.pool,
-            &auth,
-            &req.table,
-            op,
-            record_id.as_deref(),
-            &result,
-            Some(&request_id),
-        )
-        .await;
+    //    Skipped in replay mode — events would re-trigger webhooks/functions.
+    if !auth.is_replay {
+        if let Some(op) = EventEmitter::verb_for(&req.operation) {
+            let record_id = EventEmitter::extract_record_id(&result);
+            EventEmitter::emit(
+                &state.pool,
+                &auth,
+                &req.table,
+                op,
+                record_id.as_deref(),
+                &result,
+                Some(&request_id),
+            )
+            .await;
+        }
     }
 
     Ok(Json(json!({

@@ -10,6 +10,7 @@ use uuid::Uuid;
 ///   x-project-slug: slug string (e.g. "auth")
 ///   x-user-id:      opaque user identifier (e.g. Firebase UID)
 ///   x-user-role:    role string — "anon" | "authenticated" | "admin" | "service"
+///   x-flux-replay:  "true" — replay mode: skip hooks, events, workflows (data only)
 #[derive(Clone, Debug)]
 pub struct AuthContext {
     pub tenant_id: Uuid,
@@ -18,6 +19,10 @@ pub struct AuthContext {
     pub project_slug: String,
     pub user_id: String,
     pub role: String,
+    /// When true the caller is replaying past mutations to rebuild state.
+    /// Side-effect triggers (hooks, events, workflows) are suppressed so
+    /// replay does not resend emails, fire webhooks, or start new workflows.
+    pub is_replay: bool,
 }
 
 impl AuthContext {
@@ -32,6 +37,11 @@ impl AuthContext {
             .unwrap_or_else(|| project_id.to_string().replace('-', "_"));
         let user_id = header_str(headers, "x-user-id").unwrap_or_default();
         let role = header_str(headers, "x-user-role").unwrap_or_else(|| "anon".to_string());
+        let is_replay = headers
+            .get("x-flux-replay")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
 
         Ok(AuthContext {
             tenant_id,
@@ -40,6 +50,7 @@ impl AuthContext {
             project_slug,
             user_id,
             role,
+            is_replay,
         })
     }
 }

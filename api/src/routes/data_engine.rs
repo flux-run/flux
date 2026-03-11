@@ -62,6 +62,7 @@ pub async fn proxy_handler(
                 | "accept"
                 | "x-fluxbase-tenant"
                 | "x-fluxbase-project"
+                | "x-flux-replay"
         ) {
             if let Ok(v) = value.to_str() {
                 rb = rb.header(name.as_str(), v);

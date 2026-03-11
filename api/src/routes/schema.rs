@@ -44,6 +44,7 @@ pub fn forward_headers(headers: &HeaderMap) -> reqwest::header::HeaderMap {
         "x-user-id",
         "x-user-role",
         "x-request-id",
+        "x-flux-replay",
         "content-type",
     ] {
         if let Some(v) = headers.get(*key) {
