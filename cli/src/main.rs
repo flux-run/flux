@@ -18,6 +18,7 @@ mod errors;
 mod event;
 mod functions;
 mod gateway;
+mod incident;
 mod init;
 mod invoke;
 mod logs;
@@ -29,6 +30,7 @@ mod schedule;
 mod sdk;
 mod secrets;
 mod stack;
+mod state;
 mod tail;
 mod tenant;
 mod tool;
@@ -36,6 +38,7 @@ mod trace;
 mod upgrade;
 mod version_cmd;
 mod whoami;
+mod why;
 mod workflow;
 
 #[derive(Parser)]
@@ -169,6 +172,41 @@ enum Commands {
         runtime_url: Option<String>,
     },
 
+    /// Root cause explanation for a request — shows error, commit, state changes, and suggested fixes.
+    ///
+    /// Combines trace spans, state mutations, and error logs for a single request_id.
+    ///
+    /// Examples:
+    ///   flux why 550e8400
+    ///   flux why 550e8400 --json
+    Why {
+        /// Request ID to explain
+        request_id: String,
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Row-level state audit (history + blame).
+    ///
+    /// Examples:
+    ///   flux state history users --id 42
+    ///   flux state blame orders
+    State {
+        #[command(subcommand)]
+        command: state::StateCommands,
+    },
+
+    /// Incident investigation and deterministic replay.
+    ///
+    /// Examples:
+    ///   flux incident replay 2026-03-11T15:00:00Z..2026-03-11T15:05:00Z
+    ///   flux incident replay --request-id 550e8400
+    Incident {
+        #[command(subcommand)]
+        command: incident::IncidentCommands,
+    },
+
     // ── Observability ─────────────────────────────────────────────────────────
     /// Tail or stream platform logs
     Logs {
@@ -186,6 +224,9 @@ enum Commands {
         slow: u64,
         #[arg(long)]
         flame: bool,
+        /// Re-apply this request in replay mode (x-flux-replay: true)
+        #[arg(long)]
+        replay: bool,
     },
     /// Interactive production debugger.
     ///
@@ -470,7 +511,25 @@ async fn main() -> anyhow::Result<()> {
                 logs::execute(resolved_source, resolved_resource, limit).await?
             }
         }
-        Commands::Trace { request_id, slow, flame } => trace::execute(request_id, slow, flame).await?,
+        Commands::Trace { request_id, slow, flame, replay } => {
+            if replay {
+                incident::execute(incident::IncidentCommands::Replay {
+                    window:     None,
+                    request_id: Some(request_id),
+                    from:       None,
+                    to:         None,
+                    database:   "default".to_string(),
+                    yes:        cli.yes,
+                    json:       cli.json,
+                }).await?
+            } else {
+                trace::execute(request_id, slow, flame).await?
+            }
+        }
+        Commands::Why  { request_id, json } => why::execute(request_id, json).await?,
+        Commands::State    { command } => state::execute(command).await?,
+        Commands::Incident { command } => incident::execute(command).await?,
+
         Commands::Debug { request_id, replay, replay_payload, no_logs, json } |
         Commands::Fix   { request_id, replay, replay_payload, no_logs, json } => {
             debug::execute(request_id, replay, replay_payload, no_logs, json).await?

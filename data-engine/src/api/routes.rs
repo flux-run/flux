@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::{
     api::{
-        handlers::{cron, databases, debug, files, history, hooks, policies, query, relationships, schema, subscriptions, tables, workflows},
+        handlers::{cron, databases, debug, files, history, hooks, mutations, policies, query, relationships, schema, subscriptions, tables, workflows},
         middleware::service_auth::require_service_token,
     },
     state::AppState,
@@ -44,6 +44,7 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route("/db/history/{database}/{table}", get(history::history))
         .route("/db/blame/{database}/{table}",   get(history::blame))
         .route("/db/replay/{database}",          get(history::replay))
+        .route("/db/mutations",                  get(mutations::handler))
         // ── Schema introspection ───────────────────────────────────────────────
         .route("/db/schema", get(schema::introspect))
         // ── Debug / engine introspection ────────────────────────────────────────

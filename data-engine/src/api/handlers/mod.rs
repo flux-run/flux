@@ -4,6 +4,7 @@ pub mod debug;
 pub mod files;
 pub mod history;
 pub mod hooks;
+pub mod mutations;
 pub mod policies;
 pub mod query;
 pub mod relationships;
