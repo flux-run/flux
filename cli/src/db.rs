@@ -51,6 +51,49 @@ pub enum DbCommands {
         #[arg(long, default_value = "default")]
         database: String,
     },
+    /// Show full mutation history for a single row
+    History {
+        /// Table name
+        table: String,
+        /// Primary-key value when the pk column is named "id" (e.g. 42 or "abc")
+        #[arg(long)]
+        id: Option<String>,
+        /// Composite/custom pk as JSON (e.g. '{"order_id":99}')
+        #[arg(long)]
+        pk: Option<String>,
+        /// Database name (default: "default")
+        #[arg(long, default_value = "default")]
+        database: String,
+        /// Max rows to display (default 50)
+        #[arg(long, default_value = "50")]
+        limit: u32,
+    },
+    /// Show who last modified each row in a table
+    Blame {
+        /// Table name
+        table: String,
+        /// Database name (default: "default")
+        #[arg(long, default_value = "default")]
+        database: String,
+        /// Max rows to display (default 100)
+        #[arg(long, default_value = "100")]
+        limit: u32,
+    },
+    /// List all mutations in a time window (incident replay)
+    Replay {
+        /// Window start as RFC-3339 timestamp (e.g. 2026-03-09T15:00:00Z)
+        #[arg(long)]
+        from: String,
+        /// Window end as RFC-3339 timestamp (e.g. 2026-03-09T15:05:00Z)
+        #[arg(long)]
+        to: String,
+        /// Database name (default: "default")
+        #[arg(long, default_value = "default")]
+        database: String,
+        /// Max rows to display (default 500)
+        #[arg(long, default_value = "500")]
+        limit: u32,
+    },
     /// Manage SQL migrations for the project database
     Migration {
         #[command(subcommand)]
@@ -323,6 +366,97 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
                 })?;
             if !status.success() {
                 anyhow::bail!("psql exited with status {}", status);
+            }
+        }
+
+        // ── flux db history <table> --id <pk> ─────────────────────────────────
+        DbCommands::History { table, id, pk, database, limit } => {
+            let mut url = format!("{}/db/history/{}/{}", client.base_url, database, table);
+            let mut sep = '?';
+            if let Some(ref v) = id  { url.push_str(&format!("{sep}id={v}"));  sep = '&'; }
+            if let Some(ref v) = pk  { url.push_str(&format!("{sep}pk={}", urlencoding::encode(v))); sep = '&'; }
+            url.push_str(&format!("{sep}limit={limit}"));
+
+            let res = client.client.get(&url).send().await?;
+            let json: Value = res.error_for_status()?.json().await?;
+            let rows = json["history"].as_array().cloned().unwrap_or_default();
+            if rows.is_empty() {
+                println!("No mutations found for {} id={}", table, id.as_deref().or(pk.as_deref()).unwrap_or("?"));
+            } else {
+                println!("{:<8} {:<10} {:<20} {}",
+                    "VERSION".bold(), "OP".bold(), "ACTOR".bold(), "TIME".bold());
+                println!("{}", "─".repeat(65).dimmed());
+                for r in &rows {
+                    let ver    = r["version"].as_i64().unwrap_or(0);
+                    let op     = r["operation"].as_str().unwrap_or("");
+                    let actor  = r["actor_id"].as_str().unwrap_or("–");
+                    let ts     = r["created_at"].as_str().unwrap_or("");
+                    let op_col = match op {
+                        "insert" => "insert".green().to_string(),
+                        "update" => "update".yellow().to_string(),
+                        "delete" => "delete".red().to_string(),
+                        other    => other.to_string(),
+                    };
+                    println!("{:<8} {:<10} {:<20} {}", ver, op_col, actor, ts);
+                }
+                println!("\n({} row{})", rows.len(), if rows.len() == 1 { "" } else { "s" });
+            }
+        }
+
+        // ── flux db blame <table> ─────────────────────────────────────────────
+        DbCommands::Blame { table, database, limit } => {
+            let url = format!("{}/db/blame/{}/{}?limit={}", client.base_url, database, table, limit);
+            let res = client.client.get(&url).send().await?;
+            let json: Value = res.error_for_status()?.json().await?;
+            let rows = json["blame"].as_array().cloned().unwrap_or_default();
+            if rows.is_empty() {
+                println!("No blame data found for table '{}'.", table);
+            } else {
+                println!("{:<30} {:<20} {:<8} {}",
+                    "ROW PK".bold(), "LAST ACTOR".bold(), "VERSION".bold(), "TIME".bold());
+                println!("{}", "─".repeat(75).dimmed());
+                for r in &rows {
+                    let pk     = r["record_pk"].to_string();
+                    let actor  = r["actor_id"].as_str().unwrap_or("–");
+                    let ver    = r["version"].as_i64().unwrap_or(0);
+                    let ts     = r["created_at"].as_str().unwrap_or("");
+                    println!("{:<30} {:<20} {:<8} {}", pk, actor, ver, ts);
+                }
+                println!("\n({} row{})", rows.len(), if rows.len() == 1 { "" } else { "s" });
+            }
+        }
+
+        // ── flux db replay --from … --to … ───────────────────────────────────
+        DbCommands::Replay { from, to, database, limit } => {
+            let url = format!(
+                "{}/db/replay/{}?from={}&to={}&limit={}",
+                client.base_url, database,
+                urlencoding::encode(&from), urlencoding::encode(&to), limit
+            );
+            let res = client.client.get(&url).send().await?;
+            let json: Value = res.error_for_status()?.json().await?;
+            let rows = json["replay"].as_array().cloned().unwrap_or_default();
+            if rows.is_empty() {
+                println!("No mutations found between {} and {}.", from, to);
+            } else {
+                println!("{:<25} {:<10} {:<8} {:<20} {}",
+                    "TIME".bold(), "TABLE".bold(), "OP".bold(), "ACTOR".bold(), "PK".bold());
+                println!("{}", "─".repeat(85).dimmed());
+                for r in &rows {
+                    let ts     = r["created_at"].as_str().unwrap_or("");
+                    let tbl    = r["table_name"].as_str().unwrap_or("");
+                    let op     = r["operation"].as_str().unwrap_or("");
+                    let actor  = r["actor_id"].as_str().unwrap_or("–");
+                    let pk     = r["record_pk"].to_string();
+                    let op_col = match op {
+                        "insert" => "insert".green().to_string(),
+                        "update" => "update".yellow().to_string(),
+                        "delete" => "delete".red().to_string(),
+                        other    => other.to_string(),
+                    };
+                    println!("{:<25} {:<10} {:<8} {:<20} {}", ts, tbl, op_col, actor, pk);
+                }
+                println!("\n({} event{})", rows.len(), if rows.len() == 1 { "" } else { "s" });
             }
         }
 
