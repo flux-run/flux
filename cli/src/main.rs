@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod agent;
 mod api_key;
 mod auth;
+mod bisect;
 mod client;
 mod config;
 mod config_cmd;
@@ -35,6 +36,7 @@ mod tail;
 mod tenant;
 mod tool;
 mod trace;
+mod trace_diff;
 mod upgrade;
 mod version_cmd;
 mod whoami;
@@ -84,6 +86,28 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Subcommand)]
+enum BugCommands {
+    /// Binary-search commits to find the first regression (reads trace history, no replays needed).
+    Bisect {
+        /// Function name to bisect (e.g. create_user)
+        #[arg(long)]
+        function: String,
+        /// Known-good commit SHA (prefix is fine)
+        #[arg(long)]
+        good: String,
+        /// Known-bad commit SHA (prefix is fine)
+        #[arg(long)]
+        bad: String,
+        /// Failure-rate threshold to classify a commit as bad (0.0–1.0, default: 0.05)
+        #[arg(long, default_value = "0.05")]
+        threshold: f64,
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -170,6 +194,36 @@ enum Commands {
         gateway_url: Option<String>,
         #[arg(long, value_name = "URL")]
         runtime_url: Option<String>,
+    },
+
+    /// Compare two executions of the same request: duration, status, and field-level state diffs.
+    ///
+    /// Typical use: compare original production run vs a replay to see what changed.
+    ///
+    /// Examples:
+    ///   flux trace diff 9624a58d 550e8400
+    ///   flux trace diff 9624a58d 550e8400 --json
+    TraceDiff {
+        /// Original request ID (production run)
+        original_id: String,
+        /// Second request ID to compare against (typically a replay)
+        replay_id: String,
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Binary-search commit history to find the first regression.
+    ///
+    /// Scans trace history for a function, groups by commit SHA, and binary-searches
+    /// between a known-good and known-bad commit to identify the first bad deploy.
+    ///
+    /// Examples:
+    ///   flux bug bisect --function create_user --good a93f42c --bad 9624a58d
+    ///   flux bug bisect --function create_user --good a93f42c --bad 9624a58d --threshold 0.1
+    Bug {
+        #[command(subcommand)]
+        command: BugCommands,
     },
 
     /// Root cause explanation for a request — shows error, commit, state changes, and suggested fixes.
@@ -526,6 +580,11 @@ async fn main() -> anyhow::Result<()> {
                 trace::execute(request_id, slow, flame).await?
             }
         }
+        Commands::TraceDiff { original_id, replay_id, json } => trace_diff::execute(original_id, replay_id, json).await?,
+        Commands::Bug { command } => match command {
+            BugCommands::Bisect { function, good, bad, threshold, json } =>
+                bisect::execute(function, good, bad, threshold, json).await?,
+        },
         Commands::Why  { request_id, json } => why::execute(request_id, json).await?,
         Commands::State    { command } => state::execute(command).await?,
         Commands::Incident { command } => incident::execute(command).await?,

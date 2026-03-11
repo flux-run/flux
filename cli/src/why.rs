@@ -34,6 +34,53 @@ fn trunc(s: &str, n: usize) -> String {
     }
 }
 
+/// Compare two JSON objects and return changed fields as `(key, old_display, new_display)`.
+/// Ignores `updated_at` / `created_at` unless they are the *only* change.
+pub fn diff_json(before: &Value, after: &Value) -> Vec<(String, String, String)> {
+    let mut diffs = Vec::new();
+    let skip_set = ["updated_at", "created_at", "modified_at"];
+
+    // Keys in after (new/changed values)
+    if let (Some(bmap), Some(amap)) = (before.as_object(), after.as_object()) {
+        for (key, aval) in amap {
+            let bval = bmap.get(key).unwrap_or(&Value::Null);
+            if bval != aval {
+                if skip_set.contains(&key.as_str()) {
+                    continue; // defer timestamp-only changes
+                }
+                diffs.push((key.clone(), json_scalar(bval), json_scalar(aval)));
+            }
+        }
+        // Keys removed (present in before but not after)
+        for key in bmap.keys() {
+            if !amap.contains_key(key) && !skip_set.contains(&key.as_str()) {
+                diffs.push((key.clone(), json_scalar(bmap.get(key).unwrap()), "∅".to_string()));
+            }
+        }
+        // If nothing meaningful changed, fall back to timestamps
+        if diffs.is_empty() {
+            for (key, aval) in amap {
+                let bval = bmap.get(key).unwrap_or(&Value::Null);
+                if bval != aval {
+                    diffs.push((key.clone(), json_scalar(bval), json_scalar(aval)));
+                }
+            }
+        }
+    }
+    diffs
+}
+
+pub fn json_scalar(v: &Value) -> String {
+    match v {
+        Value::Null             => "∅".to_string(),
+        Value::Bool(b)          => b.to_string(),
+        Value::Number(n)        => n.to_string(),
+        Value::String(s)        => trunc(s, 40),
+        Value::Array(a)         => format!("[{}]", a.len()),
+        Value::Object(_)        => "{…}".to_string(),
+    }
+}
+
 pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
@@ -199,6 +246,43 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
                 actor.dimmed(),
                 row_suffix,
             );
+
+            // Field-level diff for updates (skip insert/delete — show all fields or nothing)
+            if op == "update" {
+                let before = &m["before_state"];
+                let after  = &m["after_state"];
+                if before.is_object() && after.is_object() {
+                    let diffs = diff_json(before, after);
+                    let show = diffs.iter().take(6);
+                    for (key, old_val, new_val) in show {
+                        println!(
+                            "      {}  {}  {}",
+                            format!("{key}:").dimmed(),
+                            old_val.red().strikethrough(),
+                            format!("→ {new_val}").green(),
+                        );
+                    }
+                    if diffs.len() > 6 {
+                        println!("      {} more field{}", (diffs.len() - 6), if diffs.len() - 6 == 1 { "" } else { "s" });
+                    }
+                }
+            } else if op == "insert" {
+                // Show up to 3 notable fields for inserts
+                if let Some(obj) = m["after_state"].as_object() {
+                    let skip = ["id", "created_at", "updated_at", "tenant_id", "project_id"];
+                    let notable: Vec<_> = obj.iter()
+                        .filter(|(k, _)| !skip.contains(&k.as_str()))
+                        .take(3)
+                        .collect();
+                    for (key, val) in notable {
+                        println!(
+                            "      {}  {}",
+                            format!("{key}:").dimmed(),
+                            json_scalar(val).green(),
+                        );
+                    }
+                }
+            }
         }
     }
 
