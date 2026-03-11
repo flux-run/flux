@@ -8,7 +8,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/style.css">
-  
+  <style>
+  @media (max-width: 900px) {
+    .grid-3col { grid-template-columns: 1fr !important; }
+  }
+  @media (max-width: 760px) {
+    .grid-2col { grid-template-columns: 1fr !important; }
+  }
+</style>
 </head>
 <body>
 
@@ -24,79 +31,17 @@
 </nav>
 
 <div class="landing-wrap">
-<section class="hero" style="padding-bottom:56px;">
+<section class="hero" style="padding-bottom:64px;">
   <span class="eyebrow">CLI Reference</span>
-  <h1 style="font-size:clamp(2rem,5vw,3rem);">Developers live<br><span class="gradient-text">in the terminal.</span></h1>
-  <p style="max-width:560px;margin:0 auto 40px;">Every debugging operation — from deploying a function to bisecting a production regression — is a single <code>flux</code> command.</p>
+  <h1 style="font-size:clamp(2rem,5vw,3rem);">Debug production<br><span class="gradient-text">in one command.</span></h1>
+  <p style="max-width:560px;margin:0 auto 40px;font-size:1.05rem;">Fluxbase records every backend execution. The CLI lets you inspect production requests like Git commits — right from your terminal.</p>
 
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:24px;max-width:1000px;margin:0 auto;text-align:left;">
-    <div>
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--green);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
-        <span style="display:inline-block;width:2px;height:12px;background:var(--green);border-radius:1px;"></span>
-        Deploy & Runtime
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px;">
-        <a href="#deploy" style="display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:.82rem;color:var(--text);text-decoration:none;transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--green)'" onmouseleave="this.style.borderColor='var(--border)'">
-        <span style="color:var(--green);font-weight:700;">flux</span><span style="color:var(--muted);">deploy</span>
-        <span style="font-family:var(--font);font-size:.72rem;color:var(--muted);margin-left:auto;white-space:nowrap;">Deploy functions to production</span>
-      </a>
-      <a href="#tail" style="display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:.82rem;color:var(--text);text-decoration:none;transition:border-color .15s;" onmouseenter="this.style.borderColor='var(--green)'" onmouseleave="this.style.borderColor='var(--border)'">
-        <span style="color:var(--green);font-weight:700;">flux</span><span style="color:var(--muted);">tail</span>
-        <span style="font-family:var(--font);font-size:.72rem;color:var(--muted);margin-left:auto;white-space:nowrap;">Stream live request logs</span>
-      </a>
-      </div>
-    </div>
-  <div>
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
-        <span style="display:inline-block;width:2px;height:12px;background:var(--accent);border-radius:1px;"></span>
-        Debugging
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px;">
-        
-      
-      
-      
-      
-      </div>
-    </div>
-  <div>
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#60a5fa;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
-        <span style="display:inline-block;width:2px;height:12px;background:#60a5fa;border-radius:1px;"></span>
-        Data History
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px;">
-        
-      
-      </div>
-    </div>
-  <div>
-      <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#c084fc;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
-        <span style="display:inline-block;width:2px;height:12px;background:#c084fc;border-radius:1px;"></span>
-        Incident Analysis
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px;">
-        
-      <a href="#bug" style="display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;font-family:var(--font-mono);font-size:.82rem;color:var(--text);text-decoration:none;transition:border-color .15s;" onmouseenter="this.style.borderColor='#c084fc'" onmouseleave="this.style.borderColor='var(--border)'">
-        <span style="color:#c084fc;font-weight:700;">flux</span><span style="color:var(--muted);">bug bisect</span>
-        <span style="font-family:var(--font);font-size:.72rem;color:var(--muted);margin-left:auto;white-space:nowrap;">Find the commit that introduced a bug</span>
-      </a>
-      
-      </div>
-    </div>
-  </div>
-</section>
-
-<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
-<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Installation</div>
-<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">One-line install.</h2>
-<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Installs a single static binary. No Node.js, no Python, no dependencies.</p>
-<div style="max-width:600px;"><div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="max-width:680px;margin:0 auto 40px;text-align:left;"><div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
   <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
     <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
     <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
-    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">install</span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux why 550e8400</span>
     <button id="cw-7-copy" onclick="(function(){
     var el=document.getElementById('cw-7');
     var txt=el.innerText||el.textContent;
@@ -108,7 +53,500 @@
     });
   })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
   </div>
-  <pre id="cw-7" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> curl -fsSL https://fluxbase.co/install | bash
+  <pre id="cw-7" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux why <span style="color:var(--accent);">550e8400</span>
+
+  <span style="color:var(--red);">✗</span>  POST /signup → create_user  (<span style="color:var(--yellow);">3200ms</span>, 500)
+
+  <span style="color:var(--muted);">─── Root cause ──────────────────────────────────────────</span>
+  <span style="color:var(--red);">Stripe timeout after 10000ms</span>
+
+  <span style="color:var(--muted);">─── Execution graph ─────────────────────────────────────</span>
+  <span style="color:#f9a8d4;">gateway</span>     POST /signup           <span style="color:var(--yellow);">2ms</span>
+  <span style="color:#f9a8d4;">runtime</span>     create_user            <span style="color:var(--yellow);">1ms</span>
+  <span style="color:#60a5fa;">db</span>          users (SELECT)        <span style="color:var(--yellow);">12ms</span>
+  <span style="color:#f9a8d4;">tool</span>        stripe.charge       <span style="color:var(--yellow);">3200ms</span>  <span style="color:var(--red);">⚠ slow</span>
+
+  <span style="color:var(--muted);">─── State changes ───────────────────────────────────────</span>
+  <span style="color:#60a5fa;">users</span>  INSERT  email=user@example.com  plan=free
+
+  <span style="color:var(--muted);">─── Suggested next steps ────────────────────────────────</span>
+  <span style="color:var(--green);">flux doctor</span> <span style="color:var(--accent);">550e8400</span>        full diagnosis
+  <span style="color:var(--green);">flux trace diff</span> <span style="color:var(--accent);">550e8400</span> <span style="color:var(--accent);">4f9a3b2c</span>  compare traces</code></pre>
+</div></div>
+
+  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+    <a class="btn-primary" href="#install">Install the CLI →</a>
+    <a class="btn-secondary" href="/docs/quickstart">Quickstart</a>
+  </div>
+</section>
+
+<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Core Workflow</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Three commands. Every incident resolved.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:580px;margin:0 0 40px;">The entire debugging workflow — from spotting a failure to understanding its cause — is three commands.</p>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:32px;" class="grid-3col">
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="display:inline-block;width:3px;height:20px;background:var(--green);border-radius:2px;flex-shrink:0;"></span>
+      <span style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--green);">WATCH</span>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--green);margin-bottom:6px;">flux tail</div>
+      <p style="font-size:.88rem;color:var(--muted);margin:0 0 14px;">Stream live requests</p>
+    </div>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux tail</span>
+    <button id="cw-8-copy" onclick="(function(){
+    var el=document.getElementById('cw-8');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-8-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-8" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux tail
+
+  METHOD   ROUTE          DURATION  STATUS
+  <span style="color:var(--green);">POST</span>     /login         <span style="color:var(--yellow);">38ms</span>     <span style="color:var(--green);">✔</span>
+  <span style="color:var(--green);">POST</span>     /checkout      <span style="color:var(--yellow);">121ms</span>    <span style="color:var(--green);">✔</span>
+  <span style="color:var(--green);">POST</span>     /signup        <span style="color:var(--yellow);">3.2s</span>     <span style="color:var(--red);">✗ 500</span>
+    <span style="color:var(--red);">Stripe timeout after 10000ms</span>
+    <span style="color:var(--muted);">→ flux why</span> <span style="color:var(--accent);">550e8400</span></code></pre>
+</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="display:inline-block;width:3px;height:20px;background:var(--accent);border-radius:2px;flex-shrink:0;"></span>
+      <span style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--accent);">UNDERSTAND</span>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:var(--accent);margin-bottom:6px;">flux why</div>
+      <p style="font-size:.88rem;color:var(--muted);margin:0 0 14px;">Root-cause a failed request</p>
+    </div>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux why 550e8400</span>
+    <button id="cw-9-copy" onclick="(function(){
+    var el=document.getElementById('cw-9');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-9-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-9" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux why <span style="color:var(--accent);">550e8400</span>
+
+  <span style="color:var(--red);">✗</span>  POST /signup  <span style="color:var(--yellow);">3200ms</span>  500
+
+  <span style="color:var(--red);">Root cause: Stripe timeout after 10000ms</span>
+
+  <span style="color:#f9a8d4;">gateway</span>   <span style="color:var(--yellow);">2ms</span>
+  <span style="color:#f9a8d4;">runtime</span>   <span style="color:var(--yellow);">1ms</span>
+  <span style="color:#60a5fa;">db</span>        <span style="color:var(--yellow);">12ms</span>
+  <span style="color:#f9a8d4;">stripe</span>    <span style="color:var(--yellow);">3200ms</span>  <span style="color:var(--red);">⚠</span></code></pre>
+</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:16px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="display:inline-block;width:3px;height:20px;background:#c084fc;border-radius:2px;flex-shrink:0;"></span>
+      <span style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:#c084fc;">DIAGNOSE</span>
+    </div>
+    <div>
+      <div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;color:#c084fc;margin-bottom:6px;">flux doctor</div>
+      <p style="font-size:.88rem;color:var(--muted);margin:0 0 14px;">Automatic incident diagnosis</p>
+    </div>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux doctor 550e8400</span>
+    <button id="cw-10-copy" onclick="(function(){
+    var el=document.getElementById('cw-10');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-10-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-10" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> flux doctor <span style="color:var(--accent);">550e8400</span>
+
+  ROOT CAUSE
+  <span style="color:var(--red);">⚡ stripe.charge timed out after 10000ms</span>
+
+  LIKELY ISSUE
+  <span style="color:var(--green);">External tool latency exceeded threshold</span>
+
+  SUGGESTED ACTIONS
+  <span style="color:var(--green);">•</span> Increase timeout above 11000ms
+  <span style="color:var(--green);">•</span> Add retry with exponential backoff</code></pre>
+</div>
+  </div>
+</div>
+</div>
+</section>
+
+<section style="border-top:1px solid var(--border); padding:80px 0;">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Deep Debugging</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Superpowers that no other tool has.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:600px;margin:0 0 40px;">Traditional APM shows you that a request failed. Fluxbase lets you step through it, diff it, replay it, and bisect it — all from the CLI.</p>
+<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:24px;" class="grid-2col">
+  <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;padding:28px;display:flex;flex-direction:column;gap:16px;">
+    <div>
+      <div style="font-size:1.4rem;margin-bottom:10px;">🔬</div>
+      <div style="font-size:.95rem;font-weight:700;margin-bottom:6px;">Step through a request</div>
+      <div style="font-family:var(--font-mono);font-size:.78rem;color:var(--accent);margin-bottom:10px;">flux trace debug 550e8400</div>
+      <p style="font-size:.85rem;color:var(--muted);line-height:1.6;margin:0;">Navigate spans with arrow keys. See exact inputs, outputs, and timing for every step of execution.</p>
+    </div>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux trace debug</span>
+    <button id="cw-11-copy" onclick="(function(){
+    var el=document.getElementById('cw-11');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-11-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-11" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);">Step 1/4</span>  <span style="color:#f9a8d4;">gateway</span>
+  <span style="color:var(--muted);">──────────────────────────────────</span>
+  Input:  POST /signup  { email: "a@b.com" }
+  Output: { passed: true }
+  Time:   <span style="color:var(--yellow);">4ms</span>
+
+  <span style="color:var(--muted);">↓ next  ↑ prev  q quit</span></code></pre>
+</div>
+  </div>
+  <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;padding:28px;display:flex;flex-direction:column;gap:16px;">
+    <div>
+      <div style="font-size:1.4rem;margin-bottom:10px;">⚖️</div>
+      <div style="font-size:.95rem;font-weight:700;margin-bottom:6px;">Compare two executions</div>
+      <div style="font-family:var(--font-mono);font-size:.78rem;color:var(--accent);margin-bottom:10px;">flux trace diff reqA reqB</div>
+      <p style="font-size:.85rem;color:var(--muted);line-height:1.6;margin:0;">Diff any two request traces side by side. Changed spans highlighted — useful for before/after a deploy.</p>
+    </div>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux trace diff</span>
+    <button id="cw-12-copy" onclick="(function(){
+    var el=document.getElementById('cw-12');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-12-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-12" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code>  SPAN              A        B        DELTA
+  gateway           <span style="color:var(--yellow);">3ms</span>     <span style="color:var(--yellow);">4ms</span>     <span style="color:var(--muted);">+1ms</span>
+  create_user      <span style="color:var(--yellow);">81ms</span>    <span style="color:var(--yellow);">44ms</span>    <span style="color:var(--muted);">-37ms</span>
+  stripe.charge    <span style="color:var(--yellow);">12ms</span>  <span style="color:var(--red);">10002ms</span>  <span style="color:var(--red);">+9990ms ✗</span>
+
+  <span style="color:var(--red);">→ stripe.charge regressed</span></code></pre>
+</div>
+  </div>
+  <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;padding:28px;display:flex;flex-direction:column;gap:16px;">
+    <div>
+      <div style="font-size:1.4rem;margin-bottom:10px;">⏪</div>
+      <div style="font-size:.95rem;font-weight:700;margin-bottom:6px;">Replay a production incident</div>
+      <div style="font-family:var(--font-mono);font-size:.78rem;color:var(--accent);margin-bottom:10px;">flux incident replay 14:00..14:05</div>
+      <p style="font-size:.85rem;color:var(--muted);line-height:1.6;margin:0;">Re-execute any time window against your current code. Side-effects off. Database writes on.</p>
+    </div>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux incident replay</span>
+    <button id="cw-13-copy" onclick="(function(){
+    var el=document.getElementById('cw-13');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-13-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-13" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code>  <span style="color:var(--green);">✔</span>  <span style="color:var(--accent);">4f9a3b2c</span>  POST /create_user   <span style="color:var(--green);">200</span>
+  <span style="color:var(--green);">✔</span>  <span style="color:var(--accent);">a3c91ef0</span>  GET  /list_users    <span style="color:var(--green);">200</span>
+  <span style="color:var(--red);">✗</span>  <span style="color:var(--accent);">550e8400</span>  POST /signup        <span style="color:var(--red);">500</span>
+     <span style="color:var(--red);">└─ Still failing: Stripe timeout</span>
+
+  <span style="color:var(--muted);">23 replayed · 1 still failing</span></code></pre>
+</div>
+  </div>
+  <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;padding:28px;display:flex;flex-direction:column;gap:16px;">
+    <div>
+      <div style="font-size:1.4rem;margin-bottom:10px;">🔎</div>
+      <div style="font-size:.95rem;font-weight:700;margin-bottom:6px;">Find the bad commit</div>
+      <div style="font-family:var(--font-mono);font-size:.78rem;color:var(--accent);margin-bottom:10px;">flux bug bisect --request 550e8400</div>
+      <p style="font-size:.85rem;color:var(--muted);line-height:1.6;margin:0;">Binary-searches your git history. Finds the exact commit and author that introduced the regression.</p>
+    </div>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">flux bug bisect</span>
+    <button id="cw-14-copy" onclick="(function(){
+    var el=document.getElementById('cw-14');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-14-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-14" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code>  Testing <span style="color:var(--accent);">abc123</span>…  <span style="color:var(--green);">✔ passes</span>
+  Testing <span style="color:var(--accent);">def456</span>…  <span style="color:var(--red);">✗ fails</span>
+
+  FIRST BAD COMMIT
+  <span style="color:var(--red);">def456</span>  "feat: add retry to stripe.charge"
+  <span style="color:var(--muted);">2026-03-08  alice@example.com</span></code></pre>
+</div>
+  </div>
+</div>
+</div>
+</section>
+
+<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--bg-elevated);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Mental Model</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">If Git is version history for code, Fluxbase is version history for production.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:620px;margin:0 0 40px;">The same mental model. The same commands. Applied to your production execution graph instead of your source tree.</p>
+<div style="max-width:680px;margin:0 auto;">
+  <table style="width:100%;border-collapse:collapse;font-size:.9rem;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+    <thead>
+      <tr style="background:var(--bg-elevated);">
+        <th style="text-align:left;padding:12px 16px;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#facc15;border-bottom:1px solid var(--border);">Git</th>
+        <th style="text-align:left;padding:12px 16px;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--accent);border-bottom:1px solid var(--border);">Fluxbase</th>
+        <th style="text-align:left;padding:12px 16px;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);border-bottom:1px solid var(--border);">What it answers</th>
+      </tr>
+    </thead>
+    <tbody>
+    <tr>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:#facc15;">git log</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:var(--accent);">flux tail</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">See what happened</td>
+    </tr>
+    <tr>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:#facc15;">git show</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:var(--accent);">flux why</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">Inspect one execution</td>
+    </tr>
+    <tr>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:#facc15;">git diff</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:var(--accent);">flux trace diff</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">Compare two executions</td>
+    </tr>
+    <tr>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:#facc15;">git bisect</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:var(--accent);">flux bug bisect</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">Find the bad commit</td>
+    </tr>
+    <tr>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:#facc15;">git blame</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.84rem;color:var(--accent);">flux state blame</td>
+      <td style="padding:12px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">Who changed this row?</td>
+    </tr>
+    </tbody>
+  </table>
+</div>
+</div>
+</section>
+
+<section style="border-top:1px solid var(--border); padding:80px 0;">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Full Command Surface</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Every command answers a developer question.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">The CLI has 11 commands. Each one maps to a question you'd ask when something goes wrong in production.</p>
+<div style="max-width:780px;margin:0 auto;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+  <table style="width:100%;border-collapse:collapse;">
+    <thead>
+      <tr style="background:var(--bg-elevated);">
+        <th style="text-align:left;padding:12px 16px;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);border-bottom:1px solid var(--border);">Command</th>
+        <th style="text-align:left;padding:12px 16px;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);border-bottom:1px solid var(--border);">What it answers</th>
+      </tr>
+    </thead>
+    <tbody>
+    <tr style="">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux tail</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">What is happening right now?</td>
+    </tr>
+    <tr style="background:var(--bg-elevated);">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux why &lt;id&gt;</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">Why did this request fail?</td>
+    </tr>
+    <tr style="">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux doctor &lt;id&gt;</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">What is the likely cause?</td>
+    </tr>
+    <tr style="background:var(--bg-elevated);">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux trace debug &lt;id&gt;</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">What happened step-by-step?</td>
+    </tr>
+    <tr style="">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux trace diff &lt;a&gt; &lt;b&gt;</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">What changed between two runs?</td>
+    </tr>
+    <tr style="background:var(--bg-elevated);">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux state history &lt;table&gt; --id &lt;row&gt;</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">How did this row change over time?</td>
+    </tr>
+    <tr style="">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux state blame &lt;table&gt; --id &lt;row&gt;</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">Who modified this field last?</td>
+    </tr>
+    <tr style="background:var(--bg-elevated);">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux incident replay &lt;from&gt;..&lt;to&gt;</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">What happens if we replay this window?</td>
+    </tr>
+    <tr style="">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux bug bisect --request &lt;id&gt;</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">Which deploy introduced the bug?</td>
+    </tr>
+    <tr style="background:var(--bg-elevated);">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux explain &lt;query-file&gt;</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">What SQL will run? What policies apply?</td>
+    </tr>
+    <tr style="">
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.81rem;color:var(--accent);white-space:nowrap;">flux deploy</td>
+      <td style="padding:11px 16px;border-bottom:1px solid var(--border);font-size:.85rem;color:var(--muted);">Deploy functions to production</td>
+    </tr>
+    </tbody>
+  </table>
+</div>
+</div>
+</section>
+
+<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--green);background:rgba(61,214,140,.1);padding:4px 12px;border-radius:20px;margin-bottom:20px;">30-Second Workflow</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Deploy. Tail. Why. Fixed.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:540px;margin:0 0 40px;">The core debugging workflow: spot a failure in <code>flux tail</code>, take the request ID, hand it to <code>flux why</code>. Everything else is optional depth.</p>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;max-width:960px;margin:0 auto;" class="grid-2col">
+  <div>
+    <div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">debug in 30 seconds</span>
+    <button id="cw-15-copy" onclick="(function(){
+    var el=document.getElementById('cw-15');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-15-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-15" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># 1. Deploy</span>
+<span style="color:var(--green);">$</span> flux deploy
+  <span style="color:var(--green);">✔</span>  create_user → gw.fluxbase.co/create_user
+
+<span style="color:var(--muted);"># 2. Watch for failures</span>
+<span style="color:var(--green);">$</span> flux tail
+  POST /signup  <span style="color:var(--yellow);">3.2s</span>  <span style="color:var(--red);">✗ 500</span>
+  <span style="color:var(--red);">Stripe timeout after 10000ms</span>
+  <span style="color:var(--muted);">→ flux why</span> <span style="color:var(--accent);">550e8400</span>
+
+<span style="color:var(--muted);"># 3. Root-cause immediately</span>
+<span style="color:var(--green);">$</span> flux why <span style="color:var(--accent);">550e8400</span>
+  <span style="color:var(--red);">Root cause: Stripe timeout after 10000ms</span>
+  <span style="color:#f9a8d4;">stripe.charge</span>  <span style="color:var(--yellow);">3200ms</span>  <span style="color:var(--red);">⚠ slow</span>
+
+<span style="color:var(--muted);"># 4. Auto-diagnose</span>
+<span style="color:var(--green);">$</span> flux doctor <span style="color:var(--accent);">550e8400</span>
+  <span style="color:var(--green);">•</span> Increase timeout above 11000ms
+  <span style="color:var(--green);">•</span> Add retry with exponential backoff</code></pre>
+</div>
+  </div>
+  <div>
+    <ol style="padding:0;margin:0;list-style:none;display:flex;flex-direction:column;gap:24px;">
+      <li style="display:flex;gap:16px;align-items:start;">
+        <span style="width:28px;height:28px;border-radius:50%;background:var(--green);color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;">1</span>
+        <div><h3 style="font-size:.95rem;font-weight:700;margin:0 0 4px;">Deploy your function</h3><p style="font-size:.85rem;color:var(--muted);margin:0;line-height:1.6;"><code>flux deploy</code> bundles and ships your TypeScript in ~20s. Returns a URL per function.</p></div>
+      </li>
+      <li style="display:flex;gap:16px;align-items:start;">
+        <span style="width:28px;height:28px;border-radius:50%;background:var(--green);color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;">2</span>
+        <div><h3 style="font-size:.95rem;font-weight:700;margin:0 0 4px;">Watch for failures</h3><p style="font-size:.85rem;color:var(--muted);margin:0;line-height:1.6;"><code>flux tail</code> streams live requests. Errors appear in red with their request ID inline.</p></div>
+      </li>
+      <li style="display:flex;gap:16px;align-items:start;">
+        <span style="width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;">3</span>
+        <div><h3 style="font-size:.95rem;font-weight:700;margin:0 0 4px;">Root-cause immediately</h3><p style="font-size:.85rem;color:var(--muted);margin:0;line-height:1.6;"><code>flux why &lt;id&gt;</code> shows root cause, execution graph, and state changes in one output.</p></div>
+      </li>
+      <li style="display:flex;gap:16px;align-items:start;">
+        <span style="width:28px;height:28px;border-radius:50%;background:#c084fc;color:#fff;font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;">4</span>
+        <div><h3 style="font-size:.95rem;font-weight:700;margin:0 0 4px;">Go deeper if needed</h3><p style="font-size:.85rem;color:var(--muted);margin:0;line-height:1.6;"><code>flux doctor</code>, <code>flux trace diff</code>, <code>flux incident replay</code>, <code>flux bug bisect</code> — each adds a layer of precision.</p></div>
+      </li>
+    </ol>
+    <div style="margin-top:32px;">
+      <a class="btn-primary" href="/docs/quickstart">Follow the full quickstart →</a>
+    </div>
+  </div>
+</div>
+</div>
+</section>
+
+<div id="install"><section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Installation</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">One-line install.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Installs a single static binary. No Node.js, no Python, no dependencies.</p>
+<div style="max-width:600px;"><div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">install</span>
+    <button id="cw-16-copy" onclick="(function(){
+    var el=document.getElementById('cw-16');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-16-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-16" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--green);">$</span> curl -fsSL https://fluxbase.co/install | bash
 
   Installing flux CLI…
 
@@ -123,48 +561,7 @@
   <span style="color:var(--green);">✔</span>  Logged in as alice@example.com</code></pre>
 </div></div>
 </div>
-</section>
-
-<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
-<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
-<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--green);background:rgba(61,214,140,.1);padding:4px 12px;border-radius:20px;margin-bottom:20px;">First Tutorial</div>
-<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Debug a production bug in 30 seconds.</h2>
-<p style="color:var(--muted);font-size:.95rem;max-width:520px;margin:0 0 40px;">The fastest way to understand these commands is to see them in sequence against a real failure.</p>
-
-<ol class="steps" style="max-width:640px;">
-  <li>
-    <div class="step-num">1</div>
-    <div class="step-body">
-      <h3>Deploy your function</h3>
-      <p><code>flux deploy</code> — bundles and deploys your TypeScript functions. Returns a URL per function.</p>
-    </div>
-  </li>
-  <li>
-    <div class="step-num">2</div>
-    <div class="step-body">
-      <h3>Watch for failures</h3>
-      <p><code>flux tail</code> — streams live requests. Errors appear in red with their request ID.</p>
-    </div>
-  </li>
-  <li>
-    <div class="step-num">3</div>
-    <div class="step-body">
-      <h3>Root-cause immediately</h3>
-      <p><code>flux why &lt;request-id&gt;</code> — takes the ID from <code>flux tail</code> and shows root cause, location, and data changes.</p>
-    </div>
-  </li>
-  <li>
-    <div class="step-num">4</div>
-    <div class="step-body">
-      <h3>Compare before/after your fix</h3>
-      <p><code>flux trace diff &lt;id-before&gt; &lt;id-after&gt;</code> — shows which spans changed and by how much after your code change.</p>
-    </div>
-  </li>
-</ol>
-
-<a class="btn-primary" href="/docs/quickstart" style="display:inline-flex;">Follow the full quickstart →</a>
-</div>
-</section>
+</section></div>
 
 <div style="padding:56px 0 0;">
   <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
