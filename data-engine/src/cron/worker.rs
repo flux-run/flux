@@ -61,6 +61,7 @@ async fn fire_due_jobs(pool: &PgPool, http: &reqwest::Client, runtime_url: &str)
             &action_config,
             &payload,
             "cron.fired",
+            &format!("cron:{}", job_id),  // synthetic trace id for background-triggered dispatches
         )
         .await;
 

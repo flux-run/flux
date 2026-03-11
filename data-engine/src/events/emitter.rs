@@ -20,13 +20,14 @@ impl EventEmitter {
         operation: &str,
         record_id: Option<&str>,
         payload: &serde_json::Value,
+        request_id: Option<&str>,
     ) {
         let event_type = format!("{}.{}d", table, operation); // inserted / updated / deleted
         let result = sqlx::query(
             "INSERT INTO fluxbase_internal.events \
                  (tenant_id, project_id, event_type, table_name, \
-                  record_id, operation, payload) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                  record_id, operation, payload, request_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(auth.tenant_id)
         .bind(auth.project_id)
@@ -35,6 +36,7 @@ impl EventEmitter {
         .bind(record_id)
         .bind(operation)
         .bind(payload)
+        .bind(request_id)
         .execute(pool)
         .await;
 

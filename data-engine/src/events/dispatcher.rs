@@ -6,6 +6,9 @@ use uuid::Uuid;
 /// Dispatch a single event to a single subscription target.
 /// Returns Ok(http_status) for webhooks, Ok(200) for function/queue targets.
 /// Errors here are non-fatal — the worker records them in event_deliveries.
+///
+/// `request_id` is the originating request's trace ID, forwarded as
+/// `x-request-id` on webhook and function calls to keep traces continuous.
 pub async fn dispatch(
     pool: &PgPool,
     http: &Client,
@@ -15,10 +18,11 @@ pub async fn dispatch(
     target_config: &Value,
     event_payload: &Value,
     event_type: &str,
+    request_id: &str,
 ) -> Result<u16, String> {
     match target_type {
-        "webhook" => dispatch_webhook(http, target_config, event_payload, event_type).await,
-        "function" => dispatch_function(http, runtime_url, target_config, event_payload).await,
+        "webhook"   => dispatch_webhook(http, target_config, event_payload, event_type, request_id).await,
+        "function"  => dispatch_function(http, runtime_url, target_config, event_payload, request_id).await,
         "queue_job" => dispatch_queue_job(pool, target_config, event_payload).await,
         other => Err(format!("unknown target_type: {}", other)),
     }
@@ -31,6 +35,7 @@ async fn dispatch_webhook(
     config: &Value,
     payload: &Value,
     event_type: &str,
+    request_id: &str,
 ) -> Result<u16, String> {
     let url = config
         .get("url")
@@ -40,7 +45,8 @@ async fn dispatch_webhook(
     let mut req = http
         .post(url)
         .header("content-type", "application/json")
-        .header("x-fluxbase-event", event_type);
+        .header("x-fluxbase-event", event_type)
+        .header("x-request-id", request_id);
 
     // Optional HMAC signature header for endpoint verification.
     if let Some(secret) = config.get("secret").and_then(|v| v.as_str()) {
@@ -78,6 +84,7 @@ async fn dispatch_function(
     runtime_url: &str,
     config: &Value,
     payload: &Value,
+    request_id: &str,
 ) -> Result<u16, String> {
     let function_id = config
         .get("function_id")
@@ -91,6 +98,7 @@ async fn dispatch_function(
 
     let resp = http
         .post(format!("{}/internal/execute", runtime_url))
+        .header("x-request-id", request_id)
         .json(&body)
         .send()
         .await

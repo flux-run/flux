@@ -48,6 +48,9 @@ impl HookEngine {
     ///
     /// **after_* hooks** — runtime errors are logged but do not fail the
     /// request (the data mutation has already committed).
+    ///
+    /// `request_id` is forwarded as `x-request-id` to the runtime so the
+    /// hook invocation appears in the same trace as the originating request.
     pub async fn run(
         pool: &PgPool,
         http: &reqwest::Client,
@@ -56,11 +59,12 @@ impl HookEngine {
         table: &str,
         event: HookEvent,
         record: &serde_json::Value,
+        request_id: &str,
     ) -> Result<(), EngineError> {
         let hooks = load_hooks(pool, auth.tenant_id, auth.project_id, table, event).await?;
 
         for function_id in hooks {
-            let result = invoke_hook(http, runtime_url, auth, function_id, table, event, record).await;
+            let result = invoke_hook(http, runtime_url, auth, function_id, table, event, record, request_id).await;
 
             match result {
                 Ok(()) => {
@@ -124,6 +128,7 @@ async fn load_hooks(
 }
 
 /// POST to the runtime's /internal/execute endpoint.
+/// Forwards `request_id` as `x-request-id` so the hook appears in the trace.
 async fn invoke_hook(
     http: &reqwest::Client,
     runtime_url: &str,
@@ -132,6 +137,7 @@ async fn invoke_hook(
     table: &str,
     event: HookEvent,
     record: &serde_json::Value,
+    request_id: &str,
 ) -> Result<(), EngineError> {
     let endpoint = format!("{}/internal/execute", runtime_url.trim_end_matches('/'));
 
@@ -149,6 +155,7 @@ async fn invoke_hook(
 
     let response = http
         .post(&endpoint)
+        .header("x-request-id", request_id)
         .json(&json!({
             "function_id": function_id,
             "payload": payload,

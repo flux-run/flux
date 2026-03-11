@@ -160,6 +160,13 @@ pub async fn handler(
         QueryCompiler::compile(&req, &policy, &schema, &opts)?
     };
 
+    // Pull request_id from headers early — needed by hooks, executor, and emitter.
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
+
     // 7. Before hook (runs before the SQL; can abort the operation).
     let hook_events = hook_events(&req.operation);
     if let Some((before, _)) = hook_events {
@@ -171,16 +178,10 @@ pub async fn handler(
             &req.table,
             before,
             &req.data.clone().unwrap_or(serde_json::Value::Null),
+            &request_id,
         )
         .await?;
     }
-
-    // Pull request_id from headers once; used in trace comment + mutation log.
-    let request_id = headers
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("-")
-        .to_string();
 
     // Build once and share across both executor call sites below.
     let mut_ctx = MutationContext {
@@ -241,6 +242,7 @@ pub async fn handler(
             &req.table,
             after,
             &result,
+            &request_id,
         )
         .await
         {
@@ -271,6 +273,7 @@ pub async fn handler(
             op,
             record_id.as_deref(),
             &result,
+            Some(&request_id),
         )
         .await;
     }

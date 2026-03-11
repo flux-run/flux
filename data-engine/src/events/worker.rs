@@ -35,7 +35,7 @@ pub async fn run(pool: Arc<PgPool>, http: Arc<Client>, runtime_url: String) {
 async fn process_new_events(pool: &PgPool, http: &Client, runtime_url: &str) -> Result<(), sqlx::Error> {
     // Claim a locked batch of undelivered events.
     let events = sqlx::query(
-        "SELECT id, tenant_id, project_id, event_type, payload \
+        "SELECT id, tenant_id, project_id, event_type, payload, request_id \
          FROM fluxbase_internal.events \
          WHERE delivered_at IS NULL \
          ORDER BY created_at \
@@ -58,6 +58,8 @@ async fn process_new_events(pool: &PgPool, http: &Client, runtime_url: &str) -> 
         let project_id: Uuid = event.get("project_id");
         let event_type: String = event.get("event_type");
         let payload: serde_json::Value = event.get("payload");
+        let request_id: Option<String> = event.try_get("request_id").unwrap_or(None);
+        let request_id_str: String = request_id.unwrap_or_else(|| event_id.to_string());
 
         let subs = load_matching_subscriptions(pool, tenant_id, project_id, &event_type).await?;
 
@@ -83,6 +85,7 @@ async fn process_new_events(pool: &PgPool, http: &Client, runtime_url: &str) -> 
             let result = dispatcher::dispatch(
                 pool, http, runtime_url, sub_id,
                 &target_type, &target_config, &payload, &event_type,
+                &request_id_str,
             )
             .await;
 
@@ -124,7 +127,7 @@ async fn process_retries(pool: &PgPool, http: &Client, runtime_url: &str) -> Res
     let retries = sqlx::query(
         "SELECT d.id, d.event_id, d.subscription_id, d.attempt, \
                 s.target_type, s.target_config, s.max_attempts, \
-                e.event_type, e.payload \
+                e.event_type, e.payload, e.request_id \
          FROM fluxbase_internal.event_deliveries d \
          JOIN fluxbase_internal.event_subscriptions s ON s.id = d.subscription_id \
          JOIN fluxbase_internal.events e ON e.id = d.event_id \
@@ -155,12 +158,15 @@ async fn process_retries(pool: &PgPool, http: &Client, runtime_url: &str) -> Res
         let target_config: serde_json::Value = row.get("target_config");
         let event_type: String = row.get("event_type");
         let payload: serde_json::Value = row.get("payload");
+        let request_id: Option<String> = row.try_get("request_id").unwrap_or(None);
+        let request_id_str: String = request_id.unwrap_or_else(|| event_id.to_string());
 
         let next_attempt = attempt + 1;
 
         let result = dispatcher::dispatch(
-            pool, http, "", sub_id,
+            pool, http, runtime_url, sub_id,
             &target_type, &target_config, &payload, &event_type,
+            &request_id_str,
         )
         .await;
 

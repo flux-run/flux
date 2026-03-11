@@ -147,6 +147,7 @@ async fn advance_executions(pool: &PgPool, http: &Client, runtime_url: &str) -> 
                     &action_config,
                     &context,
                     "workflow.step",
+                    &format!("workflow:{}", exec_id),  // synthetic trace id for background-triggered dispatches
                 )
                 .await;
 
