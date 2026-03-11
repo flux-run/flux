@@ -34,7 +34,8 @@ ${c.cmd('$')} flux why ${c.id('550e8400')}
   return `<section class="hero" style="padding-bottom:60px;">
   <span class="eyebrow">Git for Backend Execution</span>
   <h1>Debug production systems<br><span class="gradient-text">faster than local development.</span></h1>
-  <p style="max-width:560px;margin:0 auto 36px;">Every request is automatically recorded. Root-cause any incident in seconds, replay it safely, and find the exact commit that broke it.</p>
+  <p style="max-width:580px;margin:0 auto 10px;font-size:1.05rem;">Fluxbase records every backend execution — requests, data mutations, and runtime spans — so you can debug production systems the way Git debugs code.</p>
+  <p style="max-width:520px;margin:0 auto 36px;font-size:.9rem;color:var(--muted);">Root-cause any incident in seconds. Replay it safely. Find the exact commit that broke it.</p>
 
   <div style="max-width:660px;margin:0 auto 40px;text-align:left;">${cliMoment}</div>
 
@@ -204,19 +205,88 @@ ${sectionHeader({
   });
 }
 
-// ── CTA ───────────────────────────────────────────────────────────────────────
+// ── Why Fluxbase Works ─────────────────────────────────────────────────────────
+function whyItWorks() {
+  const points = [
+    {
+      icon: '📝',
+      title: 'Every request is recorded.',
+      body: 'The gateway captures inputs, outputs, and metadata for every HTTP request. No SDK. No instrumentation. No config.',
+    },
+    {
+      icon: '📃',
+      title: 'Every mutation is logged.',
+      body: 'When your function writes to PostgreSQL, the Data Engine intercepts it and stores the row diff with its <code>request_id</code>. Your database is auditable by default.',
+    },
+    {
+      icon: '🔬',
+      title: 'Every execution span is traced.',
+      body: 'Gateway, runtime, DB queries, tool calls, async jobs — each layer emits spans automatically. <code>flux trace</code> reassembles the full picture from a single ID.',
+    },
+    {
+      icon: '♻️',
+      title: 'Production can be replayed safely.',
+      body: 'Because inputs and state are captured, any time window can be re-executed against your current code. Side-effects are disabled. Your fix is tested against real production traffic.',
+    },
+  ];
+
+  const cards = points.map(p => `<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:22px 24px;">
+    <div style="font-size:1.4rem;margin-bottom:10px;">${p.icon}</div>
+    <h3 style="font-size:.95rem;font-weight:700;margin-bottom:8px;">${p.title}</h3>
+    <p style="font-size:.85rem;color:var(--muted);line-height:1.7;">${p.body}</p>
+  </div>`).join('\n  ');
+
+  return section({
+    bg: 'var(--bg-surface)',
+    content: `${eyebrow({ text: 'Why It Works', color: 'green' })}
+${sectionHeader({
+  heading: 'The system is designed to be observable.',
+  sub: 'There is no "add tracing later" checkbox. Observability is how Fluxbase executes your code, not a feature you bolt on.',
+  maxWidth: '560px',
+})}
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;">
+  ${cards}
+</div>`,
+  });
+}
+
+// ── CTA ──────────────────────────────────────────────────────────────────────
 function ctaSection() {
-  return `<section class="cta-strip">
-  <h2>Debug your first production bug in 5 minutes.</h2>
-  <p style="max-width:520px;margin:0 auto 32px;">Install the CLI, deploy a function, trigger a request. You'll have a full trace before you finish reading the quickstart.</p>
-  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:24px;">
-    <a class="btn-primary" href="/docs/quickstart">Start the quickstart →</a>
-    <a class="btn-secondary" href="/product">See all features</a>
-  </div>
-  <div style="display:flex;justify-content:center;">
-    <div class="install-hint">
-      <span class="prompt">$</span>
-      curl -fsSL https://fluxbase.co/install | bash
+  const steps = [
+    { label: 'Homepage',           note: 'understand the product',      href: '/' },
+    { label: 'Quickstart',         note: 'deploy + debug in 5 minutes',  href: '/docs/quickstart' },
+    { label: 'Debugging Guide',    note: 'the 4-command workflow',       href: '/docs/debugging-production' },
+    { label: 'Core Concepts',      note: 'understand why it works',      href: '/docs/concepts' },
+    { label: 'CLI Reference',      note: 'every command, with examples', href: '/cli' },
+  ];
+
+  const ladder = steps.map((s, i) =>
+    `<div style="display:flex;align-items:center;gap:10px;">
+      <a href="${s.href}" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;flex:1;">
+        <span style="width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;font-size:.68rem;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;">${i + 1}</span>
+        <span style="font-weight:600;font-size:.9rem;">${s.label}</span>
+        <span style="font-size:.8rem;opacity:.55;">— ${s.note}</span>
+      </a>
+    </div>${i < steps.length - 1 ? '<div style="padding-left:11px;height:16px;border-left:1px dashed rgba(255,255,255,.2);"></div>' : ''}`
+  ).join('\n    ');
+
+  return `<section class="cta-strip" style="text-align:left;">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:64px;align-items:start;max-width:900px;margin:0 auto;">
+    <div>
+      <h2 style="text-align:left;">Start debugging production in 5 minutes.</h2>
+      <p style="max-width:400px;margin:0 0 28px;opacity:.75;">Install the CLI, deploy your first function, and get a full trace end-to-end before you finish the quickstart.</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px;">
+        <a class="btn-primary" href="/docs/quickstart">Start the quickstart →</a>
+        <a class="btn-secondary" href="/product">See all features</a>
+      </div>
+      <div class="install-hint" style="margin:0;">
+        <span class="prompt">$</span>
+        curl -fsSL https://fluxbase.co/install | bash
+      </div>
+    </div>
+    <div>
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;opacity:.5;margin-bottom:16px;">Learning path</div>
+      ${ladder}
     </div>
   </div>
 </section>`;
@@ -232,6 +302,7 @@ export function render() {
     demoSection(),
     comparisonSection(),
     featuresSection(),
+    whyItWorks(),
     architectureTeaser(),
     ctaSection(),
   ].join('\n\n');

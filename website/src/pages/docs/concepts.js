@@ -173,6 +173,64 @@ function concept4() {
   });
 }
 
+function systemDiagram() {
+  const nodes = [
+    { label: 'Client Request',      sub: 'HTTP / webhook / event',        color: 'var(--border)',  accent: 'var(--muted)' },
+    { label: 'Gateway',             sub: 'captures request + metadata',    color: 'var(--accent)',  accent: 'var(--accent)', tag: 'trace_requests' },
+    { label: 'Runtime',             sub: 'executes function in V8 isolate', color: 'var(--accent)',  accent: 'var(--accent)', tag: 'runtime spans' },
+    { label: 'Data Engine',         sub: 'intercepts DB writes',            color: 'var(--accent)',  accent: 'var(--accent)', tag: 'state_mutations' },
+    { label: 'Your PostgreSQL',     sub: 'source of truth',                color: 'var(--border)',  accent: 'var(--muted)' },
+  ];
+
+  const arrow = `<div style="display:flex;align-items:center;gap:0;padding:0 32px;">
+    <div style="flex:1;height:1px;background:var(--border);"></div>
+    <span style="color:var(--muted);font-size:.75rem;">&#9660;</span>
+  </div>`;
+
+  const boxes = nodes.map((n, i) => {
+    const isHighlighted = i > 0 && i < 4;
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border:1px solid ${n.color};border-radius:8px;background:${isHighlighted ? 'var(--accent-dim)' : 'var(--bg-elevated)'}">
+      <div>
+        <div style="font-size:.88rem;font-weight:700;color:${isHighlighted ? 'var(--text)' : 'var(--muted)'}">${n.label}</div>
+        <div style="font-size:.74rem;color:var(--muted);margin-top:2px;">${n.sub}</div>
+      </div>
+      ${n.tag ? `<span style="font-family:var(--font-mono);font-size:.68rem;color:${n.accent};background:var(--accent-dim);border:1px solid var(--accent);padding:2px 10px;border-radius:20px;white-space:nowrap;">${n.tag}</span>` : ''}
+    </div>`;
+  }).join(`\n    ${arrow}\n    `);
+
+  const dataFlows = [
+    { table: 'trace_requests',  color: 'var(--accent)',         desc: 'One row per request: id, tenant, function, status, duration, spans JSON' },
+    { table: 'state_mutations', color: '#60a5fa',               desc: 'One row per DB write: table, row id, old value, new value, request_id' },
+    { table: 'runtime spans',   color: '#f9a8d4',               desc: 'Nested span tree: function calls, tool calls, async steps, latencies' },
+  ];
+
+  const flowItems = dataFlows.map(f =>
+    `<div style="display:flex;align-items:flex-start;gap:10px;padding:12px 16px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;">
+      <span style="font-family:var(--font-mono);font-size:.75rem;color:${f.color};white-space:nowrap;padding-top:1px;">${f.table}</span>
+      <span style="font-size:.8rem;color:var(--muted);line-height:1.6;">${f.desc}</span>
+    </div>`
+  ).join('\n    ');
+
+  return `<div style="margin:32px 0;padding:32px;background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;">
+  <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:20px;">System shape</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:start;">
+    <div style="display:flex;flex-direction:column;gap:0;">
+      ${boxes}
+    </div>
+    <div>
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:14px;">Data recorded at each layer</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${flowItems}
+      </div>
+      <div style="margin-top:20px;padding:14px 16px;background:var(--accent-dim);border:1px solid var(--accent);border-radius:8px;">
+        <div style="font-size:.78rem;font-weight:700;color:var(--accent);margin-bottom:6px;">All data is keyed by request_id</div>
+        <div style="font-size:.8rem;color:var(--muted);line-height:1.6;">Every row in every table carries the <code>request_id</code> that caused it. That single ID unlocks the entire debugging workflow.</div>
+      </div>
+    </div>
+  </div>
+</div>`;
+}
+
 export function render() {
   const content = `
 <div style="padding:48px 0 24px;">
@@ -181,6 +239,8 @@ export function render() {
     <h1 style="font-size:clamp(1.8rem,4vw,2.8rem);font-weight:800;margin-bottom:16px;">The mental model.</h1>
     <p style="font-size:1.05rem;color:var(--muted);line-height:1.8;">Three ideas explain how Fluxbase works. Once you have them, every CLI command becomes obvious.</p>
   </div>
+
+  ${systemDiagram()}
 
   <div style="display:flex;flex-direction:column;gap:0;margin-top:32px;">
     <div style="display:flex;gap:16px;flex-wrap:wrap;">
