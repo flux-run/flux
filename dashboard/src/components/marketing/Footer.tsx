@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { FluxIcon, FluxWordmark } from '@/components/FluxLogo'
 
 export function Footer() {
   return (
@@ -10,7 +11,11 @@ export function Footer() {
       fontSize: '.82rem',
       color: 'var(--mg-muted)',
     }}>
-      <span>© 2026 Fluxbase</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <FluxIcon size={18} />
+        <FluxWordmark fontSize={13} baseColor="var(--mg-muted)" />
+        <span style={{ marginLeft: 4 }}>© 2026</span>
+      </span>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
         {[
           { href: '/product', label: 'Product' },

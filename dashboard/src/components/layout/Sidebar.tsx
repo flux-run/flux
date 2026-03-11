@@ -3,10 +3,11 @@
 import Link from 'next/link'
 import { useParams, usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { Zap, FolderOpen, Settings, LayoutDashboard,
+import { FolderOpen, Settings, LayoutDashboard,
   Code2, KeyRound, ShieldCheck, ScrollText, Globe,
   Database, HardDrive, Bell, GitBranch, Clock, Terminal, Share2, Puzzle,
 } from 'lucide-react'
+import { FluxLogo } from '@/components/FluxLogo'
 import { TenantSwitcher } from '@/components/TenantSwitcher'
 import { useAuth } from '@/hooks/useAuth'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -34,7 +35,7 @@ function NavItem({
       className={cn(
         'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150',
         isActive
-          ? 'bg-white/10 text-white font-medium'
+          ? 'bg-[#6c63ff]/10 text-[#a78bfa] font-medium'
           : 'text-white/50 hover:text-white hover:bg-white/5'
       )}
     >
@@ -60,11 +61,8 @@ export function Sidebar() {
   return (
     <aside className="flex flex-col w-60 shrink-0 h-screen border-r bg-[hsl(var(--sidebar-background))] border-[hsl(var(--sidebar-border))]">
       {/* Logo */}
-      <div className="flex items-center gap-2.5 px-4 py-4 border-b border-[hsl(var(--sidebar-border))]">
-        <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-white/10">
-          <Zap className="w-4 h-4 text-white" />
-        </div>
-        <span className="font-bold text-sm tracking-tight text-sidebar-foreground">Fluxbase</span>
+      <div className="flex items-center px-4 py-4 border-b border-[hsl(var(--sidebar-border))]">
+        <FluxLogo iconSize={24} fontSize={13} gap={8} baseColor="rgba(255,255,255,0.9)" />
       </div>
 
       {/* Tenant switcher */}

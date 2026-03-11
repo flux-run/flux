@@ -1,0 +1,5 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="64" height="64" rx="16" fill="#6c63ff"/>
+  <!-- Lightning bolt mark, scaled for 64×64 -->
+  <path d="M35.5 9L20.5 34.5H30.5L28.5 55L43.5 31H33L35.5 9Z" fill="white"/>
+</svg>

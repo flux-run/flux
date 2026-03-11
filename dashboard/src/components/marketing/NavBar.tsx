@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { FluxIcon, FluxWordmark } from '@/components/FluxLogo'
 
 const links = [
   { href: '/product', label: 'Product' },
@@ -23,13 +24,9 @@ export function NavBar() {
       backdropFilter: 'blur(10px)',
       borderBottom: '1px solid var(--mg-border)',
     }}>
-      <Link href="/" style={{
-        fontWeight: 700, fontSize: '1rem',
-        color: 'var(--mg-text)', letterSpacing: '-.02em',
-        display: 'flex', alignItems: 'center', gap: 8,
-        textDecoration: 'none',
-      }}>
-        <span style={{ color: 'var(--mg-accent)' }}>flux</span>base
+      <Link href="/" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}>
+        <FluxIcon size={24} />
+        <FluxWordmark fontSize={15} baseColor="rgba(255,255,255,0.9)" />
       </Link>
 
       <div style={{ display: 'flex', gap: 24 }}>

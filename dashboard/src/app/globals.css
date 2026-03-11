@@ -3,6 +3,10 @@
 /* ─── CSS custom properties — Next.js / Vercel design language ─────────── */
 @layer base {
   :root {
+    /* Brand accent — shared across dashboard, marketing, and docs */
+    --brand-accent: 243 100% 69%;      /* #6c63ff */
+    --brand-accent-dim: 243 100% 69% / 0.15;
+
     /* Light mode — neutral, clean */
     --background: 0 0% 100%;           /* #ffffff */
     --foreground: 0 0% 9%;             /* #171717 */
@@ -86,6 +90,7 @@
   --color-sidebar-muted: hsl(var(--sidebar-muted));
   --color-sidebar-border: hsl(var(--sidebar-border));
   --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-brand-accent: hsl(var(--brand-accent));
   --radius-sm: calc(var(--radius) - 2px);
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 2px);
@@ -100,8 +105,9 @@
   --mg-border:      #2a2a30;
   --mg-text:        #e4e4e8;
   --mg-muted:       #888890;
-  --mg-accent:      #6c63ff;
-  --mg-accent-dim:  rgba(108,99,255,.15);
+  /* Accent tied to the global brand token */
+  --mg-accent:      hsl(var(--brand-accent));
+  --mg-accent-dim:  hsl(var(--brand-accent-dim));
   --mg-green:       #3dd68c;
   --mg-yellow:      #f5c542;
   --mg-red:         #f87171;
