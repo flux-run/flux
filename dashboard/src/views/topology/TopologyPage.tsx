@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 import { useRouter } from 'next/navigation'
 import {
   Globe, Cpu, Database, Workflow, Clock, ArrowRight,
-  AlertTriangle,
+  AlertTriangle, History, Search,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -311,12 +311,44 @@ export default function TopologyPage() {
             )}
           </div>
 
+          {tierArrow()}
+
+          {/* ── Tier 5 · Trace History ───────────────────────────────────────── */}
+          <div className="rounded-xl border border-[#6c63ff]/15 bg-[#6c63ff]/[0.02] p-4">
+            <TierLabel icon={History} label="Trace History" color="text-[#a78bfa]/70" />
+            <div className="flex flex-wrap gap-2">
+              <Node
+                label="Execution Store"
+                sub="Every request recorded"
+                icon={History}
+                badge="queryable"
+                badgeClass="bg-[#6c63ff]/10 text-[#a78bfa] border-[#6c63ff]/20"
+                color="border-[#6c63ff]/20 bg-[#6c63ff]/[0.06] text-[#a78bfa]/80"
+                onClick={() => nav('traces')}
+              />
+              <Node
+                label="flux why"
+                sub="root cause analysis"
+                icon={Search}
+                badge="CLI"
+                badgeClass="bg-[#6c63ff]/10 text-[#a78bfa] border-[#6c63ff]/20"
+                color="border-[#6c63ff]/15 bg-[#6c63ff]/[0.04] text-[#a78bfa]/60"
+                onClick={() => nav('traces')}
+              />
+            </div>
+            <p className="text-[10px] text-muted-foreground/30 mt-3 pl-1 leading-relaxed">
+              Every execution flows into the trace store — inspect, replay, or diff any request with{' '}
+              <code className="font-mono text-[#a78bfa]/60">flux why &lt;id&gt;</code>.
+            </p>
+          </div>
+
           {/* Legend / summary */}
           <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground/50 pl-1">
             <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-sky-500/60" />HTTP Routes ({routes.length})</span>
             <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-[#6c63ff]/60" />Functions ({fns.length})</span>
             <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-500/60" />Data Engine (2)</span>
             <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-amber-500/60" />Async ({workflows.length + cron.length})</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-[#6c63ff]/40" />Trace History</span>
           </div>
         </div>
       )}

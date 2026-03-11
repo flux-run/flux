@@ -348,11 +348,29 @@ function RunDetail({ run, onClose }: { run: AgentRun; onClose: () => void }) {
           <StepRow key={step.id} step={step} isLast={i === run.steps.length - 1} />
         ))}
 
-        {/* CLI replay hint */}
-        <div className="mt-4 border border-white/5 rounded-lg p-3 bg-white/[0.02]">
-          <p className="text-[10px] text-muted-foreground/40 mb-2 font-semibold uppercase tracking-widest">Replay in terminal</p>
-          <code className="text-xs font-mono text-emerald-400">flux agent trace {run.id.slice(0, 8)}</code>
-          <p className="text-[10px] text-muted-foreground/40 mt-1">Replays the full agent run with diff against previous run.</p>
+        {/* Replay + diff panel */}
+        <div className="mt-4 border border-white/5 rounded-lg overflow-hidden bg-white/[0.02]">
+          <div className="flex border-b border-white/5">
+            <div className="flex-1 px-4 py-3 border-r border-white/5">
+              <p className="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/30 mb-2">Replay run</p>
+              <code className="text-xs font-mono text-emerald-400 block">flux agent replay {run.id.slice(0, 8)}</code>
+              <p className="text-[10px] text-muted-foreground/40 mt-1 leading-relaxed">
+                Re-execute with latest code. Diff is shown automatically.
+              </p>
+            </div>
+            <div className="flex-1 px-4 py-3">
+              <p className="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/30 mb-2">Inspect trace</p>
+              <code className="text-xs font-mono text-[#a78bfa] block">flux agent trace {run.id.slice(0, 8)}</code>
+              <p className="text-[10px] text-muted-foreground/40 mt-1 leading-relaxed">
+                Full step-by-step trace with input/output at each stage.
+              </p>
+            </div>
+          </div>
+          <div className="px-4 py-2.5">
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/30 mb-1.5">Compare runs</p>
+            <code className="text-xs font-mono text-sky-400">flux agent diff {run.id.slice(0, 8)} &lt;other-run-id&gt;</code>
+            <p className="text-[10px] text-muted-foreground/40 mt-0.5">Highlights which steps changed, got slower, or started failing.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -426,11 +444,16 @@ export default function AgentsPage() {
     [workflows, logs]
   )
 
-  const stats = useMemo(() => ({
-    total:   runs.length,
-    failed:  runs.filter((r) => r.status === 'failed').length,
-    avgMs:   runs.length ? Math.round(runs.reduce((s, r) => s + r.durationMs, 0) / runs.length) : 0,
-  }), [runs])
+  const stats = useMemo(() => {
+    const failed  = runs.filter((r) => r.status === 'failed').length
+    const success = runs.filter((r) => r.status === 'success').length
+    return {
+      total:       runs.length,
+      failed,
+      successRate: runs.length ? Math.round((success / runs.length) * 100) : 0,
+      avgMs:       runs.length ? Math.round(runs.reduce((s, r) => s + r.durationMs, 0) / runs.length) : 0,
+    }
+  }, [runs])
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -464,9 +487,10 @@ export default function AgentsPage() {
         {runs.length > 0 && (
           <div className="flex gap-3 px-5 pb-3 shrink-0 flex-wrap">
             {[
-              { label: 'Total runs',    value: stats.total,              color: 'text-foreground'   },
-              { label: 'Failed',        value: stats.failed,             color: 'text-red-400'      },
-              { label: 'Avg duration',  value: fmtMs(stats.avgMs),       color: 'text-[#a78bfa]'    },
+              { label: 'Total runs',    value: stats.total,                               color: 'text-foreground'   },
+              { label: 'Failed',        value: stats.failed,                              color: stats.failed > 0 ? 'text-red-400' : 'text-muted-foreground/50' },
+              { label: 'Success rate',  value: `${stats.successRate}%`,                   color: stats.successRate >= 90 ? 'text-emerald-400' : 'text-amber-400' },
+              { label: 'Avg duration',  value: fmtMs(stats.avgMs),                       color: 'text-[#a78bfa]'    },
             ].map(({ label, value, color }) => (
               <div key={label} className="bg-white/[0.03] border border-white/8 rounded-lg px-3 py-2 min-w-[90px]">
                 <p className="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/30">{label}</p>
