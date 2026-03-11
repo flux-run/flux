@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Fluxbase — Git for Backend Execution</title>
-  <meta name="description" content="Debug production systems faster than local development. Every request is recorded. Replay, diff, and root-cause any production issue with a single CLI command.">
+  <title>Fluxbase — Execution History for Backend Systems</title>
+  <meta name="description" content="Fluxbase gives backend systems execution history. Every request is recorded, replayable, and diffable — the way Git makes source code inspectable.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/style.css">
@@ -26,8 +26,8 @@
 <div class="landing-wrap">
 <section class="hero" style="padding-bottom:60px;">
   <span class="eyebrow">Git for Backend Execution</span>
-  <h1>Debug production systems<br><span class="gradient-text">faster than local development.</span></h1>
-  <p style="max-width:580px;margin:0 auto 10px;font-size:1.05rem;">Fluxbase records every backend execution — requests, data mutations, and runtime spans — so you can debug production systems the way Git debugs code.</p>
+  <h1>Backend execution should be<br><span class="gradient-text">inspectable history.</span></h1>
+  <p style="max-width:580px;margin:0 auto 10px;font-size:1.05rem;">Fluxbase gives every backend request a permanent record — spans, mutations, and state transitions — queryable after the fact, the way Git makes every commit inspectable.</p>
   <p style="max-width:520px;margin:0 auto 12px;font-size:.9rem;color:var(--muted);">Root-cause any incident in seconds. Replay it safely. Find the exact commit that broke it.</p>
   <p style="max-width:520px;margin:0 auto 32px;font-size:.82rem;color:var(--muted);opacity:.7;">Your code. Your database. Your infrastructure. Fluxbase records the execution history.</p>
 
@@ -156,36 +156,101 @@
 <section style="border-top:1px solid var(--border); padding:80px 0;">
 <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
 <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);padding:4px 12px;border-radius:20px;margin-bottom:20px;">The Difference</div>
-<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">You shouldn't need 5 tools to debug one request.</h2>
-<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Traditional backends scatter evidence across logs, metrics, and traces — each in a different tool without shared context. Fluxbase records everything in one place, queryable by request ID.</p>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Traditional backends discard execution. Fluxbase keeps it.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Every backend request normally runs and disappears — logs printed, memory freed, context gone. Fluxbase makes execution permanent. Every request becomes a queryable record.</p>
 
 <div class="grid-2col" style="display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:start;">
   <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;">
     <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:14px 20px;">
-      <span style="font-size:.8rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Traditional backend debugging</span>
+      <span style="font-size:.8rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Traditional backend: execution disappears</span>
     </div>
     <div style="padding:24px 20px;display:flex;flex-direction:column;gap:10px;">
-      <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> logs — scattered across services</div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> metrics dashboard — no request context</div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> trace UI — requires manual SDK instrumentation</div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> DB console — query by query</div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> queue monitor — separate tool</div>
+      <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> request runs → logs printed → context gone</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> incident happens → reconstruct from fragments</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> debug production → reproduce locally (or not)</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> data changes → no record of what caused it</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--red);">✗</span> regression appears → grep through git history</div>
     </div>
   </div>
 
   <div style="border:1px solid var(--accent);border-radius:10px;overflow:hidden;">
     <div style="background:var(--accent-dim);border-bottom:1px solid var(--accent);padding:14px 20px;">
-      <span style="font-size:.8rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;">Fluxbase</span>
+      <span style="font-size:.8rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;">Fluxbase: execution is inspectable history</span>
     </div>
     <div style="padding:24px 20px;display:flex;flex-direction:column;gap:10px;">
-      <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux why &lt;id&gt;</code> — root cause, one command</div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux trace &lt;id&gt;</code> — full span tree, latencies</div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux state history</code> — every row mutation</div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux incident replay</code> — safe re-execution</div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux bug bisect</code> — which commit broke it</div>
+      <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux tail</code> — stream live execution history</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux why &lt;id&gt;</code> — root cause, one command</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux incident replay</code> — re-run production safely</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux state history</code> — every mutation, every request</div>
+        <div style="display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted);"><span style="color:var(--green);">✓</span> <code>flux bug bisect</code> — find exact breaking commit</div>
     </div>
   </div>
 </div>
+</div>
+</section>
+
+<section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
+<div style="max-width:1040px;margin:0 auto;padding:0 24px;">
+<div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--bg-elevated);padding:4px 12px;border-radius:20px;margin-bottom:20px;">The Shift</div>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">A new execution model.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">Backend systems have always been ephemeral by default — executions run and vanish. Fluxbase inverts this. Execution becomes the permanent artifact, not an afterthought.</p>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;max-width:780px;margin:0 auto;" class="grid-2col">
+  <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:28px;">
+    <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:20px;">Traditional backend</div>
+    <div style="display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">📨</span>
+      <span style="font-size:.88rem;color:var(--muted);">Request arrives</span>
+    </div><div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">⚙️</span>
+      <span style="font-size:.88rem;color:var(--muted);">Code runs</span>
+    </div><div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">🗒️</span>
+      <span style="font-size:.88rem;color:var(--muted);">Logs printed</span>
+    </div><div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">💨</span>
+      <span style="font-size:.88rem;color:var(--muted);">Execution disappears</span>
+    </div>
+    </div>
+  </div>
+  <div style="background:var(--bg-elevated);border:1px solid var(--accent);border-radius:12px;padding:28px;box-shadow:0 0 0 1px var(--accent-dim);">
+    <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);margin-bottom:20px;">Fluxbase</div>
+    <div style="display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">📨</span>
+      <span style="font-size:.88rem;color:var(--muted);">Request arrives</span>
+    </div><div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">⚙️</span>
+      <span style="font-size:.88rem;color:var(--muted);">Code runs</span>
+    </div><div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">🗃️</span>
+      <span style="font-size:.88rem;color:var(--muted);">Execution recorded</span>
+    </div><div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">♻️</span>
+      <span style="font-size:.88rem;color:var(--accent);font-weight:600;">Replayable</span>
+    </div><div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">⚖️</span>
+      <span style="font-size:.88rem;color:var(--accent);font-weight:600;">Diffable</span>
+    </div><div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">🔍</span>
+      <span style="font-size:.88rem;color:var(--accent);font-weight:600;">Blameable</span>
+    </div><div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">🔬</span>
+      <span style="font-size:.88rem;color:var(--accent);font-weight:600;">Step-through debuggable</span>
+    </div>
+    </div>
+  </div>
+</div>
+<p style="text-align:center;font-size:.85rem;color:var(--muted);margin-top:28px;max-width:520px;margin-left:auto;margin-right:auto;">This is why <code>flux why</code> can answer in one command what used to take hours of log archaeology.</p>
 </div>
 </section>
 
@@ -232,8 +297,8 @@
 <section style="border-top:1px solid var(--border); padding:80px 0; background:var(--bg-surface);">
 <div style="max-width:1040px;margin:0 auto;padding:0 24px;">
 <div style="display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--green);background:rgba(61,214,140,.1);padding:4px 12px;border-radius:20px;margin-bottom:20px;">Why It Works</div>
-<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">The system is designed to be observable.</h2>
-<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">There is no "add tracing later" checkbox. Observability is how Fluxbase executes your code, not a feature you bolt on.</p>
+<h2 style="font-size:clamp(1.4rem,3vw,2rem);font-weight:800;letter-spacing:-.03em;margin-bottom:10px;">Observability is not a feature. It is how the runtime works.</h2>
+<p style="color:var(--muted);font-size:.95rem;max-width:560px;margin:0 0 40px;">There is no "add tracing later" checkbox. Every execution is recorded at the infrastructure level — not by SDKs, not by your code.</p>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;">
   <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:22px 24px;">
     <div style="font-size:1.4rem;margin-bottom:10px;">📝</div>

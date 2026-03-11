@@ -6,8 +6,8 @@ import { codeWindow, c }    from '../components/code-window.js';
 import { eyebrow, section, sectionHeader, featureCard, comparisonGrid } from '../components/section.js';
 
 export const meta = {
-  title:       'Fluxbase — Git for Backend Execution',
-  description: 'Debug production systems faster than local development. Every request is recorded. Replay, diff, and root-cause any production issue with a single CLI command.',
+  title:       'Fluxbase — Execution History for Backend Systems',
+  description: 'Fluxbase gives backend systems execution history. Every request is recorded, replayable, and diffable — the way Git makes source code inspectable.',
   path:        'home.html',
 };
 
@@ -33,8 +33,8 @@ ${c.cmd('$')} flux why ${c.id('550e8400')}
 
   return `<section class="hero" style="padding-bottom:60px;">
   <span class="eyebrow">Git for Backend Execution</span>
-  <h1>Debug production systems<br><span class="gradient-text">faster than local development.</span></h1>
-  <p style="max-width:580px;margin:0 auto 10px;font-size:1.05rem;">Fluxbase records every backend execution — requests, data mutations, and runtime spans — so you can debug production systems the way Git debugs code.</p>
+  <h1>Backend execution should be<br><span class="gradient-text">inspectable history.</span></h1>
+  <p style="max-width:580px;margin:0 auto 10px;font-size:1.05rem;">Fluxbase gives every backend request a permanent record — spans, mutations, and state transitions — queryable after the fact, the way Git makes every commit inspectable.</p>
   <p style="max-width:520px;margin:0 auto 12px;font-size:.9rem;color:var(--muted);">Root-cause any incident in seconds. Replay it safely. Find the exact commit that broke it.</p>
   <p style="max-width:520px;margin:0 auto 32px;font-size:.82rem;color:var(--muted);opacity:.7;">Your code. Your database. Your infrastructure. Fluxbase records the execution history.</p>
 
@@ -113,28 +113,77 @@ function comparisonSection() {
   return section({
     content: `${eyebrow({ text: 'The Difference' })}
 ${sectionHeader({
-  heading: 'You shouldn\'t need 5 tools to debug one request.',
-  sub: 'Traditional backends scatter evidence across logs, metrics, and traces — each in a different tool without shared context. Fluxbase records everything in one place, queryable by request ID.',
+  heading: 'Traditional backends discard execution. Fluxbase keeps it.',
+  sub: 'Every backend request normally runs and disappears — logs printed, memory freed, context gone. Fluxbase makes execution permanent. Every request becomes a queryable record.',
 })}
 
 ${comparisonGrid({
-  leftTitle: 'Traditional backend debugging',
+  leftTitle: 'Traditional backend: execution disappears',
   leftItems: [
-    'logs — scattered across services',
-    'metrics dashboard — no request context',
-    'trace UI — requires manual SDK instrumentation',
-    'DB console — query by query',
-    'queue monitor — separate tool',
+    'request runs → logs printed → context gone',
+    'incident happens → reconstruct from fragments',
+    'debug production → reproduce locally (or not)',
+    'data changes → no record of what caused it',
+    'regression appears → grep through git history',
   ],
-  rightTitle: 'Fluxbase',
+  rightTitle: 'Fluxbase: execution is inspectable history',
   rightItems: [
+    '<code>flux tail</code> — stream live execution history',
     '<code>flux why &lt;id&gt;</code> — root cause, one command',
-    '<code>flux trace &lt;id&gt;</code> — full span tree, latencies',
-    '<code>flux state history</code> — every row mutation',
-    '<code>flux incident replay</code> — safe re-execution',
-    '<code>flux bug bisect</code> — which commit broke it',
+    '<code>flux incident replay</code> — re-run production safely',
+    '<code>flux state history</code> — every mutation, every request',
+    '<code>flux bug bisect</code> — find exact breaking commit',
   ],
 })}`,
+  });
+}
+
+// ── Execution shift ───────────────────────────────────────────────────────────
+function executionShift() {
+  const before = [
+    { icon: '📨', label: 'Request arrives' },
+    { icon: '⚙️', label: 'Code runs' },
+    { icon: '🗒️', label: 'Logs printed' },
+    { icon: '💨', label: 'Execution disappears' },
+  ];
+  const after = [
+    { icon: '📨', label: 'Request arrives' },
+    { icon: '⚙️', label: 'Code runs' },
+    { icon: '🗃️', label: 'Execution recorded' },
+    { icon: '♻️', label: 'Replayable', accent: true },
+    { icon: '⚖️', label: 'Diffable', accent: true },
+    { icon: '🔍', label: 'Blameable', accent: true },
+    { icon: '🔬', label: 'Step-through debuggable', accent: true },
+  ];
+
+  const renderSteps = (steps) => steps.map((s, i) => `<div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:1rem;">${s.icon}</span>
+      <span style="font-size:.88rem;${s.accent ? 'color:var(--accent);font-weight:600;' : 'color:var(--muted);'}">${s.label}</span>
+    </div>${i < steps.length - 1 ? '<div style="padding-left:14px;height:14px;border-left:1px solid var(--border);"></div>' : ''}`).join('\n    ');
+
+  return section({
+    bg: 'var(--bg-surface)',
+    content: `${eyebrow({ text: 'The Shift', color: 'muted' })}
+${sectionHeader({
+  heading: 'A new execution model.',
+  sub: 'Backend systems have always been ephemeral by default — executions run and vanish. Fluxbase inverts this. Execution becomes the permanent artifact, not an afterthought.',
+  maxWidth: '560px',
+})}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;max-width:780px;margin:0 auto;" class="grid-2col">
+  <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:12px;padding:28px;">
+    <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:20px;">Traditional backend</div>
+    <div style="display:flex;flex-direction:column;">
+      ${renderSteps(before)}
+    </div>
+  </div>
+  <div style="background:var(--bg-elevated);border:1px solid var(--accent);border-radius:12px;padding:28px;box-shadow:0 0 0 1px var(--accent-dim);">
+    <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);margin-bottom:20px;">Fluxbase</div>
+    <div style="display:flex;flex-direction:column;">
+      ${renderSteps(after)}
+    </div>
+  </div>
+</div>
+<p style="text-align:center;font-size:.85rem;color:var(--muted);margin-top:28px;max-width:520px;margin-left:auto;margin-right:auto;">This is why <code>flux why</code> can answer in one command what used to take hours of log archaeology.</p>`,
   });
 }
 
@@ -241,8 +290,8 @@ function whyItWorks() {
     bg: 'var(--bg-surface)',
     content: `${eyebrow({ text: 'Why It Works', color: 'green' })}
 ${sectionHeader({
-  heading: 'The system is designed to be observable.',
-  sub: 'There is no "add tracing later" checkbox. Observability is how Fluxbase executes your code, not a feature you bolt on.',
+  heading: 'Observability is not a feature. It is how the runtime works.',
+  sub: 'There is no "add tracing later" checkbox. Every execution is recorded at the infrastructure level — not by SDKs, not by your code.',
   maxWidth: '560px',
 })}
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;">
@@ -302,6 +351,7 @@ export function render() {
     hero(),
     demoSection(),
     comparisonSection(),
+    executionShift(),
     featuresSection(),
     whyItWorks(),
     architectureTeaser(),
