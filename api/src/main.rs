@@ -201,6 +201,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/logs",            get(logs::routes::list_project_logs))
         // Full request trace — all log spans for a given request_id across services
         .route("/traces/{request_id}", get(logs::routes::get_trace))
+        // List recent traces (project-scoped) — used by `flux why` for PREVIOUS REQUEST context
+        .route("/traces",              get(logs::routes::list_traces))
         // Integrations + tool catalog
         .route("/tools",                     get(routes::tools::list_tools))
         .route("/tools/connected",           get(routes::tools::list_connected))

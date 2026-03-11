@@ -521,3 +521,109 @@ pub async fn get_trace(
         "suggested_indexes":   suggested_indexes,
     })))
 }
+
+// ─── GET /traces  (list recent requests, project-scoped, Firebase auth) ───────
+//
+// Query params:
+//   before  — ISO-8601 timestamp; return request IDs whose first span is older
+//   exclude — request_id to skip (typically the one currently being inspected)
+//   limit   — default 5, max 20
+//
+// Used by `flux why` to surface the "PREVIOUS REQUEST" block — what request
+// ran just before the one being debugged.
+
+#[derive(Deserialize)]
+pub struct ListTracesQuery {
+    pub before:  Option<String>,
+    pub exclude: Option<String>,
+    pub limit:   Option<i64>,
+}
+
+pub async fn list_traces(
+    axum::extract::State(state): axum::extract::State<crate::AppState>,
+    Extension(context): Extension<RequestContext>,
+    Query(params): Query<ListTracesQuery>,
+) -> ApiResult<serde_json::Value> {
+    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let pool       = &state.pool;
+    let limit      = params.limit.unwrap_or(5).min(20);
+
+    let before: chrono::DateTime<chrono::Utc> = params.before.as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(chrono::Utc::now);
+
+    let exclude = params.exclude.unwrap_or_default();
+
+    // Step 1 — find the N most-recent *distinct* request_ids whose first span
+    // started before `before`, excluding the current request being debugged.
+    #[derive(sqlx::FromRow)]
+    struct ReqWindow { request_id: String, started_at: chrono::DateTime<chrono::Utc>, ended_at: chrono::DateTime<chrono::Utc> }
+
+    let windows = sqlx::query_as::<_, ReqWindow>(
+        "SELECT request_id, MIN(timestamp) AS started_at, MAX(timestamp) AS ended_at \
+         FROM platform_logs \
+         WHERE project_id = $1 \
+           AND request_id IS NOT NULL \
+           AND request_id != '' \
+           AND ($3 = '' OR request_id != $3) \
+           AND timestamp < $2 \
+         GROUP BY request_id \
+         ORDER BY started_at DESC \
+         LIMIT $4",
+    )
+    .bind(project_id)
+    .bind(before)
+    .bind(&exclude)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| db_err())?;
+
+    if windows.is_empty() {
+        return Ok(ApiResponse::new(serde_json::json!({ "traces": [] })));
+    }
+
+    // Step 2 — for each request_id, fetch one gateway span to get method/path/status.
+    // We use a single IN query to avoid N+1.
+    let ids: Vec<String> = windows.iter().map(|w| w.request_id.clone()).collect();
+    let id_list = ids.iter().map(|id| format!("'{id}'")).collect::<Vec<_>>().join(",");
+
+    #[derive(sqlx::FromRow)]
+    struct GatewaySpan { request_id: String, metadata: Option<serde_json::Value> }
+
+    // DISTINCT ON guarantees one representative gateway span per request_id.
+    let gw_sql = format!(
+        "SELECT DISTINCT ON (request_id) request_id, metadata \
+         FROM platform_logs \
+         WHERE project_id = $1 AND request_id IN ({id_list}) \
+           AND (source = 'gateway' OR span_type IN ('request','gateway_request','http_request')) \
+         ORDER BY request_id, timestamp ASC",
+    );
+    let gw_spans = sqlx::query_as::<_, GatewaySpan>(&gw_sql)
+        .bind(project_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+    let gw_map: std::collections::HashMap<String, serde_json::Value> = gw_spans
+        .into_iter()
+        .filter_map(|s| s.metadata.map(|m| (s.request_id, m)))
+        .collect();
+
+    let traces: Vec<serde_json::Value> = windows.iter().map(|w| {
+        let meta = gw_map.get(&w.request_id).cloned().unwrap_or_default();
+        let duration_ms = (w.ended_at - w.started_at).num_milliseconds();
+
+        serde_json::json!({
+            "request_id":  w.request_id,
+            "started_at":  w.started_at.to_rfc3339(),
+            "duration_ms": duration_ms,
+            "method":      meta.get("method").and_then(|v| v.as_str()).unwrap_or("?"),
+            "path":        meta.get("path").and_then(|v| v.as_str()).unwrap_or("?"),
+            "status":      meta.get("status").and_then(|v| v.as_i64()).unwrap_or(0),
+        })
+    }).collect();
+
+    Ok(ApiResponse::new(serde_json::json!({ "traces": traces })))
+}

@@ -132,6 +132,30 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
     let elapsed   = trace_body["total_ms"].as_i64().unwrap_or(0);
     let is_error  = status >= 400 || spans.iter().any(|s| s["span_type"] == "error");
 
+    // ── Fetch previous request (context-aware debugging) ─────────────────────
+    // Find the request that ran immediately before this one.  We pass the first
+    // span's timestamp as `before` so the API returns requests older than this one.
+    let first_span_ts = spans.first()
+        .and_then(|s| s["timestamp"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let prev_req: Option<Value> = if !first_span_ts.is_empty() {
+        let prev_url = format!(
+            "{}/traces?before={}&limit=1&exclude={}",
+            client.base_url,
+            urlencoding::encode(&first_span_ts),
+            urlencoding::encode(&request_id),
+        );
+        let prev_res = client.client.get(&prev_url).send().await;
+        if let Ok(res) = prev_res {
+            if res.status().is_success() {
+                let body: Value = res.json().await.unwrap_or_default();
+                body["traces"].as_array().and_then(|arr| arr.first()).cloned()
+            } else { None }
+        } else { None }
+    } else { None };
+
     // ── Find error spans ─────────────────────────────────────────────────────
     let error_spans: Vec<&Value> = spans.iter()
         .filter(|s| s["span_type"] == "error")
@@ -284,6 +308,53 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
                 }
             }
         }
+    }
+
+    // ── Previous request ──────────────────────────────────────────────────────
+    if let Some(prev) = &prev_req {
+        let p_id     = prev["request_id"].as_str().unwrap_or("?");
+        let p_method = prev["method"].as_str().unwrap_or("?");
+        let p_path   = prev["path"].as_str().unwrap_or("?");
+        let p_ms     = prev["duration_ms"].as_i64().unwrap_or(0);
+        let p_status = prev["status"].as_i64().unwrap_or(0);
+        let p_icon = match p_status {
+            200..=299 => "✔".green().bold(),
+            400..=499 => "!".yellow().bold(),
+            _         => "✗".red().bold(),
+        };
+
+        // Rows that this request mutated — check if the previous request touched any.
+        let mutated_rows: Vec<String> = mutations.iter().filter_map(|m| {
+            let table = m["table_name"].as_str()?;
+            let row_id = m["after_state"].get("id")
+                .or_else(|| m["before_state"].get("id"))
+                .and_then(|v| {
+                    v.as_str().map(|s| trunc(s, 8))
+                        .or_else(|| v.as_i64().map(|n| n.to_string()))
+                })?;
+            Some(format!("{}.id={}", table, row_id))
+        }).collect();
+
+        println!(
+            "{}",
+            "─── Previous request ─────────────────────────────────────────────────────".dimmed()
+        );
+        println!(
+            "  {} {}  {} {}  {}ms",
+            p_icon,
+            trunc(p_id, 12).dimmed(),
+            p_method.bold(),
+            trunc(p_path, 40),
+            p_ms,
+        );
+        for row in &mutated_rows {
+            println!(
+                "  {}  {}",
+                "⚠ also modified".yellow(),
+                row.yellow(),
+            );
+        }
+        println!();
     }
 
     // ── Suggested next steps ─────────────────────────────────────────────────
