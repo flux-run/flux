@@ -8,7 +8,7 @@ import { codeWindow, c } from '../components/code-window.js';
 export const meta = {
   title:       'Building Git for Backend Execution — Fluxbase',
   description: 'Every backend failure leaves evidence. The problem is that execution history disappears the moment a request finishes. Here\'s what it looks like when it doesn\'t.',
-  path:        'git-for-backend.html',
+  path:        'blog/git-for-backend.html',
 };
 
 // ── Reusable prose helpers ────────────────────────────────────────────────────
