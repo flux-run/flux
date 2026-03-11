@@ -1,0 +1,117 @@
+import type { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  title: 'Secrets — Fluxbase Docs',
+  description: 'Encrypted secrets management for Fluxbase projects. Store, rotate, and inject secrets at runtime without redeploying.',
+}
+
+export default function Page() {
+  return (
+    <div
+      dangerouslySetInnerHTML={{ __html: `<h1>Secrets</h1>
+<p class="page-subtitle">An encrypted key-value store per project. Store API keys and sensitive config. Inject at runtime. Rotate without redeploying.</p>
+
+<h2>Overview</h2>
+<p>Fluxbase Secrets is a per-project encrypted store for sensitive values — API keys, tokens, credentials. Secrets are stored encrypted, injected into your functions at runtime via <code>ctx.secrets.get(key)</code>, and never included in your deployed code bundle.</p>
+
+<div class="callout callout-success">
+  <div class="callout-title">Rotate without redeploying</div>
+  Rotating a secret takes one CLI command. The new value is available to all running functions immediately — no redeploy required.
+</div>
+
+<h2>Managing secrets with the CLI</h2>
+
+<h3>Set a secret</h3>
+<pre><code><span class="shell-prompt">$</span> flux secrets set OPENAI_API_KEY sk-abc123...
+<span class="cm"># ✔ Secret set: OPENAI_API_KEY</span></code></pre>
+
+<h3>List secrets (names only — values are never shown)</h3>
+<pre><code><span class="shell-prompt">$</span> flux secrets list
+
+  OPENAI_API_KEY     set 2 hours ago
+  STRIPE_SECRET_KEY  set 3 days ago
+  SENDGRID_API_KEY   set 1 week ago</code></pre>
+
+<h3>Delete a secret</h3>
+<pre><code><span class="shell-prompt">$</span> flux secrets delete OPENAI_API_KEY
+<span class="cm"># ✔ Secret deleted: OPENAI_API_KEY</span></code></pre>
+
+<h3>Rotate a secret</h3>
+<pre><code><span class="shell-prompt">$</span> flux secrets set OPENAI_API_KEY sk-newkey456...
+<span class="cm"># ✔ Secret updated: OPENAI_API_KEY
+# New value is live immediately — no redeploy needed.</span></code></pre>
+
+<h2>Accessing secrets in a function</h2>
+<pre><code><span class="kw">import</span> { <span class="fn">defineFunction</span> } <span class="kw">from</span> <span class="str">"@fluxbase/functions"</span>;
+
+<span class="kw">export default</span> <span class="fn">defineFunction</span>({
+  name: <span class="str">"call_openai"</span>,
+
+  handler: <span class="kw">async</span> ({ input, ctx }) => {
+    <span class="cm">// Secret is retrieved at runtime — not baked into the bundle</span>
+    <span class="kw">const</span> apiKey = <span class="kw">await</span> ctx.secrets.<span class="fn">get</span>(<span class="str">"OPENAI_API_KEY"</span>);
+
+    <span class="kw">const</span> res = <span class="kw">await</span> <span class="fn">fetch</span>(<span class="str">"https://api.openai.com/v1/chat/completions"</span>, {
+      method: <span class="str">"POST"</span>,
+      headers: {
+        <span class="str">"Authorization"</span>: <span class="str">\`Bearer \${apiKey}\`</span>,
+        <span class="str">"Content-Type"</span>: <span class="str">"application/json"</span>,
+      },
+      body: <span class="fn">JSON.stringify</span>({ model: <span class="str">"gpt-4o"</span>, messages: input.messages }),
+    });
+
+    <span class="kw">return</span> res.<span class="fn">json</span>();
+  },
+});</code></pre>
+
+<h2>ctx.secrets reference</h2>
+
+<h3><code>ctx.secrets.get(key)</code></h3>
+<p>Returns the decrypted value for the given secret key. Throws if the key does not exist.</p>
+<pre><code><span class="kw">const</span> value = <span class="kw">await</span> ctx.secrets.<span class="fn">get</span>(<span class="str">"MY_SECRET"</span>);
+<span class="cm">// value: string</span></code></pre>
+
+<h3><code>ctx.secrets.get(key, fallback)</code></h3>
+<p>Returns the secret value, or the fallback if the key is not set. Useful for optional secrets with a default.</p>
+<pre><code><span class="kw">const</span> region = <span class="kw">await</span> ctx.secrets.<span class="fn">get</span>(<span class="str">"AWS_REGION"</span>, <span class="str">"us-east-1"</span>);</code></pre>
+
+<h2>Environment variables vs secrets</h2>
+<table>
+  <thead><tr><th></th><th>Secrets (<code>ctx.secrets</code>)</th><th>Env vars (<code>ctx.env</code>)</th></tr></thead>
+  <tbody>
+    <tr><td>Encrypted at rest</td><td>✔</td><td>✗</td></tr>
+    <tr><td>Visible in dashboard</td><td>Names only</td><td>Yes</td></tr>
+    <tr><td>Rotate without redeploy</td><td>✔</td><td>✗ (requires redeploy)</td></tr>
+    <tr><td>Best for</td><td>API keys, tokens, credentials</td><td>Non-sensitive config (region, tier)</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout-warning">
+  <div class="callout-title">Never hardcode secrets</div>
+  Don't put sensitive values in your function code or <code>flux.json</code>. Use <code>flux secrets set</code> and <code>ctx.secrets.get()</code>. Your code bundle is stored and should be treated as potentially readable.
+</div>
+
+<h2>Security model</h2>
+<ul>
+  <li>Secrets are encrypted at rest using project-scoped keys.</li>
+  <li>Secret values are never returned over the API — only names are listed.</li>
+  <li>The runtime retrieves and decrypts secrets on-demand per invocation.</li>
+  <li>Deleting a project permanently deletes all associated secrets.</li>
+</ul>
+
+<h2>Working with secrets locally</h2>
+<p>When running functions with <code>flux dev</code>, secrets are read from a local <code>.env</code> file if present. This file is listed in the generated <code>.gitignore</code>.</p>
+<pre><code><span class="cm"># .env (local development only — never commit this)</span>
+OPENAI_API_KEY=sk-local-dev-key
+STRIPE_SECRET_KEY=sk_test_xyz</code></pre>
+
+<p>In production (<code>flux deploy</code>), these values are not used. Only secrets stored with <code>flux secrets set</code> are injected.</p>
+
+<hr>
+<p style="display:flex;gap:16px;font-size:.875rem;">
+  <a href="/docs/gateway">← API Gateway</a>
+  <a href="/docs/cli">Next: CLI Reference →</a>
+</p>` }}
+    />
+  )
+}
