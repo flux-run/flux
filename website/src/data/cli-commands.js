@@ -33,23 +33,25 @@ export const CLI_COMMANDS = [
   {
     cmd:     'flux why <request-id>',
     summary: 'Root cause a failed request',
-    desc:    "Fetches the full trace for a request, identifies the first failing span, and explains the cause in plain language. This is the fastest way to answer 'why did this request fail?'",
+    desc:    "Fetches the full trace for a request, identifies the first failing span, and explains the cause in plain language — plus shows what request ran just before it.",
     example: `$ flux why 550e8400
 
-  ROOT CAUSE
-  Stripe API timeout after 10s
+✗  POST /signup → create_user  (142ms, 500 FAILED)
+    request_id:  550e8400-e29b-41d4-a716-446655440000
+    error:       TypeError: Cannot read properties of undefined (reading 'id')
 
-  LOCATION
-  payments/create.ts:42
+─── State changes (1 mutation) ─────────────────────────────────────────────
+  users  v1  INSERT  by api-key  id=7f3a…
+    email:   user@example.com
+    plan:    free
 
-  SPAN
-  stripe.charge  POST /v1/charges  10002ms  ✗ timeout
+─── Previous request ───────────────────────────────────────────────────────
+  ✔ 3c9f1a2b  POST /login  38ms
+  ⚠ also modified  users.id=7f3a…
 
-  DATABASE CHANGES
-  users id=42  plan: free → null  (rolled back)
-
-  SUGGESTION
-  → Add a 5s timeout and retry with idempotency key`,
+─── Suggested next steps ───────────────────────────────────────────────────
+  flux debug 550e8400-e29b  deep-dive the full trace + logs
+  flux state history users 7f3a  full row version history`,
   },
   {
     cmd:     'flux trace <request-id>',
