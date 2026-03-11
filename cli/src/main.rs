@@ -212,6 +212,9 @@ enum Commands {
         /// Output raw JSON
         #[arg(long)]
         json: bool,
+        /// Only diff mutations for this table (dramatically faster on large traces)
+        #[arg(long)]
+        table: Option<String>,
     },
 
     /// Step-through debugger for a past production request.
@@ -605,7 +608,7 @@ async fn main() -> anyhow::Result<()> {
                 trace::execute(request_id, slow, flame).await?
             }
         }
-        Commands::TraceDiff { original_id, replay_id, json } => trace_diff::execute(original_id, replay_id, json).await?,
+        Commands::TraceDiff { original_id, replay_id, json, table } => trace_diff::execute(original_id, replay_id, json, table).await?,
         Commands::TraceDebug { trace_id, at, interactive, json } => trace_debug::execute(trace_id, at, interactive, json).await?,
         Commands::Bug { command } => match command {
             BugCommands::Bisect { function, good, bad, threshold, json } =>

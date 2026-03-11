@@ -35,11 +35,17 @@
 //! FIXED
 //! ```
 
+use std::collections::VecDeque;
 use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
-use crate::why::{diff_json, json_scalar};
+use crate::why::diff_json;
+
+/// Page size for cursor-paginated mutation fetches.
+/// Peak memory for State Diff = 2 × PAGE_SIZE × avg-row-size.
+/// At 3 KB/row: 2 × 1000 × 3 KB = 6 MB regardless of total mutation count.
+const PAGE_SIZE: u32 = 1000;
 
 // ── Entry point ──────────────────────────────────────────────────────────────
 
@@ -47,23 +53,26 @@ pub async fn execute(
     original_id: String,
     replay_id:   String,
     json_output: bool,
+    table:       Option<String>,
 ) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
-    // Fetch both traces + mutations concurrently
+    // Traces are small (one JSON object per request) — fetch both eagerly.
     let orig_trace_url = format!("{}/traces/{}?slow_ms=0", client.base_url, original_id);
     let rep_trace_url  = format!("{}/traces/{}?slow_ms=0", client.base_url, replay_id);
-    let orig_mut_url   = format!("{}/db/mutations?request_id={}&limit=50", client.base_url, original_id);
-    let rep_mut_url    = format!("{}/db/mutations?request_id={}&limit=50", client.base_url, replay_id);
 
-    let (orig_trace, rep_trace, orig_muts, rep_muts) = tokio::try_join!(
+    let (orig_trace, rep_trace) = tokio::try_join!(
         fetch_json(&client, &orig_trace_url),
         fetch_json(&client, &rep_trace_url),
-        fetch_json(&client, &orig_mut_url),
-        fetch_json(&client, &rep_mut_url),
     )?;
 
     if json_output {
+        // For JSON output we still stream-paginate mutations but collect them all
+        // so the output is a single valid JSON document.
+        let (orig_muts, rep_muts) = tokio::try_join!(
+            collect_all_mutations(&client, &original_id, table.as_deref()),
+            collect_all_mutations(&client, &replay_id,   table.as_deref()),
+        )?;
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
             "original": { "trace": orig_trace, "mutations": orig_muts },
             "replay":   { "trace": rep_trace,  "mutations": rep_muts  },
@@ -100,6 +109,9 @@ pub async fn execute(
     println!("  {}  {} {} → {}", "endpoint:".dimmed(), method.bold(), path.bold(), function.cyan().bold());
     println!("  {}  {}  commit {}", "original:".dimmed(), trunc(&original_id, 12).yellow(), orig_commit.dimmed());
     println!("  {}  {}  commit {}", "replay:  ".dimmed(), trunc(&replay_id, 12).cyan(),    rep_commit.dimmed());
+    if let Some(ref t) = table {
+        println!("  {}  {}", "filter:  ".dimmed(), format!("table={t}").cyan());
+    }
     println!();
 
     // ── Runtime section ──────────────────────────────────────────────────────
@@ -211,117 +223,142 @@ pub async fn execute(
         println!();
     }
 
-    // ── State changes ────────────────────────────────────────────────────────
-    let empty_arr = vec![];
-    let orig_muts_arr = orig_muts["mutations"].as_array().unwrap_or(&empty_arr);
-    let rep_muts_arr  = rep_muts ["mutations"].as_array().unwrap_or(&empty_arr);
-
+    // ── State Diff — streaming paginated ─────────────────────────────────────
+    //
+    // Instead of fetching all mutations into memory (O(n)), we interleave two
+    // page-cursors and compare mutations pair-by-pair in relative position.
+    // Peak memory = 2 × PAGE_SIZE rows regardless of total mutation count.
+    // For 100k mutations @ 3 KB/row that's 6 MB vs ~300 MB with a single fetch.
     println!("{}", "State Diff".bold());
     println!("{}", "─".repeat(28).dimmed());
 
-    if orig_muts_arr.is_empty() && rep_muts_arr.is_empty() {
-        println!("  {}", "no mutations in either execution".dimmed());
-    } else {
-        // Walk original mutations; match with replay mutations by position
-        let max = orig_muts_arr.len().max(rep_muts_arr.len());
-        for i in 0..max {
-            let om = orig_muts_arr.get(i);
-            let rm = rep_muts_arr.get(i);
+    let mut orig_iter = MutIter::new(&client, &original_id, table.as_deref());
+    let mut rep_iter  = MutIter::new(&client, &replay_id,   table.as_deref());
 
-            match (om, rm) {
-                (Some(o), Some(r)) => {
-                    let table = o["table_name"].as_str().unwrap_or("?");
-                    let op    = o["operation"].as_str().unwrap_or("?");
-                    let ver   = o["version"].as_i64().unwrap_or(0);
+    let mut mutation_count  = 0usize;
+    let mut state_changed   = false;
 
-                    let mutations_match = o["after_state"] == r["after_state"]
-                        && o["before_state"] == r["before_state"];
+    loop {
+        let om = orig_iter.next().await?;
+        let rm = rep_iter .next().await?;
 
-                    let row_id = o["after_state"].get("id")
-                        .or_else(|| o["before_state"].get("id"))
-                        .and_then(|v| v.as_str().map(|s| trunc(s, 8))
-                            .or_else(|| v.as_i64().map(|n| n.to_string())))
-                        .unwrap_or_default();
+        match (om, rm) {
+            (None, None) => break,
 
-                    let same_label = if mutations_match { "  (same)".dimmed().to_string() } else { String::new() };
+            (Some(o), Some(r)) => {
+                mutation_count += 1;
+                let table_name = o["table_name"].as_str().unwrap_or("?");
+                let op         = o["operation"].as_str().unwrap_or("?");
+                let ver        = o["mutation_seq"].as_i64()
+                    .or_else(|| o["version"].as_i64()).unwrap_or(0);
 
-                    println!();
-                    println!("  {}.{}{}  {}{}",
-                        table.cyan(),
-                        if row_id.is_empty() { format!("v{ver}") } else { format!("id={row_id}") },
-                        String::new(),
-                        color_op(op),
-                        same_label,
-                    );
+                let mutations_match = o["after_state"] == r["after_state"]
+                    && o["before_state"] == r["before_state"];
 
-                    if !mutations_match && op == "update" {
-                        // Side-by-side field diff
-                        let o_diffs = diff_json(&o["before_state"], &o["after_state"]);
-                        let r_diffs = diff_json(&r["before_state"], &r["after_state"]);
+                if !mutations_match { state_changed = true; }
 
-                        // All field keys involved in either
-                        let mut keys: Vec<String> = o_diffs.iter().map(|(k,_,_)| k.clone())
-                            .chain(r_diffs.iter().map(|(k,_,_)| k.clone()))
-                            .collect();
-                        keys.dedup();
+                let row_id = o["after_state"].get("id")
+                    .or_else(|| o["before_state"].get("id"))
+                    .and_then(|v| v.as_str().map(|s| trunc(s, 8))
+                        .or_else(|| v.as_i64().map(|n| n.to_string())))
+                    .unwrap_or_default();
 
-                        for key in keys {
-                            let o_change = o_diffs.iter().find(|(k,_,_)| k == &key);
-                            let r_change = r_diffs.iter().find(|(k,_,_)| k == &key);
+                let same_label = if mutations_match { "  (same)".dimmed().to_string() } else { String::new() };
 
-                            match (o_change, r_change) {
-                                (Some((_, ob, oa)), Some((_, _rb, ra))) if oa == ra => {
-                                    println!("    {}  {} → {}  (same)",
-                                        format!("{key}:").dimmed(),
-                                        ob.yellow(), ra.green());
-                                }
-                                (Some((_, ob, oa)), Some((_, rb, ra))) => {
-                                    println!();
-                                    println!("    {}", key.bold());
-                                    println!("    {}  {} → {}",
-                                        "  original:".dimmed(), ob.yellow(), oa.red());
-                                    println!("    {}  {} → {}",
-                                        "  replay:  ".dimmed(), rb.yellow(), ra.green().bold());
-                                }
-                                (Some((_, ob, oa)), None) => {
-                                    println!();
-                                    println!("    {}", key.bold());
-                                    println!("    {}  {} → {}",
-                                        "  original:".dimmed(), ob.yellow(), oa.red());
-                                    println!("    {}  {}", "  replay:  ".dimmed(), "(no change)".dimmed());
-                                }
-                                (None, Some((_, _, ra))) => {
-                                    println!();
-                                    println!("    {}", key.bold());
-                                    println!("    {}  {}", "  original:".dimmed(), "(no change)".dimmed());
-                                    println!("    {}  → {}", "  replay:  ".dimmed(), ra.green().bold());
-                                }
-                                _ => {}
+                println!();
+                println!("  {}.{}{}  {}{}",
+                    table_name.cyan(),
+                    if row_id.is_empty() { format!("seq{ver}") } else { format!("id={row_id}") },
+                    String::new(),
+                    color_op(op),
+                    same_label,
+                );
+
+                if !mutations_match && op == "update" {
+                    let o_diffs = diff_json(&o["before_state"], &o["after_state"]);
+                    let r_diffs = diff_json(&r["before_state"], &r["after_state"]);
+
+                    let mut keys: Vec<String> = o_diffs.iter().map(|(k,_,_)| k.clone())
+                        .chain(r_diffs.iter().map(|(k,_,_)| k.clone()))
+                        .collect();
+                    keys.dedup();
+
+                    for key in keys {
+                        let o_change = o_diffs.iter().find(|(k,_,_)| k == &key);
+                        let r_change = r_diffs.iter().find(|(k,_,_)| k == &key);
+
+                        match (o_change, r_change) {
+                            (Some((_, ob, oa)), Some((_, _rb, ra))) if oa == ra => {
+                                println!("    {}  {} → {}  (same)",
+                                    format!("{key}:").dimmed(),
+                                    ob.yellow(), ra.green());
                             }
-                        }
-                    } else if !mutations_match && op == "insert" {
-                        let diffs = diff_json(&r["after_state"], &o["after_state"]);
-                        for (key, rval, oval) in diffs.iter().take(5) {
-                            println!("    {}  original: {}   replay: {}",
-                                format!("{key}:").dimmed(), oval.yellow(), rval.cyan());
+                            (Some((_, ob, oa)), Some((_, rb, ra))) => {
+                                println!();
+                                println!("    {}", key.bold());
+                                println!("    {}  {} → {}",
+                                    "  original:".dimmed(), ob.yellow(), oa.red());
+                                println!("    {}  {} → {}",
+                                    "  replay:  ".dimmed(), rb.yellow(), ra.green().bold());
+                            }
+                            (Some((_, ob, oa)), None) => {
+                                println!();
+                                println!("    {}", key.bold());
+                                println!("    {}  {} → {}",
+                                    "  original:".dimmed(), ob.yellow(), oa.red());
+                                println!("    {}  {}", "  replay:  ".dimmed(), "(no change)".dimmed());
+                            }
+                            (None, Some((_, _, ra))) => {
+                                println!();
+                                println!("    {}", key.bold());
+                                println!("    {}  {}", "  original:".dimmed(), "(no change)".dimmed());
+                                println!("    {}  → {}", "  replay:  ".dimmed(), ra.green().bold());
+                            }
+                            _ => {}
                         }
                     }
+                } else if !mutations_match && op == "insert" {
+                    let diffs = diff_json(&r["after_state"], &o["after_state"]);
+                    for (key, rval, oval) in diffs.iter().take(5) {
+                        println!("    {}  original: {}   replay: {}",
+                            format!("{key}:").dimmed(), oval.yellow(), rval.cyan());
+                    }
                 }
-                (Some(o), None) => {
-                    let table = o["table_name"].as_str().unwrap_or("?");
-                    let op    = o["operation"].as_str().unwrap_or("?");
-                    println!();
-                    println!("  {}  {}  {}  replay: {}", table.cyan(), color_op(op), "v?".dimmed(), "missing".red());
+            }
+
+            (Some(o), None) => {
+                mutation_count += 1;
+                state_changed = true;
+                let table_name = o["table_name"].as_str().unwrap_or("?");
+                let op         = o["operation"].as_str().unwrap_or("?");
+                println!();
+                println!("  {}  {}  replay: {}",
+                    table_name.cyan(), color_op(op), "missing".red());
+                // drain remaining original mutations without re-allocating
+                while orig_iter.next().await?.is_some() {
+                    mutation_count += 1;
                 }
-                (None, Some(r)) => {
-                    let table = r["table_name"].as_str().unwrap_or("?");
-                    let op    = r["operation"].as_str().unwrap_or("?");
-                    println!();
-                    println!("  {}  {}  {}  original: {}", table.cyan(), color_op(op), "v?".dimmed(), "missing".red());
+                break;
+            }
+
+            (None, Some(r)) => {
+                mutation_count += 1;
+                state_changed = true;
+                let table_name = r["table_name"].as_str().unwrap_or("?");
+                let op         = r["operation"].as_str().unwrap_or("?");
+                println!();
+                println!("  {}  {}  original: {}",
+                    table_name.cyan(), color_op(op), "missing".red());
+                while rep_iter.next().await?.is_some() {
+                    mutation_count += 1;
                 }
-                (None, None) => {}
+                break;
             }
         }
+    }
+
+    if mutation_count == 0 {
+        println!("  {}", "no mutations in either execution".dimmed());
     }
 
     println!();
@@ -329,10 +366,6 @@ pub async fn execute(
     // ── Verdict ──────────────────────────────────────────────────────────────
     println!("{}", "Verdict".bold());
     println!("{}", "─".repeat(28).dimmed());
-
-    let state_changed = orig_muts_arr.len() != rep_muts_arr.len()
-        || orig_muts_arr.iter().zip(rep_muts_arr.iter())
-            .any(|(o, r)| o["after_state"] != r["after_state"]);
 
     let behavior_changed = status_changed || orig_errors != rep_errors || state_changed || any_span_diff;
 
@@ -351,6 +384,108 @@ pub async fn execute(
 
     println!();
     Ok(())
+}
+
+// ── Streaming mutation cursor ─────────────────────────────────────────────────
+
+/// Async cursor that pages through a request's mutations using keyset pagination.
+/// Holds at most PAGE_SIZE rows in memory at any time.
+struct MutIter<'a> {
+    client:     &'a ApiClient,
+    request_id: &'a str,
+    table:      Option<&'a str>,
+    buffer:     VecDeque<Value>,
+    after_seq:  Option<i64>,   // None = start from beginning
+    exhausted:  bool,
+}
+
+impl<'a> MutIter<'a> {
+    fn new(client: &'a ApiClient, request_id: &'a str, table: Option<&'a str>) -> Self {
+        Self {
+            client,
+            request_id,
+            table,
+            buffer: VecDeque::new(),
+            after_seq: None,
+            exhausted: false,
+        }
+    }
+
+    /// Return the next mutation row, fetching a new page when the buffer is empty.
+    /// Returns `None` when the log is fully consumed.
+    async fn next(&mut self) -> anyhow::Result<Option<Value>> {
+        if self.buffer.is_empty() {
+            if self.exhausted {
+                return Ok(None);
+            }
+            self.fill_buffer().await?;
+        }
+        Ok(self.buffer.pop_front())
+    }
+
+    async fn fill_buffer(&mut self) -> anyhow::Result<()> {
+        let page = fetch_mutations_page(
+            self.client,
+            self.request_id,
+            PAGE_SIZE,
+            self.after_seq,
+            self.table,
+        ).await?;
+
+        let next_cursor = page["next_after_seq"].as_i64();
+        self.exhausted  = next_cursor.is_none();
+        self.after_seq  = next_cursor;
+
+        if let Some(arr) = page["mutations"].as_array() {
+            self.buffer.extend(arr.iter().cloned());
+        } else {
+            self.exhausted = true;
+        }
+        Ok(())
+    }
+}
+
+/// Fetch one page of mutations from the data-engine REST API.
+async fn fetch_mutations_page(
+    client:     &ApiClient,
+    request_id: &str,
+    limit:      u32,
+    after_seq:  Option<i64>,
+    table:      Option<&str>,
+) -> anyhow::Result<Value> {
+    let mut url = format!(
+        "{}/db/mutations?request_id={}&limit={}",
+        client.base_url, request_id, limit,
+    );
+    if let Some(seq) = after_seq {
+        url.push_str(&format!("&after_seq={seq}"));
+    }
+    if let Some(t) = table {
+        url.push_str(&format!("&table_name={t}"));
+    }
+    fetch_json(client, &url).await
+}
+
+/// Collect all mutations across pages (used only for `--json` output).
+async fn collect_all_mutations(
+    client:     &ApiClient,
+    request_id: &str,
+    table:      Option<&str>,
+) -> anyhow::Result<Vec<Value>> {
+    let mut all: Vec<Value> = Vec::new();
+    let mut after_seq: Option<i64> = None;
+    loop {
+        let page = fetch_mutations_page(client, request_id, PAGE_SIZE, after_seq, table).await?;
+        let next = page["next_after_seq"].as_i64();
+        if let Some(arr) = page["mutations"].as_array() {
+            all.extend(arr.iter().cloned());
+        }
+        match next {
+            Some(c) => after_seq = Some(c),
+            None    => break,
+        }
+    }
+    Ok(all)
 }
 
 // ── Span diff ────────────────────────────────────────────────────────────────
@@ -386,7 +521,6 @@ fn diff_spans(orig: &[Value], rep: &[Value]) -> Vec<SpanDiff> {
 
     fn span_key(s: &Value) -> String {
         let kind = s["span_type"].as_str().unwrap_or("span");
-        // Prefer a human-readable name from common fields, fall back to span_type
         let name = s["data"]["action"].as_str()
             .or_else(|| s["data"]["tool"].as_str())
             .or_else(|| s["data"]["table"].as_str())
@@ -424,7 +558,6 @@ fn diff_spans(orig: &[Value], rep: &[Value]) -> Vec<SpanDiff> {
     let orig_vec = collect(orig);
     let rep_vec  = collect(rep);
 
-    // Union of all keys, original order first, then replay-only keys
     let mut all_keys: Vec<String> = orig_vec.iter().map(|(k, _)| k.clone()).collect();
     for (k, _) in &rep_vec {
         if !all_keys.contains(k) {
@@ -441,11 +574,7 @@ fn diff_spans(orig: &[Value], rep: &[Value]) -> Vec<SpanDiff> {
         let orig_ms     = oe.and_then(|e| e.ms);
         let rep_ms      = re.and_then(|e| e.ms);
 
-        // Status changed, or one side is absent (skipped vs executed)
         let status_diff = orig_status != rep_status || oe.is_none() != re.is_none();
-
-        // Duration changed by >= 100ms absolute OR >= 20% relative.
-        // The absolute guard prevents small spans (10ms → 20ms) from appearing as noise.
         let dur_diff = match (orig_ms, rep_ms) {
             (Some(o), Some(r)) if o > 0 => {
                 let abs_diff = (r - o).abs();

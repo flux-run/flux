@@ -1405,6 +1405,72 @@ No migration required. Compiler-only change.
 
 ---
 
+### Gap 20 — Streaming Mutation Diff for Large Traces `[resolved]`
+
+**Problem:** `flux trace diff` fetched mutations with a hard cap of 50 rows and loaded them all into memory. A batch job or workflow fan-out that touches 100k rows (×~3 KB JSON/row ≈ 300 MB) made the CLI slow and eventually OOM. The `GET /db/mutations` handler also sorted by `(created_at, version)` — non-deterministic when multiple mutations share the same clock tick — and had no table filter, forcing callers to download the full log even when they only needed one table.
+
+**Root cause — two layers:**
+
+1. **Data-engine handler** (`mutations.rs`): `fetch_all` with hard cap 500; ORDER BY `(created_at, version)` instead of the deterministic `mutation_seq` BIGSERIAL; no cursor or table filter.
+2. **CLI** (`trace_diff.rs`): single `?limit=50` fetch; no `--table` flag; mutations compared by loading both sides into `Vec<Value>` before any output.
+
+**Fix — keyset pagination + streaming cursor:**
+
+**`GET /db/mutations` API (data-engine):**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `request_id` | string | Required — request to look up |
+| `limit` | u32 | Page size, default 500, max 1000 |
+| `after_seq` | i64 | Cursor: return rows with `mutation_seq > N`. Omit to start from beginning. |
+| `table_name` | string | Optional — filter to one table only |
+
+Response now includes `next_after_seq: i64 \| null` — callers loop until `null`:
+```json
+{
+  "request_id": "…",
+  "count": 1000,
+  "next_after_seq": 87234,
+  "mutations": [{ "mutation_seq": 86235, … }, …]
+}
+```
+
+ORDER BY changed from `(created_at, version)` to `mutation_seq` — strict total order, backed by the existing `idx_state_mutations_request_seq (request_id, mutation_seq)` index.
+
+**CLI `flux trace diff` — streaming `MutIter`:**
+
+```rust
+// Peak memory = 2 × PAGE_SIZE rows, regardless of total mutation count.
+struct MutIter<'a> { buffer: VecDeque<Value>, after_seq: Option<i64>, … }
+impl MutIter<'_> {
+    async fn next(&mut self) -> anyhow::Result<Option<Value>> {
+        if self.buffer.is_empty() && !self.exhausted { self.fill_buffer().await?; }
+        Ok(self.buffer.pop_front())
+    }
+}
+```
+
+Both sides (original, replay) are walked simultaneously via two `MutIter` instances. Each pair of rows is printed immediately — no accumulation before output. Total allocations at any point: `2 × PAGE_SIZE` rows (2000 rows max, ~6 MB at 3 KB/row).
+
+**`--table` flag:**
+```
+flux trace diff reqA reqB --table users
+```
+Passes `&table_name=users` to the API; backed by `idx_state_mutations_request_table (request_id, table_name)`. Reduces fetched data by 100–1000× on traces that touch many tables.
+
+**Performance:**
+
+| Scenario | Before | After |
+|---|---|---|
+| 100k mutations (no filter) | ~300 MB RAM, slow | ~6 MB RAM, O(1) |
+| 100k mutations, `--table users` (500 rows) | 300 MB still fetched | 1.5 MB fetched |
+| Non-deterministic ordering on same-ms writes | possible | impossible (mutation_seq) |
+| Limit cap per request | 50 (CLI) / 500 (API) | 1000/page, unlimited pages |
+
+No migration required. The `mutation_seq` column and indexes exist from migration `20260311000012`.
+
+---
+
 ### Other Items
 
 | Area | Item |
