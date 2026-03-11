@@ -42,17 +42,21 @@ The Data Engine is Flowbase's internal data-access tier — a Rust/Axum microser
 ## Overview
 
 ```
-  Client / SDK
-       │
-       ▼
-  [ API Service ]  ──x-service-token──▶  [ Data Engine ]
-       │                                        │
-       │ (auth forwarded in x-* headers)        ▼
-       │                               [ Postgres / Neon ]
-       │
-       ▼
-  [ Gateway ] ────x-service-token────▶  [ Data Engine ]
+             ┌─────────────────────────┐
+             │   Fluxbase Platform DB  │
+             │  (fluxbase_internal.*)  │
+             └──────────┬──────────────┘
+                        │
+Client / SDK            │
+     │                  │
+     ▼                  ▼
+[ API Service ] ──▶ [ Data Engine ] ──▶ [ User PostgreSQL ]
+     │               (x-service-token)
+     ▼
+[ Gateway ]  ───▶ [ Data Engine ] ──▶ [ User PostgreSQL ]
 ```
+
+The Data Engine reads and writes platform metadata from the Fluxbase platform database while executing user queries against the project's configured PostgreSQL database.
 
 The Data Engine is responsible for:
 
@@ -64,6 +68,51 @@ The Data Engine is responsible for:
 - **Workflow execution** — step-advance workflow executions triggered by events.
 - **Cron scheduling** — fire cron jobs whose schedule has become due.
 - **File upload/download** — presigned S3 URLs with per-table access control.
+
+### External Database Model (BYODB)
+
+Fluxbase supports a **Bring Your Own Database (BYODB)** architecture. Application data is stored in a user-provided PostgreSQL database, while Fluxbase platform metadata is stored in the Fluxbase platform database.
+
+```
+Fluxbase Platform DB
+  └─ fluxbase_internal.*
+
+User PostgreSQL
+  └─ application tables (users, orders, etc.)
+```
+
+The Data Engine coordinates both databases:
+
+| Database | Stores |
+|---|---|
+| Platform DB | policies, hooks, events, workflows, `state_mutations`, `trace_requests` |
+| User DB | application tables and business data |
+
+This model allows Fluxbase to operate as an execution and observability layer for existing Postgres databases without requiring data migration.
+
+All queries must pass through the Data Engine so that:
+- policies are enforced
+- mutations are recorded in `state_mutations`
+- traces remain linked to the originating request
+- replay and debugging features (`flux incident replay`, `flux bug bisect`) work correctly
+
+### Data Engine Invariant
+
+All application queries **must** pass through the Data Engine:
+
+```
+Runtime
+   ↓
+Data Engine
+   ↓
+User PostgreSQL
+```
+
+Direct database access from the Runtime is not allowed because it would bypass:
+- mutation logging (`state_mutations`)
+- policy enforcement
+- tracing
+- deterministic replay
 
 ---
 
@@ -287,6 +336,9 @@ POST /db/query
   ├─ 11. Executor:
   │      ├─ Single path  → db_executor::execute (transaction + json_agg)
   │      └─ Batched path → batched::execute (root query + N child fetches merged in Rust)
+  │      (The executor runs compiled SQL against the project's configured PostgreSQL database —
+  │       never the platform DB. The `search_path` is set to the tenant schema so all SQL
+  │       fragments resolve against the correct project tables.)
   │
   ├─ 12. Transform Engine:
   │      ├─ File columns → replace S3 key with presigned GET URL (private)
@@ -626,7 +678,27 @@ Fires scheduled cron jobs on a 30-second polling interval.
 
 ## Database Schema
 
-All metadata lives in the **`fluxbase_internal`** Postgres schema, never exposed to end users.
+All Fluxbase **platform metadata** lives in the **`fluxbase_internal`** schema in the Fluxbase platform database, never exposed to end users.
+
+Application tables do **not** live in this database. Instead they reside in the project's configured PostgreSQL database connected via the Data Engine.
+
+```
+Platform DB
+  fluxbase_internal.policies
+  fluxbase_internal.events
+  fluxbase_internal.state_mutations
+  fluxbase_internal.trace_requests
+  fluxbase_internal.workflows   (+ steps, executions)
+  fluxbase_internal.cron_jobs
+  … (see table below)
+
+User DB
+  users
+  orders
+  subscriptions
+  payments
+  … (project-defined application tables)
+```
 
 | Table | Purpose |
 |---|---|
