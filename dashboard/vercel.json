@@ -1,5 +1,12 @@
 {
   "cleanUrls": true,
+  "redirects": [
+    {
+      "source": "/dashboard/:path*",
+      "destination": "/dashboard",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/",
@@ -51,10 +58,6 @@
     },
     {
       "source": "/dashboard",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/dashboard/:path*",
       "destination": "/index.html"
     }
   ]
