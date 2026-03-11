@@ -34,8 +34,8 @@ function NavItem({
       className={cn(
         'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-all duration-150',
         isActive
-          ? 'bg-primary/15 text-primary font-medium'
-          : 'text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-white/5'
+          ? 'bg-white/10 text-white font-medium'
+          : 'text-white/50 hover:text-white hover:bg-white/5'
       )}
     >
       <Icon className="w-4 h-4 shrink-0" />
@@ -61,8 +61,8 @@ export function Sidebar() {
     <aside className="flex flex-col w-60 shrink-0 h-screen border-r bg-[hsl(var(--sidebar-background))] border-[hsl(var(--sidebar-border))]">
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-4 py-4 border-b border-[hsl(var(--sidebar-border))]">
-        <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-primary/20">
-          <Zap className="w-4 h-4 text-primary" />
+        <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-white/10">
+          <Zap className="w-4 h-4 text-white" />
         </div>
         <span className="font-bold text-sm tracking-tight text-sidebar-foreground">Fluxbase</span>
       </div>
