@@ -87,6 +87,7 @@ Fluxbase gives every backend developer the same tools that Git gives every code 
 | `gdb` / step-through | `flux trace debug` | Walk a past production request step-by-step; see exact database state at each span |
 | `git bisect` | `flux bug bisect` | Binary-search deploy history to find the first regression commit |
 | `git revert` | `flux incident replay` | Re-apply a past request with all side effects suppressed |
+| `gdb explain` | `flux trace explain` | AI-assisted root cause: which span failed, why it was slow, and suggested fix |
 
 All five commands operate on real production data. They are read-only except for `flux incident replay`, which applies mutations with `x-flux-replay: true` (no hooks, no events, no emails).
 
@@ -161,6 +162,13 @@ Power-user shortcuts. All flags and subcommands work identically — aliases are
 | `flux fn` | `flux function` | function subcommands |
 | `flux db` | `flux db` | database subcommands (already short) |
 | `flux fix` | `flux debug` | debug alias — shorter during incident response |
+| `flux request why` | `flux why` | request-centric alias |
+| `flux request debug` | `flux debug` | request-centric alias |
+| `flux request replay` | `flux incident replay` | request-centric alias |
+| `flux request diff` | `flux trace diff` | request-centric alias |
+| `flux trace list` | `flux trace search` | discoverability alias |
+| `flux trace errors` | `flux errors` | trace-namespace ergonomic alias |
+| `flux trace flame <id>` | `flux trace <id> --flame` | waterfall shorthand |
 
 For CI/CD scripts prefer the full names so scripts remain readable.
 
@@ -363,8 +371,15 @@ flux
 │   │     Flags: --slow <ms>, --flame, --replay (re-execute in replay mode)
 │   ├── live                       📋
 │   ├── search                     📋 --function --error --since
+│   ├── list                       📋 alias for trace search (discoverability)
+│   │     flux trace list --since 1h / --error / --function <name>
+│   ├── slow                       📋 --since <dur> --threshold <ms> (default 1000)
+│   ├── errors                     📋 alias for flux errors (trace-namespace ergonomic)
+│   ├── flame <request-id>         📋 alias for flux trace <id> --flame
+│   ├── explain <request-id>       📋 AI-assisted root cause + suggested fix
 │   ├── diff <id> <id>             ✅ compare two executions field-by-field
 │   │     status, duration, mutation diffs, FIXED/REGRESSED/IDENTICAL verdict
+│   ├── debug <request-id>         ✅ step-through debugger (span-by-span state)
 │   ├── replay <request-id>        📋 --payload <file> for override
 │   └── export <request-id>        📋
 │
@@ -373,14 +388,18 @@ flux
 ├── state                          ✅ row-level audit (git blame/log for DB rows)
 │   ├── history <table>            ✅ full version history with field-level before/after diffs
 │   │     Flags: --id <pk>, --pk <json>, --database, --limit
-│   └── blame <table>              ✅ last writer per row with request_id linkage
-│         Flags: --database, --limit
+│   ├── blame <table>              ✅ last writer per row with request_id linkage
+│   │     Flags: --database, --limit
+│   └── diff <table>               📋 field diff between two row versions
+│         --id <pk> --v1 <n> --v2 <m>
 │
 ├── incident                       ✅ deterministic replay (side-effect-free)
-│   └── replay                     ✅
-│         --request-id <id>        replay a single past request
-│         <from..to>               replay all requests in a time window
-│         Flags: --database, --yes (skip confirmation), --json
+│   ├── replay                     ✅
+│   │     --request-id <id>        replay a single past request
+│   │     <from..to>               replay all requests in a time window
+│   │     Flags: --database, --yes (skip confirmation), --json
+│   └── simulate                   📋 dry-run replay — shows mutations without applying them
+│         --request-id <id>        preview what replay would write
 │
 ├── bug                            ✅
 │   └── bisect                     ✅ binary-search commit history to find first regression
@@ -421,10 +440,15 @@ flux
 │   ├── generate                   📋
 │   └── (pull / watch / status)    ✅ (also: flux pull / flux watch / flux status)
 │
+├── request                        📋 optional namespace — aliases for request-centric commands
+│   ├── why <id>                   alias for flux why <id>
+│   ├── debug <id>                 alias for flux debug <id>
+│   ├── replay <id>                alias for flux incident replay --request-id <id>
+│   └── diff <id1> <id2>          alias for flux trace diff <id1> <id2>
 ├── debug [request-id]             ✅ interactive debugger (no args) or deep-dive a specific request
 │     No args: lists recent errors → select one → auto trace + logs + suggested fix
 │     With ID: direct deep-dive (trace + logs + suggested fix + optional replay)
-│     Trace URL printed in every output for Slack/PR sharing
+│     Trace URL + Span graph URL printed for Slack/PR sharing
 ├── fix [request-id]               ✅ alias for debug — shorter to type during incident response
 ├── errors                         ✅ per-function error summary (count, last error, p95) for triage
 │     Flags: --since <duration>, --function <name>
@@ -614,11 +638,14 @@ flux deploy [flags]
 $ cd send_email && flux deploy
   Bundling send_email...
   ✔ Deployed send_email v4  (1.2s)
+  commit:  a93f42c
+  runtime: deno
+  size:    1.2MB
 
 $ cd .. && flux deploy
-  Bundling create_user...   ✔ v7
-  Bundling send_email...    ✔ v4
-  Bundling auth_handler...  ✔ v2
+  Bundling create_user...   ✔ v7  commit: a93f42c
+  Bundling send_email...    ✔ v4  commit: a93f42c
+  Bundling auth_handler...  ✔ v2  commit: a93f42c
   Deployed 3 functions
 ```
 
@@ -1306,6 +1333,67 @@ $ flux trace search --tool gmail.send_email --since 24h
 $ flux trace search --route /signup --min-duration 2000
 ```
 
+#### `flux trace list` 📋
+
+Alias for `flux trace search` — satisfies the instinct to type `list` before discovering `search`.
+All flags are identical.
+
+```
+$ flux trace list --since 1h
+$ flux trace list --error
+$ flux trace list --function create_user
+```
+
+#### `flux trace slow` 📋
+
+Show the slowest requests in a time window, sorted by duration descending.
+Replaces manual log analysis for latency triage.
+
+```
+flux trace slow [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--since <duration>` | `1h` | Time window |
+| `--threshold <ms>` | `1000` | Only show requests slower than this |
+| `--function <name>` | — | Scope to a single function |
+
+```
+$ flux trace slow --since 1h --threshold 1000
+
+Slow requests (last 1h, > 1000ms)
+────────────────────────────────────────────────
+REQUEST ID   FUNCTION      DURATION   ROUTE
+9624a58d     create_user   3816ms     POST /signup
+b7c1d9a2     checkout      2900ms     POST /checkout
+a3f1c8e4     send_report   1420ms     POST /report
+```
+
+#### `flux trace errors` 📋
+
+Alias for `flux errors` — accessible within the `trace` namespace for developers who instinctively start with `flux trace`.
+
+```
+$ flux trace errors
+$ flux trace errors --since 24h
+$ flux trace errors --function create_user
+```
+
+#### `flux trace flame <request-id>` 📋
+
+Alias for `flux trace <id> --flame` — renders the waterfall timeline directly.
+
+```
+$ flux trace flame 9624a58d57e7
+
+  14:01:12.031  ┤ gateway.receive (11ms)
+  14:01:12.041  ┤──────────────────── gateway.route (487ms)
+  14:01:12.528  ┤ create_user (146ms)
+  14:01:12.674  ┤ db.insert(users) (0ms)
+  14:01:12.674  ┤──────────────────────────────────────── gmail.send_email (1862ms) ⚠
+```
+
 #### `flux trace replay <request-id>` 📋
 
 Re-execute a past request — same payload by default, or override with `--payload`
@@ -1780,6 +1868,7 @@ Duration:     3816ms
 Status:       error
 Time:         2026-03-10 14:01:12 UTC
 Trace URL:    https://app.fluxbase.co/acme-org/backend/traces/9624a58d57e7
+Span graph:   https://app.fluxbase.co/acme-org/backend/traces/9624a58d57e7?view=graph
 
 Trace
 ─────────────────────────────────────────────
@@ -1846,7 +1935,8 @@ POST     /signup                       create_user             312ms      ✔
 GET      /status                       health_check            8ms        ✔
 POST     /signup                       create_user             281ms      ✔
 POST     /signup                       create_user             3.8s       ✗ rate_limit
-   → flux debug 9624a58d57e7
+   request: 9624a58d
+   → flux debug 9624a58d
 POST     /login                        auth_handler            102ms      ✔
 ```
 
@@ -1938,7 +2028,7 @@ $ flux why 9624a58d
     error:       RateLimitError: gmail API rate limit exceeded
                  at send_email/index.ts:34
 
-─── State changes ─────────────────────────────────────────────────────────────
+─── State changes (2 mutations) ───────────────────────────────────────────────
   users  id=42
 
     plan
@@ -1990,11 +2080,11 @@ $ flux state history users --id 42
 
 Version history: users  id=42
 ────────────────────────────────────────────────────────────────
-  v3  update  9624a58d  by api-key  2026-03-11 14:01
+  v3  update  9624a58d  by queue_worker  2026-03-11 14:01
         plan:  free → pro
-  v2  update  1a3c92fe  by api-key  2026-03-10 09:22
+  v2  update  1a3c92fe  by api-key       2026-03-10 09:22
         name:  Ada → Ada L.
-  v1  insert  72bc21ab  by api-key  2026-03-09 17:44
+  v1  insert  72bc21ab  by runtime       2026-03-09 17:44
         email:  ada@example.com
         name:   Ada
 ```
@@ -2018,8 +2108,41 @@ $ flux state blame users
 
 Last writer: users
 ────────────────────────────────────────────────────────────────
-  {"id":42}   request 9624a58d   v3   2026-03-11 14:01
-  {"id":43}   request 72bc21ab   v1   2026-03-09 17:44
+  {"id":42}   request 9624a58d   v3   queue_worker   2026-03-11 14:01
+  {"id":43}   request 72bc21ab   v1   runtime        2026-03-09 17:44
+```
+
+#### `flux state diff <table>` 📋
+
+Field-level diff between two specific version numbers of a single row.
+Complements `flux state history` (which shows all versions) with a focused
+two-version comparison.
+
+```
+flux state diff <table> --id <pk> --v1 <n> --v2 <m> [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--id <value>` | Row primary key |
+| `--v1 <n>` | First version number |
+| `--v2 <m>` | Second version number |
+| `--database <name>` | Database name (default: `default`) |
+| `--json` | Output raw JSON |
+
+```
+$ flux state diff users --id 42 --v1 3 --v2 5
+
+Diff: users  id=42  v3 → v5
+────────────────────────────────────────────────────────────────
+  plan
+    free → enterprise
+
+  updated_at
+    2026-03-10 → 2026-03-11
+
+  v3  written by request 9624a58d  (2026-03-10 14:01)
+  v5  written by request c2d3e4f5  (2026-03-11 09:22)
 ```
 
 ---
@@ -2078,6 +2201,43 @@ Proceed? [y/N]: y
 ```
 
 > **Safety**: replay mode suppresses all side effects at the data-engine and API layers via the `x-flux-replay: true` header. Hooks registered on tables are skipped, events are not emitted, and the replay flag is propagated through all downstream calls.
+
+---
+
+#### `flux incident simulate` 📋
+
+Dry-run replay — shows exactly which mutations would be applied without writing anything.
+Use this to preview the impact of a replay before committing it.
+
+**Difference from `flux incident replay`:**
+
+| Command | What it does |
+|---------|-------------|
+| `flux incident simulate` | Shows mutations, writes nothing |
+| `flux incident replay` | Applies mutations with `x-flux-replay: true` |
+
+```
+flux incident simulate --request-id <id> [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--request-id <id>` | Request to simulate |
+| `--database <name>` | Database name (default: `default`) |
+| `--json` | Output raw JSON |
+
+```
+$ flux incident simulate --request-id 9624a58d
+
+Simulate replay for request 9624a58d
+(read-only — no mutations will be applied)
+────────────────────────────────────────────────────────────────
+  [1] INSERT users  {email: ada@example.com, plan: free}
+  [2] UPDATE users  id=42  plan: free → pro
+
+2 mutations would be applied.
+Run 'flux incident replay --request-id 9624a58d' to apply.
+```
 
 ---
 
@@ -2216,6 +2376,50 @@ $ flux trace debug 9624a58d --at 2
 - Verify that a refactor preserved mutation ordering, not just final state
 
 **How it works:** `state_mutations.span_id` (column added in migration `20260309000011_span_id`) links every mutation row to the runtime span that caused it. The CLI fetches all mutations for the request and partitions them into steps by matching `span_id` to span objects in the trace tree. For older rows without `span_id`, mutations are distributed proportionally across steps as a best-effort fallback.
+
+`state_mutations.mutation_source` identifies which component of the platform wrote each row, giving you exact attribution in `flux state blame`, `flux state history`, and `flux trace debug` output:
+
+| Value | Written by |
+|-------|------------|
+| `runtime` | A function execution via `ctx.db` |
+| `workflow` | A workflow step |
+| `queue_worker` | A queue-triggered job |
+| `cron` | A scheduled cron job |
+| `hook` | A table-change hook handler |
+| `event_handler` | An event subscription handler |
+| `agent` | An AI agent action |
+
+---
+
+### `flux trace explain <request-id>` 📋
+
+AI-assisted root cause analysis. Combines trace spans, error logs, and state mutations for a single request and produces a plain-English explanation of what went wrong, why it was slow, and a concrete suggested fix.
+
+```
+flux trace explain <request-id>
+```
+
+```
+$ flux trace explain 9624a58d
+
+Root cause:
+  gmail.send_email → rate_limit_exceeded
+  Span duration: 1862ms (97% of total request time)
+
+Why it was slow:
+  stripe.charge timed out after 3200ms before gmail was even reached.
+  Total latency amplification: inline tool call chain (Stripe → Gmail)
+  with no parallelism or queue offload.
+
+Suggested fix:
+  Move email sending to a queue job so the HTTP response
+  does not block on Gmail availability.
+
+  flux queue create email-jobs
+  flux queue bind email-jobs --function send_email
+```
+
+> **Note:** `flux trace explain` is a convenience wrapper over `flux why` with additional span-level analysis. Both operate on the same data (`trace_requests` + `state_mutations`). `flux why` is faster; `flux trace explain` is more verbose.
 
 ---
 
