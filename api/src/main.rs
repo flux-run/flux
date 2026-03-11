@@ -210,6 +210,11 @@ pub fn create_app(state: AppState) -> Router {
         .route("/tools/connected",           get(routes::tools::list_connected))
         .route("/tools/connect/{provider}",  post(routes::tools::connect_provider))
         .route("/tools/disconnect/{provider}", delete(routes::tools::disconnect_provider))
+        // Storage provider configuration (BYO S3)
+        .route("/storage/provider",  get(routes::storage::get_provider)
+                                    .put(routes::storage::upsert_provider)
+                                    .delete(routes::storage::delete_provider))
+        .route("/storage/presign",   axum::routing::post(routes::storage::presign))
         // Data Engine management proxy — CRUD for databases, tables, schema,
         // relationships, policies, hooks, subscriptions, workflows, cron.
         // Execution traffic (POST /db/query) is routed to the gateway instead.
