@@ -81,25 +81,20 @@ function writeVercelJson(builtPaths) {
     .sort((a, b) => (a.source === '/' ? -1 : b.source === '/' ? 1 : 0));
 
   // SPA routes — /dashboard and /login serve the React app.
-  // All /dashboard sub-paths redirect to /dashboard so the app always
-  // loads from root (avoids 404 on hard reload of deep links).
+  // All sub-paths also rewrite to index.html; React Router handles routing.
   const spaRewrites = [
-    { source: '/login',     destination: '/index.html' },
-    { source: '/dashboard', destination: '/index.html' },
-  ];
-
-  const spaRedirects = [
-    { source: '/dashboard/:path*', destination: '/dashboard', permanent: false },
+    { source: '/login',            destination: '/index.html' },
+    { source: '/dashboard',        destination: '/index.html' },
+    { source: '/dashboard/:path*', destination: '/index.html' },
   ];
 
   const config = {
     cleanUrls: true,
-    redirects: spaRedirects,
     rewrites: [...staticRewrites, ...spaRewrites],
   };
 
   writeFileSync(VERCEL_JSON, JSON.stringify(config, null, 2) + '\n', 'utf8');
-  console.log(`  ✔  vercel.json (${staticRewrites.length} static + ${spaRewrites.length} SPA rewrites + ${spaRedirects.length} SPA redirects)`);
+  console.log(`  ✔  vercel.json (${staticRewrites.length} static + ${spaRewrites.length} SPA routes)`);
 }
 
 // ── Build all ─────────────────────────────────────────────────────────────────
