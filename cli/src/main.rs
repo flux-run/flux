@@ -222,6 +222,7 @@ enum Commands {
     /// Examples:
     ///   flux trace debug 9624a58d
     ///   flux trace debug 9624a58d --at 2
+    ///   flux trace debug 9624a58d --interactive
     ///   flux trace debug 9624a58d --json
     TraceDebug {
         /// Request ID to debug
@@ -229,6 +230,9 @@ enum Commands {
         /// Inspect state at exactly this step number (1-based)
         #[arg(long, value_name = "STEP")]
         at: Option<usize>,
+        /// Step through spans interactively (Enter/s/p/q)
+        #[arg(long)]
+        interactive: bool,
         /// Output raw JSON
         #[arg(long)]
         json: bool,
@@ -602,7 +606,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Commands::TraceDiff { original_id, replay_id, json } => trace_diff::execute(original_id, replay_id, json).await?,
-        Commands::TraceDebug { trace_id, at, json } => trace_debug::execute(trace_id, at, json).await?,
+        Commands::TraceDebug { trace_id, at, interactive, json } => trace_debug::execute(trace_id, at, interactive, json).await?,
         Commands::Bug { command } => match command {
             BugCommands::Bisect { function, good, bad, threshold, json } =>
                 bisect::execute(function, good, bad, threshold, json).await?,
