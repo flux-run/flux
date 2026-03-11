@@ -2,12 +2,24 @@
 
 `flux` is the terminal interface for Fluxbase. It gives developers full control over every layer of the platform — from deploying a function and wiring a gateway route to managing database schema, running AI agents, and inspecting end-to-end traces — all without leaving the terminal.
 
-**Every request in Fluxbase receives a unique request ID.** This ID links logs, traces, tool calls, database operations, and workflows together — enabling one-command debugging with `flux debug`.
+**Every request in Fluxbase receives a unique request ID.** This ID links logs, traces, tool calls, database operations, and workflows together into a fully navigable execution graph — enabling one-command root cause analysis.
 
-- `flux debug` — interactive production debugger: shows recent errors, you pick one, it auto-runs trace + logs + suggests a fix
+**Production debugging commands:**
+- `flux why <request-id>` — 10-second root cause: error message, commit SHA, field-level state changes, and suggested fix. **The first command to run during any incident.**
+- `flux debug` — interactive debugger: lists recent errors, pick one, auto-runs trace + logs + suggests a fix
 - `flux debug <request-id>` / `flux fix <request-id>` — deep-dive a specific request directly; trace URL printed for sharing
 - `flux tail` — live request stream (htop for your backend); `--auto-debug` auto-debugs errors as they arrive
 - `flux errors` — per-function error summary (counts, last error type, p95) for quick triage
+
+**State audit commands (git blame/log for database rows):**
+- `flux state history <table> --id <n>` — full version history for a row with field-level before→after diffs
+- `flux state blame <table>` — last writer per row, linked to the request that wrote it
+
+**Incident replay and regression finding:**
+- `flux incident replay --request-id <id>` — re-apply a past request with side effects suppressed (`x-flux-replay: true`)
+- `flux incident replay <from..to>` — replay all requests in a time window in chronological order
+- `flux trace diff <id> <replay-id>` — compare two executions field-by-field: status, duration, mutation diffs, verdict
+- `flux bug bisect --function <name> --good <sha> --bad <sha>` — binary-search commit history to find the first regression (read-only, no replays)
 
 **Design principles:**
 - `flux <resource> <operation>` — noun-first, verb-second
@@ -43,10 +55,11 @@ curl https://gateway.fluxbase.co/signup \
   -H 'Content-Type: application/json' \
   -d '{"name":"Ada","email":"ada@example.com"}'
 
-# 6. Watch live traffic and debug errors — two commands tell the whole story
+# 6. Watch live traffic and debug errors
 flux tail                          # stream requests in real time
+flux why <request-id>              # 10-second root cause (error + state changes + fix hint)
 flux debug                         # interactive: pick an error, auto-debug it
-flux debug <request-id-from-response>  # or jump directly to a known request
+flux debug <request-id>            # or jump directly to a known request
 ```
 
 ---
@@ -329,10 +342,31 @@ flux
 │
 ├── trace
 │   ├── get <request-id>           ✅ (also: flux trace <id>)
+│   │     Flags: --slow <ms>, --flame, --replay (re-execute in replay mode)
 │   ├── live                       📋
 │   ├── search                     📋 --function --error --since
+│   ├── diff <id> <id>             ✅ compare two executions field-by-field
+│   │     status, duration, mutation diffs, FIXED/REGRESSED/IDENTICAL verdict
 │   ├── replay <request-id>        📋 --payload <file> for override
 │   └── export <request-id>        📋
+│
+├── why <request-id>               ✅ root cause: error + commit + state changes + suggestions
+│
+├── state                          ✅ row-level audit (git blame/log for DB rows)
+│   ├── history <table>            ✅ full version history with field-level before/after diffs
+│   │     Flags: --id <pk>, --pk <json>, --database, --limit
+│   └── blame <table>              ✅ last writer per row with request_id linkage
+│         Flags: --database, --limit
+│
+├── incident                       ✅ deterministic replay (side-effect-free)
+│   └── replay                     ✅
+│         --request-id <id>        replay a single past request
+│         <from..to>               replay all requests in a time window
+│         Flags: --database, --yes (skip confirmation), --json
+│
+├── bug                            ✅
+│   └── bisect                     ✅ binary-search commit history to find first regression
+│         --function, --good <sha>, --bad <sha>, --threshold (default: 0.05)
 │
 ├── logs                           ✅
 │   Flags: --function, --workflow, --agent, --level, --since, --tail, --request-id
@@ -378,6 +412,15 @@ flux
 │     Flags: --since <duration>, --function <name>
 ├── tail [function]                ✅ live request stream — htop for your backend
 │     Flags: --errors, --slow <ms>, --json, --auto-debug
+│
+│  ── Incident investigation ──────────────────────────────────────────────────
+│  The following commands form a complete "git for backend execution" surface:
+│
+│  flux why      →  root cause in 10 seconds
+│  flux state    →  git blame / git log for database rows
+│  flux incident →  git revert (replays with side effects suppressed)
+│  flux trace diff → git diff between two executions
+│  flux bug bisect → git bisect across deploy history
 ├── open [resource]                📋 open in browser
 ├── whoami                         📋 print current user + active context
 ├── doctor                         ✅
@@ -1858,11 +1901,239 @@ flux fix
 
 Use `flux fix` when you are in incident mode and every character counts. Use `flux debug` in scripts and docs where clarity matters.
 
+---
 
+### `flux why <request-id>` ✅
+
+**The first command to run during any production incident.** Combines trace spans, state mutations, and error logs for a single request into a one-screen root cause summary.
+
+```
+flux why <request-id> [--json]
+```
+
+```
+$ flux why 9624a58d57e7
+
+✗  POST /signup → create_user  (3816ms, 500 FAILED)
+    request_id:  9624a58d57e7
+    commit:      a93f42c
+    error:       RateLimitError: gmail API rate limit exceeded
+                 at send_email/index.ts:34
+
+─── State changes (2 mutations) ──────────────────────────────────────────────
+  users  v1   insert  by api-key  id=7f3a8c1b
+      email:  ada@example.com
+      name:   Ada
+  users  v2   update  by api-key  id=7f3a8c1b
+      plan:   free → pro
+
+─── Suggested next steps ──────────────────────────────────────────────
+  flux debug 9624a58d57e7     deep-dive the full trace + logs
+  flux state history users 7f3a8c1b   full row version history
+```
+
+**Pipeline:**
+1. `GET /traces/:id` — extract method, path, function, commit SHA, error spans
+2. `GET /db/mutations?request_id=` — cross-table state mutations for this request
+3. Render: status header, error message, field-level diffs per mutation, suggested next steps
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output raw JSON (both trace + mutations) |
 
 ---
 
-## Developer workflow examples
+### `flux state` ✅
+
+Row-level audit surface. Shows who wrote what, when, and from which request. Equivalent to `git blame` and `git log` applied to database rows.
+
+#### `flux state history <table>` ✅
+
+Full version history for a single row, with field-level before→after diffs for every update.
+
+```
+flux state history <table> [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--id <value>` | Row ID (shorthand for simple integer/UUID primary keys) |
+| `--pk <json>` | Composite primary key as JSON object |
+| `--database <name>` | Database name (default: `default`) |
+| `--limit <n>` | Max versions to show (default: `50`) |
+| `--json` | Output raw JSON |
+
+```
+$ flux state history users --id 42
+
+Version history: users  id=42
+────────────────────────────────────────────────────────────────
+  v3  update  9624a58d  by api-key  2026-03-11 14:01
+        plan:  free → pro
+  v2  update  1a3c92fe  by api-key  2026-03-10 09:22
+        name:  Ada → Ada L.
+  v1  insert  72bc21ab  by api-key  2026-03-09 17:44
+        email:  ada@example.com
+        name:   Ada
+```
+
+#### `flux state blame <table>` ✅
+
+Last writer per row — shows which request last modified each record.
+
+```
+flux state blame <table> [flags]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--database <name>` | Database name (default: `default`) |
+| `--limit <n>` | Max rows (default: `50`) |
+| `--json` | Output raw JSON |
+
+```
+$ flux state blame users
+
+Last writer: users
+────────────────────────────────────────────────────────────────
+  {"id":42}   request 9624a58d   v3   2026-03-11 14:01
+  {"id":43}   request 72bc21ab   v1   2026-03-09 17:44
+```
+
+---
+
+### `flux incident` ✅
+
+Deterministic replay of past requests. Mutations are re-applied against the current data state with `x-flux-replay: true`, which suppresses all side effects: hooks, events, webhooks, email sending, and external API calls.
+
+#### `flux incident replay` ✅
+
+**Mode 1: single request**
+
+```
+flux incident replay --request-id <id> [flags]
+```
+
+Fetches state mutations from `/db/mutations?request_id=`, then replays each mutation via `/db/query` with `x-flux-replay: true`.
+
+**Mode 2: time window**
+
+```
+flux incident replay <from..to> [flags]
+flux incident replay --from <rfc3339> --to <rfc3339> [flags]
+```
+
+Fetches all mutations from `/db/replay/:database?from=&to=`, groups by `request_id`, and replays them in chronological order.
+
+| Flag | Description |
+|------|-------------|
+| `--request-id <id>` | Replay a single past request |
+| `--from <rfc3339>` | Start of time window |
+| `--to <rfc3339>` | End of time window |
+| `--database <name>` | Database name (default: `default`) |
+| `--yes` | Skip confirmation prompt |
+| `--json` | Output raw JSON |
+
+```
+$ flux incident replay --request-id 9624a58d57e7
+
+Replay 1 request, 2 mutations
+Proceed? [y/N]: y
+  [1/1] request 9624a58d…  ✔
+
+✔ replayed 1 request, 0 failed
+
+$ flux incident replay 2026-03-11T15:00:00Z..2026-03-11T15:05:00Z
+
+Replay 14 requests, 31 mutations  (window: 15:00–15:05 UTC)
+Proceed? [y/N]: y
+  [1/14]  request 72bc21ab…  ✔
+  [2/14]  request 9624a58d…  ✔
+  …
+  [14/14] request f8e3d9c4…  ✔
+
+✔ replayed 14 requests, 0 failed
+```
+
+> **Safety**: replay mode suppresses all side effects at the data-engine and API layers via the `x-flux-replay: true` header. Hooks registered on tables are skipped, events are not emitted, and the replay flag is propagated through all downstream calls.
+
+---
+
+### `flux trace diff <original-id> <replay-id>` ✅
+
+Compare two executions of the same request field-by-field: runtime metrics and state mutation diffs. Typical use: compare a production failure against a replay to see exactly what changed.
+
+```
+flux trace diff <original-id> <replay-id> [--json]
+```
+
+```
+$ flux trace diff 9624a58d 550e8400
+
+─── DIFF SUMMARY ────────────────────────────────────────────────────────────────
+
+  endpoint:  POST /signup → create_user
+  original:  9624a58d   commit a93f42c
+  replay:    550e8400   commit a93f42c   (replay:9624a58d)
+
+─── Runtime ───────────────────────────────────────────────────────────────────
+  status:    500 FAILED → 200 OK    ✔ fixed
+  duration:  3816ms → 142ms        ↓ 96%
+  errors:    1 → 0
+
+─── State changes ────────────────────────────────────────────────────────────
+  users  v1  insert  (same)
+
+  users  v2  update  id=42
+    plan:  original free → pro   replay → enterprise
+
+─── Verdict ───────────────────────────────────────────────────────────────────
+  ≠ BEHAVIOR CHANGED — state mutations differ
+```
+
+**Verdicts:** `FIXED` — `REGRESSED` — `BEHAVIOR CHANGED` — `IDENTICAL`
+
+---
+
+### `flux bug bisect` ✅
+
+Binary-search deploy history to find the first commit that introduced a regression. Reads trace history — **fully read-only, no replays or redeploys required**.
+
+```
+flux bug bisect --function <name> --good <sha> --bad <sha> [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--function <name>` | required | Function to bisect |
+| `--good <sha>` | required | Last known-good commit SHA (prefix OK) |
+| `--bad <sha>` | required | Known-bad commit SHA (prefix OK) |
+| `--threshold <rate>` | `0.05` | Failure rate to classify a commit as bad (0.0–1.0) |
+| `--json` | false | Output raw JSON |
+
+```
+$ flux bug bisect --function create_user --good a93f42c --bad 9624a58d
+
+─── Bisecting create_user ───────────────────────────────────────────────
+
+  timeline: 8 deployments,  good=a93f42c..bad=9624a58d  (4 to search)
+
+  [1/~3]  testing 3b21aaf  2026-03-11T12:11  →  ✔ GOOD   (0/12 failed)
+  [2/~3]  testing c72de1b  2026-03-11T13:44  →  ✗ BAD    (5/9 failed)
+
+─── Result ──────────────────────────────────────────────────────────────────
+
+  first bad commit:  c72de1b   2026-03-11T13:44
+
+  ✗ BAD   c72de1b  2026-03-11T13:44  (5/9 failed)
+  ✔ GOOD  3b21aaf  2026-03-11T12:11  (0/12 failed)
+
+  sample failing request:  f8e3d9c4…  (flux why f8e3d9c4)
+```
+
+**Algorithm:** groups all traced requests by `code_sha`, sorts by `first_seen`, then binary-searches between `--good` and `--bad` in $O(\log n)$ steps. The `--threshold` flag handles noisy production data — a commit is "bad" only when its failure rate exceeds the threshold.
+
+---
 
 ### 1. First-time setup
 
@@ -1889,29 +2160,42 @@ flux logs function send_email -f
 ### 3. Debug a production error
 
 ```bash
-# Option A: Interactive mode — lists recent errors, pick one, auto-debugs
-flux debug
+# ── The fastest path: single command root cause ────────────────────────────
+flux why 9624a58d57e7
+# → shows: endpoint, error message, commit SHA, field-level state changes,
+#          suggested next steps.  10 seconds from alert to understanding.
 
-# Option B: You already have a request ID (from response header or flux tail)
-flux debug 9624a58d57e7
-
-# Watch live traffic to catch errors as they happen (Ctrl-C to stop)
-flux tail
-flux tail create_user          # filter to one function
-flux tail --errors             # errors only
+# ── Step 1: spot which function is broken ─────────────────────────────────
+flux errors                    # per-function error counts + last error type
+flux tail create_user          # stream live requests for that function
+flux tail --errors             # errors only across all functions
 flux tail --slow 500           # only requests > 500ms
 
-# Drill deeper after picking a request
+# ── Step 2: pick a bad request and understand it ──────────────────────────
+flux debug                     # interactive: pick from recent errors
+flux debug 9624a58d57e7        # or jump directly to a known request
 flux trace 9624a58d57e7 --flame
-flux trace search --function create_user --error --since 1h
 flux logs --request-id 9624a58d57e7
 
-# Replay with a patched payload to verify the fix
-flux trace replay 9624a58d57e7 --payload override.json
+# ── Step 3: inspect state changes that request caused ─────────────────────
+flux state blame users         # which request last wrote each user row
+flux state history users --id 42   # full version history for user 42
+# shows:  v1→INSERT  v2→UPDATE plan: free→pro  v3→UPDATE name: Ada→Ada L.
 
-# If the bug is a regression, roll back
-flux version list send_email
-flux rollback send_email --version 5
+# ── Step 4: replay to verify the fix ──────────────────────────────────────
+flux incident replay --request-id 9624a58d57e7
+# re-applies mutations with x-flux-replay: true (hooks/emails/webhooks suppressed)
+
+flux trace diff 9624a58d57e7 <replay-id>
+# shows: status 500 FAILED→200 OK, duration 3816ms→142ms, verdict: FIXED
+
+# ── Step 5: if it's a regression, find the bad commit ─────────────────────
+flux bug bisect --function create_user --good a93f42c --bad 9624a58d
+# binary-searches commit history; prints first bad commit + sample request_id
+
+# ── Step 6: roll back if needed ───────────────────────────────────────────
+flux version list create_user
+flux rollback create_user --version 5
 ```
 
 ### 4. Add a database table
@@ -2015,6 +2299,14 @@ export default defineFunction({
 
 | CLI command | API endpoint |
 |-------------|-------------|
+| `flux why <id>` | `GET /traces/:id?slow_ms=0` + `GET /db/mutations?request_id=` |
+| `flux state history` | `GET /db/history/:database/:table?id=&limit=` |
+| `flux state blame` | `GET /db/blame/:database/:table?limit=` |
+| `flux incident replay` (single) | `GET /db/mutations?request_id=` + `POST /db/query` (with `x-flux-replay: true`) |
+| `flux incident replay` (window) | `GET /db/replay/:database?from=&to=` + `POST /db/query` per mutation |
+| `flux trace <id> --replay` | delegates to `flux incident replay --request-id` |
+| `flux trace diff` | `GET /traces/:id` ×2 + `GET /db/mutations?request_id=` ×2 |
+| `flux bug bisect` | `GET /traces?function=&limit=500` (read-only) |
 | `flux login` | `GET /auth/me` |
 | `flux tenant create` | `POST /tenants` |
 | `flux tenant list` | `GET /tenants` |

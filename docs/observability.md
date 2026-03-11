@@ -17,6 +17,10 @@ flows through each service:
 | `runtime` | Bundle cache, R2 fetch, execution start/end |
 | `function` | `ctx.log()` calls |
 | `db` | Every `/db/query` — table, duration, cache, filter columns |
+| `hook` | Row-level hooks triggered by mutations |
+| `event` | Events emitted by functions (`ctx.event.emit`) |
+| `workflow` | Workflow step start/end |
+| `cron` | Schedule trigger execution |
 
 ### Reading a trace
 
@@ -189,3 +193,144 @@ Response envelope fields:
 | `n_plus_one_tables` | Tables flagged for N+1 patterns |
 | `slow_db_count` | DB spans flagged as slow |
 | `suggested_indexes` | Auto-generated `CREATE INDEX` DDL |
+
+---
+
+## State mutation log
+
+Every write through the Fluxbase data engine is recorded in `fluxbase_internal.state_mutations`. This is the foundation for `flux why`, `flux state history`, `flux state blame`, and `flux incident replay`.
+
+### Schema
+
+```sql
+CREATE TABLE fluxbase_internal.state_mutations (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   uuid NOT NULL,
+    project_id  uuid NOT NULL,
+    request_id  text,          -- links to platform_logs / trace
+    table_name  text NOT NULL,
+    record_pk   jsonb NOT NULL, -- e.g. {"id": 42}
+    operation   text NOT NULL,  -- insert | update | delete
+    before_state jsonb,
+    after_state  jsonb,
+    actor_id    text,           -- api-key slug, user ID, or system
+    version     bigint NOT NULL DEFAULT 1,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Rows are immutable: every write appends a new version. `version` is incremented per-row atomically in a transaction.
+
+### Data engine endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /db/mutations?request_id=&limit=` | All mutations caused by one request (used by `flux why`) |
+| `GET /db/history/:database/:table?id=&limit=` | Version history for a single row (used by `flux state history`) |
+| `GET /db/blame/:database/:table?limit=` | Last writer per row (used by `flux state blame`) |
+| `GET /db/replay/:database?from=&to=&limit=` | All mutations in a time window (used by `flux incident replay`) |
+
+### Using the API directly
+
+```bash
+# All state mutations caused by one request
+curl https://api.fluxbase.co/db/mutations?request_id=9624a58d \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Fluxbase-Tenant: $TENANT_ID" \
+  -H "X-Fluxbase-Project: $PROJECT_ID"
+
+# Response
+{
+  "request_id": "9624a58d...",
+  "count": 2,
+  "mutations": [
+    {
+      "table_name":   "users",
+      "record_pk":    {"id": 42},
+      "operation":    "insert",
+      "before_state": null,
+      "after_state":  {"id": 42, "email": "ada@example.com", "plan": "free"},
+      "actor_id":     "api-key-prod",
+      "version":      1,
+      "created_at":   "2026-03-11T14:01:12Z"
+    },
+    {
+      "table_name":   "users",
+      "record_pk":    {"id": 42},
+      "operation":    "update",
+      "before_state": {"plan": "free"},
+      "after_state":  {"plan": "pro"},
+      "actor_id":     "api-key-prod",
+      "version":      2,
+      "created_at":   "2026-03-11T14:01:12Z"
+    }
+  ]
+}
+```
+
+---
+
+## x-request-id propagation
+
+`x-request-id` is generated at the gateway edge and propagated through every service boundary in the call chain. All platform components write it into every span and log line they produce.
+
+### Propagation chain
+
+```
+Client
+  ↓  (response header: x-request-id)
+Gateway
+  ↓  x-request-id, x-parent-span-id  (forwarded to Runtime + Data Engine)
+Runtime
+  ↓  x-request-id  (forwarded to Control Plane for log ingestion)
+Hooks     ← x-request-id passed as parent context when hooks fire
+Events    ← x-request-id stored alongside every emitted event
+Workflows ← x-request-id propagated into each workflow step execution
+Cron jobs ← x-request-id generated at trigger time, carried through execution
+```
+
+This means a single `flux trace <id>` or `flux why <id>` call can recover the full causal chain — gateway → function → db → hooks → downstream events — for any request.
+
+### Headers forwarded by the gateway
+
+| Header | Type | Description |
+|---|---|---|
+| `x-request-id` | UUID v4 | Unique per request; client may supply, gateway generates if absent |
+| `x-parent-span-id` | UUID v4 | Current gateway span ID; becomes the parent for runtime spans |
+| `X-Tenant-Id` | UUID | Tenant identifier |
+| `X-Tenant-Slug` | string | Human-readable tenant slug |
+
+---
+
+## Replay mode (`x-flux-replay: true`)
+
+When the `x-flux-replay: true` header is present on a request, Fluxbase suppresses all side effects while still applying state mutations. This enables deterministic replay of past incidents without re-triggering emails, webhooks, or external API calls.
+
+### What is suppressed in replay mode
+
+| Component | Replay behaviour |
+|---|---|
+| Row-level hooks | Not fired |
+| Event emission (`ctx.event.emit`) | Silently dropped |
+| Workflow triggers | Not started |
+| Cron-triggered executions | Not re-scheduled |
+| State mutations (`/db/query`) | **Applied** — this is the point of replay |
+
+### How replay requests are identified
+
+The `x-request-id` for replay requests uses the format `replay:<original-request-id>` so replays are distinguishable in traces and logs from the original runs.
+
+### Invoking replay directly
+
+```bash
+# Replay a single request (side effects suppressed)
+curl -X POST https://api.fluxbase.co/db/query \
+  -H "x-flux-replay: true" \
+  -H "x-request-id: replay:9624a58d-57e7-..." \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Fluxbase-Tenant: $TENANT_ID" \
+  -H "X-Fluxbase-Project: $PROJECT_ID" \
+  -d '{"database": "default", "table": "users", "operation": "update", ...}'
+```
+
+The CLI commands `flux incident replay` and `flux trace <id> --replay` handle constructing the correct mutation payloads and headers automatically.
