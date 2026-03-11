@@ -512,8 +512,12 @@ enum Commands {
     },
 
     // ── Utilities ────────────────────────────────────────────────────────────
-    /// Diagnose environment, connectivity, and SDK sync
-    Doctor,
+    /// Diagnose environment/connectivity, or analyze a failed request with flux doctor <request-id>
+    Doctor {
+        /// Request ID to diagnose (omit for environment health check)
+        #[arg(value_name = "REQUEST_ID")]
+        request_id: Option<String>,
+    },
     /// Open the Fluxbase dashboard (or a specific resource) in the browser
     Open {
         #[command(subcommand)]
@@ -675,7 +679,7 @@ async fn main() -> anyhow::Result<()> {
             StackCommand::Seed  { file }              => stack::execute_seed(file).await?,
         },
 
-        Commands::Doctor  => doctor::execute().await?,
+        Commands::Doctor { request_id } => doctor::execute(request_id).await?,
         Commands::Open { command } => match command {
             Some(cmd) => open::execute(cmd).await?,
             None      => open::execute_default().await?,

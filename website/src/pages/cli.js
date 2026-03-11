@@ -15,7 +15,7 @@ export const meta = {
 // ── Hero ──────────────────────────────────────────────────────────────────────
 const HERO_GROUPS = [
   { label: 'Deploy & Runtime',  color: 'var(--green)',          cmds: ['flux deploy', 'flux tail'] },
-  { label: 'Debugging',         color: 'var(--accent)',         cmds: ['flux why', 'flux trace', 'flux trace debug', 'flux trace diff'] },
+  { label: 'Debugging',         color: 'var(--accent)',         cmds: ['flux why', 'flux doctor', 'flux trace', 'flux trace debug', 'flux trace diff'] },
   { label: 'Data History',      color: '#60a5fa',               cmds: ['flux state history', 'flux state blame'] },
   { label: 'Incident Analysis', color: '#c084fc',               cmds: ['flux incident replay', 'flux bug bisect', 'flux explain'] },
 ];

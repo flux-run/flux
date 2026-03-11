@@ -68,6 +68,52 @@ POST     /signup                       create_user            3.2s       ✗ 500
   flux state history users 7f3a  full row version history`,
   },
   {
+    cmd:     'flux doctor <request-id>',
+    summary: 'Automatic incident diagnosis',
+    desc:    'Analyzes a failed request end-to-end: identifies the root cause, explains the likely issue category, lists the evidence from spans, shows data changes, flags the related request, and prints concrete fix actions. Combines trace spans + state mutations + heuristics into one diagnosis.',
+    example: `$ flux doctor 550e8400
+
+REQUEST
+────────────────────────────────
+  POST /signup
+  function: create_user
+  duration: 3.20s
+  status:   500
+
+ROOT CAUSE
+────────────────────────────────
+  ⚡ stripe.charge timed out after 10000ms
+
+LIKELY ISSUE
+────────────────────────────────
+  External tool latency exceeded threshold.
+
+EVIDENCE
+────────────────────────────────
+  stripe.charge                           3200ms  ⚠ slow
+  db (users SELECT)                       12ms
+  runtime (create_user)                   1ms
+
+DATA CHANGES
+────────────────────────────────
+  users.id=7f3a  insert
+    email:  user@example.com
+    plan:   free
+
+RELATED REQUEST
+────────────────────────────────
+  ✔ POST /login  38ms  (0.2s before)
+  ⚠ modified  users.id=7f3a
+
+SUGGESTED ACTIONS
+────────────────────────────────
+  • Increase timeout above 11000ms
+  • Add retry with exponential backoff for stripe.charge
+  • Check network latency to the external service
+  • flux why 550e8400
+  • flux trace debug 550e8400`,
+  },
+  {
     cmd:     'flux trace <request-id>',
     summary: 'Full trace for any request',
     desc:    'Shows every span for a request in order: gateway auth, function execution, each database query, tool calls, async jobs. Latencies in yellow, errors in red.',
