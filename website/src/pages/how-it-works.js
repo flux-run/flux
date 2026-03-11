@@ -294,7 +294,8 @@ ${sectionHeader({
 </div>
 <div style="margin-top:40px;padding:22px 26px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;max-width:720px;">
   <p style="font-weight:700;margin:0 0 8px;font-size:.95rem;">The tradeoff is intentional.</p>
-  <p style="color:var(--muted);font-size:.88rem;line-height:1.7;margin:0;">Runtime ownership introduces adoption friction — you must run your functions on Fluxbase rather than integrating with an existing backend. In exchange, you get guarantees that a library or proxy cannot provide: complete execution history, reliable mutation tracking, and safe deterministic replay. The bet is that the debugging power is worth the deployment step.</p>
+  <p style="color:var(--muted);font-size:.88rem;line-height:1.7;margin:0 0 12px;">Runtime ownership introduces adoption friction — you must run your functions on Fluxbase rather than integrating with an existing backend. In exchange, you get guarantees that a library or proxy cannot provide: complete execution history, reliable mutation tracking, and safe deterministic replay. The bet is that the debugging power is worth the deployment step.</p>
+  <p style="font-size:.85rem;margin:0;"><strong>You can self-host the entire stack.</strong> All Fluxbase services are open source. Run them on your own infrastructure with Docker Compose, in your own region, with your own Postgres. <a href="/docs/deployment" style="color:var(--accent);">Deployment options →</a></p>
 </div>`,
   });
 }

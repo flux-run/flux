@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Deployment — Fluxbase</title>
+  <meta name="description" content="Cloud-managed or fully self-hosted. How to run Fluxbase in your own infrastructure with Docker Compose, what each service does, and how BYODB works.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+  
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="logo" href="/"><span>flux</span>base</a>
+  <div class="nav-links">
+    <a href="/product">Product</a>
+    <a href="/how-it-works">How It Works</a>
+    <a href="/cli">CLI</a>
+    <a href="/docs/" class="active">Docs</a>
+  </div>
+  <a class="nav-cta" href="https://dashboard.fluxbase.co">Dashboard →</a>
+</nav>
+
+<div class="page-wrap">
+
+  <aside class="sidebar">
+    <div class="sidebar-group">
+    <div class="sidebar-group-title">Getting Started</div>
+    <a href="/docs/">Introduction</a>
+    <a href="/docs/quickstart">Quickstart</a>
+    <a href="/docs/concepts">Core Concepts</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Debugging</div>
+    <a href="/docs/debugging-production">Production Debugging</a>
+    <a href="/cli">CLI Reference</a>
+    <a href="/docs/observability">Observability</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Architecture</div>
+    <a href="/how-it-works">How It Works</a>
+    <a href="/docs/gateway">Gateway</a>
+    <a href="/docs/runtime">Runtime</a>
+    <a href="/docs/data-engine">Data Engine</a>
+    <a href="/docs/queue">Queue</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Examples</div>
+    <a href="/examples/">All Examples</a>
+    <a href="/examples/todo-api">Todo API</a>
+    <a href="/examples/ai-backend">AI Backend</a>
+  </div>
+  <div class="sidebar-group">
+    <div class="sidebar-group-title">Trust</div>
+    <a href="/docs/security-and-privacy">Security & Privacy</a>
+    <a href="/docs/deployment" class="active">Deployment & Self-hosting</a>
+  </div>
+  </aside>
+
+  <main class="main-content">
+    <div class="content">
+<article class="doc-content">
+
+<h1>Deployment</h1>
+
+<p class="doc-lead">Fluxbase can run as a managed cloud service or as a fully self-hosted stack on your own infrastructure. Both options use the same CLI and the same BYODB (Bring Your Own Database) model.</p>
+
+<hr class="doc-divider">
+
+<h2 id="options">Deployment options</h2>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:0 0 24px;">
+  <div style="background:var(--bg-elevated);border:1px solid var(--accent);border-radius:10px;padding:22px 24px;">
+    <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);margin-bottom:10px;">Cloud (managed)</div>
+    <p style="font-size:.88rem;line-height:1.65;margin:0 0 12px;">Fluxbase runs the infrastructure at <strong>fluxbase.co</strong>. You install the CLI, <code>flux login</code>, and deploy. Zero infrastructure to manage.</p>
+    <ul style="font-size:.85rem;color:var(--muted);line-height:1.7;margin:0;padding-left:18px;">
+      <li>Deploy in ~20 seconds</li>
+      <li>Automatic scaling</li>
+      <li>Your Postgres, connected via <code>DATABASE_URL</code></li>
+      <li>Trace data stored in your own DB</li>
+    </ul>
+  </div>
+  <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:22px 24px;">
+    <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:10px;">Self-hosted</div>
+    <p style="font-size:.88rem;line-height:1.65;margin:0 0 12px;">All Fluxbase services are open source. Run the full stack with Docker Compose on your own machines, VMs, or Kubernetes cluster.</p>
+    <ul style="font-size:.85rem;color:var(--muted);line-height:1.7;margin:0;padding-left:18px;">
+      <li>Full control over all services</li>
+      <li>Your network, your region, your certs</li>
+      <li>Same BYODB model</li>
+      <li>Same CLI, pointed at your endpoint</li>
+    </ul>
+  </div>
+</div>
+
+<hr class="doc-divider">
+
+<h2 id="cloud">Cloud setup</h2>
+
+<p>The managed cloud option requires no infrastructure. Install the CLI, authenticate, connect your Postgres, and deploy.</p>
+
+<div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">cloud: deploy in 20 seconds</span>
+    <button id="cw-25-copy" onclick="(function(){
+    var el=document.getElementById('cw-25');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-25-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-25" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Install CLI</span>
+<span style="color:var(--green);">$</span> curl -fsSL https://fluxbase.co/install | bash
+
+<span style="color:var(--muted);"># Authenticate</span>
+<span style="color:var(--green);">$</span> flux login
+  <span style="color:var(--green);">✔</span>  Logged in as alice@example.com
+
+<span style="color:var(--muted);"># Deploy your functions</span>
+<span style="color:var(--green);">$</span> flux deploy
+  <span style="color:var(--green);">✔</span>  create_user  → gw.fluxbase.co/create_user
+  <span style="color:var(--green);">✔</span>  list_users   → gw.fluxbase.co/list_users
+  <span style="color:var(--green);">✔</span>  Deployed in 18s
+
+<span style="color:var(--muted);"># Start debugging</span>
+<span style="color:var(--green);">$</span> flux tail</code></pre>
+</div>
+
+<p>Trace and mutation data is written to a <code>fluxbase_trace</code> schema inside the Postgres database you provide. It is never stored on Fluxbase infrastructure.</p>
+
+<hr class="doc-divider">
+
+<h2 id="self-hosted">Self-hosted setup</h2>
+
+<p>The self-hosted stack runs five Rust services plus Postgres. All source code is in the <a href="https://github.com/fluxbase/fluxbase" style="color:var(--accent);">fluxbase/fluxbase</a> repository.</p>
+
+<div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">self-hosted: docker compose up</span>
+    <button id="cw-26-copy" onclick="(function(){
+    var el=document.getElementById('cw-26');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-26-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-26" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Clone the repo</span>
+<span style="color:var(--green);">$</span> git clone https://github.com/fluxbase/fluxbase
+<span style="color:var(--green);">$</span> cd fluxbase
+
+<span style="color:var(--muted);"># Configure environment</span>
+<span style="color:var(--green);">$</span> cp .env.dev.example .env.dev
+<span style="color:var(--green);">$</span> $EDITOR .env.dev   <span style="color:var(--muted);"># set DATABASE_URL, etc.</span>
+
+<span style="color:var(--muted);"># Start all services</span>
+<span style="color:var(--green);">$</span> flux stack up --build
+
+  <span style="color:var(--green);">✔</span>  db            postgres:16  :5432
+  <span style="color:var(--green);">✔</span>  api           :8080
+  <span style="color:var(--green);">✔</span>  gateway       :8081
+  <span style="color:var(--green);">✔</span>  data-engine   :8082
+  <span style="color:var(--green);">✔</span>  runtime       :8083
+  <span style="color:var(--green);">✔</span>  queue         :8084
+
+<span style="color:var(--muted);"># Point CLI at local stack</span>
+<span style="color:var(--green);">$</span> flux login --endpoint http://localhost:8080</code></pre>
+</div>
+
+<p>The CLI is identical in both modes. Point it at your local gateway with <code>--endpoint</code> or the <code>FLUX_ENDPOINT</code> environment variable.</p>
+
+<h3 id="services">Services</h3>
+
+<div style="overflow-x:auto;margin:0 0 24px;">
+  <table style="width:100%;border-collapse:collapse;font-size:.88rem;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+    <thead>
+      <tr style="background:var(--bg-elevated);">
+        <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;">Port</th>
+        <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;">Service</th>
+        <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;">Tech</th>
+        <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;">Role</th>
+      </tr>
+    </thead>
+    <tbody>
+    <tr>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.8rem;color:var(--muted);">:8080</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:.88rem;">API</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.77rem;color:var(--accent);">Rust (Axum)</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:.84rem;color:var(--muted);line-height:1.5;">Management plane — deploy functions, manage API keys, tenant config, schema definitions. Consumed by the CLI and Dashboard.</td>
+  </tr>
+  <tr>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.8rem;color:var(--muted);">:8081</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:.88rem;">Gateway</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.77rem;color:var(--accent);">Rust (Axum)</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:.84rem;color:var(--muted);line-height:1.5;">Public execution edge — auth, rate limiting, request routing. Assigns request IDs and emits the first span. Horizontally scalable.</td>
+  </tr>
+  <tr>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.8rem;color:var(--muted);">:8082</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:.88rem;">Data Engine</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.77rem;color:var(--accent);">Rust (Axum)</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:.84rem;color:var(--muted);line-height:1.5;">Query compiler and mutation logger — validates writes, applies row-level security and column policies, writes mutation diffs in the same transaction as user writes.</td>
+  </tr>
+  <tr>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.8rem;color:var(--muted);">:8083</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:.88rem;">Runtime</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.77rem;color:var(--accent);">Rust + Deno V8</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:.84rem;color:var(--muted);line-height:1.5;">TypeScript execution — runs your functions in sandboxed V8 isolates per tenant. Warm isolates for low latency. All ctx.db / ctx.tool calls are intercepted here.</td>
+  </tr>
+  <tr>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.8rem;color:var(--muted);">:8084</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:.88rem;">Queue</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-family:var(--font-mono);font-size:.77rem;color:var(--accent);">Rust</td>
+    <td style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:.84rem;color:var(--muted);line-height:1.5;">Async job queue — stores job payloads in Postgres, polls and executes async functions via the Runtime. Fully traced.</td>
+  </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>All services communicate over internal HTTP. The only public-facing port is the Gateway (<code>:8081</code>).</p>
+
+<hr class="doc-divider">
+
+<h2 id="byodb">BYODB — Bring Your Own Database</h2>
+
+<p>Both cloud and self-hosted use the same database model: <strong>you provide the Postgres instance</strong>. Fluxbase never stores application data on its own infrastructure.</p>
+
+<div style="max-width:720px;margin:0 auto;background:#0a0a0c;border:1px solid var(--border);border-radius:10px;overflow:hidden;text-align:left;">
+  <div style="background:var(--bg-elevated);border-bottom:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:8px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#f87171;display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--yellow);display:inline-block;flex-shrink:0;"></span>
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0;"></span>
+    <span style="font-size:.75rem;color:var(--muted);margin-left:8px;font-family:var(--font-mono);flex:1;">BYODB — your postgres, always</span>
+    <button id="cw-27-copy" onclick="(function(){
+    var el=document.getElementById('cw-27');
+    var txt=el.innerText||el.textContent;
+    navigator.clipboard.writeText(txt).then(function(){
+      var btn=document.getElementById('cw-27-copy');
+      btn.textContent='Copied!';
+      btn.style.color='var(--green)';
+      setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);
+    });
+  })()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.68rem;padding:2px 8px;cursor:pointer;font-family:var(--font);transition:color .15s,border-color .15s;" onmouseenter="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseleave="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">Copy</button>
+  </div>
+  <pre id="cw-27" style="margin:0;padding:24px 28px;font-family:var(--font-mono);font-size:.82rem;line-height:1.85;overflow-x:auto;white-space:pre-wrap;word-break:break-word;"><code><span style="color:var(--muted);"># Point Fluxbase at your existing Postgres</span>
+<span style="color:var(--muted);"># in .env.dev or cloud project settings:</span>
+
+  DATABASE_URL=postgresql://user:pass@your-db.host:5432/myapp
+
+<span style="color:var(--muted);"># Fluxbase creates two schemas:</span>
+
+  <span style="color:var(--green);">public</span>          <span style="color:var(--muted);">← your application tables (unchanged)</span>
+  <span style="color:var(--green);">fluxbase_trace</span>  <span style="color:var(--muted);">← spans, mutations, request log</span>
+
+<span style="color:var(--muted);"># Your tables are never modified.</span>
+<span style="color:var(--muted);"># Trace data lives in its own schema.</span>
+<span style="color:var(--green);"># You control backups, region, encryption.</span></code></pre>
+</div>
+
+<p>Fluxbase creates one additional schema (<code>fluxbase_trace</code>) in your Postgres for spans, mutation diffs, and the request log. Your application tables are never modified. The trace schema can be in the same cluster or a separate one.</p>
+
+<h3>What this means for compliance and residency</h3>
+
+<ul>
+  <li><strong>Data residency</strong> is determined by where you host Postgres — your choice of cloud and region.</li>
+  <li><strong>Encryption at rest</strong> follows your Postgres configuration.</li>
+  <li><strong>Backups</strong> are your responsibility (same as any other data in your DB).</li>
+  <li><strong>Deletion</strong> — dropping the <code>fluxbase_trace</code> schema removes all trace data immediately.</li>
+</ul>
+
+<hr class="doc-divider">
+
+<h2 id="faq">Common questions</h2>
+
+<h3>Can I run only some services?</h3>
+<p>Yes, with some caveats. The Runtime, Data Engine, and Gateway are co-dependent — removing any one breaks the execution and mutation recording pipeline. The Queue service is optional if you don't use async functions. The API service is optional for read-only CLI operations but required for deploys and key management.</p>
+
+<h3>Does self-hosted support multi-tenancy?</h3>
+<p>Yes. Tenant isolation is enforced inside the services via <code>tenant_id</code> on every table and V8 isolate affinity in the Runtime. The cloud and self-hosted stacks use identical isolation logic.</p>
+
+<h3>What about auth in self-hosted mode?</h3>
+<p>The managed cloud uses Firebase Auth. In self-hosted mode you can configure an alternative OIDC provider, or use API key auth with <code>FLUX_API_KEY</code> for CLI access. See the <code>.env.dev.example</code> in the repository for all configuration options.</p>
+
+<h3>Is the self-hosted stack production-ready?</h3>
+<p>The self-hosted Dockerfiles are the same images used in the managed cloud. For production we recommend running the Gateway and Runtime in at least two replicas, with Postgres behind a connection pooler (e.g. PgBouncer).</p>
+
+<hr class="doc-divider">
+
+<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;padding:22px 26px;">
+  <p style="font-weight:700;margin:0 0 8px;">In short</p>
+  <p style="color:var(--muted);margin:0;line-height:1.7;">Cloud or self-hosted, the guarantees are identical: your Postgres, your data, your infrastructure. Fluxbase records the execution history in a schema you own and can delete at any time.</p>
+</div>
+
+</article>
+    </div>
+  </main>
+
+</div>
+
+<footer>
+  <span>© 2026 Fluxbase</span>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;">
+    <a href="/product">Product</a>
+    <a href="/how-it-works">How It Works</a>
+    <a href="/cli">CLI</a>
+    <a href="/docs/">Docs</a>
+    <a href="/docs/quickstart">Quickstart</a>
+    <a href="https://dashboard.fluxbase.co">Dashboard</a>
+  </div>
+</footer>
+
+</body>
+</html>

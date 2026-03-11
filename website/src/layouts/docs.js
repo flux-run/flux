@@ -43,6 +43,7 @@ const SIDEBAR_NAV = [
     title: 'Trust',
     links: [
       { href: '/docs/security-and-privacy', label: 'Security & Privacy' },
+      { href: '/docs/deployment',           label: 'Deployment & Self-hosting' },
     ],
   },
 ];
