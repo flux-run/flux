@@ -5,7 +5,7 @@ import { CodeWindow } from '@/components/marketing/CodeWindow'
 
 export const metadata: Metadata = {
   title: 'Product — Fluxbase',
-  description: 'Time-travel debugging, mutation history, incident replay, regression detection. Every tool a developer needs to understand and fix production systems fast.',
+  description: 'Time-travel debugging, mutation history, incident replay, regression detection, and AI agent observability. Every tool a developer needs to understand and fix production systems — and debug AI agents — fast.',
 }
 
 const inner: React.CSSProperties = { maxWidth: 1040, margin: '0 auto', padding: '0 24px' }
@@ -61,6 +61,9 @@ export default function ProductPage() {
                   ['What happens if I replay this?',  'flux incident replay',    'Safe re-run, side-effects off'],
                   ['How do two requests differ?',     'flux trace diff',         'Span-by-span comparison'],
                   ['How does my query get compiled?', 'flux explain',            'Dry-run with policy + SQL preview'],
+                  ['Why did the agent do that?',      'flux agent trace <id>',   'Full agent run: every tool call, input/output, DB mutation'],
+                  ['Which tool call caused this?',    'flux agent why <id>',     'Root-cause within an agent run'],
+                  ['How did behaviour change?',       'flux agent diff',         'Compare runs across model versions or prompts'],
                 ].map(([q, cmd, desc]) => (
                   <tr key={cmd}>
                     <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--mg-border)', color: 'var(--mg-text)' }}>{q}</td>
@@ -153,7 +156,37 @@ export default function ProductPage() {
           </div>
         </div>
       </section>
-
+      {/* ── AI Agent Observability ───────────────────────────── */}
+      <section id="agent-observability" style={section('var(--mg-bg-surface)')}>
+        <div style={inner}>
+          <span className="section-label">AI Agent Observability</span>
+          <h2 className="section-h2">Debug AI agents the same way you debug backends.</h2>
+          <p style={{ ...muted, fontSize: '.95rem', maxWidth: 620, margin: '0 0 40px' }}>
+            AI agents make decisions, invoke tools, and mutate state — and when they go wrong, debugging is chaotic because execution evidence is scattered across LLM logs, tool logs, and database logs with no shared context. Fluxbase captures all of it in one place by construction.
+          </p>
+          <div style={grid2}>
+            <div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 32 }}>
+                {[
+                  { cmd: 'flux agent trace <id>',  desc: 'Step-by-step run trace: every tool call, input, output, and latency in execution order.' },
+                  { cmd: 'flux agent why <id>',    desc: 'Root-cause a failed agent run. Pinpoints the exact tool call or plan step that went wrong.' },
+                  { cmd: 'flux agent diff',         desc: 'Compare two runs side-by-side — different model versions, different prompts, or before/after a prompt change.' },
+                  { cmd: 'flux agent replay',       desc: 'Re-run any agent execution deterministically. Test updated logic against a real historical input.' },
+                ].map(({ cmd, desc }) => (
+                  <div key={cmd} style={{ background: 'var(--mg-bg-elevated)', border: '1px solid var(--mg-border)', borderRadius: 8, padding: '14px 16px' }}>
+                    <code style={{ fontSize: '.8rem', color: 'var(--mg-accent)', display: 'block', marginBottom: 6 }}>{cmd}</code>
+                    <p style={{ fontSize: '.8rem', color: 'var(--mg-muted)', lineHeight: 1.6, margin: 0 }}>{desc}</p>
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontSize: '.82rem', color: 'var(--mg-muted)', lineHeight: 1.7, borderLeft: '2px solid var(--mg-accent)', paddingLeft: 14 }}>
+                Fluxbase’s architecture — deterministic execution, mutation logs, and request-linked spans — maps directly to what agent systems need. There is no separate &quot;agent mode&quot;. Your agent workflows are already traced.
+              </p>
+            </div>
+            <CodeWindow label="flux agent why 7f3a9">{`<span style="color:var(--mg-green);">$</span> flux agent why <span style="color:var(--mg-accent);">7f3a9</span>\n\n  <span style="color:#f8f8f2;">AGENT RUN</span>  7f3a9  book_hotel_workflow\n  <span style="color:#f8f8f2;">TRIGGER</span>    user.signup_requested\n  <span style="color:#f8f8f2;">STATUS</span>     <span style="color:var(--mg-red);">failed at step 3/5</span>\n\n  <span style="color:#f8f8f2;">FAILING STEP</span>\n  tool.book_room  (step 3)\n  <span style="color:var(--mg-red);">Stripe 402: card_declined</span>\n\n  <span style="color:#f8f8f2;">UPSTREAM STATE THAT LED HERE</span>\n  step 1  search_hotels  →  top_id: h_991\n  step 2  filter_results →  selected: h_991  price: $420\n  step 3  book_room      →  <span style="color:var(--mg-red);">card declined</span>\n\n  <span style="color:#f8f8f2;">DB MUTATIONS</span>\n  reservations  INSERT  <span style="color:var(--mg-red);">rolled back</span>\n\n  <span style="color:var(--mg-green);">→</span> flux agent diff <span style="color:var(--mg-muted);">7f3a9 prev  # 3 step changes</span>`}</CodeWindow>
+          </div>
+        </div>
+      </section>
       {/* ── CTA ─────────────────────────────────────────────── */}
       <section className="cta-strip">
         <h2>Ready to debug production like it&apos;s local?</h2>

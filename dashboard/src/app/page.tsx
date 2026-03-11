@@ -4,8 +4,8 @@ import { MarketingLayout } from '@/components/marketing/MarketingLayout'
 import { CodeWindow } from '@/components/marketing/CodeWindow'
 
 export const metadata: Metadata = {
-  title: 'Fluxbase — Git for Backend Execution',
-  description: 'Debug production systems faster than local development. Every request is recorded. Replay, diff, and root-cause any production issue with a single CLI command.',
+  title: 'Fluxbase — Backend Execution Runtime',
+  description: 'Debug production systems faster than local development. Every request, mutation, and agent run is recorded. Replay, diff and root-cause any issue — or inspect an AI agent step-by-step — with a single command.',
 }
 
 const inner: React.CSSProperties = { maxWidth: 1040, margin: '0 auto', padding: '0 24px' }
@@ -20,7 +20,7 @@ export default function HomePage() {
     <MarketingLayout>
       {/* ── Hero ─────────────────────────────────────────────── */}
       <section className="hero" style={{ paddingBottom: 60 }}>
-        <span className="eyebrow">Git for Backend Execution</span>
+        <span className="eyebrow">Backend Execution Runtime · AI Agent Observability</span>
         <h1>
           Debug production systems<br />
           <span className="gradient-text">faster than local development.</span>
@@ -105,6 +105,8 @@ export default function HomePage() {
                   ['flux state history', '— every row mutation'],
                   ['flux incident replay', '— safe re-execution'],
                   ['flux bug bisect', '— which commit broke it'],
+                  ['flux agent trace <id>', '— full AI agent run replay'],
+                  ['flux agent diff', '— compare runs across model versions'],
                 ].map(([cmd, desc]) => (
                   <div key={cmd} style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: '.88rem', color: 'var(--mg-muted)' }}>
                     <span style={{ color: 'var(--mg-green)' }}>✓</span>
@@ -144,6 +146,39 @@ export default function HomePage() {
               <p>{desc}</p>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* ── AI Agent Systems ─────────────────────────────── */}
+      <section style={section('var(--mg-bg-surface)')}>
+        <div style={inner}>
+          <span style={{ display: 'inline-block', fontSize: '.72rem', fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--mg-accent)', background: 'var(--mg-accent-dim)', padding: '4px 12px', borderRadius: 20, marginBottom: 20 }}>AI Agent Observability</span>
+          <h2 className="section-h2">The execution runtime AI agents have been missing.</h2>
+          <p style={{ ...muted, fontSize: '.95rem', maxWidth: 600, margin: '0 0 40px' }}>
+            AI agents make decisions, call tools, mutate state — and when they fail, debugging is chaos. Fluxbase already captures every step. Now <code>flux agent trace</code> surfaces it as a full run-by-run trace.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 40, alignItems: 'start' }}>
+            <div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 32 }}>
+                {[
+                  { icon: '🔍', title: 'Every tool call recorded', desc: 'Input, output, and latency for every tool the agent invoked — in order.' },
+                  { icon: '🗃️', title: 'Every DB mutation linked', desc: 'State changes are traced back to the exact agent step that caused them.' },
+                  { icon: '♻️', title: 'Deterministic replay', desc: 'Re-run any agent execution against a different model version or prompt.' },
+                  { icon: '📊', title: 'Diff across model versions', desc: 'Compare how GPT-4o vs Claude 3 handled the same user request, step by step.' },
+                ].map(({ icon, title, desc }) => (
+                  <div key={title} style={{ display: 'flex', gap: 14, paddingBottom: 14, borderBottom: '1px solid var(--mg-border)' }}>
+                    <span style={{ fontSize: '1.1rem', marginTop: 2, flexShrink: 0 }}>{icon}</span>
+                    <div>
+                      <p style={{ fontWeight: 700, fontSize: '.9rem', color: 'var(--mg-text)', marginBottom: 3 }}>{title}</p>
+                      <p style={{ fontSize: '.83rem', color: 'var(--mg-muted)', lineHeight: 1.6 }}>{desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <Link href="/product#agent-observability" className="btn-secondary" style={{ fontSize: '.85rem' }}>See agent features →</Link>
+            </div>
+            <CodeWindow label="flux agent trace 7f3a9">{`<span style="color:var(--mg-green);">$</span> flux agent trace <span style="color:var(--mg-accent);">7f3a9</span>\n\n  Agent Run <span style="color:var(--mg-accent);">7f3a9</span>  2026-03-11 09:14 UTC\n  on: user.signup_requested  ·  5 steps  ·  342ms\n\n  <span style="color:#f9a8d4;">trigger</span>   on: user.signup_requested       <span style="color:var(--mg-yellow);">2ms</span>\n  <span style="color:#c4b5fd;">plan()</span>    planning 3 steps               <span style="color:var(--mg-yellow);">28ms</span>\n  <span style="color:var(--mg-green);">tool</span>      search_hotels                  <span style="color:var(--mg-yellow);">180ms</span>\n             input:  <span style="color:var(--mg-green);">{ city: &quot;Tokyo&quot;, dates: [...] }</span>\n             output: <span style="color:var(--mg-green);">{ results: 12, top_id: &quot;h_991&quot; }</span>\n  <span style="color:var(--mg-red);">tool</span>      book_room                      <span style="color:var(--mg-red);">✗ failed</span>\n             input:  <span style="color:var(--mg-green);">{ hotel_id: &quot;h_991&quot; }</span>\n             error:  <span style="color:var(--mg-red);">card declined (Stripe 402)</span>\n  <span style="color:var(--mg-muted);">db</span>        insert(reservations)         <span style="color:var(--mg-muted);">skipped</span>\n\n  <span style="color:var(--mg-red);">FAILED</span>  at tool.book_room\n  <span style="color:var(--mg-green);">→</span> flux agent trace diff <span style="color:var(--mg-muted);">7f3a9 prev</span>`}</CodeWindow>
+          </div>
         </div>
       </section>
 
