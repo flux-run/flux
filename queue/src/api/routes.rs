@@ -4,7 +4,10 @@ use crate::state::AppState;
 
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/jobs", post(crate::api::handlers::create_job::handler))
+        .route("/jobs",
+            get(crate::api::handlers::list_jobs::handler)
+                .post(crate::api::handlers::create_job::handler),
+        )
         .route("/jobs/stats", get(crate::api::handlers::stats::handler))
         .route(
             "/jobs/{id}",

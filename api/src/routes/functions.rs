@@ -186,3 +186,52 @@ pub async fn delete_function(
 
     Ok(ApiResponse::new(serde_json::json!({ "deleted": true })))
 }
+
+// ── Internal: function name → ID resolution ───────────────────────────────────
+//
+// Used by the runtime's ctx.queue.push() op to resolve a user-facing function
+// name ("send_email") to the UUIDs required by the Queue service.
+// Protected by the service-token middleware on /internal/*.
+
+#[derive(serde::Deserialize)]
+pub struct ResolveQuery {
+    pub name:       String,
+    pub project_id: Uuid,
+}
+
+#[derive(sqlx::FromRow)]
+struct ResolveRow {
+    id:        Uuid,
+    tenant_id: Uuid,
+}
+
+pub async fn resolve_function(
+    State(pool): State<PgPool>,
+    Query(q): axum::extract::Query<ResolveQuery>,
+) -> Result<axum::Json<serde_json::Value>, (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
+    let row = sqlx::query_as::<_, ResolveRow>(
+        "SELECT id, tenant_id FROM functions WHERE name = $1 AND project_id = $2 LIMIT 1",
+    )
+    .bind(&q.name)
+    .bind(q.project_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|_| (
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        axum::Json(serde_json::json!({ "error": "database_error" })),
+    ))?;
+
+    match row {
+        Some(r) => Ok(axum::Json(serde_json::json!({
+            "function_id": r.id,
+            "tenant_id":   r.tenant_id,
+        }))),
+        None => Err((
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({
+                "error": "function_not_found",
+                "name":  q.name,
+            })),
+        )),
+    }
+}

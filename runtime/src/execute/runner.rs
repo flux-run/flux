@@ -12,7 +12,7 @@ use axum::Json;
 use axum::response::{IntoResponse, Response};
 use serde_json::Value;
 
-use crate::engine::executor::ExecutionResult;
+use crate::engine::executor::{ExecutionResult, QueueContext};
 use crate::engine::pool::IsolatePool;
 use crate::engine::wasm_pool::WasmPool;
 use crate::execute::bundle::ResolvedBundle;
@@ -22,11 +22,17 @@ use crate::schema::validator;
 use crate::trace::emitter::TraceEmitter;
 
 pub struct ExecutionRunner<'a> {
-    pub isolate_pool:  &'a IsolatePool,
-    pub wasm_pool:     &'a WasmPool,
-    pub schema_cache:  &'a SchemaCache,
-    pub http_client:   &'a reqwest::Client,
-    pub wasm_http_hosts: Vec<String>,
+    pub isolate_pool:     &'a IsolatePool,
+    pub wasm_pool:        &'a WasmPool,
+    pub schema_cache:     &'a SchemaCache,
+    pub http_client:      &'a reqwest::Client,
+    pub wasm_http_hosts:  Vec<String>,
+    /// Queue service base URL — forwarded into ctx.queue.push() via QueueOpState.
+    pub queue_url:        &'a str,
+    /// API service base URL — used by ctx.queue.push() to resolve function names.
+    pub api_url:          &'a str,
+    /// Internal service token threaded to queue + API calls from user functions.
+    pub service_token:    &'a str,
 }
 
 impl<'a> ExecutionRunner<'a> {
@@ -91,11 +97,19 @@ impl<'a> ExecutionRunner<'a> {
         tracer:  &TraceEmitter,
         start:   Instant,
     ) -> (Result<ExecutionResult, Response>, u64) {
+        let queue_ctx = QueueContext {
+            queue_url:     self.queue_url.to_string(),
+            api_url:       self.api_url.to_string(),
+            service_token: self.service_token.to_string(),
+            project_id:    ctx.project_id,
+            client:        self.http_client.clone(),
+        };
         let result = self.isolate_pool.execute(
             code,
             secrets,
             ctx.payload.clone(),
             ctx.execution_seed,
+            queue_ctx,
         ).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 

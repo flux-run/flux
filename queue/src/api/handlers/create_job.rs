@@ -10,7 +10,14 @@ pub async fn handler(
     Json(req): Json<CreateJobRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let pool = &state.pool;
-    let run_at = chrono::Utc::now().naive_utc();
+
+    let run_at = match req.delay_seconds {
+        Some(d) if d > 0 => {
+            chrono::Utc::now().naive_utc()
+                + chrono::Duration::try_seconds(d).unwrap_or_default()
+        }
+        _ => chrono::Utc::now().naive_utc(),
+    };
 
     let input = CreateJobInput {
         tenant_id: req.tenant_id,

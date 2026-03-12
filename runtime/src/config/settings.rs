@@ -5,6 +5,8 @@ pub struct Settings {
     /// Base URL of the API service — bundle fetch, secrets, log emission.
     /// e.g. `http://localhost:8080` in dev, internal Cloud Run URL in prod.
     pub api_url:         String,
+    /// Base URL of the Queue service — used by ctx.queue.push() from user functions.
+    pub queue_url:       String,
     pub service_token:   String,
     pub port:            u16,
     /// Number of V8 isolate worker threads.
@@ -25,6 +27,9 @@ impl Settings {
             .or_else(|_| env::var("CONTROL_PLANE_URL"))   // backward-compat alias
             .unwrap_or_else(|_| "http://localhost:8080".to_string());
 
+        let queue_url = env::var("QUEUE_URL")
+            .unwrap_or_else(|_| "http://localhost:8084".to_string());
+
         let service_token = env::var("SERVICE_TOKEN")
             .unwrap_or_else(|_| "stub_token".to_string());
 
@@ -41,6 +46,6 @@ impl Settings {
             .and_then(|v| v.parse().ok())
             .unwrap_or(default_workers);
 
-        Self { api_url, service_token, port, isolate_workers }
+        Self { api_url, queue_url, service_token, port, isolate_workers }
     }
 }

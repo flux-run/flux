@@ -21,11 +21,17 @@ pub async fn execute(pool: PgPool, runtime_url: String, service_token: String, c
     info!(job_id = %job.id, function_id = %job.function_id, "job started");
     log_job(&pool, job.id, "job started").await;
 
-    // Stamp started_at immediately before the runtime call.
-    // Timeout recovery measures elapsed time from this column, not from locked_at.
+    // Generate a fresh request_id for this execution. This UUID is forwarded to
+    // the runtime as `x-request-id` so all spans emitted during the execution are
+    // grouped under it — enabling `flux trace <request_id>` on a job.
+    let request_id = Uuid::new_v4();
+
+    // Stamp started_at and request_id before the runtime call.
+    // Timeout recovery measures elapsed time from started_at, not from locked_at.
     let _ = sqlx::query(
-        "UPDATE jobs SET started_at = now(), updated_at = now() WHERE id = $1",
+        "UPDATE jobs SET started_at = now(), request_id = $1, updated_at = now() WHERE id = $2",
     )
+    .bind(request_id)
     .bind(job.id)
     .execute(&pool)
     .await;
@@ -35,6 +41,7 @@ pub async fn execute(pool: PgPool, runtime_url: String, service_token: String, c
     let res = client
         .post(&runtime_endpoint)
         .bearer_auth(&service_token)
+        .header("x-request-id", request_id.to_string())
         .json(&serde_json::json!({
             "function_id": job.function_id,
             "project_id":  job.project_id,
@@ -46,17 +53,17 @@ pub async fn execute(pool: PgPool, runtime_url: String, service_token: String, c
     match res {
         Ok(response) if response.status().is_success() => {
             let _ = update_status(&pool, job.id, "completed").await;
-            info!(job_id = %job.id, "job completed");
-            log_job(&pool, job.id, "job completed").await;
+            info!(job_id = %job.id, %request_id, "job completed");
+            log_job(&pool, job.id, &format!("job completed (trace: {})", request_id)).await;
         }
         Ok(response) => {
             let status = response.status();
-            error!(job_id = %job.id, %status, "runtime returned error");
+            error!(job_id = %job.id, %request_id, %status, "runtime returned error");
             log_job(&pool, job.id, &format!("job failed: runtime returned {}", status)).await;
             handle_failure(&pool, job).await;
         }
         Err(e) => {
-            error!(job_id = %job.id, error = %e, "runtime request failed");
+            error!(job_id = %job.id, %request_id, error = %e, "runtime request failed");
             log_job(&pool, job.id, &format!("job failed: {}", e)).await;
             handle_failure(&pool, job).await;
         }

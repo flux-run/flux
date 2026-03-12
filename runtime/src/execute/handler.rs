@@ -80,6 +80,9 @@ pub async fn execute_handler(
         schema_cache:    &state.schema_cache,
         http_client:     &state.http_client,
         wasm_http_hosts: allowed_wasm_http_hosts(),
+        queue_url:       &state.queue_url,
+        api_url:         &state.api_url,
+        service_token:   &state.service_token,
     };
 
     // ── Warm WASM path ────────────────────────────────────────────────────

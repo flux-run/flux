@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration};
 
-use super::executor::{create_js_runtime, execute_with_runtime, ExecutionResult};
+use super::executor::{create_js_runtime, execute_with_runtime, ExecutionResult, QueueContext};
 
 /// A task sent to an isolate worker.
 struct ExecutionTask {
@@ -10,6 +10,7 @@ struct ExecutionTask {
     secrets:        HashMap<String, String>,
     payload:        serde_json::Value,
     execution_seed: i64,
+    queue_ctx:      QueueContext,
     reply:          oneshot::Sender<Result<ExecutionResult, String>>,
 }
 
@@ -113,7 +114,7 @@ impl IsolatePool {
                             let result = execute_with_runtime(
                                 &mut js_rt,
                                 t.code, t.secrets, t.payload,
-                                t.execution_seed,
+                                t.execution_seed, t.queue_ctx,
                             ).await;
 
                             // If execution timed out the V8 event loop may be stuck.
@@ -154,11 +155,12 @@ impl IsolatePool {
         secrets:        HashMap<String, String>,
         payload:        serde_json::Value,
         execution_seed: i64,
+        queue_ctx:      QueueContext,
     ) -> Result<ExecutionResult, String> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
         let task = ExecutionTask {
-            code, secrets, payload, execution_seed,
+            code, secrets, payload, execution_seed, queue_ctx,
             reply: reply_tx,
         };
 

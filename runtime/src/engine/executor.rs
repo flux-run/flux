@@ -41,13 +41,146 @@ pub async fn op_agent_llm_call(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
-/// Build the Fluxbase runtime extension — agent ops.
+/// Build the Fluxbase runtime extension — agent + queue ops.
 pub fn build_fluxbase_extension() -> Extension {
     Extension {
         name: "fluxbase",
-        ops: Cow::Owned(vec![op_agent_llm_call()]),
+        ops: Cow::Owned(vec![op_agent_llm_call(), op_queue_push()]),
         ..Default::default()
     }
+}
+
+// ── Queue op ──────────────────────────────────────────────────────────────────
+//
+// Deno bridge: JS calls Deno.core.ops.op_queue_push(functionName, payload, delay, key)
+// from inside ctx.queue.push().
+// The op:
+//   1. Resolves function name → UUID via GET {api_url}/internal/functions/resolve
+//   2. POSTs to queue service /jobs
+//   3. Returns { job_id }
+
+/// Per-request queue context injected into Deno OpState.
+pub struct QueueOpState {
+    pub queue_url:     String,
+    pub api_url:       String,
+    pub service_token: String,
+    pub project_id:    Option<uuid::Uuid>,
+    pub client:        reqwest::Client,
+}
+
+/// Carry queue context from the async Tokio world (pool.rs) into execute_with_runtime.
+#[derive(Clone)]
+pub struct QueueContext {
+    pub queue_url:     String,
+    pub api_url:       String,
+    pub service_token: String,
+    pub project_id:    Option<uuid::Uuid>,
+    pub client:        reqwest::Client,
+}
+
+/// Options forwarded from JS's `opts` argument to `ctx.queue.push()`.
+#[derive(serde::Deserialize)]
+pub struct QueuePushOpts {
+    pub delay_seconds:   Option<i64>,
+    pub idempotency_key: Option<String>,
+}
+
+#[deno_core::op2(async)]
+#[serde]
+pub async fn op_queue_push(
+    state:             Rc<RefCell<OpState>>,
+    #[string] function_name: String,
+    #[serde]  payload:       serde_json::Value,
+    #[serde]  opts:          QueuePushOpts,
+) -> Result<serde_json::Value, std::io::Error> {
+    let (queue_url, api_url, service_token, project_id, client) = {
+        let s = state.borrow();
+        let qs = s.borrow::<QueueOpState>();
+        (
+            qs.queue_url.clone(),
+            qs.api_url.clone(),
+            qs.service_token.clone(),
+            qs.project_id,
+            qs.client.clone(),
+        )
+    };
+
+    let project_id_str = project_id
+        .map(|p| p.to_string())
+        .unwrap_or_default();
+
+    // ── Resolve function name → { function_id, tenant_id } ───────────────
+    let resolve_url = format!(
+        "{}/internal/functions/resolve?name={}&project_id={}",
+        api_url.trim_end_matches('/'), function_name, project_id_str,
+    );
+
+    let resolve_resp = client
+        .get(&resolve_url)
+        .header("X-Service-Token", &service_token)
+        .send()
+        .await
+        .map_err(|e| std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("function resolve request failed: {}", e),
+        ))?;
+
+    if !resolve_resp.status().is_success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("ctx.queue.push: function '{}' not found in project", function_name),
+        ));
+    }
+
+    let resolved: serde_json::Value = resolve_resp.json().await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    let function_id = resolved["function_id"].as_str()
+        .ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "missing function_id in resolve response",
+        ))?;
+
+    let tenant_id = resolved["tenant_id"].as_str()
+        .ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "missing tenant_id in resolve response",
+        ))?;
+
+    // ── Push to queue service ─────────────────────────────────────────────
+    let job_body = serde_json::json!({
+        "tenant_id":       tenant_id,
+        "project_id":      project_id,
+        "function_id":     function_id,
+        "payload":         payload,
+        "delay_seconds":   opts.delay_seconds,
+        "idempotency_key": opts.idempotency_key,
+    });
+
+    let queue_resp = client
+        .post(format!("{}/jobs", queue_url.trim_end_matches('/')))
+        .bearer_auth(&service_token)
+        .json(&job_body)
+        .send()
+        .await
+        .map_err(|e| std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("queue push failed: {}", e),
+        ))?;
+
+    if !queue_resp.status().is_success() {
+        let status = queue_resp.status();
+        let body = queue_resp.text().await.unwrap_or_default();
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("queue returned {}: {}", status, body),
+        ));
+    }
+
+    let job_data: serde_json::Value = queue_resp.json().await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    Ok(serde_json::json!({ "job_id": job_data["job_id"] }))
 }
 
 /// Create a warm `JsRuntime` with the Fluxbase extension registered.
@@ -293,6 +426,42 @@ fn build_wrapper(
                         throw new Error("agent: exceeded maxSteps=" + maxSteps);
                     }},
                 }},
+
+                // ── Queue ─────────────────────────────────────────────
+                // ctx.queue.push("function_name", payload, {{ delay: "5m", idempotencyKey: "..." }})
+                //
+                // Enqueues a background job. The runtime resolves the function name
+                // to a UUID, calls the Queue service, and records a queue_push span
+                // so the enqueue appears in `flux trace`.
+                queue: {{
+                    push: async (functionName, payload, opts) => {{
+                        opts = opts || {{}};
+                        const delay = opts.delay
+                            ? (() => {{
+                                const _d = String(opts.delay);
+                                if (_d.endsWith("h")) return parseInt(_d) * 3600;
+                                if (_d.endsWith("m")) return parseInt(_d) * 60;
+                                if (_d.endsWith("s")) return parseInt(_d);
+                                return parseInt(_d);
+                              }})()
+                            : (opts.delay_seconds || null);
+                        const result = await Deno.core.ops.op_queue_push(
+                            functionName,
+                            payload !== undefined ? payload : {{}},
+                            {{
+                                delay_seconds:   delay,
+                                idempotency_key: opts.idempotencyKey || opts.idempotency_key || null,
+                            }},
+                        );
+                        __fluxbase_logs.push({{
+                            level:     "info",
+                            message:   "queue_push:" + functionName + "  job_id=" + (result && result.job_id),
+                            span_type: "queue_push",
+                            source:    "queue",
+                        }});
+                        return result;
+                    }},
+                }},
             }};
 
             // Execute the bundle
@@ -400,6 +569,7 @@ pub async fn execute_with_runtime(
     secrets:        HashMap<String, String>,
     payload:        serde_json::Value,
     execution_seed: i64,
+    queue_ctx:      QueueContext,
 ) -> Result<ExecutionResult, String> {
     // ── Per-request OpState injection ─────────────────────────────────────────
     // Use try_take + put to handle both the first call and subsequent reuse.
@@ -414,6 +584,15 @@ pub async fn execute_with_runtime(
             .unwrap_or_else(|| "gpt-4o-mini".to_string());
         let _ = state.try_take::<AgentOpState>();
         state.put(AgentOpState { llm_key, llm_url, llm_model });
+
+        let _ = state.try_take::<QueueOpState>();
+        state.put(QueueOpState {
+            queue_url:     queue_ctx.queue_url,
+            api_url:       queue_ctx.api_url,
+            service_token: queue_ctx.service_token,
+            project_id:    queue_ctx.project_id,
+            client:        queue_ctx.client,
+        });
     }
 
     // ── Build + execute the IIFE wrapper ───────────────────────────────────

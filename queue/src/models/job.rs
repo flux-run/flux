@@ -17,6 +17,9 @@ pub struct Job {
     pub run_at: NaiveDateTime,
     pub locked_at: Option<NaiveDateTime>,
     pub started_at: Option<NaiveDateTime>,
+    /// UUID sent as `x-request-id` to the runtime. Links this job to its
+    /// execution record so `flux trace <request_id>` shows the full trace.
+    pub request_id: Option<Uuid>,
     pub idempotency_key: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,

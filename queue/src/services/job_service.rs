@@ -40,3 +40,36 @@ pub async fn get_job(pool: &PgPool, id: Uuid) -> Result<Job, sqlx::Error> {
         .fetch_one(pool)
         .await
 }
+
+/// List jobs with optional status filter.
+///
+/// Used by `flux queue list`: returns jobs ordered by `run_at` descending
+/// (most-recently-scheduled first) with simple limit/offset pagination.
+pub async fn list_jobs(
+    pool: &PgPool,
+    status: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Job>, sqlx::Error> {
+    match status {
+        Some(s) => {
+            sqlx::query_as::<_, Job>(
+                "SELECT * FROM jobs WHERE status = $1 ORDER BY run_at DESC LIMIT $2 OFFSET $3",
+            )
+            .bind(s)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+        None => {
+            sqlx::query_as::<_, Job>(
+                "SELECT * FROM jobs ORDER BY run_at DESC LIMIT $1 OFFSET $2",
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await
+        }
+    }
+}

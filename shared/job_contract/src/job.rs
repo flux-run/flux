@@ -13,6 +13,11 @@ pub struct CreateJobRequest {
     /// rather than creating a duplicate.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Delay before the job becomes eligible to run.
+    /// e.g. 300 = run no sooner than 5 minutes from now.
+    /// Omit (or pass null/0) for immediate execution.
+    #[serde(default)]
+    pub delay_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

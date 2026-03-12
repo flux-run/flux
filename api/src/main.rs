@@ -148,6 +148,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/introspect", get(routes::introspect::get_project_introspect))
         .route("/logs", post(logs::routes::create_log))
         .route("/logs", get(logs::routes::list_logs))
+        // Resolves a function name → { function_id, tenant_id } for the runtime's ctx.queue.push()
+        .route("/functions/resolve", get(routes::functions::resolve_function))
         // Emits a table-change event to all connected SSE clients for the project.
         .route("/events/emit", post(routes::events::emit))
         // Central service-token guard — applied once here so every /internal/*
