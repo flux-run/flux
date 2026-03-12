@@ -5,8 +5,16 @@
 ## Functions
 
 A **function** is the primary compute unit in Fluxbase.  Functions are
-JavaScript/TypeScript modules that export a single default handler.  Each
-function is deployed as an isolated bundle executed inside a Deno V8 isolate.
+language-independent compute units: write them in JavaScript, TypeScript, Rust,
+Go, or any language that compiles to WebAssembly.  Each function is deployed as
+an isolated bundle and executed inside one of two sandboxed runtimes:
+
+| Runtime | `flux.json` field | Languages | Use cases |
+|---|---|---|---|
+| **Deno V8** | `"runtime": "deno"` | JavaScript, TypeScript | APIs, scripts, workflows, AI agents |
+| **WASM** | `"runtime": "wasm"` | Rust, Go, C, AssemblyScript, … | CPU-bound compute, ML inference, native libraries |
+
+See [WASM Runtime](./wasm-runtime.md) for the full design and language guides.
 
 ### Handler signatures
 
@@ -53,12 +61,32 @@ export default defineFunction({
 
 ### Manifest — `flux.json`
 
+**Deno (JavaScript / TypeScript):**
+
 ```json
 {
   "runtime": "deno",
   "entry": "index.ts"
 }
 ```
+
+**WASM (Rust, Go, C, AssemblyScript, …):**
+
+```json
+{
+  "runtime": "wasm",
+  "entry":   "handler.wasm",
+  "build":   "cargo build --target wasm32-wasip1 --release && cp target/wasm32-wasip1/release/my_fn.wasm handler.wasm",
+  "memory_mb": 64
+}
+```
+
+| Field | Description |
+|---|---|
+| `runtime` | `"deno"` or `"wasm"` |
+| `entry` | Entry file — `.ts`/`.js` for Deno, `.wasm` for WASM |
+| `build` | Optional shell command run by `flux deploy` before upload |
+| `memory_mb` | WASM only — linear memory cap (default 64 MB) |
 
 ---
 

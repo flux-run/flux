@@ -1,6 +1,17 @@
 # Runtime Service
 
-The **Runtime** is the JavaScript execution engine of Fluxbase. It receives function invocation requests, fetches the compiled JS bundle, runs it inside an isolated Deno V8 sandbox, and returns a structured result with logs.
+The **Runtime** is the language-independent execution engine of Fluxbase.  It
+receives function invocation requests, fetches the compiled bundle, and
+dispatches to one of two sandboxed execution engines:
+
+| Engine | Trigger | Languages |
+|---|---|---|
+| **Deno V8** (`IsolatePool`) | `"runtime": "deno"` in `flux.json` | JavaScript, TypeScript |
+| **Wasmtime** (`WasmPool`) | `"runtime": "wasm"` in `flux.json` | Rust, Go, C/C++, AssemblyScript, … |
+
+Both engines share bundle fetching, secrets injection, structured logging, and
+request tracing.  See [WASM Runtime](./wasm-runtime.md) for the full WASM
+design doc and language guides.
 
 ---
 
@@ -12,23 +23,24 @@ The **Runtime** is the JavaScript execution engine of Fluxbase. It receives func
 4. [Security Model](#security-model)
 5. [Execution Flow](#execution-flow)
 6. [IsolatePool — Worker Thread Model](#isolatepool--worker-thread-model)
-7. [Resource Limits](#resource-limits)
-8. [V8 Sandbox & FluxContext](#v8-sandbox--fluxcontext)
-9. [Caching Layer](#caching-layer)
-10. [Secrets Management](#secrets-management)
-11. [Tools Layer](#tools-layer)
-12. [Workflow Engine](#workflow-engine)
-13. [Agent Engine](#agent-engine)
-14. [Triggers](#triggers)
-15. [Deterministic Execution Model](#deterministic-execution-model)
-16. [Replay Execution Mode](#replay-execution-mode)
-17. [Execution Comparison](#execution-comparison)
-18. [Observability & Logging](#observability--logging)
-18. [Runtime Instrumentation](#runtime-instrumentation)
-19. [Performance Characteristics](#performance-characteristics)
-20. [Configuration](#configuration)
-21. [Dependencies](#dependencies)
-22. [Known Limitations & Improvement Areas](#known-limitations--improvement-areas)
+7. [WasmPool — WASM Executor (planned)](#wasmpool--wasm-executor-planned)
+8. [Resource Limits](#resource-limits)
+9. [V8 Sandbox & FluxContext](#v8-sandbox--fluxcontext)
+10. [Caching Layer](#caching-layer)
+11. [Secrets Management](#secrets-management)
+12. [Tools Layer](#tools-layer)
+13. [Workflow Engine](#workflow-engine)
+14. [Agent Engine](#agent-engine)
+15. [Triggers](#triggers)
+16. [Deterministic Execution Model](#deterministic-execution-model)
+17. [Replay Execution Mode](#replay-execution-mode)
+18. [Execution Comparison](#execution-comparison)
+19. [Observability & Logging](#observability--logging)
+20. [Runtime Instrumentation](#runtime-instrumentation)
+21. [Performance Characteristics](#performance-characteristics)
+22. [Configuration](#configuration)
+23. [Dependencies](#dependencies)
+24. [Known Limitations & Improvement Areas](#known-limitations--improvement-areas)
 
 ---
 
@@ -41,13 +53,17 @@ Client
   ↓
 Gateway  (auth, rate-limit, route resolution)
   ↓  x-request-id, x-parent-span-id, X-Tenant-Id, X-Tenant-Slug
-Runtime  (bundle fetch, secret inject, V8 execution)
+Runtime  (bundle fetch, secret inject, dispatch)
   ↓
-V8 Isolate  (user JS bundle, FluxContext sandbox)
-  ↓
-ToolExecutor  (single unified call path)
-  ↓
-External APIs  (Composio, LLM, …)
+  ├─ runtime=deno ───► V8 Isolate  (user JS bundle, FluxContext sandbox)
+  │                       ↓
+  │               ToolExecutor  (single unified call path)
+  │                       ↓
+  │               External APIs  (Composio, LLM, …)
+  │
+  └─ runtime=wasm ───► WasmExecutor  (Wasmtime, user .wasm module)
+                          ↓
+                  fluxbase.* host imports  (secrets, log, http_fetch)
 ```
 
 ### Execution internals
@@ -106,11 +122,13 @@ runtime/src/
 ├── main.rs                  # Entry point: HTTP server, AppState, route wiring
 ├── api/
 │   ├── mod.rs
-│   └── routes.rs            # execute_handler, health_check, invalidate_cache_handler
+│   └── routes.rs            # execute_handler — dispatches to IsolatePool or WasmPool
 ├── engine/
 │   ├── mod.rs
 │   ├── executor.rs          # execute_function(), Deno ops, FluxContext JS wrapper
-│   └── pool.rs              # IsolatePool — fixed OS thread pool
+│   ├── pool.rs              # IsolatePool — fixed OS thread pool (Deno V8)
+│   ├── wasm_pool.rs         # WasmPool — Wasmtime module pool (planned)
+│   └── wasm_executor.rs    # WasmExecutor — per-invocation Wasmtime execution (planned)
 ├── cache/
 │   ├── mod.rs
 │   └── bundle_cache.rs      # Two-level LRU bundle cache (function + deployment)
@@ -416,6 +434,58 @@ This is a non-breaking, per-request injection — live executions are unaffected
 | outer (pool level) | 11 s | Time to acquire a worker |
 | inner (V8 level) | 30 s | Function execution time |
 | OS thread | 32 s | Backstop if inner timeout is bypassed |
+
+---
+
+## WasmPool — WASM Executor (planned)
+
+A second execution pool that runs `.wasm` modules compiled ahead-of-time by
+**Wasmtime** (Cranelift backend).  Selected when `bundle_meta.runtime == "wasm"`.
+
+### Architecture
+
+```
+WasmPool (new)
+  ├── compiled_modules: LruCache<function_id, Arc<Module>>  // AOT bytecode, shared
+  └── worker_slots:     mpsc::channel<WasmWorker>           // N = min(2×CPU, 16)
+
+WasmWorker
+  ├── engine: Arc<wasmtime::Engine>  // shared, one per process
+  └── store:  wasmtime::Store         // per-worker; reset between invocations
+```
+
+### Dispatch in `execute_handler`
+
+```rust
+match bundle_meta.runtime.as_deref() {
+    Some("wasm") => state.wasm_pool.execute(params).await,
+    _            => state.isolate_pool.execute(params).await,  // default: deno
+}
+```
+
+### Host imports (FluxContext ABI for WASM)
+
+| Import | Signature | Description |
+|---|---|---|
+| `fluxbase.secrets_get` | `(key_ptr, key_len) → (val_ptr, val_len)` | Read a named secret |
+| `fluxbase.log` | `(level, msg_ptr, msg_len) → ()` | Emit a structured log line |
+| `fluxbase.http_fetch` | `(req_ptr, req_len) → (resp_ptr, resp_len)` | Outbound HTTP (allow-list gated) |
+
+Modules must export `handle(payload_ptr, payload_len) → result_ptr` plus
+memory helpers `__flux_alloc` and `__flux_free`.  See
+[WASM Runtime](./wasm-runtime.md) for the full ABI specification.
+
+### Tenant isolation
+
+Mirrors `IsolatePool` — a worker slot whose last `tenant_id` differs from the
+arriving task gets its `Store` fully recreated before execution (all linear
+memory cleared) preventing any cross-tenant data leakage.
+
+### Roadmap
+
+See [WASM Runtime — Roadmap](./wasm-runtime.md#roadmap) for the phased
+implementation plan (Phase 1: core executor, Phase 2: HTTP + Component Model,
+Phase 3: production hardening).
 
 ---
 
