@@ -9,6 +9,8 @@ pub struct RouteRecord {
     pub path: String,
     pub method: String,
     pub function_id: Uuid,
+    /// Runtime that will execute this function: "deno" (default) or "wasm".
+    pub runtime: String,
     pub is_async: bool,
     pub auth_type: String,
     pub cors_enabled: bool,

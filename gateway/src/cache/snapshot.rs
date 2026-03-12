@@ -47,12 +47,16 @@ impl GatewaySnapshot {
             new_data.tenants_by_slug.insert(t.slug, t.id);
         }
 
-        // Fetch routes
+        // Fetch routes — note the JOIN on functions so we can carry the runtime
+        // field forward and dispatch correctly at the gateway layer.
         let routes = sqlx::query_as::<_, RouteRecord>(
-            "SELECT r.id, r.project_id, p.tenant_id, r.path, r.method, r.function_id, r.is_async, r.auth_type, r.cors_enabled, r.rate_limit, \
+            "SELECT r.id, r.project_id, p.tenant_id, r.path, r.method, r.function_id, \
+             COALESCE(f.runtime, 'deno') AS runtime, \
+             r.is_async, r.auth_type, r.cors_enabled, r.rate_limit, \
              r.jwks_url, r.jwt_audience, r.jwt_issuer, r.json_schema, r.cors_origins, r.cors_headers \
              FROM routes r \
-             JOIN projects p ON p.id = r.project_id"
+             JOIN projects p ON p.id = r.project_id \
+             JOIN functions f ON f.id = r.function_id"
         )
         .fetch_all(&self.db_pool)
         .await?;
