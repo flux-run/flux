@@ -21,6 +21,7 @@ use api::routes::{execute_handler, health_check, invalidate_cache_handler, AppSt
 use config::settings::Settings;
 use secrets::secrets_client::SecretsClient;
 use engine::pool::IsolatePool;
+use engine::wasm_pool::WasmPool;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let secrets_client = SecretsClient::new(settings.clone(), http_client.clone());
     let isolate_pool = IsolatePool::new(settings.isolate_workers);
+    let wasm_pool    = WasmPool::default_sized();
     let pool_workers = settings.isolate_workers;
     
     let state = Arc::new(AppState {
@@ -46,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         service_token: settings.service_token.clone(),
         bundle_cache: cache::bundle_cache::BundleCache::new(100),
         isolate_pool,
+        wasm_pool,
     });
 
     let app = Router::new()

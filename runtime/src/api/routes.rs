@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
 use crate::engine::pool::IsolatePool;
+use crate::engine::wasm_pool::WasmPool;
 use crate::secrets::secrets_client::SecretsClient;
 
 #[derive(Deserialize)]
@@ -35,7 +36,10 @@ pub struct AppState {
     pub control_plane_url: String,
     pub service_token: String,
     pub bundle_cache: crate::cache::bundle_cache::BundleCache,
+    /// Deno V8 isolate pool (JavaScript / TypeScript functions)
     pub isolate_pool: IsolatePool,
+    /// Wasmtime execution pool (WASM functions — any language)
+    pub wasm_pool: WasmPool,
 }
 
 // ── Span helpers ─────────────────────────────────────────────────────────────
@@ -181,7 +185,85 @@ pub async fn execute_handler(
 
     let start_time = std::time::Instant::now();
 
-    // ── Function-level bundle cache (skips control plane + S3 entirely) ──
+    // ── WASM warm path: cached bytes → skip control plane + S3 entirely ────────
+    if let Some(wasm_bytes) = state.wasm_pool.get_cached_bytes(&req.function_id).await {
+        tracing::debug!(function_id = %req.function_id, "wasm bytes cache hit (warm path)");
+        let log_url = format!("{}/internal/logs", state.control_plane_url);
+        post_span(&state.http_client, log_url.clone(), state.service_token.clone(),
+            req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+            "runtime", "debug", "wasm cache hit — skipping fetch".into(), "event");
+        let secrets = match state.secrets_client.fetch_secrets(req.tenant_id, req.project_id).await {
+            Ok(s) => s,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "SecretFetchError", "message": e })),
+            ).into_response(),
+        };
+        post_trace_span(&state.http_client, log_url.clone(), state.service_token.clone(),
+            req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+            &trace_ctx, "info", "execution_start".into(), "start", "started", None);
+        let execution = match state.wasm_pool.execute(
+            req.function_id.clone(), wasm_bytes.to_vec(), secrets,
+            req.payload, tenant_id_header.to_string(), None,
+        ).await {
+            Ok(r) => r,
+            Err(e) => {
+                let (err_code, message) = if let Ok(p) = serde_json::from_str::<serde_json::Value>(&e) {
+                    (p.get("code").and_then(|c| c.as_str()).unwrap_or("FunctionExecutionError").to_string(),
+                     p.get("message").and_then(|m| m.as_str()).unwrap_or(&e).to_string())
+                } else { ("FunctionExecutionError".to_string(), e) };
+                let error_dur = start_time.elapsed().as_millis() as u64;
+                post_trace_span(&state.http_client, log_url.clone(), state.service_token.clone(),
+                    req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+                    &trace_ctx, "error", format!("execution_error: {}: {}", err_code, message),
+                    "end", "error", Some(error_dur));
+                return (StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": err_code, "message": message })),
+                ).into_response();
+            }
+        };
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        {
+            let trace_parent  = trace_ctx.parent_span_id.clone();
+            let trace_sha     = trace_ctx.code_sha.clone();
+            let service_token = state.service_token.clone();
+            let function_id   = req.function_id.clone();
+            let tenant_id     = req.tenant_id;
+            let project_id    = req.project_id;
+            let logs          = execution.logs;
+            let client        = state.http_client.clone();
+            let rid           = request_id.clone();
+            let dur           = duration_ms;
+            tokio::spawn(async move {
+                for log in logs {
+                    let span_type = log.span_type.as_deref().unwrap_or("event");
+                    let source    = log.source.as_deref().unwrap_or("function");
+                    let span_id   = log.span_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+                    let _ = client.post(&log_url).header("X-Service-Token", &service_token)
+                        .json(&serde_json::json!({
+                            "source": source, "resource_id": &function_id,
+                            "tenant_id": tenant_id, "project_id": project_id,
+                            "level": log.level, "message": log.message,
+                            "request_id": &rid, "span_id": span_id, "span_type": span_type,
+                            "parent_span_id": &trace_parent, "code_sha": &trace_sha,
+                            "duration_ms": log.duration_ms, "tool_name": log.tool_name,
+                            "execution_state": log.execution_state,
+                        })).send().await;
+                }
+                let _ = client.post(&log_url).header("X-Service-Token", &service_token)
+                    .json(&serde_json::json!({
+                        "source": "runtime", "resource_id": &function_id,
+                        "tenant_id": tenant_id, "project_id": project_id,
+                        "level": "info", "message": format!("execution_end ({}ms)", dur),
+                        "request_id": &rid, "span_id": Uuid::new_v4().to_string(),
+                        "span_type": "end", "parent_span_id": &trace_parent, "code_sha": &trace_sha,
+                        "execution_state": "completed", "duration_ms": dur,
+                    })).send().await;
+            });
+        }
+        return (StatusCode::OK, Json(ExecuteResponse { result: execution.output, duration_ms })).into_response();
+    }
+
+    // ── Deno function-level bundle cache (skips control plane + S3 entirely) ──
     if let Some(cached_code) = state.bundle_cache.get_by_function(&req.function_id) {
         tracing::debug!(function_id = %req.function_id, "bundle cache hit (function-level)");
 
@@ -366,6 +448,13 @@ pub async fn execute_handler(
                     ).into_response();
                 }
             };
+            // Extract runtime field — determines which execution engine to use.
+            let bundle_runtime = json.get("data")
+                .and_then(|d| d.get("runtime"))
+                .and_then(|r| r.as_str())
+                .unwrap_or("deno")
+                .to_string();
+
             let (deployment_id, url_opt, code_opt) = {
                 let d_id = json.get("data").and_then(|d| d.get("deployment_id")).and_then(|id| id.as_str());
                 let u_id = json.get("data").and_then(|d| d.get("url")).and_then(|u| u.as_str());
@@ -373,6 +462,114 @@ pub async fn execute_handler(
                 (d_id.map(|s| s.to_string()), u_id.map(|s| s.to_string()), c_id.map(|s| s.to_string()))
             };
 
+            // ── WASM cold execution path ─────────────────────────────────────────
+            if bundle_runtime == "wasm" {
+                // WASM binaries are downloaded as bytes (not UTF-8 text).
+                let wasm_bytes: Vec<u8> = if let Some(url) = url_opt {
+                    match state.http_client.get(&url).send().await {
+                        Ok(res) if res.status().is_success() => {
+                            let fetch_ms = start_time.elapsed().as_millis();
+                            post_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
+                                req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+                                "runtime", "info", format!("wasm bundle fetched from R2 ({}ms)", fetch_ms), "event");
+                            res.bytes().await.map(|b| b.to_vec()).unwrap_or_default()
+                        }
+                        Ok(res) => {
+                            let status = res.status().as_u16();
+                            let body = res.text().await.unwrap_or_default();
+                            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                                "error": "S3FetchError",
+                                "message": format!("S3 returned HTTP {}: {}", status, body)
+                            }))).into_response();
+                        }
+                        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                            "error": "S3FetchError",
+                            "message": format!("Failed to download wasm bundle: {}", e)
+                        }))).into_response(),
+                    }
+                } else if let Some(encoded) = code_opt {
+                    // Inline WASM is base64-encoded (binary can't be stored raw as text).
+                    use base64::Engine as _;
+                    base64::engine::general_purpose::STANDARD
+                        .decode(&encoded)
+                        .unwrap_or_else(|_| encoded.into_bytes())
+                } else {
+                    return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                        "error": "no_bundle_found", "message": "No wasm bundle found for this function."
+                    }))).into_response();
+                };
+
+                trace_ctx.code_sha = Some(bundle_sha(&String::from_utf8_lossy(&wasm_bytes)));
+                state.wasm_pool.cache_bytes(req.function_id.clone(), std::sync::Arc::new(wasm_bytes.clone())).await;
+
+                post_trace_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
+                    req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+                    &trace_ctx, "info", "execution_start".into(), "start", "started", None);
+
+                let execution = match state.wasm_pool.execute(
+                    req.function_id.clone(), wasm_bytes, secrets,
+                    req.payload, tenant_id_header.to_string(), None,
+                ).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let (err_code, message) = if let Ok(p) = serde_json::from_str::<serde_json::Value>(&e) {
+                            (p.get("code").and_then(|c| c.as_str()).unwrap_or("FunctionExecutionError").to_string(),
+                             p.get("message").and_then(|m| m.as_str()).unwrap_or(&e).to_string())
+                        } else { ("FunctionExecutionError".to_string(), e) };
+                        let error_dur = start_time.elapsed().as_millis() as u64;
+                        post_trace_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
+                            req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
+                            &trace_ctx, "error", format!("execution_error: {}: {}", err_code, message),
+                            "end", "error", Some(error_dur));
+                        return (StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": err_code, "message": message })),
+                        ).into_response();
+                    }
+                };
+                let duration_ms = start_time.elapsed().as_millis() as u64;
+                {
+                    let trace_parent  = trace_ctx.parent_span_id.clone();
+                    let trace_sha     = trace_ctx.code_sha.clone();
+                    let log_url       = log_url_nc.clone();
+                    let service_token = state.service_token.clone();
+                    let function_id   = req.function_id.clone();
+                    let tenant_id     = req.tenant_id;
+                    let project_id    = req.project_id;
+                    let logs          = execution.logs;
+                    let client        = state.http_client.clone();
+                    let rid           = request_id.clone();
+                    let dur           = duration_ms;
+                    tokio::spawn(async move {
+                        for log in logs {
+                            let span_type = log.span_type.as_deref().unwrap_or("event");
+                            let source    = log.source.as_deref().unwrap_or("function");
+                            let span_id   = log.span_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+                            let _ = client.post(&log_url).header("X-Service-Token", &service_token)
+                                .json(&serde_json::json!({
+                                    "source": source, "resource_id": &function_id,
+                                    "tenant_id": tenant_id, "project_id": project_id,
+                                    "level": log.level, "message": log.message,
+                                    "request_id": &rid, "span_id": span_id, "span_type": span_type,
+                                    "parent_span_id": &trace_parent, "code_sha": &trace_sha,
+                                    "duration_ms": log.duration_ms, "tool_name": log.tool_name,
+                                    "execution_state": log.execution_state,
+                                })).send().await;
+                        }
+                        let _ = client.post(&log_url).header("X-Service-Token", &service_token)
+                            .json(&serde_json::json!({
+                                "source": "runtime", "resource_id": &function_id,
+                                "tenant_id": tenant_id, "project_id": project_id,
+                                "level": "info", "message": format!("execution_end ({}ms)", dur),
+                                "request_id": &rid, "span_id": Uuid::new_v4().to_string(),
+                                "span_type": "end", "parent_span_id": &trace_parent, "code_sha": &trace_sha,
+                                "execution_state": "completed", "duration_ms": dur,
+                            })).send().await;
+                    });
+                }
+                return (StatusCode::OK, Json(ExecuteResponse { result: execution.output, duration_ms })).into_response();
+            }
+
+            // ── Deno cold path ──────────────────────────────────────────────────
             let final_code = if let Some(d_id) = deployment_id.clone() {
                 if let Some(cached_code) = state.bundle_cache.get(&d_id) {
                     tracing::debug!(function_id = %req.function_id, deployment_id = %d_id, "bundle cache hit (deployment-level) — re-warming function cache");
@@ -597,6 +794,7 @@ pub async fn invalidate_cache_handler(
 
     if let Some(ref fid) = req.function_id {
         state.bundle_cache.invalidate_function(fid);
+        state.wasm_pool.evict(fid).await;
         evicted.push("function_bundle");
     }
     if let Some(ref did) = req.deployment_id {

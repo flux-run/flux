@@ -20,3 +20,8 @@ uuid = { version = "1.22.0", features = ["v4", "serde"] }
 # Deno core for V8 isolates
 deno_core = "0.354.0"
 lru = "0.16.3"
+
+# Wasmtime for WASM module execution (language-independent functions)
+wasmtime = { version = "28", default-features = false, features = ["cranelift", "runtime"] }
+# Base64 for decoding inline WASM bundles (binary stored as base64 in bundle_code)
+base64 = "0.22"
