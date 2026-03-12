@@ -48,15 +48,13 @@ async fn main() -> anyhow::Result<()> {
     let snapshot = snapshot::GatewaySnapshot::new(
         db_pool.clone(),
         config.database_url.clone(),
-        config.snapshot_refresh_secs,
     );
+    // Warm the snapshot before accepting traffic.
     if let Err(e) = snapshot.refresh().await {
-        tracing::warn!("Initial snapshot fetch failed (will retry): {:?}", e);
+        tracing::warn!("Initial snapshot fetch failed (will retry on first NOTIFY): {:?}", e);
     }
-    // Instant updates via Postgres LISTEN/NOTIFY.
+    // LISTEN/NOTIFY keeps the snapshot current — no polling needed.
     snapshot::GatewaySnapshot::start_notify_listener(snapshot.clone());
-    // Periodic polling as a consistency fallback.
-    snapshot::GatewaySnapshot::start_background_refresh(snapshot.clone());
 
     // HTTP client with a timeout matching RUNTIME_TIMEOUT_SECS.
     let http_client = reqwest::Client::builder()

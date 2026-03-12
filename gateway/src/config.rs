@@ -13,7 +13,6 @@ use std::env;
 /// | `RUNTIME_URL`            | `http://localhost:8083` |          |
 /// | `CONTROL_PLANE_URL`      | `http://localhost:8080` |          |
 /// | `MAX_REQUEST_SIZE_BYTES` | `10485760` (10 MB)      |          |
-/// | `SNAPSHOT_REFRESH_SECS`  | `60`                    |          |
 /// | `RUNTIME_TIMEOUT_SECS`   | `30`                    |          |
 /// | `RATE_LIMIT_PER_SEC`     | `50`                    |          |
 /// | `LOCAL_MODE`             | `false`                 |          |
@@ -32,8 +31,6 @@ pub struct Config {
     pub control_plane_url: String,
     /// Maximum HTTP request body in bytes before returning 413.
     pub max_request_size_bytes: usize,
-    /// Route snapshot refresh interval (seconds).
-    pub snapshot_refresh_secs: u64,
     /// HTTP timeout for forwarded runtime calls (seconds).
     pub runtime_timeout_secs: u64,
     /// Per-route default rate limit (requests / second).
@@ -69,10 +66,6 @@ impl Config {
             max_request_size_bytes: env::var("MAX_REQUEST_SIZE_BYTES")
                 .ok().and_then(|s| s.parse().ok())
                 .unwrap_or(10 * 1024 * 1024),
-
-            snapshot_refresh_secs: env::var("SNAPSHOT_REFRESH_SECS")
-                .ok().and_then(|s| s.parse().ok())
-                .unwrap_or(60),
 
             runtime_timeout_secs: env::var("RUNTIME_TIMEOUT_SECS")
                 .ok().and_then(|s| s.parse().ok())

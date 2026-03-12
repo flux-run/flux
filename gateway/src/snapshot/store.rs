@@ -1,6 +1,12 @@
-//! In-memory route snapshot.  Refreshed in two ways:
-//!   1. Postgres LISTEN/NOTIFY — instant reaction to route changes
-//!   2. Periodic polling fallback — catches missed notifications / cold starts
+//! In-memory route snapshot.
+//!
+//! Loaded once at startup, then kept current via Postgres LISTEN/NOTIFY.
+//! No polling — any INSERT/UPDATE/DELETE on `routes` fires a notification
+//! (see migration `20260312000029_route_notify_trigger.sql`) and the
+//! snapshot is refreshed immediately.
+//!
+//! On reconnect after a dropped NOTIFY connection the snapshot is refreshed
+//! immediately to catch any changes that arrived during the gap.
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -9,9 +15,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgListener;
 use super::types::{RouteRecord, SnapshotData};
 
-/// Postgres channel name.  The DB trigger (see migration
-/// `20260312000029_route_notify_trigger.sql`) sends a notification on this
-/// channel whenever a row in `routes` is inserted, updated, or deleted.
+/// Postgres channel name — must match the trigger function in the migration.
 const NOTIFY_CHANNEL: &str = "route_changes";
 
 /// Wraps the snapshot in an `Arc<RwLock>` so all Axum workers share one copy
@@ -21,16 +25,14 @@ pub struct GatewaySnapshot {
     data:         Arc<RwLock<Arc<SnapshotData>>>,
     db_pool:      PgPool,
     database_url: String,
-    refresh_secs: u64,
 }
 
 impl GatewaySnapshot {
-    pub fn new(db_pool: PgPool, database_url: String, refresh_secs: u64) -> Self {
+    pub fn new(db_pool: PgPool, database_url: String) -> Self {
         Self {
             data: Arc::new(RwLock::new(Arc::new(SnapshotData::default()))),
             db_pool,
             database_url,
-            refresh_secs,
         }
     }
 
@@ -61,25 +63,6 @@ impl GatewaySnapshot {
         Ok(())
     }
 
-    /// Spawn a background task that refreshes the snapshot periodically.
-    ///
-    /// This is a fallback — the Postgres LISTEN/NOTIFY listener handles the
-    /// common case.  Polling ensures consistency after restarts or missed
-    /// notifications.
-    pub fn start_background_refresh(snapshot: Self) {
-        tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(Duration::from_secs(snapshot.refresh_secs));
-            loop {
-                interval.tick().await;
-                match snapshot.refresh().await {
-                    Ok(_)  => info!("Route snapshot refreshed (poll)"),
-                    Err(e) => error!("Route snapshot refresh failed: {:?}", e),
-                }
-            }
-        });
-    }
-
     /// Spawn a background task that listens for `NOTIFY route_changes` from
     /// Postgres and refreshes the snapshot immediately when a notification
     /// arrives.
@@ -105,6 +88,12 @@ impl GatewaySnapshot {
                         if let Err(e) = listener.listen(NOTIFY_CHANNEL).await {
                             error!("NOTIFY LISTEN failed: {:?}", e);
                             continue;
+                        }
+
+                        // Refresh immediately — changes may have arrived
+                        // while the connection was down.
+                        if let Err(e) = snapshot.refresh().await {
+                            error!("Snapshot refresh on (re)connect failed: {:?}", e);
                         }
 
                         info!("Listening for route changes on Postgres channel '{}'", NOTIFY_CHANNEL);
