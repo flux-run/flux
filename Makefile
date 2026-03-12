@@ -55,9 +55,9 @@ sqlx-prepare:
 	cd api && DATABASE_URL="$(DB_URL)" cargo sqlx prepare
 
 migrate:
-	cd api && sqlx migrate run --ignore-missing
+	sqlx migrate run --source schemas/api --ignore-missing
 	@DB_URL=$$(python3 -c "import re; [print(m.group(1)) for l in open('data-engine/env.yaml') for m in [re.match(r'.*DATABASE_URL: \"(.*)\"', l)] if m]"); \
-	  DATABASE_URL="$$DB_URL" sqlx migrate run --source data-engine/migrations --ignore-missing
+	  DATABASE_URL="$$DB_URL" sqlx migrate run --source schemas/data-engine --ignore-missing
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 install:

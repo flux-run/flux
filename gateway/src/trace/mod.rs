@@ -45,7 +45,7 @@ pub fn resolve_parent_span(headers: &HeaderMap) -> Option<String> {
 
 // ── Trace root write ─────────────────────────────────────────────────────────
 
-/// Persist the trace root envelope to `trace_requests`.
+/// Persist the trace root envelope to `gateway_trace_requests`.
 ///
 /// Fire-and-forget via `tokio::spawn` — never blocks the hot path.
 pub fn write_root(
@@ -65,7 +65,7 @@ pub fn write_root(
 
     tokio::spawn(async move {
         let _ = sqlx::query(
-            "INSERT INTO trace_requests
+            "INSERT INTO flux.gateway_trace_requests
              (request_id, project_id, function_id, method, path,
               headers, body, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
