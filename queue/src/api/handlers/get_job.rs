@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use axum::{extract::{State, Path}, Json};
+use axum::{extract::{State, Path}, http::StatusCode, Json};
 use uuid::Uuid;
 use crate::state::AppState;
 use crate::services::job_service;
@@ -7,7 +7,7 @@ use crate::services::job_service;
 pub async fn handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
-) -> Json<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>) {
     match job_service::get_job(&state.pool, id).await {
         Ok(job) => {
             // Derive queue_time_ms: time from creation to execution start.
@@ -26,8 +26,11 @@ pub async fn handler(
                 obj.insert("queue_time_ms".into(), queue_time_ms.into());
                 obj.insert("execution_time_ms".into(), execution_time_ms.into());
             }
-            Json(val)
+            (StatusCode::OK, Json(val))
         }
-        Err(_) => Json(serde_json::json!({ "error": "Job not found" })),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Job not found" })),
+        ),
     }
 }

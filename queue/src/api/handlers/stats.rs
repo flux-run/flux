@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use axum::{extract::State, Json};
+use axum::{extract::State, http::StatusCode, Json};
 use sqlx::FromRow;
 use crate::state::AppState;
 
@@ -27,7 +27,7 @@ struct RetryStats {
     max_retries_seen: Option<i32>,
 }
 
-pub async fn handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+pub async fn handler(State(state): State<Arc<AppState>>) -> (StatusCode, Json<serde_json::Value>) {
     let pool = &state.pool;
 
     // 1. Job status counts
@@ -90,28 +90,34 @@ pub async fn handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Val
         Ok(c) => {
             let lat = latency.ok();
             let ret = retries.ok();
-            Json(serde_json::json!({
-                "queue": {
-                    "pending":     c.pending,
-                    "running":     c.running,
-                    "completed":   c.completed,
-                    "failed":      c.failed,
-                    "cancelled":   c.cancelled,
-                    "dead_letter": dead_letter_count,
-                },
-                "latency_ms": {
-                    "avg_queue_time":      lat.as_ref().and_then(|l| l.avg_queue_time_ms),
-                    "p95_queue_time":      lat.as_ref().and_then(|l| l.p95_queue_time_ms),
-                    "avg_execution_time":  lat.as_ref().and_then(|l| l.avg_execution_time_ms),
-                    "p95_execution_time":  lat.as_ref().and_then(|l| l.p95_execution_time_ms),
-                },
-                "retries": {
-                    "total":       ret.as_ref().and_then(|r| r.total_retries),
-                    "jobs_retried":ret.as_ref().and_then(|r| r.jobs_retried),
-                    "max_seen":    ret.as_ref().and_then(|r| r.max_retries_seen),
-                }
-            }))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "queue": {
+                        "pending":     c.pending,
+                        "running":     c.running,
+                        "completed":   c.completed,
+                        "failed":      c.failed,
+                        "cancelled":   c.cancelled,
+                        "dead_letter": dead_letter_count,
+                    },
+                    "latency_ms": {
+                        "avg_queue_time":      lat.as_ref().and_then(|l| l.avg_queue_time_ms),
+                        "p95_queue_time":      lat.as_ref().and_then(|l| l.p95_queue_time_ms),
+                        "avg_execution_time":  lat.as_ref().and_then(|l| l.avg_execution_time_ms),
+                        "p95_execution_time":  lat.as_ref().and_then(|l| l.p95_execution_time_ms),
+                    },
+                    "retries": {
+                        "total":       ret.as_ref().and_then(|r| r.total_retries),
+                        "jobs_retried":ret.as_ref().and_then(|r| r.jobs_retried),
+                        "max_seen":    ret.as_ref().and_then(|r| r.max_retries_seen),
+                    }
+                }))
+            )
         }
-        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ),
     }
 }

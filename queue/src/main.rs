@@ -5,7 +5,6 @@ mod services;
 mod api;
 mod worker;
 mod queue;
-mod utils;
 mod state;
 
 use std::net::SocketAddr;
