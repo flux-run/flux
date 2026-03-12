@@ -27,7 +27,7 @@
 
 | Service | Port | Role |
 |---|---|---|
-| [Gateway](gateway.md) | `:4000` | Routing, auth, rate limiting, trace roots |
+| [Gateway](gateway.md) | `:8081` | Routing, auth, rate limiting, trace roots |
 | [Runtime](runtime.md) | `:8083` | Deno V8 execution, secrets, tool dispatch |
 | [API](api.md) | `:8080` | Function registry, logs, schema management |
 | [Data Engine](data-engine.md) | `:8082` | DB queries, mutation recording, hooks, cron |
@@ -38,6 +38,7 @@
 | Doc | Purpose |
 |---|---|
 | [Storage](storage.md) | File columns, S3-compatible storage, BYO bucket |
+| [Database Schema](database-schema.md) | Table ownership, naming conventions, flux vs public schema |
 | [Production Debugging](production-debugging.md) | Deep dive: replay, bisect, trace diff |
 | [Git for Backend Execution](git-for-backend-execution.md) | The conceptual model behind Flux |
 | [flux why — The Viral Command](flux-why-the-viral-command.md) | Why `flux why` changes how you debug |
@@ -57,7 +58,7 @@ my-app/
 
 $ flux dev → http://localhost:4000
 
-  Gateway     :4000   routing, rate limiting, execution record roots
+  Gateway     :8081   routing, rate limiting, execution record roots
   Runtime     :8083   Deno V8 execution, secrets, tool dispatch
   API         :8080   function registry, schema management
   Data Engine :8082   DB queries, mutation recording, hooks
