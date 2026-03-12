@@ -389,3 +389,145 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
     println!();
     Ok(())
 }
+
+// ── flux trace (no ID) — list recent execution records ────────────────────────
+//
+// Padding must always be applied to plain strings BEFORE colorizing.
+// Passing a `colored::ColoredString` into a `{:<N}` width specifier counts
+// ANSI escape bytes toward the visible width and produces misaligned columns.
+
+pub async fn execute_list(limit: u64, function: Option<String>, json_output: bool) -> anyhow::Result<()> {
+    let client = ApiClient::new().await?;
+
+    // URL-encode the function name so names with slashes/spaces are safe.
+    let mut url = format!("{}/traces?limit={}", client.base_url, limit);
+    if let Some(ref fn_name) = function {
+        url.push_str("&function=");
+        url.push_str(&urlencoding::encode(fn_name));
+    }
+
+    let res = client.client.get(&url).send().await?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let body   = res.text().await.unwrap_or_default();
+        anyhow::bail!("API {}: {}", status, body.trim());
+    }
+
+    let body: Value = res.json().await?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
+
+    let empty_vec  = vec![];
+    let records = body["data"]
+        .as_array()
+        .or_else(|| body.as_array())
+        .unwrap_or(&empty_vec);
+
+    if records.is_empty() {
+        println!("{} No traces found.", "ℹ".blue());
+        println!("  Invoke a function first: {}", "flux invoke <fn>".cyan());
+        return Ok(());
+    }
+
+    // Column widths (fixed — no ANSI codes in these strings).
+    const W_STATUS:   usize = 9;
+    const W_FUNCTION: usize = 26;
+    const W_DURATION: usize = 9;
+    const W_SPANS:    usize = 6;
+
+    // ── Header ────────────────────────────────────────────────────────────────
+    // Pad plain text first, THEN colorize — never the other way around.
+    println!();
+    println!(
+        "  {}  {}  {}  {}  {}",
+        format!("{:<w$}", "status",   w = W_STATUS).bold(),
+        format!("{:<w$}", "function", w = W_FUNCTION).bold(),
+        format!("{:<w$}", "duration", w = W_DURATION).bold(),
+        format!("{:<w$}", "spans",    w = W_SPANS).bold(),
+        "request_id".dimmed(),
+    );
+    println!("  {}", "─".repeat(W_STATUS + W_FUNCTION + W_DURATION + W_SPANS + 22).dimmed());
+
+    for record in records {
+        let request_id = record["request_id"].as_str()
+            .or_else(|| record["id"].as_str())
+            .unwrap_or("?");
+
+        let function_name = {
+            let raw = record["function_name"].as_str()
+                .or_else(|| record["resource"].as_str())
+                .unwrap_or("?");
+            // Truncate to fit column before padding (avoids ANSI double-count).
+            let max = W_FUNCTION - 2;
+            if raw.chars().count() > max {
+                let truncated: String = raw.chars().take(max).collect();
+                format!("{}…", truncated)
+            } else {
+                raw.to_owned()
+            }
+        };
+
+        let status_raw = record["status"].as_str().unwrap_or("?");
+        let duration_ms = record["total_duration_ms"].as_i64()
+            .or_else(|| record["duration_ms"].as_i64());
+        let span_count = record["span_count"].as_u64().unwrap_or(0);
+        let short_id   = &request_id[..request_id.len().min(8)];
+
+        // Build padded plain strings, then colorize the whole padded cell.
+        let status_padded   = format!("{:<w$}", status_raw.to_uppercase(), w = W_STATUS);
+        let function_padded = format!("{:<w$}", function_name,             w = W_FUNCTION);
+        let spans_padded    = format!("{:<w$}", span_count,                w = W_SPANS);
+
+        let status_col = match status_raw.to_uppercase().as_str() {
+            "OK" | "SUCCESS" | "200"    => status_padded.green().bold().to_string(),
+            "ERROR" | "FAILED" | "500"  => status_padded.red().bold().to_string(),
+            "TIMEOUT"                   => status_padded.yellow().bold().to_string(),
+            _                           => status_padded.normal().to_string(),
+        };
+
+        let duration_plain = match duration_ms {
+            Some(d) => format!("{}ms", d),
+            None    => "—".to_string(),
+        };
+        let duration_padded = format!("{:<w$}", duration_plain, w = W_DURATION);
+        let duration_col = match duration_ms {
+            Some(d) if d >= 1000 => duration_padded.red().bold().to_string(),
+            Some(d) if d >= 500  => duration_padded.yellow().to_string(),
+            _                    => duration_padded.dimmed().to_string(),
+        };
+
+        println!(
+            "  {}  {}  {}  {}  {}",
+            status_col,
+            function_padded.normal(),
+            duration_col,
+            spans_padded.dimmed(),
+            short_id.dimmed(),
+        );
+    }
+
+    println!();
+    println!(
+        "  {}",
+        format!(
+            "{} trace{} — `flux trace <id>` for the full waterfall",
+            records.len(),
+            if records.len() == 1 { "" } else { "s" },
+        ).dimmed(),
+    );
+    if function.is_none() {
+        println!(
+            "  {}  {}",
+            "tip:".dimmed(),
+            "flux trace --function <name>  to filter".cyan(),
+        );
+    }
+    println!();
+
+    Ok(())
+}
+

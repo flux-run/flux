@@ -183,20 +183,30 @@ enum Commands {
         #[arg(long, short, value_name = "TEMPLATE")]
         template: Option<String>,
     },
-    /// Initialise .fluxbase/config.json for this project
+    /// Initialise flux.toml for this project directory.
+    ///
+    /// Creates flux.toml at the project root with sensible defaults.
+    ///
+    /// Examples:
+    ///   flux init
+    ///   flux init --name my-api --runtime bun
+    ///   flux init --gateway-port 4000 --api-port 8080
     Init {
-        #[arg(long, value_name = "PROJECT_ID")]
-        project: Option<String>,
-        #[arg(long, value_name = "FILE")]
-        output: Option<String>,
-        #[arg(long, value_name = "SECS")]
-        interval: Option<u64>,
-        #[arg(long, value_name = "URL")]
-        api_url: Option<String>,
-        #[arg(long, value_name = "URL")]
-        gateway_url: Option<String>,
-        #[arg(long, value_name = "URL")]
-        runtime_url: Option<String>,
+        /// Project name (written to flux.toml `name` field)
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Runtime identifier (nodejs20 | bun | deno). Default: nodejs20
+        #[arg(long, value_name = "RUNTIME")]
+        runtime: Option<String>,
+        /// Override local API port in [dev] section
+        #[arg(long, value_name = "PORT")]
+        api_port: Option<u16>,
+        /// Override local gateway port in [dev] section
+        #[arg(long, value_name = "PORT")]
+        gateway_port: Option<u16>,
+        /// Override local runtime port in [dev] section
+        #[arg(long, value_name = "PORT")]
+        runtime_port: Option<u16>,
     },
 
     /// Dry-run a query: show the compiler output, applied policies, complexity score, and
@@ -316,13 +326,27 @@ enum Commands {
         #[arg(long, default_value = "100", value_name = "N")]
         limit: u64,
     },
-    /// Show the full cross-service request trace for a request ID
+    /// Show the full cross-service request trace for a request ID.
+    /// With no request ID, lists recent traces.
+    ///
+    /// Examples:
+    ///   flux trace                    # list last 20 traces
+    ///   flux trace 9624a58d           # full waterfall for one request
+    ///   flux trace 9624a58d --flame   # with Gantt flame graph
+    ///   flux trace 9624a58d --replay  # re-run the request
     Trace {
-        request_id: String,
+        /// Request ID to show (omit to list recent traces)
+        request_id: Option<String>,
         #[arg(long, default_value = "500", value_name = "MS")]
         slow: u64,
         #[arg(long)]
         flame: bool,
+        /// Filter / sort for `flux trace` list mode
+        #[arg(long, value_name = "NAME")]
+        function: Option<String>,
+        /// Number of traces to list (default 20)
+        #[arg(long, default_value = "20", value_name = "N")]
+        limit: u64,
         /// Re-apply this request in replay mode (x-flux-replay: true)
         #[arg(long)]
         replay: bool,
@@ -617,8 +641,14 @@ async fn main() -> anyhow::Result<()> {
         Commands::New    { name, template } |
         Commands::Create { name, template } => create::execute(name, template).await?,
 
-        Commands::Init { project, output, interval, api_url, gateway_url, runtime_url } => {
-            init::execute(project, output, interval, api_url, gateway_url, runtime_url).await?
+        Commands::Init { name, runtime, api_port, gateway_port, runtime_port } => {
+            init::execute(init::InitOptions {
+                name,
+                runtime,
+                api_port,
+                gateway_port,
+                runtime_port,
+            }).await?
         }
 
         Commands::Logs { source, resource, follow, limit } => {
@@ -634,19 +664,21 @@ async fn main() -> anyhow::Result<()> {
                 logs::execute(resolved_source, resolved_resource, limit).await?
             }
         }
-        Commands::Trace { request_id, slow, flame, replay } => {
-            if replay {
-                incident::execute(incident::IncidentCommands::Replay {
-                    window:     None,
-                    request_id: Some(request_id),
-                    from:       None,
-                    to:         None,
-                    database:   "default".to_string(),
-                    yes:        cli.yes,
-                    json:       cli.json,
-                }).await?
-            } else {
-                trace::execute(request_id, slow, flame).await?
+        Commands::Trace { request_id, slow, flame, function, limit, replay } => {
+            match request_id {
+                Some(id) if replay => {
+                    incident::execute(incident::IncidentCommands::Replay {
+                        window:     None,
+                        request_id: Some(id),
+                        from:       None,
+                        to:         None,
+                        database:   "default".to_string(),
+                        yes:        cli.yes,
+                        json:       cli.json,
+                    }).await?
+                }
+                Some(id) => trace::execute(id, slow, flame).await?,
+                None     => trace::execute_list(limit, function, cli.json).await?,
             }
         }
         Commands::TraceDiff { original_id, replay_id, json, table } => trace_diff::execute(original_id, replay_id, json, table).await?,

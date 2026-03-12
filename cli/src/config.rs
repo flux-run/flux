@@ -2,7 +2,122 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
-// ─── Global auth config (~/.fluxbase/config.json) ────────────────────────────
+// ─── flux.toml — project-level config (Flux v2 format) ─────────────────────
+//
+// Written by `flux init` at the project root.  Committed to version control.
+//
+// [dev] section is used by `flux dev` and the CLI URL resolver.
+// [limits] section feeds function limits (combined with defineFunction / flux.json).
+//
+//   name    = "my-project"
+//   runtime = "nodejs20"
+//
+//   [record]
+//   sample_rate   = 1.0
+//   retention_days = 30
+//
+//   [limits]
+//   timeout_ms = 5000
+//   memory_mb  = 256
+//
+//   [dev]
+//   gateway_port     = 4000
+//   runtime_port     = 8083
+//   api_port         = 8080
+//   data_engine_port = 8082
+//   queue_port       = 8084
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct FluxTomlRecord {
+    pub sample_rate: Option<f64>,
+    pub retention_days: Option<u32>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct FluxTomlLimits {
+    pub timeout_ms: Option<u64>,
+    pub memory_mb: Option<u64>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct FluxTomlDev {
+    pub gateway_port: Option<u16>,
+    pub runtime_port: Option<u16>,
+    pub api_port: Option<u16>,
+    pub data_engine_port: Option<u16>,
+    pub queue_port: Option<u16>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct FluxToml {
+    pub name: Option<String>,
+    pub runtime: Option<String>,
+    pub region: Option<String>,
+    #[serde(default)]
+    pub record: FluxTomlRecord,
+    #[serde(default)]
+    pub limits: FluxTomlLimits,
+    #[serde(default)]
+    pub dev: FluxTomlDev,
+}
+
+impl FluxToml {
+    const FILE: &'static str = "flux.toml";
+
+    /// Walk from `cwd` toward the root looking for `flux.toml`.
+    pub fn find_path() -> Option<PathBuf> {
+        let mut dir = std::env::current_dir().ok()?;
+        loop {
+            let candidate = dir.join(Self::FILE);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            if !dir.pop() {
+                return None;
+            }
+        }
+    }
+
+    pub fn load_sync() -> Option<Self> {
+        let path = Self::find_path()?;
+        let src = std::fs::read_to_string(&path).ok()?;
+        match toml::from_str::<Self>(&src) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                // Surface the error without aborting — callers treat None as
+                // "no flux.toml" so we print a warning and fall through.
+                eprintln!(
+                    "warning: {} is malformed and was ignored ({})\n         \
+                     Fix the file or delete it and re-run `flux init`.",
+                    path.display(),
+                    e,
+                );
+                None
+            }
+        }
+    }
+
+    /// Compute the API URL from [dev] ports (falls back to default).
+    pub fn api_url(&self) -> Option<String> {
+        self.dev.api_port.map(|p| format!("http://localhost:{}", p))
+    }
+
+    /// Compute the gateway URL from [dev] ports.
+    pub fn gateway_url(&self) -> Option<String> {
+        self.dev.gateway_port.map(|p| format!("http://localhost:{}", p))
+    }
+
+    /// Compute the runtime URL from [dev] ports.
+    pub fn runtime_url(&self) -> Option<String> {
+        self.dev.runtime_port.map(|p| format!("http://localhost:{}", p))
+    }
+}
+
+// ─── CLI runtime config (~/.flux/config.json) ────────────────────────────────
+//
+// Loaded from `~/.flux/config.json`.  Override individual fields with:
+//   FLUXBASE_API_URL   FLUXBASE_GATEWAY_URL   FLUXBASE_RUNTIME_URL
+// `flux.toml [dev]` takes highest precedence for local port assignments.──
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -23,12 +138,12 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            api_url: "https://api.fluxbase.co".to_string(),
-            token: None,
-            tenant_id: None,
+            api_url:     "http://localhost:8080".to_string(),
+            token:       None,
+            tenant_id:   None,
             tenant_slug: None,
-            project_id: None,
-            gateway_url: "https://gateway.fluxbase.co".to_string(),
+            project_id:  None,
+            gateway_url: "http://localhost:8081".to_string(),
             runtime_url: "http://localhost:8083".to_string(),
         }
     }
@@ -37,7 +152,7 @@ impl Default for Config {
 impl Config {
     fn config_path() -> PathBuf {
         let mut path = dirs::home_dir().expect("Could not find home directory");
-        path.push(".fluxbase");
+        path.push(".flux");
         path.push("config.json");
         path
     }
@@ -82,6 +197,20 @@ impl Config {
                 config.gateway_url = url;
             }
             if let Some(url) = proj.runtime_url {
+                config.runtime_url = url;
+            }
+        }
+
+        // flux.toml [dev] ports override everything for local dev.
+        // Precedence: flux.toml > env vars > .fluxbase/config.json > defaults.
+        if let Some(flux) = FluxToml::load_sync() {
+            if let Some(url) = flux.api_url() {
+                config.api_url = url;
+            }
+            if let Some(url) = flux.gateway_url() {
+                config.gateway_url = url;
+            }
+            if let Some(url) = flux.runtime_url() {
                 config.runtime_url = url;
             }
         }

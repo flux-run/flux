@@ -71,6 +71,8 @@ services:
       API_URL:                 "http://api:8080"
       QUEUE_URL:               "http://queue:8084"
       INTERNAL_SERVICE_TOKEN:  "fluxbase_local_dev_token"
+      # flux dev injects FLUX_LOCAL=true to bypass tenant auth in local dev.
+      FLUX_LOCAL:              "${FLUX_LOCAL:-false}"
     depends_on:
       db:
         condition: service_healthy

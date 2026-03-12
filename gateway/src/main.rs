@@ -1,28 +1,38 @@
+//! Gateway entry point.
+//!
+//! Responsibilities (startup only):
+//!   1. Load config from environment / .env
+//!   2. Connect to database, warm the route snapshot
+//!   3. Wire shared state
+//!   4. Build the Axum router and start listening
 mod config;
 mod state;
-mod cache;
 mod router;
-mod routes;
-mod services;
-mod middleware;
-mod clients;
+mod snapshot;
+mod auth;
+mod rate_limit;
+mod trace;
+mod forward;
+mod handlers;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::info;
 use sqlx::postgres::PgPoolOptions;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize logging
     tracing_subscriber::fmt::init();
 
-    // Load configuration
+    // Load .env if present — silently ignored in production where env vars are
+    // injected directly by the container runtime.
     dotenvy::dotenv().ok();
+
     let config = config::Config::load();
 
-    // Setup database pool
+    // Database pool.
     let db_pool = PgPoolOptions::new()
         .max_connections(20)
         .after_connect(|conn, _meta| Box::pin(async move {
@@ -34,76 +44,42 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Gateway connected to database");
 
-    // Initialize snapshot cache
-    let snapshot = cache::snapshot::GatewaySnapshot::new(db_pool.clone());
-    // Initial fetch to populate caches synchronously before starting server
-    if let Err(e) = snapshot.refresh().await {
-        tracing::error!("Initial snapshot fetch failed: {:?}", e);
-    }
-    // Start periodic background refresh
-    cache::snapshot::GatewaySnapshot::start_background_refresh(snapshot.clone());
-
-    // Initialize state
-    let http_client = reqwest::Client::new();
-    let jwks_cache = cache::jwks::JwksCache::new(http_client.clone());
-    let queue_client = clients::queue_client::QueueClient::new(
-        config.queue_url.clone(),
-        http_client.clone(),
+    // Route snapshot — warm before accepting traffic so /readiness returns 200.
+    let snapshot = snapshot::GatewaySnapshot::new(
+        db_pool.clone(),
+        config.database_url.clone(),
+        config.snapshot_refresh_secs,
     );
+    if let Err(e) = snapshot.refresh().await {
+        tracing::warn!("Initial snapshot fetch failed (will retry): {:?}", e);
+    }
+    // Instant updates via Postgres LISTEN/NOTIFY.
+    snapshot::GatewaySnapshot::start_notify_listener(snapshot.clone());
+    // Periodic polling as a consistency fallback.
+    snapshot::GatewaySnapshot::start_background_refresh(snapshot.clone());
 
-    // Bounded analytics channel — drain worker writes to `gateway_metrics`.
-    // Sized to absorb short bursts; rows are dropped (not blocked) when full.
-    let (metric_tx, metric_rx) =
-        tokio::sync::mpsc::channel::<middleware::analytics::MetricRow>(
-            middleware::analytics::CHANNEL_CAPACITY,
-        );
+    // HTTP client with a timeout matching RUNTIME_TIMEOUT_SECS.
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.runtime_timeout_secs))
+        .build()?;
 
-    // Clone pool for the drain worker before it is moved into GatewayState.
-    let analytics_pool = db_pool.clone();
+    let jwks_cache = auth::JwksCache::new(http_client.clone());
 
     let state = Arc::new(state::GatewayState {
         db_pool,
         http_client,
-        runtime_url: config.runtime_url,
-        queue_client,
-        data_engine_url: config.data_engine_url,
+        runtime_url:            config.runtime_url,
         internal_service_token: config.internal_service_token,
         snapshot,
         jwks_cache,
-        api_url: config.api_url,
-        metric_tx,
-        rate_limit_per_sec: config.rate_limit_per_sec,
-        max_concurrent_per_tenant: config.max_concurrent_per_tenant,
-        tenant_semaphores: Arc::new(dashmap::DashMap::new()),
-        query_guard_config: middleware::query_guard::QueryGuardConfig {
-            max_columns: std::env::var("MAX_QUERY_COLUMNS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(100),
-            max_selector_depth: std::env::var("MAX_SELECTOR_DEPTH")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(6),
-            max_filters: std::env::var("MAX_QUERY_FILTERS")
-                .ok().and_then(|s| s.parse().ok()).unwrap_or(20),
-        },
-        query_cache: {
-            let cache = cache::query_cache::QueryCache::new(
-                std::env::var("QUERY_CACHE_TTL_SECS")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(cache::query_cache::DEFAULT_TTL_SECS),
-            );
-            cache::query_cache::start_eviction_task(cache.clone());
-            cache
-        },
+        max_request_size_bytes: config.max_request_size_bytes,
+        rate_limit_per_sec:     config.rate_limit_per_sec,
+        local_mode:             config.local_mode,
     });
 
-    // Spawn the single drain worker — exits when `metric_tx` (inside state) drops.
-    tokio::spawn(middleware::analytics::drain_worker(metric_rx, analytics_pool));
-
-    // Build router
-    let app = router::create_router(state);
-
-    // Start server
+    let app  = router::create_router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
-    info!("Starting Fluxbase Gateway on {}", addr);
+    info!("Flux Gateway listening on {}", addr);
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 

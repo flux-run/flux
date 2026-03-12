@@ -18,13 +18,16 @@ pub struct SnapshotData {
 pub struct GatewaySnapshot {
     pub data: Arc<RwLock<Arc<SnapshotData>>>,
     pub db_pool: PgPool,
+    /// How often the snapshot is refreshed (from `SNAPSHOT_REFRESH_SECS`).
+    pub refresh_secs: u64,
 }
 
 impl GatewaySnapshot {
-    pub fn new(db_pool: PgPool) -> Self {
+    pub fn new(db_pool: PgPool, refresh_secs: u64) -> Self {
         Self {
             data: Arc::new(RwLock::new(Arc::new(SnapshotData::default()))),
             db_pool,
+            refresh_secs,
         }
     }
 
@@ -77,7 +80,9 @@ impl GatewaySnapshot {
 
     pub fn start_background_refresh(snapshot: Self) {
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            let mut interval = tokio::time::interval(
+                Duration::from_secs(snapshot.refresh_secs)
+            );
             loop {
                 interval.tick().await;
                 if let Err(e) = snapshot.refresh().await {
