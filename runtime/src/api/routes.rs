@@ -166,10 +166,18 @@ pub async fn execute_handler(
     let request_id = headers.get("x-request-id")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
-    // Forwarded by the Gateway — links this execution's spans to the parent gateway span.
     let parent_span_id = headers.get("x-parent-span-id")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
+    // Runtime hint forwarded by the gateway (derived from route snapshot).
+    // "deno" → skip WASM warm path.  "wasm" → skip Deno warm path.
+    // No hint (direct calls, tests) → try both paths in order.
+    let runtime_hint = headers.get("X-Function-Runtime")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let skip_wasm_warm = runtime_hint == "deno";
+    let skip_deno_warm = runtime_hint == "wasm";
 
     // TraceCtx is built once per request; code_sha is filled in after the bundle is resolved.
     // We use a mutable binding so we can add code_sha once the bundle code is available.
@@ -186,6 +194,7 @@ pub async fn execute_handler(
     let start_time = std::time::Instant::now();
 
     // ── WASM warm path: cached bytes → skip control plane + S3 entirely ────────
+    if !skip_wasm_warm {
     if let Some(wasm_bytes) = state.wasm_pool.get_cached_bytes(&req.function_id).await {
         tracing::debug!(function_id = %req.function_id, "wasm bytes cache hit (warm path)");
         let log_url = format!("{}/internal/logs", state.control_plane_url);
@@ -204,6 +213,8 @@ pub async fn execute_handler(
         let execution = match state.wasm_pool.execute(
             req.function_id.clone(), wasm_bytes.to_vec(), secrets,
             req.payload, tenant_id_header.to_string(), None,
+            allowed_wasm_http_hosts(),
+            state.http_client.clone(),
         ).await {
             Ok(r) => r,
             Err(e) => {
@@ -262,8 +273,10 @@ pub async fn execute_handler(
         }
         return (StatusCode::OK, Json(ExecuteResponse { result: execution.output, duration_ms })).into_response();
     }
+    } // end !skip_wasm_warm
 
     // ── Deno function-level bundle cache (skips control plane + S3 entirely) ──
+    if !skip_deno_warm {
     if let Some(cached_code) = state.bundle_cache.get_by_function(&req.function_id) {
         tracing::debug!(function_id = %req.function_id, "bundle cache hit (function-level)");
 
@@ -374,7 +387,8 @@ pub async fn execute_handler(
             });
         }
         return (StatusCode::OK, Json(ExecuteResponse { result: execution.output, duration_ms })).into_response();
-    }
+    } // end if let cached_code
+    } // end !skip_deno_warm
 
     // Fetch secrets from the control plane
     let secrets = match state.secrets_client.fetch_secrets(req.tenant_id, req.project_id).await {
@@ -509,6 +523,8 @@ pub async fn execute_handler(
                 let execution = match state.wasm_pool.execute(
                     req.function_id.clone(), wasm_bytes, secrets,
                     req.payload, tenant_id_header.to_string(), None,
+                    allowed_wasm_http_hosts(),
+                    state.http_client.clone(),
                 ).await {
                     Ok(r) => r,
                     Err(e) => {
@@ -814,4 +830,21 @@ pub async fn invalidate_cache_handler(
     );
 
     (StatusCode::OK, Json(serde_json::json!({ "evicted": evicted }))).into_response()
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Return the list of hosts WASM functions are allowed to call via `fluxbase.http_fetch`.
+///
+/// Configured via the `WASM_HTTP_ALLOWED_HOSTS` environment variable:
+///   - Not set or empty → deny all (safe default).
+///   - `"*"` → allow all (use only in dev/internal environments).
+///   - Comma-separated list of host strings, e.g. `"api.example.com,hooks.slack.com"`.
+fn allowed_wasm_http_hosts() -> Vec<String> {
+    std::env::var("WASM_HTTP_ALLOWED_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }

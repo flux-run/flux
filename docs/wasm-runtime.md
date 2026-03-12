@@ -129,9 +129,9 @@ The host provides these imports to every WASM module:
 
 | Import | Signature | Description |
 |---|---|---|
-| `fluxbase.secrets_get` | `(key_ptr, key_len) → (val_ptr, val_len)` | Read a secret by name |
-| `fluxbase.log` | `(level, msg_ptr, msg_len) → ()` | Emit a structured log line |
-| `fluxbase.http_fetch` | `(req_ptr, req_len) → (resp_ptr, resp_len)` | Outbound HTTP (gated by allow-list) |
+| `fluxbase.secrets_get` | `(key_ptr, key_len, out_ptr, out_max) → i32` | Read a secret by name; returns bytes written or -1 |
+| `fluxbase.log` | `(level: i32, msg_ptr, msg_len) → ()` | Emit a structured log line (0=debug … 3=error) |
+| `fluxbase.http_fetch` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Outbound HTTP gated by `WASM_HTTP_ALLOWED_HOSTS`; req/resp are JSON (`{"method","url","headers","body":<b64>}`) |
 
 Both pointer arguments point into the module's linear memory.  The host reads
 from / writes to that memory region using the module's exported
@@ -325,18 +325,20 @@ others (a buggy WASM module can corrupt its own heap but cannot affect the host)
 
 ### Phase 1 — Core WASM executor (v0.1)
 
-- [ ] Add `wasmtime` dependency to `runtime/Cargo.toml`
-- [ ] Implement `WasmPool` + `WasmExecutor` in `runtime/src/engine/`
-- [ ] Implement host imports: `fluxbase.secrets_get`, `fluxbase.log`
-- [ ] Add `runtime` field to `BundleMeta` (api + runtime)
-- [ ] Route `POST /execute` to `WasmPool` when `bundle_meta.runtime == "wasm"`
-- [ ] Validate WASM exports on upload (`flux deploy`)
-- [ ] Write Rust handler SDK (`packages/wasm-sdk/rust/`)
+- [x] Add `wasmtime` dependency to `runtime/Cargo.toml`
+- [x] Implement `WasmPool` + `WasmExecutor` in `runtime/src/engine/`
+- [x] Implement host imports: `fluxbase.secrets_get`, `fluxbase.log`
+- [x] Add `runtime` field to `BundleMeta` (api + runtime)
+- [x] Route `POST /execute` to `WasmPool` when `bundle_meta.runtime == "wasm"`
+- [x] Validate WASM exports on upload (`flux deploy`) — magic-bytes + export check
+- [x] Write Rust handler SDK (`packages/wasm-sdk/rust/`)
+- [x] Gateway: extract `tenant_router` module, forward `X-Function-Runtime` header
+- [x] Runtime: use `X-Function-Runtime` hint to skip irrelevant warm-path cache lookup
 - [ ] End-to-end test: Rust function → deploy → invoke
 
 ### Phase 2 — HTTP + Component Model (v0.2)
 
-- [ ] `fluxbase.http_fetch` host import with allow-list enforcement
+- [x] `fluxbase.http_fetch` host import with allow-list enforcement (`WASM_HTTP_ALLOWED_HOSTS`)
 - [ ] Integrate Wasmtime Component Model (`wit-bindgen` generated ABI)
 - [ ] Write WIT interface file (`wit/fluxbase.wit`)
 - [ ] Go (TinyGo) SDK + example

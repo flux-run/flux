@@ -40,6 +40,10 @@ pub struct HostState {
     pub logs:    Vec<LogLine>,
     /// Scratch buffer used by `secrets_get` to write values back to WASM memory.
     pub secrets_scratch: Vec<u8>,
+    /// `http_fetch` allow-list.  Empty vec = deny all.  Contains `"*"` = allow all.
+    pub allowed_http_hosts: Vec<String>,
+    /// Shared reqwest client for outbound HTTP from `fluxbase.http_fetch`.
+    pub http_client: reqwest::Client,
 }
 
 // ─── Params ────────────────────────────────────────────────────────────────
@@ -54,17 +58,24 @@ pub struct WasmExecutionParams {
     pub function_id:  String,
     /// Maximum WASM CPU fuel (instructions).  1 billion ≈ a few hundred ms.
     pub fuel_limit:   u64,
+    /// Hosts the WASM function is allowed to call via `fluxbase.http_fetch`.
+    /// Empty = deny all.  `["*"]` = allow all (use with caution).
+    pub allowed_http_hosts: Vec<String>,
+    /// Shared HTTP client passed through for outbound calls.
+    pub http_client: Option<reqwest::Client>,
 }
 
 impl Default for WasmExecutionParams {
     fn default() -> Self {
         Self {
-            bytes:       Vec::new(),
-            secrets:     HashMap::new(),
-            payload:     serde_json::Value::Null,
-            tenant_id:   String::new(),
-            function_id: String::new(),
-            fuel_limit:  1_000_000_000,
+            bytes:             Vec::new(),
+            secrets:           HashMap::new(),
+            payload:           serde_json::Value::Null,
+            tenant_id:         String::new(),
+            function_id:       String::new(),
+            fuel_limit:        1_000_000_000,
+            allowed_http_hosts: Vec::new(),
+            http_client:       None,
         }
     }
 }
@@ -117,9 +128,11 @@ fn execute_wasm_sync(
     params: WasmExecutionParams,
 ) -> Result<ExecutionResult, String> {
     let host = HostState {
-        secrets:         params.secrets,
-        logs:            Vec::new(),
-        secrets_scratch: vec![0u8; 4096],
+        secrets:            params.secrets,
+        logs:               Vec::new(),
+        secrets_scratch:    vec![0u8; 4096],
+        allowed_http_hosts: params.allowed_http_hosts,
+        http_client:        params.http_client.unwrap_or_else(reqwest::Client::new),
     };
 
     let mut store = Store::new(engine, host);
@@ -157,6 +170,124 @@ fn execute_wasm_sync(
             execution_state: None,
             tool_name:       None,
         });
+    }).map_err(|e| e.to_string())?;
+
+    // fluxbase.http_fetch(req_ptr, req_len, out_ptr, out_max) → actual_resp_len or -1
+    //
+    // The WASM module writes a JSON request object at `req_ptr`:
+    //   { "method": "GET", "url": "https://...", "headers": {...}, "body": "<base64>" }
+    // The host validates the URL against `allowed_http_hosts`, performs the
+    // outbound HTTP request, and writes a JSON response object at `out_ptr`:
+    //   { "status": 200, "headers": {...}, "body": "<base64>" }
+    // Returns the number of bytes written, or -1 on error / denied.
+    linker.func_wrap("fluxbase", "http_fetch", |mut caller: Caller<HostState>, req_ptr: i32, req_len: i32, out_ptr: i32, out_max: i32| -> i32 {
+        let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+            Some(m) => m,
+            None => return -1,
+        };
+
+        // Read request JSON from WASM memory.
+        let req_json = {
+            let data = memory.data(&caller);
+            let end  = (req_ptr as usize).saturating_add(req_len as usize);
+            if end > data.len() { return -1; }
+            match serde_json::from_slice::<serde_json::Value>(&data[req_ptr as usize..end]) {
+                Ok(v)  => v,
+                Err(_) => return -1,
+            }
+        };
+
+        let url = match req_json.get("url").and_then(|u| u.as_str()) {
+            Some(u) => u.to_string(),
+            None    => return -1,
+        };
+
+        // ── Allow-list check ─────────────────────────────────────────────────
+        let allowed = {
+            let hosts = &caller.data().allowed_http_hosts;
+            if hosts.iter().any(|h| h == "*") {
+                true
+            } else {
+                // Match scheme+host (ignore path)
+                match url.parse::<reqwest::Url>() {
+                    Ok(parsed) => {
+                        let host_str = parsed.host_str().unwrap_or("");
+                        hosts.iter().any(|h| h == host_str || url.starts_with(h.as_str()))
+                    }
+                    Err(_) => false,
+                }
+            }
+        };
+        if !allowed {
+            caller.data_mut().logs.push(LogLine {
+                level:           "warn".to_string(),
+                message:         format!("http_fetch blocked: {} not in allowed_http_hosts", url),
+                span_type:       None,
+                source:          Some("function".to_string()),
+                span_id:         None,
+                duration_ms:     None,
+                execution_state: None,
+                tool_name:       None,
+            });
+            return -1;
+        }
+
+        let method_str = req_json.get("method").and_then(|m| m.as_str()).unwrap_or("GET").to_uppercase();
+        let body_b64   = req_json.get("body").and_then(|b| b.as_str()).unwrap_or("").to_string();
+        let headers    = req_json.get("headers").and_then(|h| h.as_object()).cloned();
+
+        // ── Make the HTTP request (blocking on the tokio runtime) ─────────────
+        let client = caller.data().http_client.clone();
+        let rt_handle = tokio::runtime::Handle::current();
+        let resp_json = rt_handle.block_on(async move {
+            use base64::Engine as _;
+
+            let method = reqwest::Method::from_bytes(method_str.as_bytes())
+                .unwrap_or(reqwest::Method::GET);
+            let mut builder = client.request(method, &url);
+
+            if let Some(hdrs) = headers {
+                for (k, v) in &hdrs {
+                    if let Some(vs) = v.as_str() {
+                        builder = builder.header(k.as_str(), vs);
+                    }
+                }
+            }
+            if !body_b64.is_empty() {
+                if let Ok(body_bytes) = base64::engine::general_purpose::STANDARD.decode(&body_b64) {
+                    builder = builder.body(body_bytes);
+                }
+            }
+
+            match builder.send().await {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let resp_headers: serde_json::Map<String, serde_json::Value> = resp
+                        .headers()
+                        .iter()
+                        .filter_map(|(k, v)| v.to_str().ok().map(|vs| (k.to_string(), serde_json::Value::String(vs.to_string()))))
+                        .collect();
+                    let body_bytes = resp.bytes().await.unwrap_or_default();
+                    let body_b64  = base64::engine::general_purpose::STANDARD.encode(&body_bytes);
+                    serde_json::json!({ "status": status, "headers": resp_headers, "body": body_b64 })
+                }
+                Err(e) => serde_json::json!({ "status": 0, "error": e.to_string() }),
+            }
+        });
+
+        // ── Write response JSON to WASM memory ────────────────────────────────
+        let resp_bytes = match serde_json::to_vec(&resp_json) {
+            Ok(b)  => b,
+            Err(_) => return -1,
+        };
+        if resp_bytes.len() > out_max as usize { return -1; }
+
+        let data = memory.data_mut(&mut caller);
+        let out_start = out_ptr as usize;
+        let out_end   = out_start + resp_bytes.len();
+        if out_end > data.len() { return -1; }
+        data[out_start..out_end].copy_from_slice(&resp_bytes);
+        resp_bytes.len() as i32
     }).map_err(|e| e.to_string())?;
 
     // fluxbase.secrets_get(key_ptr, key_len, out_ptr, out_max) → actual_len or -1

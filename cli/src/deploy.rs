@@ -95,9 +95,17 @@ async fn deploy_one_dir(
         .or_else(|| metadata["runtime"].as_str().map(String::from))
         .unwrap_or_else(|| "deno".to_string());
 
-    let entry = metadata["entry"].as_str().unwrap_or("index.ts").to_string();
+    let entry = metadata["entry"].as_str().unwrap_or(
+        if runtime == "wasm" { "handler.wasm" } else { "index.ts" }
+    ).to_string();
 
-    // Enforce TypeScript-only
+    // ── WASM path ─────────────────────────────────────────────────────────
+    if runtime == "wasm" {
+        return deploy_wasm_dir(dir, &name, &entry, &metadata, client, t0).await;
+    }
+
+    // ── Deno/JS path ─────────────────────────────────────────────────────
+    // Enforce TypeScript source entry.
     if !entry.ends_with(".ts") {
         return Ok(DeployResult {
             name,
@@ -200,6 +208,139 @@ async fn deploy_one_dir(
         }
         Err(e) => Ok(DeployResult {
             name,
+            version: None,
+            url: None,
+            error: Some(format!("API error: {e}")),
+            elapsed_ms,
+        }),
+    }
+}
+
+// ── WASM deploy ──────────────────────────────────────────────────────────────
+
+/// Deploy a WASM function from `dir`.
+///
+/// Steps:
+/// 1. Optionally run the `build` command from `flux.json`.
+/// 2. Read the compiled `.wasm` binary.
+/// 3. Validate magic bytes (quick sanity check before upload).
+/// 4. Upload as `application/wasm`.
+async fn deploy_wasm_dir(
+    dir:      &Path,
+    name:     &str,
+    entry:    &str,
+    metadata: &Value,
+    client:   &ApiClient,
+    t0:       Instant,
+) -> anyhow::Result<DeployResult> {
+    // (a) Optional build step — e.g. `cargo build --target wasm32-wasip1 --release`
+    if let Some(build_cmd) = metadata["build"].as_str() {
+        println!("     {} Building WASM: {}", "▸".cyan(), build_cmd.dimmed());
+        let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
+        let flag  = if cfg!(target_os = "windows") { "/C" } else { "-c" };
+        let status = Command::new(shell)
+            .args([flag, build_cmd])
+            .current_dir(dir)
+            .status();
+
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                return Ok(DeployResult {
+                    name: name.to_string(),
+                    version: None,
+                    url: None,
+                    error: Some(format!("build command failed (exit {})", s)),
+                    elapsed_ms: t0.elapsed().as_millis(),
+                });
+            }
+            Err(e) => {
+                return Ok(DeployResult {
+                    name: name.to_string(),
+                    version: None,
+                    url: None,
+                    error: Some(format!("could not run build command: {}", e)),
+                    elapsed_ms: t0.elapsed().as_millis(),
+                });
+            }
+        }
+    }
+
+    // (b) Locate the compiled WASM binary
+    let wasm_path = dir.join(entry);
+    if !wasm_path.exists() {
+        return Ok(DeployResult {
+            name: name.to_string(),
+            version: None,
+            url: None,
+            error: Some(format!(
+                "WASM binary '{}' not found. \
+                 Set \"build\" in flux.json or build manually before deploying.",
+                entry
+            )),
+            elapsed_ms: t0.elapsed().as_millis(),
+        });
+    }
+
+    let wasm_bytes = match fs::read(&wasm_path) {
+        Ok(b) => b,
+        Err(e) => {
+            return Ok(DeployResult {
+                name: name.to_string(),
+                version: None,
+                url: None,
+                error: Some(format!("failed to read WASM binary: {}", e)),
+                elapsed_ms: t0.elapsed().as_millis(),
+            });
+        }
+    };
+
+    // (c) Quick sanity check — must start with WASM magic bytes.
+    if wasm_bytes.len() < 8 || &wasm_bytes[0..4] != b"\x00asm" {
+        return Ok(DeployResult {
+            name: name.to_string(),
+            version: None,
+            url: None,
+            error: Some(format!(
+                "'{}' is not a valid WASM binary (wrong magic bytes). \
+                 Build with: cargo build --target wasm32-wasip1 --release",
+                entry
+            )),
+            elapsed_ms: t0.elapsed().as_millis(),
+        });
+    }
+
+    println!(
+        "     {} WASM binary: {} ({} KB)",
+        "▸".cyan(),
+        entry.dimmed(),
+        wasm_bytes.len() / 1024
+    );
+
+    // (d) Upload
+    let part = multipart::Part::bytes(wasm_bytes)
+        .file_name(entry.to_string())
+        .mime_str("application/wasm")?;
+
+    let form = multipart::Form::new()
+        .text("name",    name.to_string())
+        .text("runtime", "wasm".to_string())
+        .part("bundle",  part);
+
+    let elapsed_ms = t0.elapsed().as_millis();
+    match client.deploy_function(form).await {
+        Ok(v) => {
+            let data = v.get("data").unwrap_or(&v);
+            Ok(DeployResult {
+                name: name.to_string(),
+                version: data.get("version").and_then(|v| v.as_u64()),
+                url: data.get("url").and_then(|u| u.as_str()).map(String::from),
+                error: None,
+                elapsed_ms,
+            })
+        }
+        Err(e) => Ok(DeployResult {
+            name: name.to_string(),
             version: None,
             url: None,
             error: Some(format!("API error: {e}")),

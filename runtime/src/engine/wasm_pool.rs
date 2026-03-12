@@ -100,16 +100,19 @@ impl WasmPool {
     ///
     /// - `function_id` is the cache key; same value as used in `IsolatePool`
     /// - `bytes` is the raw `.wasm` binary (fetched from BundleCache / S3)
+    /// - `allowed_http_hosts`: per-function HTTP allow-list for `fluxbase.http_fetch`
     ///
     /// Returns an `ExecutionResult` with `output` (JSON) and `logs`.
     pub async fn execute(
         &self,
-        function_id:  String,
-        bytes:        Vec<u8>,
-        secrets:      HashMap<String, String>,
-        payload:      serde_json::Value,
-        tenant_id:    String,
-        fuel_limit:   Option<u64>,
+        function_id:         String,
+        bytes:               Vec<u8>,
+        secrets:             HashMap<String, String>,
+        payload:             serde_json::Value,
+        tenant_id:           String,
+        fuel_limit:          Option<u64>,
+        allowed_http_hosts:  Vec<String>,
+        http_client:         reqwest::Client,
     ) -> Result<ExecutionResult, String> {
         // ── Acquire concurrency slot ──────────────────────────────────────
         let _permit = self.semaphore
@@ -141,7 +144,9 @@ impl WasmPool {
             payload,
             tenant_id,
             function_id,
-            fuel_limit: fuel_limit.unwrap_or(1_000_000_000),
+            fuel_limit:          fuel_limit.unwrap_or(1_000_000_000),
+            allowed_http_hosts,
+            http_client:         Some(http_client),
         };
 
         execute_wasm(self.engine.as_ref(), module.as_ref(), params).await

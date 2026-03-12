@@ -73,6 +73,14 @@ extern "C" {
     /// Writes the value into `out_ptr` (max `out_max` bytes).
     /// Returns actual byte length written, or -1 if the key is not found.
     fn secrets_get(key_ptr: i32, key_len: i32, out_ptr: i32, out_max: i32) -> i32;
+
+    /// Outbound HTTP request gated by the host allow-list.
+    /// `req_ptr` points to a JSON request object:
+    ///   `{"method":"GET","url":"https://...","headers":{},"body":"<base64>"}`
+    /// `out_ptr` receives a JSON response object:
+    ///   `{"status":200,"headers":{},"body":"<base64>"}`
+    /// Returns bytes written into `out_ptr`, or -1 if denied / error.
+    fn http_fetch(req_ptr: i32, req_len: i32, out_ptr: i32, out_max: i32) -> i32;
 }
 
 // ─── Stub implementations for non-WASM builds (tests, docs) ─────────────────
@@ -82,6 +90,9 @@ unsafe fn log(_level: i32, _msg_ptr: i32, _msg_len: i32) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 unsafe fn secrets_get(_key_ptr: i32, _key_len: i32, _out_ptr: i32, _out_max: i32) -> i32 { -1 }
+
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn http_fetch(_rq_ptr: i32, _rq_len: i32, _out_ptr: i32, _out_max: i32) -> i32 { -1 }
 
 // ─── Global result buffer ────────────────────────────────────────────────────
 //
@@ -168,8 +179,79 @@ impl FluxCtx {
             log(level, message.as_ptr() as i32, message.len() as i32);
         }
     }
+
+    /// Make an outbound HTTP request.
+    ///
+    /// The host enforces an allow-list (`WASM_HTTP_ALLOWED_HOSTS`). Requests to
+    /// hosts not on the list return `None`.
+    ///
+    /// # Example
+    /// ```rust
+    /// let resp = ctx.http_fetch("GET", "https://api.example.com/data", None, None);
+    /// ```
+    pub fn http_fetch(
+        &self,
+        method:  &str,
+        url:     &str,
+        headers: Option<std::collections::HashMap<&str, &str>>,
+        body:    Option<&[u8]>,
+    ) -> Option<HttpResponse> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+        let body_b64 = body.map(|b| STANDARD.encode(b)).unwrap_or_default();
+        let headers_val: serde_json::Value = headers
+            .map(|h| h.into_iter().map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string()))).collect())
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        let req = serde_json::json!({
+            "method":  method,
+            "url":     url,
+            "headers": headers_val,
+            "body":    body_b64,
+        });
+        let req_bytes = serde_json::to_vec(&req).ok()?;
+        let mut out_buf = vec![0u8; 128 * 1024]; // 128 KB response buffer
+
+        let len = unsafe {
+            http_fetch(
+                req_bytes.as_ptr() as i32,
+                req_bytes.len() as i32,
+                out_buf.as_mut_ptr() as i32,
+                out_buf.len() as i32,
+            )
+        };
+        if len < 0 { return None; }
+        out_buf.truncate(len as usize);
+
+        let resp: serde_json::Value = serde_json::from_slice(&out_buf).ok()?;
+        let status  = resp.get("status").and_then(|s| s.as_u64()).map(|s| s as u16).unwrap_or(0);
+        let body_b64 = resp.get("body").and_then(|b| b.as_str()).unwrap_or("");
+        let body_bytes = STANDARD.decode(body_b64).unwrap_or_default();
+        let resp_headers = resp.get("headers")
+            .and_then(|h| h.as_object())
+            .map(|h| h.iter().filter_map(|(k, v)| v.as_str().map(|vs| (k.clone(), vs.to_string()))).collect())
+            .unwrap_or_default();
+        Some(HttpResponse { status, headers: resp_headers, body: body_bytes })
+    }
+}
+// ─── HttpResponse ────────────────────────────────────────────────────────────────────
+
+/// Response returned by [`FluxCtx::http_fetch`].
+pub struct HttpResponse {
+    pub status:  u16,
+    pub headers: std::collections::HashMap<String, String>,
+    pub body:    Vec<u8>,
 }
 
+impl HttpResponse {
+    /// Decode the body as UTF-8 text.
+    pub fn text(&self) -> Option<&str> {
+        std::str::from_utf8(&self.body).ok()
+    }
+    /// Parse the body as JSON.
+    pub fn json<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
+        serde_json::from_slice(&self.body).ok()
+    }
+}
 // ─── FluxResult ──────────────────────────────────────────────────────────────
 
 /// Return type for Flux WASM handlers.
@@ -281,6 +363,6 @@ pub fn __serialize_output<T: serde::Serialize>(output: &T) -> Result<String, Str
 // ─── Prelude ─────────────────────────────────────────────────────────────────
 
 pub mod prelude {
-    pub use crate::{FluxCtx, FluxResult, FluxSecrets, register_handler};
+    pub use crate::{FluxCtx, FluxResult, FluxSecrets, HttpResponse, register_handler};
     pub use serde::{Deserialize, Serialize};
 }
