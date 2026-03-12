@@ -139,87 +139,16 @@ pub async fn execute(request_id: Option<String>, json_output: bool) -> anyhow::R
         }
     }
 
-    // ── 4. Authentication ──────────────────────────────────────────────────
-    let token = match &config.token {
-        None => {
-            fail("Authenticated:  ", "not logged in — run: flux login");
-            // Cannot check anything further without a token.
-            println!();
-            return Ok(());
-        }
-        Some(t) => t.clone(),
-    };
+    // ── 4. Auth status (framework: no login required) ─────────────────────
+    ok("Auth:          ", "not required — framework is self-hosted");
 
-    // Build an authenticated client for subsequent checks.
-    let mut auth_headers = reqwest::header::HeaderMap::new();
-    if let Ok(v) = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token)) {
-        auth_headers.insert(reqwest::header::AUTHORIZATION, v);
-    }
-    if let Some(tid) = &config.tenant_id {
-        if let Ok(v) = reqwest::header::HeaderValue::from_str(tid) {
-            auth_headers.insert("X-Fluxbase-Tenant", v);
-        }
-    }
-    if let Some(pid) = &config.project_id {
-        if let Ok(v) = reqwest::header::HeaderValue::from_str(pid) {
-            auth_headers.insert("X-Fluxbase-Project", v);
-        }
-    }
-    let auth_client = reqwest::Client::builder()
-        .default_headers(auth_headers)
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .unwrap_or_default();
-
-    // /auth/me
-    let me_url = format!("{}/auth/me", config.api_url);
-    match auth_client.get(&me_url).send().await {
-        Err(e) => fail("Authenticated:  ", &format!("request failed — {}", e)),
-        Ok(res) if res.status() == StatusCode::UNAUTHORIZED => {
-            fail("Authenticated:  ", "token expired — run: flux login");
-        }
-        Ok(res) if !res.status().is_success() => {
-            warn("Authenticated:  ", &format!("HTTP {}", res.status().as_u16()));
-        }
-        Ok(res) => {
-            let body: MeResponse = res.json().await.unwrap_or(MeResponse { email: None });
-            let email = body.email.as_deref().unwrap_or("(unknown)");
-            ok("Authenticated:  ", email);
-        }
-    }
-
-    // ── 5. Tenant ──────────────────────────────────────────────────────────
-    match (&config.tenant_id, &config.tenant_slug) {
-        (Some(tid), Some(slug)) => ok("Tenant:         ", &format!("{}  ({})", slug, tid)),
-        (Some(tid), None)       => ok("Tenant:         ", tid),
-        (None, _) => warn("Tenant:         ", "not set — run: flux tenant select"),
-    }
-
-    // ── 6. Project config ──────────────────────────────────────────────────
-    let proj = ProjectConfig::load().await;
-    match &config.project_id {
-        None => warn("Project:        ", "not set — run: flux project select"),
-        Some(pid) => {
-            let source = if proj.as_ref().and_then(|p| p.project_id.as_deref()) == Some(pid.as_str()) {
-                " (from .fluxbase/config.json)"
-            } else {
-                " (from ~/.fluxbase/config.json)"
-            };
-            ok("Project:        ", &format!("{}{}", pid, source.dimmed()));
-        }
-    }
-
-    // Local project config file presence
-    if proj.is_some() {
-        if let Some(p) = ProjectConfig::find_path_pub() {
-            info(&format!("└─ Config:  {}", p.display()));
-        }
+    // ── 5. flux.toml presence ────────────────────────────────────────────
+    if std::path::Path::new("flux.toml").exists() {
+        ok("flux.toml:      ", "found");
     } else {
-        info(&format!(
-            "└─ {}  (create with: flux init)",
-            "No .fluxbase/config.json found in this directory".yellow()
-        ));
+        warn("flux.toml:      ", "not found in current directory — run: flux init");
     }
+    let proj = ProjectConfig::load().await;
 
     // ── 7. URL overrides ───────────────────────────────────────────────────
     // Show resolved API + Gateway URLs so developers can confirm which
@@ -255,46 +184,8 @@ pub async fn execute(request_id: Option<String>, json_output: bool) -> anyhow::R
                 gen_ts.dimmed(),
             ));
 
-            // ── 8. Remote schema comparison ────────────────────────────
-            if config.project_id.is_some() {
-                let schema_url = format!("{}/sdk/schema", config.api_url);
-                match auth_client.get(&schema_url).send().await {
-                    Err(e) => warn("Remote schema:  ", &format!("unreachable — {}", e)),
-                    Ok(res) if !res.status().is_success() => {
-                        warn(
-                            "Remote schema:  ",
-                            &format!("HTTP {}", res.status().as_u16()),
-                        );
-                    }
-                    Ok(res) => {
-                        let env: serde_json::Value = res.json().await.unwrap_or_default();
-                        let inner = env.get("data").cloned().unwrap_or(env);
-                        let remote: SchemaHealthResponse =
-                            serde_json::from_value(inner).unwrap_or(SchemaHealthResponse {
-                                schema_hash: None,
-                                schema_version: None,
-                            });
-
-                        let remote_v    = remote.schema_version.unwrap_or(0);
-                        let remote_hash = remote.schema_hash.as_deref().unwrap_or("");
-
-                        let up_to_date =
-                            local_v == remote_v && local_h == remote_hash;
-
-                        if up_to_date {
-                            ok("Remote schema:  ", &format!("v{}  — SDK is up to date", remote_v));
-                        } else {
-                            warn(
-                                "Remote schema:  ",
-                                &format!(
-                                    "v{}  — SDK outdated (local v{})  → run: flux pull",
-                                    remote_v, local_v
-                                ),
-                            );
-                        }
-                    }
-                }
-            }
+            // Remote schema comparison is not available in self-hosted mode.
+            // Run `flux generate` to regenerate the SDK from your local schema.
         } else {
             info("└─ Schema:  header not found (file may be manually edited)");
         }

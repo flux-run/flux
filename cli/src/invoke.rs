@@ -2,78 +2,58 @@ use crate::client::ApiClient;
 use colored::Colorize;
 use std::time::Instant;
 
-// ── Invoke a deployed function ──────────────────────────────────
+// ── Invoke a deployed function ──────────────────────────────────────────────
 //
-// Default mode: POST {runtime_url}/execute
-//   Calls the runtime directly — fast, bypasses gateway auth+routing.
+// Default mode: POST {runtime_url}/execute  {"function_id": …, "payload": …}
+//   Direct to runtime — fastest path for local dev, no middleware.
 //
-// --gateway mode: POST {gateway_url}/{function_name}
-//   Routes through the full gateway stack (auth, rate-limit, analytics).
-//   Uses X-Tenant header so the gateway can resolve identity.
-//   Ensures production-parity testing.
+// --gateway flag: POST {gateway_url}/{function_name}  {payload}
+//   Routes through the full gateway stack (routing, rate-limiting, middleware).
+//   Use this to test production-parity behaviour locally.
 
 pub async fn execute(
     name: &str,
-    _tenant_slug: Option<String>,    // kept for back-compat but unused
+    _removed: Option<String>, // formerly tenant_slug — kept only for call-site compat
     payload_str: Option<String>,
     via_gateway: bool,
 ) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
-    let config = &client.config;
 
     // Parse caller payload; default to empty object
     let payload: serde_json::Value = match payload_str.as_deref() {
-        Some(s) => serde_json::from_str(s).map_err(|e| {
-            anyhow::anyhow!("--payload is not valid JSON: {e}")
-        })?,
+        Some(s) => serde_json::from_str(s)
+            .map_err(|e| anyhow::anyhow!("--payload is not valid JSON: {e}"))?,
         None => serde_json::json!({}),
     };
 
     if via_gateway {
-        execute_via_gateway(name, config, payload).await
+        invoke_via_gateway(&client, name, payload).await
     } else {
-        execute_via_runtime(name, config, payload).await
+        invoke_via_runtime(&client, name, payload).await
     }
 }
 
 // ── Runtime-direct path ────────────────────────────────────────────
 
-async fn execute_via_runtime(
+async fn invoke_via_runtime(
+    client: &ApiClient,
     name: &str,
-    config: &crate::config::Config,
     payload: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let runtime_url = config.runtime_url.trim_end_matches('/').to_string();
+    let runtime_url = client.runtime_url.trim_end_matches('/');
     let exec_url = format!("{}/execute", runtime_url);
-
-    let tenant_id = config
-        .tenant_id
-        .as_deref()
-        .and_then(|s| s.parse::<uuid::Uuid>().ok())
-        .ok_or_else(|| anyhow::anyhow!(
-            "No tenant configured. Run `flux tenant use <slug>` first."
-        ))?;
-
-    let project_id: Option<uuid::Uuid> = config
-        .project_id
-        .as_deref()
-        .and_then(|s| s.parse().ok());
 
     let body = serde_json::json!({
         "function_id": name,
-        "tenant_id":   tenant_id,
-        "project_id":  project_id,
         "payload":     payload,
     });
 
-    print_invoke_header(name, &runtime_url, "runtime", &payload_str(&payload));
+    print_invoke_header(name, runtime_url, "runtime", &payload_str(&payload));
 
     let t0 = Instant::now();
-    let http = reqwest::Client::new();
-    let res = http
+    let res = client
+        .client
         .post(&exec_url)
-        .header("X-Tenant-Id",   tenant_id.to_string())
-        .header("X-Tenant-Slug", config.tenant_slug.as_deref().unwrap_or(""))
         .json(&body)
         .send()
         .await
@@ -84,30 +64,21 @@ async fn execute_via_runtime(
 
 // ── Gateway path ─────────────────────────────────────────────────
 
-async fn execute_via_gateway(
+async fn invoke_via_gateway(
+    client: &ApiClient,
     name: &str,
-    config: &crate::config::Config,
     payload: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let gateway_url = config.gateway_url.trim_end_matches('/');
-
-    let tenant_slug = config
-        .tenant_slug
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!(
-            "No tenant slug configured. Run `flux tenant use <slug>` first."
-        ))?;
-
-    // The gateway routes `POST /{function_name}` with X-Tenant: {slug}
+    let gateway_url = client.gateway_url.trim_end_matches('/');
+    // Local single-tenant gateway: POST /{function_name} with the payload
     let exec_url = format!("{}/{}", gateway_url, name);
 
     print_invoke_header(name, gateway_url, "gateway", &payload_str(&payload));
 
     let t0 = Instant::now();
-    let http = reqwest::Client::new();
-    let res = http
+    let res = client
+        .client
         .post(&exec_url)
-        .header("X-Tenant", tenant_slug)
         .json(&payload)
         .send()
         .await

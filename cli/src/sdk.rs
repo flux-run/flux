@@ -202,7 +202,7 @@ pub async fn execute_pull(output: Option<String>) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
     // Print the project context so the user sees what they're pulling from.
-    let project_id = client.config.project_id.as_deref().unwrap_or("(no project set)");
+    let project_id = "(use flux generate for types)";
     println!(
         "{} Connected to project  {}",
         "✔".green().bold(),
@@ -274,7 +274,7 @@ pub async fn execute_watch(output: Option<String>, interval: u64) -> anyhow::Res
     let output_path = PathBuf::from(ProjectConfig::resolve_sdk_output(output, proj.as_ref()));
     let interval    = ProjectConfig::resolve_watch_interval(interval, proj.as_ref());
     let client = ApiClient::new().await?;
-    let project_id = client.config.project_id.clone().unwrap_or_else(|| "(no project)".into());
+    let project_id = String::from("(use flux generate for types)");
     let mut last_hash = String::new();
 
     println!(
@@ -360,7 +360,7 @@ pub async fn execute_status(sdk_path: Option<String>) -> anyhow::Result<()> {
     let path = PathBuf::from(ProjectConfig::resolve_sdk_output(sdk_path, proj.as_ref()));
     let client = ApiClient::new().await?;
 
-    let project_id = client.config.project_id.as_deref().unwrap_or("(none)");
+    let project_id = "(use flux generate for types)";
     println!("{} {}", "Project:".bold(), project_id.cyan());
 
     // ── Local ─────────────────────────────────────────────────────────────

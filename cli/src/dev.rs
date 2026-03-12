@@ -7,7 +7,7 @@
 //!
 //!    db            postgres     :5432
 //!    api           management   :8080
-//!    gateway       execution    :8081   LOCAL_MODE=true
+//!    gateway       execution    :4000   LOCAL_MODE=true
 //!    data-engine   query        :8082
 //!    runtime       functions    :8083
 //!    queue         workers      :8084
@@ -38,7 +38,8 @@ use colored::Colorize;
 use tokio::process::Command;
 use tokio::signal;
 
-use crate::config::FluxToml;
+use crate::config::{FluxToml, DEFAULT_API_PORT, DEFAULT_GATEWAY_PORT, DEFAULT_RUNTIME_PORT,
+                    DEFAULT_DATA_ENGINE_PORT, DEFAULT_QUEUE_PORT, DEFAULT_DASHBOARD_PORT, DEFAULT_DB_PORT};
 
 const COMPOSE_FILE: &str = "docker-compose.dev.yml";
 const ENV_FILE:     &str = ".env.dev";
@@ -55,13 +56,13 @@ struct ServiceInfo {
 
 fn default_services() -> Vec<ServiceInfo> {
     vec![
-        ServiceInfo { name: "db",          label: "postgres",   port: 5432, local_mode: false },
-        ServiceInfo { name: "api",         label: "management", port: 8080, local_mode: false },
-        ServiceInfo { name: "gateway",     label: "execution",  port: 8081, local_mode: true  },
-        ServiceInfo { name: "data-engine", label: "query",      port: 8082, local_mode: false },
-        ServiceInfo { name: "runtime",     label: "functions",  port: 8083, local_mode: false },
-        ServiceInfo { name: "queue",       label: "workers",    port: 8084, local_mode: false },
-        ServiceInfo { name: "dashboard",   label: "spa",        port: 5173, local_mode: false },
+        ServiceInfo { name: "db",          label: "postgres",   port: DEFAULT_DB_PORT,          local_mode: false },
+        ServiceInfo { name: "api",         label: "management", port: DEFAULT_API_PORT,          local_mode: false },
+        ServiceInfo { name: "gateway",     label: "execution",  port: DEFAULT_GATEWAY_PORT,      local_mode: true  },
+        ServiceInfo { name: "data-engine", label: "query",      port: DEFAULT_DATA_ENGINE_PORT,  local_mode: false },
+        ServiceInfo { name: "runtime",     label: "functions",  port: DEFAULT_RUNTIME_PORT,      local_mode: false },
+        ServiceInfo { name: "queue",       label: "workers",    port: DEFAULT_QUEUE_PORT,        local_mode: false },
+        ServiceInfo { name: "dashboard",   label: "spa",        port: DEFAULT_DASHBOARD_PORT,    local_mode: false },
     ]
 }
 
@@ -150,6 +151,8 @@ pub async fn execute() -> anyhow::Result<()> {
                 "api"         => t.dev.api_port,
                 "data-engine" => t.dev.data_engine_port,
                 "queue"       => t.dev.queue_port,
+                // dashboard port is Vite dev-only; in production it is
+                // served by the API binary at /ui — no override needed.
                 _             => None,
             };
             if let Some(p) = override_port {
@@ -193,9 +196,9 @@ pub async fn execute() -> anyhow::Result<()> {
     }
 
     // ── Resolve ports for healthchecks and ready banner ──────────────────────
-    let gateway_port = port_of(&services, "gateway").unwrap_or(8081);
-    let api_port     = port_of(&services, "api").unwrap_or(8080);
-    let dash_port    = port_of(&services, "dashboard").unwrap_or(5173);
+    let gateway_port = port_of(&services, "gateway").unwrap_or(DEFAULT_GATEWAY_PORT);
+    let api_port     = port_of(&services, "api").unwrap_or(DEFAULT_API_PORT);
+    let dash_port    = port_of(&services, "dashboard").unwrap_or(DEFAULT_DASHBOARD_PORT);
 
     // ── Launch docker compose (async, non-blocking) ──────────────────────────
     //

@@ -22,6 +22,7 @@ use types::scope::Scope;
 use firebase_auth::FirebaseAuth;
 use std::sync::Arc;
 use tower_http::cors::{CorsLayer, AllowOrigin};
+use tower_http::services::{ServeDir, ServeFile};
 use axum::http::{HeaderValue, Method, header};
 
 /// Capacity of the in-process event broadcast channel.
@@ -277,6 +278,19 @@ pub fn create_app(state: AppState) -> Router {
         // Swagger UI explorer — public page shell; auth injected via ?token=&tenant=&project= params
         .route("/openapi/ui",           get(routes::openapi::ui))
         .route("/health", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
+        // ── Dashboard static files ─────────────────────────────────────────
+        // Production: `flux build` copies `dashboard/dist` into the container
+        // and sets FLUX_DASHBOARD_DIR.  The SPA lives at /ui; any sub-path
+        // that doesn't match a real file falls back to index.html so React
+        // Router handles it.
+        // Development: Vite dev server runs on :5173 (DEFAULT_DASHBOARD_PORT)
+        // with VITE_API_URL=http://localhost:8080 — hot-reload still works.
+        .nest_service("/ui", {
+            let dir = std::env::var("FLUX_DASHBOARD_DIR")
+                .unwrap_or_else(|_| "dashboard/dist".to_string());
+            let index = format!("{}/index.html", dir);
+            ServeDir::new(&dir).not_found_service(ServeFile::new(index))
+        })
         .route("/version", get(|| async {
             Json(serde_json::json!({
                 "service": "api",

@@ -191,7 +191,11 @@ async fn deploy_one_dir(
         }
     }
 
-    let res = client.deploy_function(form).await;
+    let deploy_url = format!("{}/functions", client.base_url);
+    let res: anyhow::Result<serde_json::Value> = async {
+        let r = client.client.post(&deploy_url).multipart(form).send().await?;
+        Ok(r.error_for_status()?.json().await?)
+    }.await;
 
     let elapsed_ms = t0.elapsed().as_millis();
 
@@ -351,7 +355,12 @@ async fn deploy_wasm_dir(
     }
 
     let elapsed_ms = t0.elapsed().as_millis();
-    match client.deploy_function(form).await {
+    let deploy_url = format!("{}/functions", client.base_url);
+    let deploy_result: anyhow::Result<serde_json::Value> = async {
+        let r = client.client.post(&deploy_url).multipart(form).send().await?;
+        Ok(r.error_for_status()?.json().await?)
+    }.await;
+    match deploy_result {
         Ok(v) => {
             let data = v.get("data").unwrap_or(&v);
             Ok(DeployResult {

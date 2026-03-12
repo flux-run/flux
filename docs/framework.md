@@ -1283,85 +1283,147 @@ Everything in the framework:
 
 ## 23. CLI Reference
 
-✅ = implemented, 🔧 = infrastructure exists / CLI wrapper in progress, 📋 = planned.
+✅ = implemented · 🔧 = rewrite in progress (wrong model, not missing) · 📋 = planned
+
+Global flags on every command: `--json` `--no-color` `--quiet` `--verbose`
+`--dry-run` `--yes` `--dir <path>`
 
 ### Project
 
 | Command | Status | Description |
 |---------|--------|-------------|
-| `flux init [name]` | ✅ | Create project with `flux.toml` + `functions/` |
-| `flux dev` | 📋 | Start all services with hot reload |
+| `flux init [name]` | 🔧 | Scaffold `flux.toml` + `functions/` + `schemas/` + `tests/` |
+| `flux new <name> [--template]` | 🔧 | Full project from template (`blank`, `todo-api`, `ai-backend`, `webhook-worker`) |
+| `flux dev [--clean]` | 📋 | Start all services natively (no Docker) + managed local Postgres + hot reload |
 
 ### Functions
 
 | Command | Status | Description |
 |---------|--------|-------------|
-| `flux function create <name>` | ✅ | Scaffold a function |
-| `flux function list` | ✅ | List all functions |
-| `flux function delete <name>` | ✅ | Delete a function |
-| `flux invoke <name> --data <json>` | ✅ | Call a function |
-| `flux build [name]` | 📋 | Compile artifacts |
-| `flux deploy [name]` | ✅ | Deploy functions |
+| `flux function create <name>` | ✅ | Scaffold `functions/<name>/index.ts` + `flux.json` |
+| `flux function list` | 🔧 | List functions from local API |
+| `flux function delete <name>` | 🔧 | Remove from registry + delete directory |
+| `flux build [name] [--watch]` | 📋 | Bundle TS → JS via esbuild; write `.flux/build/<name>/` |
+| `flux deploy [name] [--target local\|docker\|k8s] [--build]` | 🔧 | Hot-swap local \| build Docker image \| write k8s manifests |
+| `flux invoke <name> [--data <json>] [--file]` | 🔧 | Call function via local gateway (`localhost:4000`) |
 
 ### Database
 
 | Command | Status | Description |
 |---------|--------|-------------|
-| `flux db push` | 📋 | Apply schemas to DB |
-| `flux db diff` | 📋 | Preview SQL changes |
-| `flux db migrate` | 📋 | Save diff as migration file |
-| `flux db seed` | 📋 | Apply test fixtures |
+| `flux db push [--dry-run]` | 📋 | Apply `schemas/*.sql` to local Postgres (diff only, never drops data) |
+| `flux db diff` | 📋 | Preview SQL that `push` would run — safe, never executes |
+| `flux db migrate [--name]` | 📋 | Save diff as `migrations/<timestamp>_<name>.sql` |
+| `flux db seed [--file] [--reset]` | 📋 | Execute `tests/fixtures/*.sql` |
 | `flux db reset` | 📋 | Drop + recreate + push + seed |
+| `flux db query [--sql] [--file]` | ✅ | Run raw SQL, print as table |
+| `flux db shell` | ✅ | Open interactive `psql` session |
+| `flux db history <table> [--id]` | ✅ | Before/after mutation history from `state_mutations` |
 
 ### Secrets
 
 | Command | Status | Description |
 |---------|--------|-------------|
-| `flux secrets set <key> <value>` | ✅ | Set a secret |
-| `flux secrets get <key>` | ✅ | Get a secret |
-| `flux secrets list` | ✅ | List secret keys |
-| `flux secrets delete <key>` | ✅ | Delete a secret |
+| `flux secrets set <key> <value>` | 🔧 | Write to `.env.local` (auto-loaded by `flux dev`) |
+| `flux secrets get <key>` | 🔧 | Read a secret value |
+| `flux secrets list` | 🔧 | List keys (values always redacted) |
+| `flux secrets delete <key>` | 🔧 | Remove a secret |
 
-### Observability
+### Observability & Debugging
 
-> Infrastructure for all observability commands exists in the Rust codebase
-> (platform_logs table, span recording, mutation capture). Status below reflects
-> whether the CLI command is wired end-to-end and usable today.
-
-| Command | Status | Description |
-|---------|--------|-------------|
-| `flux trace <id>` | 🔧 | Full distributed trace — infra exists, CLI wrapper in progress |
-| `flux trace <id> --flame` | 🔧 | Waterfall visualization — infra exists, CLI wrapper in progress |
-| `flux trace list` | 🔧 | List recent traces with filtering/sorting — infra exists, CLI wrapper in progress |
-| `flux trace debug <id>` | 🔧 | Interactive step-through mode — infra exists, CLI wrapper in progress |
-| `flux why <id>` | 🔧 | Root cause + fix suggestion — infra exists, CLI wrapper in progress |
-| `flux tail` | 🔧 | Live request stream — infra exists, CLI wrapper in progress |
-| `flux logs <fn> --follow` | 🔧 | Tail function logs — infra exists, CLI wrapper in progress |
-| `flux errors` | 🔧 | Per-function error summary — infra exists, CLI wrapper in progress |
-| `flux state history <table>` | 🔧 | Row version history — infra exists, CLI wrapper in progress |
-| `flux state blame <table>` | 🔧 | Last writer per row — infra exists, CLI wrapper in progress |
-| `flux incident replay <id>` | 🔧 | Re-run with mocked side effects — infra exists, CLI wrapper in progress |
-| `flux trace diff <a> <b>` | 🔧 | Compare two executions — infra exists, CLI wrapper in progress |
-| `flux bug bisect` | 🔧 | Find regression commit — infra exists, CLI wrapper in progress |
-
-### Tools & Workers
+All recording infrastructure exists in Rust (`trace_requests`, `platform_logs`,
+`state_mutations` tables). CLI rewrite removes tenant/project auth and points at
+`localhost:8080` instead of `api.fluxbase.io`.
 
 | Command | Status | Description |
 |---------|--------|-------------|
-| `flux add <tool>` | 📋 | Install integration |
-| `flux tools list` | ✅ | List available tools |
-| `flux tools connected` | ✅ | List connected tools |
-| `flux worker` | 📋 | Start local queue worker |
-| `flux queue list` | 📋 | List jobs |
-| `flux queue retry <id>` | 📋 | Retry failed job |
-| `flux queue dead-letter` | 📋 | List dead-letter jobs |
-| `flux cron list` | 📋 | List cron jobs |
+| `flux trace [<id>] [--flame] [--limit] [--function] [--slow]` | 🔧 | List recent traces or render full span tree |
+| `flux trace diff <a> <b> [--table]` | 🔧 | Compare two executions field-by-field |
+| `flux trace debug <id> [--at] [--interactive]` | 🔧 | Step-through debugger: span-by-span with DB mutations |
+| `flux why <id>` | 🔧 | Root cause in 10s: error + mutations + suggested next command |
+| `flux debug [<id>] [--replay]` | 🔧 | Interactive debugger — pick from recent errors or deep-dive one |
+| `flux fix [<id>]` | 🔧 | Alias for `flux debug` |
+| `flux tail [function] [--errors] [--slow] [--auto-debug]` | 🔧 | Live request stream |
+| `flux logs [source] [resource] [--follow] [--limit]` | 🔧 | Tail function/service logs |
+| `flux errors [--function] [--since]` | 🔧 | Per-function error summary: count, code, p50/p95 |
+| `flux state history <table> [--id] [--limit]` | 🔧 | Full row version history |
+| `flux state blame <table>` | 🔧 | Last writer per row |
+| `flux incident replay <id> [--write] [--live-http]` | 🔧 | Re-run with same input + code SHA; side effects mocked |
+| `flux bug bisect --function --good --bad [--threshold]` | 🔧 | Binary-search trace history for first regression commit |
+| `flux explain [file]` | ✅ | Dry-run a Data Engine query: compiler output + SQL |
+
+### Queue
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `flux queue list [--status] [--function] [--limit]` | 📋 | List jobs (pending/running/failed/dead-letter) |
+| `flux queue retry <job-id>` | 📋 | Re-enqueue a failed job |
+| `flux queue dead-letter [--limit]` | 📋 | List jobs that exhausted all retries |
+
+### Cron
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `flux cron list` | 📋 | List cron jobs: schedule, last/next run, status |
+| `flux cron pause <name>` | 📋 | Pause without deleting |
+| `flux cron resume <name>` | 📋 | Resume a paused job |
+| `flux cron history <name> [--limit]` | 📋 | Recent invocations — each links to a `request-id` |
+
+### Workflows
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `flux workflow create <name>` | 🔧 | Scaffold `workflows/<name>.ts` |
+| `flux workflow list` | 🔧 | List definitions + deployment status |
+| `flux workflow deploy <name>` | 🔧 | Upload definition to local API |
+| `flux workflow run <name> [--data] [--file]` | 🔧 | Trigger and stream step output |
+| `flux workflow list-runs [--workflow] [--status] [--limit]` | 🔧 | List active/recent runs |
+| `flux workflow trace <run-id>` | 🔧 | Full execution trace for a workflow run |
+
+### Events
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `flux event list` | 📋 | List registered event types |
+| `flux event publish <type> [--data] [--file]` | 📋 | Publish an event manually (for testing) |
+| `flux event history <type> [--limit]` | 📋 | Recent events: timestamp, payload, triggered functions |
+
+### Gateway
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `flux gateway route list` | 📋 | Show all routes + operational config (auth, rate_limit, cors) |
+| `flux gateway route patch <path> [--auth-type] [--rate-limit] [--cors-origins] [--json-schema]` | 📋 | Mutate route config; takes effect immediately via NOTIFY |
 
 ### Code Generation
 
 | Command | Status | Description |
 |---------|--------|-------------|
-| `flux generate` | 📋 | Generate TypeScript types |
+| `flux generate [--output] [--watch]` | 📋 | Emit `flux.d.ts` from live DB schema (typed `ctx.db`, `ctx.function.invoke`) |
+
+### Tools
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `flux tool list [--installed]` | ✅ | List available/connected integrations |
+| `flux tool connect <name>` | 🔧 | Walk through secrets, save to `.env.local`, re-run `flux generate` |
+| `flux tool disconnect <name>` | 🔧 | Remove secrets + update types |
+| `flux tool run <name> <action> [--data] [--file]` | ✅ | Run a tool action directly |
+
+### Config
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `flux config list` | 🔧 | Print effective config from `flux.toml` + `~/.flux/config.json` |
+| `flux config get <key>` | 🔧 | Read a single config key |
+| `flux config set <key> <value> [--global]` | 🔧 | Write to `flux.toml` or `~/.flux/config.json` |
+
+### Utilities
+
+| Command | Status | Description |
+|---------|--------|-------------|
+| `flux doctor [<request-id>]` | ✅ | Env health check or per-request diagnosis |
+| `flux upgrade [--check] [--version]` | ✅ | Self-update binary via GitHub Releases |
 
 ---
 

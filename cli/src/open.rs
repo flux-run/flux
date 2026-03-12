@@ -1,67 +1,45 @@
-//! `flux open` — open the Fluxbase dashboard or a specific resource in the browser.
+//! `flux open` — open the local trace viewer in a browser.
+//!
+//! In the self-hosted framework there is no cloud dashboard.
+//! The trace viewer is served by the gateway — its URL comes from
+//! `flux.toml [dev]`, `FLUXBASE_GATEWAY_URL`, or the default `http://localhost:4000`.
 
 use clap::Subcommand;
 use colored::Colorize;
 
 use crate::config::Config;
 
-const DASHBOARD_BASE: &str = "https://app.fluxbase.co";
-
 #[derive(Subcommand)]
 pub enum OpenCommands {
-    /// Open the project dashboard (default)
-    Dashboard,
-    /// Open the function detail page
-    Function {
-        /// Function name
-        name: String,
-    },
-    /// Open trace detail in the dashboard
+    /// Open the trace viewer for a specific request ID
     Trace {
-        /// Request/trace ID
+        /// Request / trace ID
         id: String,
     },
-    /// Open the live log stream in the dashboard
-    Logs,
-    /// Open the gateway routes editor
+    /// Open the local gateway root
     Gateway,
-    /// Open the secrets manager page
-    Secrets,
-    /// Open the API keys management page
-    ApiKeys,
 }
 
 pub async fn execute(command: OpenCommands) -> anyhow::Result<()> {
     let config = Config::load().await;
-    let tenant = config.tenant_slug.clone().unwrap_or_default();
-    let project = config.project_id.clone().unwrap_or_default();
-    let url = build_url(&command, &tenant, &project);
+    let url = build_url(&command, &config.gateway_url);
     println!("Opening: {}", url.cyan());
     open::that(&url).map_err(|e| anyhow::anyhow!("Failed to open browser: {}", e))?;
     Ok(())
 }
 
-/// Also called when `flux open` is invoked with no sub-command (defaults to dashboard).
 pub async fn execute_default() -> anyhow::Result<()> {
-    execute(OpenCommands::Dashboard).await
+    let config = Config::load().await;
+    let url = config.gateway_url.trim_end_matches('/').to_string();
+    println!("Opening: {}", url.cyan());
+    open::that(&url).map_err(|e| anyhow::anyhow!("Failed to open browser: {}", e))?;
+    Ok(())
 }
 
-fn build_url(command: &OpenCommands, tenant: &str, project: &str) -> String {
-    let base = if !tenant.is_empty() && !project.is_empty() {
-        format!("{}/{}/{}", DASHBOARD_BASE, tenant, project)
-    } else if !tenant.is_empty() {
-        format!("{}/{}", DASHBOARD_BASE, tenant)
-    } else {
-        DASHBOARD_BASE.to_string()
-    };
-
+fn build_url(command: &OpenCommands, gateway_url: &str) -> String {
+    let base = gateway_url.trim_end_matches('/');
     match command {
-        OpenCommands::Dashboard => base,
-        OpenCommands::Function { name } => format!("{}/functions/{}", base, name),
-        OpenCommands::Trace { id } => format!("{}/traces/{}", base, id),
-        OpenCommands::Logs => format!("{}/logs", base),
-        OpenCommands::Gateway => format!("{}/gateway", base),
-        OpenCommands::Secrets => format!("{}/secrets", base),
-        OpenCommands::ApiKeys => format!("{}/api-keys", base),
+        OpenCommands::Trace { id } => format!("{}/trace/{}", base, id),
+        OpenCommands::Gateway     => base.to_string(),
     }
 }

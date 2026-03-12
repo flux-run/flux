@@ -2,6 +2,28 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
+// ─── Default ports ────────────────────────────────────────────────────────────
+//
+// These are the ONLY place port numbers live.  Everything else — Config::default(),
+// FluxToml URL helpers, dev.rs service table — reads from here.
+// Override at runtime via flux.toml [dev] or FLUXBASE_*_URL env vars.
+
+pub const DEFAULT_API_PORT:         u16 = 8080;
+pub const DEFAULT_GATEWAY_PORT:     u16 = 8081;
+pub const DEFAULT_RUNTIME_PORT:     u16 = 8083;
+pub const DEFAULT_DATA_ENGINE_PORT: u16 = 8082;
+pub const DEFAULT_QUEUE_PORT:       u16 = 8084;
+/// Dev-only: Vite HMR port. In production the dashboard is served from the API
+/// binary at `/ui/*` — no separate process or port needed.
+pub const DEFAULT_DASHBOARD_PORT:   u16 = 5173;
+pub const DEFAULT_DB_PORT:          u16 = 5432;
+
+/// Build a localhost URL from a port number.
+#[inline]
+pub fn local_url(port: u16) -> String {
+    format!("http://localhost:{}", port)
+}
+
 // ─── flux.toml — project-level config (Flux v2 format) ─────────────────────
 //
 // Written by `flux init` at the project root.  Committed to version control.
@@ -21,11 +43,12 @@ use tokio::fs;
 //   memory_mb  = 256
 //
 //   [dev]
-//   gateway_port     = 4000
-//   runtime_port     = 8083
-//   api_port         = 8080
-//   data_engine_port = 8082
-//   queue_port       = 8084
+//   gateway_port     = 8081   # DEFAULT_GATEWAY_PORT
+//   runtime_port     = 8083   # DEFAULT_RUNTIME_PORT
+//   api_port         = 8080   # DEFAULT_API_PORT
+//   data_engine_port = 8082   # DEFAULT_DATA_ENGINE_PORT
+//   queue_port       = 8084   # DEFAULT_QUEUE_PORT
+//   # dashboard_port not needed — dashboard is served by the API binary at /ui
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct FluxTomlRecord {
@@ -41,11 +64,11 @@ pub struct FluxTomlLimits {
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct FluxTomlDev {
-    pub gateway_port: Option<u16>,
-    pub runtime_port: Option<u16>,
-    pub api_port: Option<u16>,
+    pub gateway_port:     Option<u16>,
+    pub runtime_port:     Option<u16>,
+    pub api_port:         Option<u16>,
     pub data_engine_port: Option<u16>,
-    pub queue_port: Option<u16>,
+    pub queue_port:       Option<u16>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -99,17 +122,27 @@ impl FluxToml {
 
     /// Compute the API URL from [dev] ports (falls back to default).
     pub fn api_url(&self) -> Option<String> {
-        self.dev.api_port.map(|p| format!("http://localhost:{}", p))
+        self.dev.api_port.map(local_url)
     }
 
     /// Compute the gateway URL from [dev] ports.
     pub fn gateway_url(&self) -> Option<String> {
-        self.dev.gateway_port.map(|p| format!("http://localhost:{}", p))
+        self.dev.gateway_port.map(local_url)
     }
 
     /// Compute the runtime URL from [dev] ports.
     pub fn runtime_url(&self) -> Option<String> {
-        self.dev.runtime_port.map(|p| format!("http://localhost:{}", p))
+        self.dev.runtime_port.map(local_url)
+    }
+
+    /// Compute the data engine URL from [dev] ports.
+    pub fn data_engine_url(&self) -> Option<String> {
+        self.dev.data_engine_port.map(local_url)
+    }
+
+    /// Compute the queue URL from [dev] ports.
+    pub fn queue_url(&self) -> Option<String> {
+        self.dev.queue_port.map(local_url)
     }
 }
 
@@ -117,34 +150,48 @@ impl FluxToml {
 //
 // Loaded from `~/.flux/config.json`.  Override individual fields with:
 //   FLUXBASE_API_URL   FLUXBASE_GATEWAY_URL   FLUXBASE_RUNTIME_URL
-// `flux.toml [dev]` takes highest precedence for local port assignments.──
+//   FLUXBASE_DATA_ENGINE_URL
+// `flux.toml [dev]` takes highest precedence for local port assignments.
+//
+// No authentication fields — local services accept all traffic.
+// The project context is the current directory: flux.toml is the project root.
 
+/// Runtime configuration for the CLI.
+///
+/// Fields map to local service URLs.  There are no cloud credentials here —
+/// the framework is self-hosted and runs entirely on the developer's machine.
+///
+/// **URL precedence** (highest → lowest):
+///   1. `flux.toml [dev]` port values
+///   2. `FLUXBASE_*_URL` environment variables
+///   3. `~/.flux/config.json`
+///   4. Compiled-in defaults
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
+    /// Local API service — `http://localhost:8080`
     pub api_url: String,
-    pub token: Option<String>,
-    pub tenant_id: Option<String>,
-    pub tenant_slug: Option<String>,
-    pub project_id: Option<String>,
-    /// Gateway URL — used by `flux subscribe` / SDK realtime features.
+    /// Local gateway — `http://localhost:8081`
     #[serde(default)]
     pub gateway_url: String,
-    /// Runtime URL — used by `flux invoke` to call the function execution engine.
-    /// Env: FLUXBASE_RUNTIME_URL  Default: http://localhost:8083
+    /// Local runtime — `http://localhost:8083`
     #[serde(default)]
     pub runtime_url: String,
+    /// Local data engine — `http://localhost:8082`
+    #[serde(default)]
+    pub data_engine_url: String,
+    /// Local queue — `http://localhost:8084`
+    #[serde(default)]
+    pub queue_url: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            api_url:     "http://localhost:8080".to_string(),
-            token:       None,
-            tenant_id:   None,
-            tenant_slug: None,
-            project_id:  None,
-            gateway_url: "http://localhost:8081".to_string(),
-            runtime_url: "http://localhost:8083".to_string(),
+            api_url:         local_url(DEFAULT_API_PORT),
+            gateway_url:     local_url(DEFAULT_GATEWAY_PORT),
+            runtime_url:     local_url(DEFAULT_RUNTIME_PORT),
+            data_engine_url: local_url(DEFAULT_DATA_ENGINE_PORT),
+            queue_url:       local_url(DEFAULT_QUEUE_PORT),
         }
     }
 }
@@ -167,7 +214,8 @@ impl Config {
             Config::default()
         };
 
-        // Env vars take priority over the stored file.
+        // Env vars override the stored file.
+        // Precedence: flux.toml [dev] > env vars > ~/.flux/config.json > defaults.
         if let Ok(url) = std::env::var("FLUXBASE_API_URL") {
             config.api_url = url;
         }
@@ -177,32 +225,16 @@ impl Config {
         if let Ok(url) = std::env::var("FLUXBASE_RUNTIME_URL") {
             config.runtime_url = url;
         }
-        if let Ok(v) = std::env::var("FLUXBASE_PROJECT_ID") {
-            config.project_id = Some(v);
+        if let Ok(url) = std::env::var("FLUXBASE_DATA_ENGINE_URL") {
+            config.data_engine_url = url;
         }
-        if let Ok(v) = std::env::var("FLUXBASE_TENANT_ID") {
-            config.tenant_id = Some(v);
-        }
-
-        // Per-project config (.fluxbase/config.json) overrides env vars for
-        // project-scoped settings so local dev instances are easy to wire up.
-        if let Some(proj) = ProjectConfig::load_sync() {
-            if proj.project_id.is_some() {
-                config.project_id = proj.project_id;
-            }
-            if let Some(url) = proj.api_url {
-                config.api_url = url;
-            }
-            if let Some(url) = proj.gateway_url {
-                config.gateway_url = url;
-            }
-            if let Some(url) = proj.runtime_url {
-                config.runtime_url = url;
-            }
+        if let Ok(url) = std::env::var("FLUXBASE_QUEUE_URL") {
+            config.queue_url = url;
         }
 
-        // flux.toml [dev] ports override everything for local dev.
-        // Precedence: flux.toml > env vars > .fluxbase/config.json > defaults.
+        // flux.toml [dev] port overrides take highest precedence.
+        // They are committed to version control so the whole team uses the
+        // same ports without any extra flags.
         if let Some(flux) = FluxToml::load_sync() {
             if let Some(url) = flux.api_url() {
                 config.api_url = url;
@@ -212,6 +244,12 @@ impl Config {
             }
             if let Some(url) = flux.runtime_url() {
                 config.runtime_url = url;
+            }
+            if let Some(url) = flux.data_engine_url() {
+                config.data_engine_url = url;
+            }
+            if let Some(url) = flux.queue_url() {
+                config.queue_url = url;
             }
         }
 

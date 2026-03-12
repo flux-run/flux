@@ -217,16 +217,8 @@ async fn execute_request(
     );
     println!("{:<summary_w$} {}", "Time:".bold(), time_val.dimmed());
 
-    // Trace URL — shareable link for Slack / issue comments
-    let trace_url = {
-        let slug = client.config.tenant_slug.as_deref().unwrap_or("");
-        let proj = client.config.project_id.as_deref().unwrap_or("");
-        if !slug.is_empty() && !proj.is_empty() {
-            format!("https://app.fluxbase.co/{}/{}/traces/{}", slug, proj, request_id)
-        } else {
-            format!("https://app.fluxbase.co/traces/{}", request_id)
-        }
-    };
+    // Local trace viewer — served by the gateway at /trace/<id>
+    let trace_url = format!("{}/trace/{}", client.gateway_url.trim_end_matches('/'), request_id);
     println!("{:<summary_w$} {}", "Trace URL:".bold(), trace_url.cyan().underline());
 
     // ── 4. Print Trace spans ──────────────────────────────────────────────
