@@ -49,8 +49,6 @@ impl FileEngine {
     ///
     /// `ext` — file extension without leading dot (e.g. "png", "pdf").
     pub fn object_key(
-        tenant_slug: &str,
-        project_slug: &str,
         schema: &str,
         table: &str,
         row_id: &str,
@@ -59,7 +57,7 @@ impl FileEngine {
     ) -> String {
         let file_id = Uuid::new_v4();
         format!(
-            "{tenant_slug}/{project_slug}/{schema}/{table}/{row_id}/{column}/{file_id}.{ext}",
+            "{schema}/{table}/{row_id}/{column}/{file_id}.{ext}",
         )
     }
 

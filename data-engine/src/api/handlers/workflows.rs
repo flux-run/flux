@@ -37,7 +37,7 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     use sqlx::Row;
     let rows = sqlx::query(
@@ -48,11 +48,8 @@ pub async fn list(
                 ) ORDER BY s.step_order) \
                  FROM fluxbase_internal.workflow_steps s WHERE s.workflow_id = w.id) AS steps \
          FROM fluxbase_internal.workflows w \
-         WHERE w.tenant_id = $1 AND w.project_id = $2 \
          ORDER BY w.name",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(EngineError::Db)?;
@@ -80,17 +77,15 @@ pub async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateWorkflowRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     use sqlx::Row;
     let row = sqlx::query(
         "INSERT INTO fluxbase_internal.workflows \
-             (tenant_id, project_id, name, description, trigger_event) \
-         VALUES ($1, $2, $3, $4, $5) \
+             (name, description, trigger_event) \
+         VALUES ($1, $2, $3) \
          RETURNING id",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&req.name)
     .bind(&req.description)
     .bind(&req.trigger_event)
@@ -108,13 +103,13 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let r = sqlx::query(
         "DELETE FROM fluxbase_internal.workflows \
-         WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+         WHERE id = $1",
     )
-    .bind(id).bind(auth.tenant_id).bind(auth.project_id)
+    .bind(id)
     .execute(&state.pool).await.map_err(EngineError::Db)?;
 
     if r.rows_affected() == 0 {
@@ -131,14 +126,14 @@ pub async fn add_step(
     Path(workflow_id): Path<Uuid>,
     Json(req): Json<CreateStepRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
-    // Verify ownership.
+    // Verify the workflow exists.
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM fluxbase_internal.workflows \
-         WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+         WHERE id = $1",
     )
-    .bind(workflow_id).bind(auth.tenant_id).bind(auth.project_id)
+    .bind(workflow_id)
     .fetch_one(&state.pool).await.map_err(EngineError::Db)?;
 
     if count == 0 {

@@ -90,7 +90,7 @@ impl<'a> QueryPipeline<'a> {
 
         // ── Step 2: Schema name ───────────────────────────────────────────────
         let schema =
-            DbRouter::schema_name(&auth.tenant_slug, &auth.project_slug, &req.database)?;
+            DbRouter::schema_name(&req.database)?;
 
         // ── Step 3: Guards ────────────────────────────────────────────────────
         // Fast CPU-only checks — reject before touching the DB.
@@ -113,7 +113,7 @@ impl<'a> QueryPipeline<'a> {
 
         // ── Step 6: Schema metadata (L1 cache) ───────────────────────────────
         let sk =
-            cache::schema_key(auth.tenant_id, auth.project_id, &schema, &req.table);
+            cache::schema_key(&schema, &req.table);
         let (col_meta, relationships) = match self.state.cache.schema_cache.get(&sk) {
             Some(entry) => {
                 tracing::debug!(key = %sk, "schema cache hit");
@@ -122,16 +122,12 @@ impl<'a> QueryPipeline<'a> {
             None => {
                 let cm = TransformEngine::load_columns(
                     &self.state.pool,
-                    auth.tenant_id,
-                    auth.project_id,
                     &schema,
                     &req.table,
                 )
                 .await?;
                 let rels = load_all_relationships(
                     &self.state.pool,
-                    auth.tenant_id,
-                    auth.project_id,
                     &schema,
                 )
                 .await?;
@@ -180,7 +176,7 @@ impl<'a> QueryPipeline<'a> {
 
         let compile_result: CompileResult = if req.operation == "select" {
             let plan_key =
-                cache::build_plan_key(auth.tenant_id, auth.project_id, &schema, &req, &policy);
+                cache::build_plan_key(&schema, &req, &policy);
             match self.state.cache.plan_cache.get(&plan_key) {
                 Some(plan) => {
                     tracing::debug!("plan cache hit");
@@ -276,8 +272,6 @@ impl<'a> QueryPipeline<'a> {
             schema: &schema,
             request_id: &request_id,
             span_id: span_id_owned.as_deref(),
-            tenant_id: auth.tenant_id,
-            project_id: auth.project_id,
             table: &req.table,
             operation: &req.operation,
             user_id: &auth.user_id,
@@ -363,7 +357,6 @@ impl<'a> QueryPipeline<'a> {
                 let record_id = EventEmitter::extract_record_id(&result);
                 EventEmitter::emit(
                     &self.state.pool,
-                    &auth,
                     &req.table,
                     op,
                     record_id.as_deref(),

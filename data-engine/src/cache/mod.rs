@@ -29,7 +29,6 @@ pub use manager::CacheManager;
 use std::time::Duration;
 
 use moka::sync::Cache;
-use uuid::Uuid;
 
 use crate::compiler::relational::{parse_selectors, ColumnSelector, RelationshipDef};
 use crate::compiler::query_compiler::QueryRequest;
@@ -72,7 +71,7 @@ pub struct SchemaCacheEntry {
     pub relationships: Vec<RelationshipDef>,
 }
 
-/// Moka LRU cache keyed by `"{tenant_id}:{project_id}:{schema}:{table}"`.
+/// Moka LRU cache keyed by `"{schema}:{table}"`.
 pub type SchemaCache = Cache<String, SchemaCacheEntry>;
 
 /// Construct a fresh [`SchemaCache`] with the standard TTL and capacity.
@@ -85,16 +84,16 @@ pub fn build_schema_cache() -> SchemaCache {
 
 /// Build the string key for one specific table.
 ///
-/// Format: `"{tenant_id}:{project_id}:{schema}:{table}"`
-pub fn schema_key(tenant_id: Uuid, project_id: Uuid, schema: &str, table: &str) -> String {
-    format!("{}:{}:{}:{}", tenant_id, project_id, schema, table)
+/// Format: `"{schema}:{table}"`
+pub fn schema_key(schema: &str, table: &str) -> String {
+    format!("{}:{}", schema, table)
 }
 
-/// Build the prefix used to evict all entries for a tenant+project at once.
+/// Build the prefix used to evict all entries for a schema at once.
 ///
-/// Format: `"{tenant_id}:{project_id}:"`
-pub fn tenant_prefix(tenant_id: Uuid, project_id: Uuid) -> String {
-    format!("{}:{}:", tenant_id, project_id)
+/// Format: `"{schema}:"`
+pub fn schema_prefix(schema: &str) -> String {
+    format!("{}:", schema)
 }
 
 // ─── Plan cache ───────────────────────────────────────────────────────────────
@@ -105,8 +104,6 @@ pub fn tenant_prefix(tenant_id: Uuid, project_id: Uuid) -> String {
 /// difference between them being the values bound to `$N` placeholders.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PlanKey {
-    pub tenant_id: Uuid,
-    pub project_id: Uuid,
     /// Postgres schema name.
     pub schema: String,
     /// Table name.
@@ -145,8 +142,6 @@ pub fn build_plan_cache() -> PlanCache {
 /// Called on every SELECT — used for cache lookup before compilation and for
 /// cache insertion after a compile miss.
 pub fn build_plan_key(
-    tenant_id: Uuid,
-    project_id: Uuid,
     schema: &str,
     req: &QueryRequest,
     policy: &PolicyResult,
@@ -188,8 +183,6 @@ pub fn build_plan_key(
     );
 
     PlanKey {
-        tenant_id,
-        project_id,
         schema: schema.to_owned(),
         table: req.table.clone(),
         columns,

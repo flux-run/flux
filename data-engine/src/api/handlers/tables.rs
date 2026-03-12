@@ -84,8 +84,8 @@ pub async fn create(
     headers: HeaderMap,
     Json(body): Json<CreateTableRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
-    let schema = DbRouter::schema_name(&auth.tenant_slug, &auth.project_slug, &body.database)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let schema = DbRouter::schema_name(&body.database)?;
     DbRouter::assert_exists(&state.pool, &schema).await?;
 
     validate_identifier(&body.name)?;
@@ -153,13 +153,11 @@ pub async fn create(
         .map_err(|e| EngineError::Internal(anyhow::anyhow!(e)))?;
     sqlx::query(
         "INSERT INTO fluxbase_internal.table_metadata \
-             (tenant_id, project_id, schema_name, table_name, columns) \
-         VALUES ($1, $2, $3, $4, $5) \
-         ON CONFLICT (tenant_id, project_id, schema_name, table_name) \
+             (schema_name, table_name, columns) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (schema_name, table_name) \
          DO UPDATE SET columns = EXCLUDED.columns, updated_at = now()",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&schema)
     .bind(&body.name)
     .bind(columns_json)
@@ -172,11 +170,11 @@ pub async fn create(
         let _file_accept: serde_json::Value = serde_json::Value::Null; // extended when file engine is implemented
         sqlx::query(
             "INSERT INTO fluxbase_internal.column_metadata \
-                 (tenant_id, project_id, schema_name, table_name, column_name, \
+                 (schema_name, table_name, column_name, \
                   pg_type, fb_type, not_null, primary_key, unique_col, \
                   default_expr, file_visibility, computed_expr, ordinal) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) \
-             ON CONFLICT (tenant_id, project_id, schema_name, table_name, column_name) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
+             ON CONFLICT (schema_name, table_name, column_name) \
              DO UPDATE SET \
                  pg_type = EXCLUDED.pg_type, fb_type = EXCLUDED.fb_type, \
                  not_null = EXCLUDED.not_null, primary_key = EXCLUDED.primary_key, \
@@ -185,8 +183,6 @@ pub async fn create(
                  computed_expr = EXCLUDED.computed_expr, \
                  ordinal = EXCLUDED.ordinal, updated_at = now()",
         )
-        .bind(auth.tenant_id)
-        .bind(auth.project_id)
         .bind(&schema)
         .bind(&body.name)
         .bind(&col.name)
@@ -208,7 +204,7 @@ pub async fn create(
 
     // Evict schema + plan cache for this table so subsequent queries pick up
     // the new column metadata immediately.
-    state.cache.invalidate_table(auth.tenant_id, auth.project_id, &schema, &body.name);
+    state.cache.invalidate_table(&schema, &body.name);
 
     Ok(Json(json!({
         "database": body.database,
@@ -224,17 +220,15 @@ pub async fn list(
     headers: HeaderMap,
     Path(database): Path<String>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
-    let schema = DbRouter::schema_name(&auth.tenant_slug, &auth.project_slug, &database)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let schema = DbRouter::schema_name(&database)?;
     DbRouter::assert_exists(&state.pool, &schema).await?;
 
     let rows = sqlx::query(
         "SELECT table_name, columns FROM fluxbase_internal.table_metadata \
-         WHERE tenant_id = $1 AND project_id = $2 AND schema_name = $3 \
+         WHERE schema_name = $1 \
          ORDER BY table_name",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&schema)
     .fetch_all(&state.pool)
     .await
@@ -256,8 +250,8 @@ pub async fn drop_table(
     headers: HeaderMap,
     Path((database, table)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
-    let schema = DbRouter::schema_name(&auth.tenant_slug, &auth.project_slug, &database)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let schema = DbRouter::schema_name(&database)?;
     DbRouter::assert_exists(&state.pool, &schema).await?;
     DbRouter::assert_table_exists(&state.pool, &schema, &table).await?;
 
@@ -271,10 +265,8 @@ pub async fn drop_table(
     sqlx::query(&drop_sql).execute(&mut *tx).await.map_err(EngineError::Db)?;
     sqlx::query(
         "DELETE FROM fluxbase_internal.table_metadata \
-         WHERE tenant_id = $1 AND project_id = $2 AND schema_name = $3 AND table_name = $4",
+         WHERE schema_name = $1 AND table_name = $2",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&schema)
     .bind(&table)
     .execute(&mut *tx)
@@ -283,10 +275,8 @@ pub async fn drop_table(
 
     sqlx::query(
         "DELETE FROM fluxbase_internal.column_metadata \
-         WHERE tenant_id = $1 AND project_id = $2 AND schema_name = $3 AND table_name = $4",
+         WHERE schema_name = $1 AND table_name = $2",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&schema)
     .bind(&table)
     .execute(&mut *tx)
@@ -295,7 +285,7 @@ pub async fn drop_table(
 
     tx.commit().await.map_err(EngineError::Db)?;
 
-    state.cache.invalidate_table(auth.tenant_id, auth.project_id, &schema, &table);
+    state.cache.invalidate_table(&schema, &table);
 
     Ok(Json(json!({ "database": database, "table": table, "status": "dropped" })))
 }

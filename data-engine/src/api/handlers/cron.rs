@@ -35,18 +35,15 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     use sqlx::Row;
     let rows = sqlx::query(
         "SELECT id, name, schedule, action_type, action_config, \
                 enabled, last_run_at, next_run_at \
          FROM fluxbase_internal.cron_jobs \
-         WHERE tenant_id = $1 AND project_id = $2 \
          ORDER BY name",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(EngineError::Db)?;
@@ -74,7 +71,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateCronRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     validate_action_type(&req.action_type)?;
     let next_run = compute_next_from_schedule(&req.schedule)?;
@@ -82,12 +79,10 @@ pub async fn create(
     use sqlx::Row;
     let row = sqlx::query(
         "INSERT INTO fluxbase_internal.cron_jobs \
-             (tenant_id, project_id, name, schedule, action_type, action_config, next_run_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             (name, schedule, action_type, action_config, next_run_at) \
+         VALUES ($1, $2, $3, $4, $5) \
          RETURNING id",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&req.name)
     .bind(&req.schedule)
     .bind(&req.action_type)
@@ -108,16 +103,16 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(req): Json<PatchCronRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     if let Some(ref sched) = req.schedule {
         let next = compute_next_from_schedule(sched)?;
         sqlx::query(
             "UPDATE fluxbase_internal.cron_jobs \
              SET schedule = $1, next_run_at = $2, updated_at = now() \
-             WHERE id = $3 AND tenant_id = $4 AND project_id = $5",
+             WHERE id = $3",
         )
-        .bind(sched).bind(next).bind(id).bind(auth.tenant_id).bind(auth.project_id)
+        .bind(sched).bind(next).bind(id)
         .execute(&state.pool).await.map_err(EngineError::Db)?;
     }
 
@@ -125,9 +120,9 @@ pub async fn update(
         sqlx::query(
             "UPDATE fluxbase_internal.cron_jobs \
              SET enabled = $1, updated_at = now() \
-             WHERE id = $2 AND tenant_id = $3 AND project_id = $4",
+             WHERE id = $2",
         )
-        .bind(enabled).bind(id).bind(auth.tenant_id).bind(auth.project_id)
+        .bind(enabled).bind(id)
         .execute(&state.pool).await.map_err(EngineError::Db)?;
     }
 
@@ -141,13 +136,13 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let r = sqlx::query(
         "DELETE FROM fluxbase_internal.cron_jobs \
-         WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+         WHERE id = $1",
     )
-    .bind(id).bind(auth.tenant_id).bind(auth.project_id)
+    .bind(id)
     .execute(&state.pool).await.map_err(EngineError::Db)?;
 
     if r.rows_affected() == 0 {
@@ -165,16 +160,14 @@ pub async fn trigger(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let r = sqlx::query(
         "UPDATE fluxbase_internal.cron_jobs \
          SET next_run_at = NOW() \
-         WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+         WHERE id = $1",
     )
     .bind(id)
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .execute(&state.pool)
     .await
     .map_err(EngineError::Db)?;

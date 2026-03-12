@@ -34,17 +34,14 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     use sqlx::Row;
     let rows = sqlx::query(
         "SELECT id, event_pattern, target_type, target_config, enabled, created_at \
          FROM fluxbase_internal.event_subscriptions \
-         WHERE tenant_id = $1 AND project_id = $2 \
          ORDER BY event_pattern, created_at",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(EngineError::Db)?;
@@ -72,19 +69,17 @@ pub async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateSubscriptionRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     validate_target_type(&req.target_type)?;
 
     use sqlx::Row;
     let row = sqlx::query(
         "INSERT INTO fluxbase_internal.event_subscriptions \
-             (tenant_id, project_id, event_pattern, target_type, target_config) \
-         VALUES ($1, $2, $3, $4, $5) \
+             (event_pattern, target_type, target_config) \
+         VALUES ($1, $2, $3) \
          RETURNING id",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&req.event_pattern)
     .bind(&req.target_type)
     .bind(&req.target_config)
@@ -104,17 +99,15 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(req): Json<PatchSubscriptionRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let result = sqlx::query(
         "UPDATE fluxbase_internal.event_subscriptions \
          SET enabled = $1, updated_at = now() \
-         WHERE id = $2 AND tenant_id = $3 AND project_id = $4",
+         WHERE id = $2",
     )
     .bind(req.enabled)
     .bind(id)
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .execute(&state.pool)
     .await
     .map_err(EngineError::Db)?;
@@ -133,15 +126,13 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let result = sqlx::query(
         "DELETE FROM fluxbase_internal.event_subscriptions \
-         WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+         WHERE id = $1",
     )
     .bind(id)
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .execute(&state.pool)
     .await
     .map_err(EngineError::Db)?;

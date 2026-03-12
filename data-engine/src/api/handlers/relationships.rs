@@ -45,18 +45,15 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     use sqlx::Row;
     let rows = sqlx::query(
         "SELECT id, schema_name, from_table, from_column, to_table, to_column, \
                 relationship, alias \
          FROM fluxbase_internal.relationships \
-         WHERE tenant_id = $1 AND project_id = $2 \
          ORDER BY from_table, alias",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(EngineError::Db)?;
@@ -87,18 +84,16 @@ pub async fn create(
     headers: HeaderMap,
     Json(req): Json<CreateRelationshipRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     use sqlx::Row;
     let row = sqlx::query(
         "INSERT INTO fluxbase_internal.relationships \
-             (tenant_id, project_id, schema_name, from_table, from_column, \
+             (schema_name, from_table, from_column, \
               to_table, to_column, relationship, alias) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7) \
          RETURNING id",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&req.schema_name)
     .bind(&req.from_table)
     .bind(&req.from_column)
@@ -111,7 +106,7 @@ pub async fn create(
     .map_err(EngineError::Db)?;
 
     let id: Uuid = row.get("id");
-    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
+    state.cache.invalidate_all();
     Ok(Json(json!({ "id": id })))
 }
 
@@ -122,15 +117,13 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let result = sqlx::query(
         "DELETE FROM fluxbase_internal.relationships \
-         WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+         WHERE id = $1",
     )
     .bind(id)
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .execute(&state.pool)
     .await
     .map_err(EngineError::Db)?;
@@ -139,6 +132,6 @@ pub async fn delete(
         return Err(EngineError::DatabaseNotFound(format!("relationship {}", id)));
     }
 
-    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
+    state.cache.invalidate_all();
     Ok(Json(json!({ "deleted": true })))
 }

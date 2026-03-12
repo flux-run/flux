@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use sqlx::{FromRow, PgPool};
 use tokio::sync::RwLock;
-use uuid::Uuid;
 use crate::engine::auth_context::AuthContext;
 use crate::engine::error::EngineError;
 
 /// In-process policy cache.
-/// Key: "<tenant_id>:<project_id>:<table>:<role>:<operation>"
+/// Key: "<table>:<role>:<operation>"
 pub type PolicyCache = RwLock<HashMap<String, PolicyResult>>;
 
 /// A row from `fluxbase_internal.policies`.
@@ -30,15 +29,9 @@ pub struct PolicyResult {
 pub struct PolicyEngine;
 
 impl PolicyEngine {
-    /// Build the cache key for a given (tenant, project, table, role, operation).
-    pub fn cache_key(
-        tenant_id: Uuid,
-        project_id: Uuid,
-        table: &str,
-        role: &str,
-        operation: &str,
-    ) -> String {
-        format!("{}:{}:{}:{}:{}", tenant_id, project_id, table, role, operation)
+    /// Build the cache key for a given (table, role, operation).
+    pub fn cache_key(table: &str, role: &str, operation: &str) -> String {
+        format!("{}:{}:{}", table, role, operation)
     }
 
     /// Evaluate policy, using `cache` as a read-through in-process cache.
@@ -49,7 +42,7 @@ impl PolicyEngine {
         operation: &str,
         cache: &PolicyCache,
     ) -> Result<PolicyResult, EngineError> {
-        let key = Self::cache_key(auth.tenant_id, auth.project_id, table, &auth.role, operation);
+        let key = Self::cache_key(table, &auth.role, operation);
 
         // Fast path — read lock only.
         {
@@ -82,7 +75,7 @@ impl PolicyEngine {
         table: &str,
         operation: &str,
     ) -> Result<PolicyResult, EngineError> {
-        let row = load_policy(pool, auth.tenant_id, auth.project_id, &auth.role, table, operation)
+        let row = load_policy(pool, &auth.role, table, operation)
             .await?;
 
         let allowed_columns = parse_columns(&row.allowed_columns);
@@ -102,8 +95,6 @@ impl PolicyEngine {
 
 async fn load_policy(
     pool: &PgPool,
-    tenant_id: Uuid,
-    project_id: Uuid,
     role: &str,
     table: &str,
     operation: &str,
@@ -112,16 +103,12 @@ async fn load_policy(
     let row = sqlx::query_as::<_, PolicyRow>(
         "SELECT allowed_columns, row_condition
          FROM fluxbase_internal.policies
-         WHERE tenant_id = $1
-           AND project_id = $2
-           AND table_name = $3
-           AND role = $4
-           AND operation = ANY(ARRAY[$5, '*'])
-         ORDER BY CASE WHEN operation = $5 THEN 0 ELSE 1 END
+         WHERE table_name = $1
+           AND role = $2
+           AND operation = ANY(ARRAY[$3, '*'])
+         ORDER BY CASE WHEN operation = $3 THEN 0 ELSE 1 END
          LIMIT 1",
     )
-    .bind(tenant_id)
-    .bind(project_id)
     .bind(table)
     .bind(role)
     .bind(operation)
@@ -167,14 +154,6 @@ fn substitute_condition(
     let substitutions: &[(&str, serde_json::Value)] = &[
         ("$auth.uid", serde_json::Value::String(auth.user_id.clone())),
         ("$auth.role", serde_json::Value::String(auth.role.clone())),
-        (
-            "$auth.tenant_id",
-            serde_json::Value::String(auth.tenant_id.to_string()),
-        ),
-        (
-            "$auth.project_id",
-            serde_json::Value::String(auth.project_id.to_string()),
-        ),
     ];
 
     for (var, val) in substitutions {

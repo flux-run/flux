@@ -130,7 +130,7 @@ pub async fn history(
     Path((_database, table)): Path<(String, String)>,
     Query(params): Query<HistoryParams>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
     let record_pk = parse_record_pk(&params)?;
     let limit = params.limit.unwrap_or(50).min(500) as i64;
 
@@ -139,16 +139,12 @@ pub async fn history(
         SELECT version, operation, before_state, after_state,
                actor_id, request_id, created_at
         FROM   fluxbase_internal.state_mutations
-        WHERE  tenant_id  = $1
-          AND  project_id = $2
-          AND  table_name = $3
-          AND  record_pk  = $4
+        WHERE  table_name = $1
+          AND  record_pk  = $2
         ORDER  BY version DESC
-        LIMIT  $5
+        LIMIT  $3
         "#,
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&table)
     .bind(&record_pk)
     .bind(limit)
@@ -181,7 +177,7 @@ pub async fn blame(
     Path((_database, table)): Path<(String, String)>,
     Query(params): Query<BlameParams>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
     let limit = params.limit.unwrap_or(100).min(1000) as i64;
 
     // DISTINCT ON (record_pk) with ORDER BY record_pk, version DESC gives the
@@ -192,15 +188,11 @@ pub async fn blame(
         SELECT DISTINCT ON (record_pk)
                record_pk, actor_id, request_id, version, created_at
         FROM   fluxbase_internal.state_mutations
-        WHERE  tenant_id  = $1
-          AND  project_id = $2
-          AND  table_name = $3
+        WHERE  table_name = $1
         ORDER  BY record_pk, version DESC
-        LIMIT  $4
+        LIMIT  $2
         "#,
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&table)
     .bind(limit)
     .fetch_all(&state.pool)
@@ -232,7 +224,7 @@ pub async fn replay(
     Path(_database): Path<String>,
     Query(params): Query<ReplayParams>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
     let limit = params.limit.unwrap_or(500).min(2000) as i64;
 
     let from: DateTime<Utc> = params.from.parse::<DateTime<Utc>>().map_err(|_| {
@@ -258,15 +250,11 @@ pub async fn replay(
                before_state, after_state,
                actor_id, request_id, version, created_at
         FROM   fluxbase_internal.state_mutations
-        WHERE  tenant_id  = $1
-          AND  project_id = $2
-          AND  created_at BETWEEN $3 AND $4
+        WHERE  created_at BETWEEN $1 AND $2
         ORDER  BY created_at ASC
-        LIMIT  $5
+        LIMIT  $3
         "#,
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(from)
     .bind(to)
     .bind(limit)

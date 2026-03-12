@@ -60,8 +60,7 @@ pub async fn handler(
     headers: HeaderMap,
     Query(params): Query<MutationsParams>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers)
-        .map_err(EngineError::MissingField)?;
+    let _auth    = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let limit     = params.limit.unwrap_or(500).min(1000) as i64;
     let after_seq = params.after_seq.unwrap_or(0);
@@ -87,17 +86,13 @@ pub async fn handler(
                 version,
                 created_at
             FROM fluxbase_internal.state_mutations
-            WHERE tenant_id    = $1
-              AND project_id   = $2
-              AND request_id   = $3
-              AND table_name   = $4
-              AND mutation_seq > $5
+            WHERE request_id   = $1
+              AND table_name   = $2
+              AND mutation_seq > $3
             ORDER BY mutation_seq
-            LIMIT $6
+            LIMIT $4
             "#,
         )
-        .bind(auth.tenant_id)
-        .bind(auth.project_id)
         .bind(&params.request_id)
         .bind(tbl)
         .bind(after_seq)
@@ -121,16 +116,12 @@ pub async fn handler(
                 version,
                 created_at
             FROM fluxbase_internal.state_mutations
-            WHERE tenant_id    = $1
-              AND project_id   = $2
-              AND request_id   = $3
-              AND mutation_seq > $4
+            WHERE request_id   = $1
+              AND mutation_seq > $2
             ORDER BY mutation_seq
-            LIMIT $5
+            LIMIT $3
             "#,
         )
-        .bind(auth.tenant_id)
-        .bind(auth.project_id)
         .bind(&params.request_id)
         .bind(after_seq)
         .bind(limit)

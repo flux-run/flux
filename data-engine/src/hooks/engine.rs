@@ -61,7 +61,7 @@ impl HookEngine {
         record: &serde_json::Value,
         request_id: &str,
     ) -> Result<(), EngineError> {
-        let hooks = load_hooks(pool, auth.tenant_id, auth.project_id, table, event).await?;
+        let hooks = load_hooks(pool, table, event).await?;
 
         for function_id in hooks {
             let result = invoke_hook(http, runtime_url, auth, function_id, table, event, record, request_id).await;
@@ -105,19 +105,14 @@ impl HookEngine {
 /// Load the function_id(s) registered for `(table, event)` for this project.
 async fn load_hooks(
     pool: &PgPool,
-    tenant_id: Uuid,
-    project_id: Uuid,
     table: &str,
     event: HookEvent,
 ) -> Result<Vec<Uuid>, EngineError> {
     let rows = sqlx::query(
         "SELECT function_id FROM fluxbase_internal.hooks \
-         WHERE tenant_id = $1 AND project_id = $2 \
-           AND table_name = $3 AND event = $4 AND enabled = true \
+         WHERE table_name = $1 AND event = $2 AND enabled = true \
          ORDER BY created_at",
     )
-    .bind(tenant_id)
-    .bind(project_id)
     .bind(table)
     .bind(event.as_str())
     .fetch_all(pool)
@@ -142,14 +137,12 @@ async fn invoke_hook(
     let endpoint = format!("{}/internal/execute", runtime_url.trim_end_matches('/'));
 
     let payload = json!({
-        "event":      event.as_str(),
-        "table":      table,
-        "record":     record,
+        "event":  event.as_str(),
+        "table":  table,
+        "record": record,
         "auth": {
-            "tenant_id":    auth.tenant_id,
-            "project_id":   auth.project_id,
-            "user_id":      auth.user_id,
-            "role":         auth.role,
+            "user_id": auth.user_id,
+            "role":    auth.role,
         },
     });
 

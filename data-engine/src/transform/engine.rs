@@ -1,5 +1,4 @@
 use sqlx::{PgPool, Row};
-use uuid::Uuid;
 
 use crate::engine::{auth_context::AuthContext, error::EngineError};
 use crate::file_engine::FileEngine;
@@ -25,20 +24,15 @@ impl TransformEngine {
     /// created outside the Fluxbase API and has no extended type information).
     pub async fn load_columns(
         pool: &PgPool,
-        tenant_id: Uuid,
-        project_id: Uuid,
         schema: &str,
         table: &str,
     ) -> Result<Vec<ColumnMeta>, EngineError> {
         let rows = sqlx::query(
             "SELECT column_name, pg_type, fb_type, computed_expr, file_visibility \
              FROM fluxbase_internal.column_metadata \
-             WHERE tenant_id = $1 AND project_id = $2 \
-               AND schema_name = $3 AND table_name = $4 \
+             WHERE schema_name = $1 AND table_name = $2 \
              ORDER BY ordinal",
         )
-        .bind(tenant_id)
-        .bind(project_id)
         .bind(schema)
         .bind(table)
         .fetch_all(pool)

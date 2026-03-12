@@ -50,7 +50,7 @@ pub async fn upload_url(
     headers: HeaderMap,
     Json(req): Json<UploadUrlRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     validate_identifier(&req.database)?;
     validate_identifier(&req.table)?;
@@ -60,8 +60,6 @@ pub async fn upload_url(
 
     let ext = req.extension.as_deref().unwrap_or("bin");
     let key = FileEngine::object_key(
-        &auth.tenant_slug,
-        &auth.project_slug,
         &req.database,
         &req.table,
         &req.row_id,

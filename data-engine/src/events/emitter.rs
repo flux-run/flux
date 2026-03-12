@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::engine::{auth_context::AuthContext, error::EngineError};
+use crate::engine::error::EngineError;
 
 pub struct EventEmitter;
 
@@ -15,7 +15,6 @@ impl EventEmitter {
     /// Errors are logged and swallowed — emission must never fail a user request.
     pub async fn emit(
         pool: &PgPool,
-        auth: &AuthContext,
         table: &str,
         operation: &str,
         record_id: Option<&str>,
@@ -25,12 +24,10 @@ impl EventEmitter {
         let event_type = format!("{}.{}d", table, operation); // inserted / updated / deleted
         let result = sqlx::query(
             "INSERT INTO fluxbase_internal.events \
-                 (tenant_id, project_id, event_type, table_name, \
+                 (event_type, table_name, \
                   record_id, operation, payload, request_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
-        .bind(auth.tenant_id)
-        .bind(auth.project_id)
         .bind(&event_type)
         .bind(table)
         .bind(record_id)
@@ -74,11 +71,9 @@ impl EventEmitter {
         })
     }
 
-    /// Fetch undelivered events for this tenant+project (cursor-based).
+    /// Fetch recent events (cursor-based).
     pub async fn recent(
         pool: &PgPool,
-        tenant_id: Uuid,
-        project_id: Uuid,
         since_id: Option<Uuid>,
         limit: i64,
     ) -> Result<Vec<serde_json::Value>, EngineError> {
@@ -87,13 +82,10 @@ impl EventEmitter {
             sqlx::query(
                 "SELECT id, event_type, table_name, record_id, operation, payload, created_at \
                  FROM fluxbase_internal.events \
-                 WHERE tenant_id = $1 AND project_id = $2 \
-                   AND created_at > (SELECT created_at FROM fluxbase_internal.events WHERE id = $3) \
+                 WHERE created_at > (SELECT created_at FROM fluxbase_internal.events WHERE id = $1) \
                  ORDER BY created_at \
-                 LIMIT $4",
+                 LIMIT $2",
             )
-            .bind(tenant_id)
-            .bind(project_id)
             .bind(cursor)
             .bind(limit)
             .fetch_all(pool)
@@ -102,12 +94,9 @@ impl EventEmitter {
             sqlx::query(
                 "SELECT id, event_type, table_name, record_id, operation, payload, created_at \
                  FROM fluxbase_internal.events \
-                 WHERE tenant_id = $1 AND project_id = $2 \
                  ORDER BY created_at DESC \
-                 LIMIT $3",
+                 LIMIT $1",
             )
-            .bind(tenant_id)
-            .bind(project_id)
             .bind(limit)
             .fetch_all(pool)
             .await

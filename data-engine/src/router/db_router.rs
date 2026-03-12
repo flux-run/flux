@@ -1,32 +1,20 @@
 use sqlx::PgPool;
 use crate::engine::error::EngineError;
 
-/// Computes the PostgreSQL schema name for a project database.
+/// Routes a request to the correct PostgreSQL schema.
 ///
-/// Convention:  t_{tenant_slug}_{project_slug}_{db_name}
-/// Example:     t_acme_auth_main
-///
-/// All slugs are lowercased and hyphens are converted to underscores by the
-/// auth context extractor, so this function only needs to assemble the parts.
+/// Flux is a single-project framework — the schema name is just the database
+/// name (e.g. `"main"`).  No tenant prefix is applied.
 pub struct DbRouter;
 
 impl DbRouter {
-    /// Compute schema name from context parts. Returns Err if any part fails
-    /// identifier validation.
-    pub fn schema_name(
-        tenant_slug: &str,
-        project_slug: &str,
-        db_name: &str,
-    ) -> Result<String, EngineError> {
-        for part in [tenant_slug, project_slug, db_name] {
-            validate_identifier(part)?;
-        }
-        Ok(format!(
-            "t_{}_{}_{}", 
-            tenant_slug.to_lowercase(),
-            project_slug.to_lowercase(),
-            db_name.to_lowercase(),
-        ))
+    /// Validate and return the schema name for `db_name`.
+    ///
+    /// The schema name is the db_name itself (lowercased), validated as a safe
+    /// Postgres identifier.
+    pub fn schema_name(db_name: &str) -> Result<String, EngineError> {
+        validate_identifier(db_name)?;
+        Ok(db_name.to_lowercase())
     }
 
     /// CREATE the schema inside Postgres if it doesn't already exist.
@@ -38,24 +26,14 @@ impl DbRouter {
         Ok(())
     }
 
-    /// List all schema names owned by this tenant+project pair.
-    pub async fn list_schemas(
-        pool: &PgPool,
-        tenant_slug: &str,
-        project_slug: &str,
-    ) -> Result<Vec<String>, EngineError> {
-        let prefix = format!(
-            "t_{}_{}_%",
-            tenant_slug.to_lowercase(),
-            project_slug.to_lowercase()
-        );
+    /// List all user-defined schema names (excludes Postgres system schemas).
+    pub async fn list_schemas(pool: &PgPool) -> Result<Vec<String>, EngineError> {
         let rows = sqlx::query_scalar::<_, String>(
-            // pg_catalog.pg_namespace is a direct catalog table; information_schema.schemata
-            // is a view with additional permission checks — slower on large clusters.
             "SELECT nspname FROM pg_catalog.pg_namespace \
-             WHERE nspname LIKE $1 ORDER BY nspname",
+             WHERE nspname NOT IN ('pg_catalog','information_schema','fluxbase_internal') \
+               AND nspname NOT LIKE 'pg_%' \
+             ORDER BY nspname",
         )
-        .bind(&prefix)
         .fetch_all(pool)
         .await?;
         Ok(rows)
@@ -88,10 +66,7 @@ impl DbRouter {
         Ok(())
     }
 
-    /// Verify a table exists within `schema` and reject system catalog access.
-    ///
-    /// User-owned schemas always start with `t_`; anything else is blocked as a
-    /// defence-in-depth measure even if identifier validation already passed.
+    /// Verify a table exists within `schema`.
     pub async fn assert_table_exists(
         pool: &PgPool,
         schema: &str,
@@ -99,14 +74,6 @@ impl DbRouter {
     ) -> Result<(), EngineError> {
         validate_identifier(schema)?;
         validate_identifier(table)?;
-
-        if !schema.starts_with("t_") {
-            return Err(EngineError::AccessDenied {
-                role: "any".into(),
-                table: table.into(),
-                operation: "any".into(),
-            });
-        }
 
         let exists: bool = sqlx::query_scalar(
             // pg_catalog join is a direct index lookup (pg_namespace.nspname + pg_class.relname).

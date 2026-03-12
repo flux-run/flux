@@ -1,27 +1,20 @@
 //! Central cache manager — owns all three in-process caches and exposes
 //! typed invalidation helpers.
 //!
-//! **Why a CacheManager?**
+//! Flux is a single-project framework — there is no tenant/project
+//! scoping in cache keys. Keys are:
 //!
-//! Previously `AppState` held the cache fields *and* contained three
-//! invalidation methods that mixed cache-management logic into the state
-//! struct (SRP violation). `CacheManager` owns:
-//!
-//! * `schema_cache` — Moka: `(tenant, project, schema, table)` → col_meta + rels
+//! * `schema_cache` — Moka: `"{schema}:{table}"` → col_meta + relationships
 //! * `plan_cache`   — Moka: `PlanKey` → compiled SQL template
 //! * `policy_cache` — `RwLock<HashMap>`: policy evaluation results
-//!
-//! Callers that previously wrote `state.invalidate_tenant_schema(…)` now write
-//! `state.cache.invalidate_tenant(…)`, keeping the concern inside this module.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
-use uuid::Uuid;
 
 use crate::cache::{
-    build_plan_cache, build_schema_cache, schema_key, tenant_prefix, PlanCache, SchemaCache,
+    build_plan_cache, build_schema_cache, schema_key, schema_prefix, PlanCache, SchemaCache,
 };
 use crate::policy::PolicyCache;
 
@@ -45,51 +38,45 @@ impl CacheManager {
 
     // ── Invalidation helpers ──────────────────────────────────────────────────
 
-    /// Evict all policy-cache entries for a tenant+project.
+    /// Evict all policy-cache entries.
     /// Called whenever a policy row is created or deleted.
-    pub async fn invalidate_policy(&self, tenant_id: Uuid, project_id: Uuid) {
-        let prefix = format!("{}:{}:", tenant_id, project_id);
+    pub async fn invalidate_policy(&self) {
         let mut guard = self.policy_cache.write().await;
-        guard.retain(|k, _| !k.starts_with(&prefix));
+        guard.clear();
     }
 
     /// Evict schema + plan cache entries for one specific table.
     /// Called after DDL changes to a single table (CREATE TABLE, DROP TABLE,
     /// or column metadata updates).
-    pub fn invalidate_table(
-        &self,
-        tenant_id: Uuid,
-        project_id: Uuid,
-        schema: &str,
-        table: &str,
-    ) {
-        let key = schema_key(tenant_id, project_id, schema, table);
+    pub fn invalidate_table(&self, schema: &str, table: &str) {
+        let key = schema_key(schema, table);
         self.schema_cache.invalidate(&key);
         let s = schema.to_owned();
         let t = table.to_owned();
         self.plan_cache
-            .invalidate_entries_if(move |k, _| {
-                k.tenant_id == tenant_id
-                    && k.project_id == project_id
-                    && k.schema == s
-                    && k.table == t
-            })
+            .invalidate_entries_if(move |k, _| k.schema == s && k.table == t)
             .ok();
     }
 
-    /// Evict all schema + plan cache entries for a tenant+project.
+    /// Evict all schema + plan cache entries for a schema.
     /// Called after hook / relationship / policy changes that affect the
     /// schema fingerprint without targeting a single table.
-    pub fn invalidate_tenant(&self, tenant_id: Uuid, project_id: Uuid) {
-        let prefix = tenant_prefix(tenant_id, project_id);
+    pub fn invalidate_schema(&self, schema: &str) {
+        let prefix = schema_prefix(schema);
         self.schema_cache
             .invalidate_entries_if(move |k: &String, _| k.starts_with(&prefix))
             .ok();
+        let schema_owned = schema.to_owned();
         self.plan_cache
-            .invalidate_entries_if(move |k, _| {
-                k.tenant_id == tenant_id && k.project_id == project_id
-            })
+            .invalidate_entries_if(move |k, _| k.schema == schema_owned)
             .ok();
+    }
+
+    /// Evict everything in the schema + plan caches.
+    /// Called after project-wide config changes (hooks, relationships).
+    pub fn invalidate_all(&self) {
+        self.schema_cache.invalidate_all();
+        self.plan_cache.invalidate_all();
     }
 }
 

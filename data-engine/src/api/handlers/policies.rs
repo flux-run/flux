@@ -20,16 +20,13 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let rows = sqlx::query(
         "SELECT id, table_name, role, operation, allowed_columns, row_condition \
          FROM fluxbase_internal.policies \
-         WHERE tenant_id = $1 AND project_id = $2 \
          ORDER BY table_name, role, operation",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(EngineError::Db)?;
@@ -74,23 +71,21 @@ pub async fn create(
     headers: HeaderMap,
     Json(body): Json<CreatePolicyRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let allowed_json = serde_json::to_value(&body.allowed_columns)
         .map_err(|e| EngineError::Internal(anyhow::anyhow!(e)))?;
 
     let row = sqlx::query(
         "INSERT INTO fluxbase_internal.policies \
-             (tenant_id, project_id, table_name, role, operation, allowed_columns, row_condition) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
-         ON CONFLICT (tenant_id, project_id, table_name, role, operation) \
+             (table_name, role, operation, allowed_columns, row_condition) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (table_name, role, operation) \
          DO UPDATE SET \
              allowed_columns = EXCLUDED.allowed_columns, \
              row_condition   = EXCLUDED.row_condition \
          RETURNING id",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&body.table_name)
     .bind(&body.role)
     .bind(&body.operation)
@@ -103,8 +98,8 @@ pub async fn create(
     let id: Uuid = row.get("id");
 
     // Invalidate policy cache + plan cache (plans embed policy fingerprint).
-    state.cache.invalidate_policy(auth.tenant_id, auth.project_id).await;
-    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
+    state.cache.invalidate_policy().await;
+    state.cache.invalidate_all();
 
     Ok(Json(json!({
         "id":     id,
@@ -119,15 +114,13 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let affected = sqlx::query(
         "DELETE FROM fluxbase_internal.policies \
-         WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+         WHERE id = $1",
     )
     .bind(id)
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .execute(&state.pool)
     .await
     .map_err(EngineError::Db)?
@@ -138,8 +131,8 @@ pub async fn delete(
     }
 
     // Invalidate policy cache + plan cache (plans embed policy fingerprint).
-    state.cache.invalidate_policy(auth.tenant_id, auth.project_id).await;
-    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
+    state.cache.invalidate_policy().await;
+    state.cache.invalidate_all();
 
     Ok(Json(json!({ "id": id, "status": "deleted" })))
 }

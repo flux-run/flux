@@ -57,7 +57,7 @@ pub async fn handler(
     let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     // ── 2. Schema name ────────────────────────────────────────────────────────
-    let schema = DbRouter::schema_name(&auth.tenant_slug, &auth.project_slug, &req.database)?;
+    let schema = DbRouter::schema_name(&req.database)?;
 
     // ── 3. Guard (compute score; do NOT reject — this is an explain) ──────────
     let complexity_score = score_request(&req);

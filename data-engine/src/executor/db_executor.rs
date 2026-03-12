@@ -1,7 +1,6 @@
 use anyhow::anyhow;
 use sqlx::postgres::PgArguments;
 use sqlx::{Arguments, PgPool, Row};
-use uuid::Uuid;
 use crate::compiler::CompiledQuery;
 use crate::engine::error::EngineError;
 
@@ -22,15 +21,13 @@ fn map_db_error(e: sqlx::Error) -> EngineError {
 ///   • prepend a trace comment to every SQL statement (Gap 3)
 ///   • write a row to `fluxbase_internal.state_mutations` for mutations (Gap 1)
 pub struct MutationContext<'a> {
-    /// Postgres schema name, e.g. `t_acme_auth_main` — already validated by DbRouter.
+    /// Postgres schema name, e.g. `main` — already validated by DbRouter.
     pub schema: &'a str,
     /// Forwarded from `x-request-id`; used in SQL comment + state_mutations.request_id.
     pub request_id: &'a str,
     /// Forwarded from `x-span-id`; links each mutation to the span that caused it.
     /// Enables intra-request time-travel: reconstruct state at any point in execution.
     pub span_id: Option<&'a str>,
-    pub tenant_id: Uuid,
-    pub project_id: Uuid,
     /// User-facing table name (not schema-qualified).
     pub table: &'a str,
     /// "select" | "insert" | "update" | "delete"
@@ -101,10 +98,9 @@ pub async fn execute(
                     bind_value(&mut pre_args, param).map_err(EngineError::Internal)?;
                 }
                 let traced_pre = format!(
-                    "/* flux_req:{req},span:{span},tenant:{tenant} */ {sql}",
+                    "/* flux_req:{req},span:{span} */ {sql}",
                     req    = ctx.request_id,
                     span   = ctx.span_id.unwrap_or("-"),
-                    tenant = ctx.tenant_id,
                     sql    = pre_sql,
                 );
                 let outer_pre = format!(
@@ -146,11 +142,10 @@ pub async fn execute(
     // span: allows pg_stat_activity to show *which runtime span* generated
     // each in-flight query — critical for flux trace debug step-through mode.
     let traced_sql = format!(
-        "/* flux_req:{req},span:{span},tenant:{tenant} */ {sql}",
-        req    = ctx.request_id,
-        span   = ctx.span_id.unwrap_or("-"),
-        tenant = ctx.tenant_id,
-        sql    = query.sql,
+        "/* flux_req:{req},span:{span} */ {sql}",
+        req  = ctx.request_id,
+        span = ctx.span_id.unwrap_or("-"),
+        sql  = query.sql,
     );
 
     // Wrap the inner SQL so we always get a JSON array back via json_agg.
@@ -203,15 +198,11 @@ pub async fn execute(
                     r#"
                     SELECT COALESCE(MAX(version), 0) + 1
                     FROM   fluxbase_internal.state_mutations
-                    WHERE  tenant_id  = $1
-                      AND  project_id = $2
-                      AND  table_name = $3
-                      AND  record_pk  = $4
+                    WHERE  table_name = $1
+                      AND  record_pk  = $2
                     FOR UPDATE
                     "#,
                 )
-                .bind(ctx.tenant_id)
-                .bind(ctx.project_id)
                 .bind(ctx.table)
                 .bind(&record_pk)
                 .fetch_one(&mut *tx)
@@ -252,14 +243,12 @@ pub async fn execute(
                 sqlx::query(
                     r#"
                     INSERT INTO fluxbase_internal.state_mutations
-                        (tenant_id, project_id, schema_name, table_name, record_pk,
+                        (schema_name, table_name, record_pk,
                          operation, before_state, after_state, changed_fields,
                          version, actor_id, request_id, span_id)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     "#,
                 )
-                .bind(ctx.tenant_id)
-                .bind(ctx.project_id)
                 .bind(ctx.schema)
                 .bind(ctx.table)
                 .bind(&record_pk)

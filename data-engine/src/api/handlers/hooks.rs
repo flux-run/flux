@@ -20,16 +20,13 @@ pub async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let rows = sqlx::query(
         "SELECT id, table_name, event, function_id, enabled, created_at \
          FROM fluxbase_internal.hooks \
-         WHERE tenant_id = $1 AND project_id = $2 \
          ORDER BY table_name, event",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(EngineError::Db)?;
@@ -73,7 +70,7 @@ pub async fn create(
     headers: HeaderMap,
     Json(body): Json<CreateHookRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     if !VALID_EVENTS.contains(&body.event.as_str()) {
         return Err(EngineError::UnsupportedOperation(
@@ -83,14 +80,12 @@ pub async fn create(
 
     let row = sqlx::query(
         "INSERT INTO fluxbase_internal.hooks \
-             (tenant_id, project_id, table_name, event, function_id, enabled) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
-         ON CONFLICT (tenant_id, project_id, table_name, event) \
+             (table_name, event, function_id, enabled) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (table_name, event) \
          DO UPDATE SET function_id = EXCLUDED.function_id, enabled = EXCLUDED.enabled \
          RETURNING id",
     )
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .bind(&body.table_name)
     .bind(&body.event)
     .bind(body.function_id)
@@ -100,7 +95,7 @@ pub async fn create(
     .map_err(EngineError::Db)?;
 
     let id: Uuid = row.get("id");
-    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
+    state.cache.invalidate_all();
     Ok(Json(json!({ "id": id, "status": "created" })))
 }
 
@@ -117,17 +112,15 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateHookRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let affected = sqlx::query(
         "UPDATE fluxbase_internal.hooks \
          SET enabled = $1 \
-         WHERE id = $2 AND tenant_id = $3 AND project_id = $4",
+         WHERE id = $2",
     )
     .bind(body.enabled)
     .bind(id)
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .execute(&state.pool)
     .await
     .map_err(EngineError::Db)?
@@ -136,7 +129,7 @@ pub async fn update(
     if affected == 0 {
         return Err(EngineError::DatabaseNotFound(format!("hook {}", id)));
     }
-    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
+    state.cache.invalidate_all();
     Ok(Json(json!({ "id": id, "enabled": body.enabled })))
 }
 
@@ -147,15 +140,13 @@ pub async fn delete(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let affected = sqlx::query(
         "DELETE FROM fluxbase_internal.hooks \
-         WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+         WHERE id = $1",
     )
     .bind(id)
-    .bind(auth.tenant_id)
-    .bind(auth.project_id)
     .execute(&state.pool)
     .await
     .map_err(EngineError::Db)?
@@ -165,6 +156,6 @@ pub async fn delete(
         return Err(EngineError::DatabaseNotFound(format!("hook {}", id)));
     }
 
-    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
+    state.cache.invalidate_all();
     Ok(Json(json!({ "id": id, "status": "deleted" })))
 }

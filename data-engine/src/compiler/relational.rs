@@ -1,5 +1,4 @@
 use sqlx::PgPool;
-use uuid::Uuid;
 
 use crate::engine::error::EngineError;
 use crate::router::db_router::quote_ident;
@@ -28,18 +27,14 @@ impl RelationshipDef {
 /// can expand nested selectors at any depth without additional DB queries.
 pub async fn load_all_relationships(
     pool: &PgPool,
-    tenant_id: Uuid,
-    project_id: Uuid,
     schema: &str,
 ) -> Result<Vec<RelationshipDef>, EngineError> {
     use sqlx::Row;
     let rows = sqlx::query(
         "SELECT alias, from_table, from_column, to_table, to_column, relationship \
          FROM fluxbase_internal.relationships \
-         WHERE tenant_id = $1 AND project_id = $2 AND schema_name = $3",
+         WHERE schema_name = $1",
     )
-    .bind(tenant_id)
-    .bind(project_id)
     .bind(schema)
     .fetch_all(pool)
     .await

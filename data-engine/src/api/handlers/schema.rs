@@ -48,10 +48,9 @@ tbls AS NOT MATERIALIZED (
     LEFT JOIN fluxbase_internal.table_metadata m
       ON m.schema_name = n.nspname AND m.table_name = c.relname
     WHERE c.relkind = 'r'
-      AND CASE
-            WHEN $3::text IS NOT NULL THEN n.nspname = $3
-            ELSE n.nspname LIKE $4
-          END
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'fluxbase_internal')
+      AND n.nspname NOT LIKE 'pg_%'
+      AND ($1::text IS NULL OR n.nspname = $1)
 ),
 cols AS NOT MATERIALIZED (
     SELECT COALESCE(jsonb_agg(
@@ -66,8 +65,7 @@ cols AS NOT MATERIALIZED (
         ) ORDER BY schema_name, table_name, ordinal
     ), '[]'::jsonb) AS data
     FROM fluxbase_internal.column_metadata
-    WHERE tenant_id = $1 AND project_id = $2
-      AND ($5::text IS NULL OR schema_name LIKE $5 || '%')
+    WHERE ($1::text IS NULL OR schema_name = $1)
 ),
 rels AS NOT MATERIALIZED (
     SELECT COALESCE(jsonb_agg(
@@ -83,7 +81,7 @@ rels AS NOT MATERIALIZED (
         ) ORDER BY from_table, alias
     ), '[]'::jsonb) AS data
     FROM fluxbase_internal.relationships
-    WHERE tenant_id = $1 AND project_id = $2
+    WHERE ($1::text IS NULL OR schema_name = $1)
 ),
 pols AS NOT MATERIALIZED (
     SELECT COALESCE(jsonb_agg(
@@ -97,7 +95,6 @@ pols AS NOT MATERIALIZED (
         ) ORDER BY table_name, role
     ), '[]'::jsonb) AS data
     FROM fluxbase_internal.policies
-    WHERE tenant_id = $1 AND project_id = $2
 )
 SELECT
     (SELECT data FROM tbls)   AS tables,
@@ -125,35 +122,19 @@ pub async fn introspect(
         .unwrap_or("-")
         .to_owned();
 
-    let auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+    let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
-    tracing::info!(
-        request_id = %request_id,
-        tenant_id  = %auth.tenant_id,
-        project_id = %auth.project_id,
-        "schema introspect start",
-    );
+    tracing::info!(request_id = %request_id, "schema introspect start");
 
-    // $3 — exact schema name when a specific database is requested
+    // $1 — exact schema name when a specific database is requested (NULL = all)
     let schema_filter: Option<String> = if let Some(ref db) = params.database {
-        Some(DbRouter::schema_name(&auth.tenant_slug, &auth.project_slug, db)?)
+        Some(DbRouter::schema_name(db)?)
     } else {
         None
     };
 
-    // $4 — LIKE prefix covering all schemas for this project (used when $3 IS NULL)
-    let schema_prefix = format!(
-        "t_{}_{}%",
-        auth.tenant_slug.replace('-', "_"),
-        auth.project_slug.replace('-', "_"),
-    );
-
     let row = sqlx::query(SCHEMA_GRAPH_SQL)
-        .bind(auth.tenant_id)                    // $1
-        .bind(auth.project_id)                   // $2
-        .bind(schema_filter.as_deref())          // $3 exact schema or NULL
-        .bind(&schema_prefix)                    // $4 LIKE pattern
-        .bind(params.database.as_deref())        // $5 column schema prefix filter
+        .bind(schema_filter.as_deref())    // $1 exact schema or NULL
         .fetch_one(&state.pool)
         .await
         .map_err(|e| {
