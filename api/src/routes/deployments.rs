@@ -368,12 +368,19 @@ pub async fn get_internal_bundle(
     let storage = state.storage;
 
     #[derive(sqlx::FromRow)]
-    struct BundleRow { id: Uuid, bundle_code: Option<String>, bundle_url: Option<String>, runtime: String }
+    struct BundleRow {
+        id: Uuid,
+        bundle_code: Option<String>,
+        bundle_url: Option<String>,
+        runtime: String,
+        input_schema: Option<serde_json::Value>,
+        output_schema: Option<serde_json::Value>,
+    }
 
     // Try to parse as UUID first; if that fails, treat as function name
     let row = if let Ok(fid) = params.function_id.parse::<Uuid>() {
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime \
+            "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime, f.input_schema, f.output_schema \
              FROM deployments d \
              JOIN functions f ON f.id = d.function_id \
              WHERE d.function_id = $1 AND d.is_active = true \
@@ -386,7 +393,7 @@ pub async fn get_internal_bundle(
     } else {
         // Look up by function name via JOIN
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime \
+            "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime, f.input_schema, f.output_schema \
              FROM deployments d \
              JOIN functions f ON f.id = d.function_id \
              WHERE f.name = $1 AND d.is_active = true \
@@ -404,9 +411,21 @@ pub async fn get_internal_bundle(
                 let url = storage.presigned_get_object(&s3_key, std::time::Duration::from_secs(300))
                     .await
                     .map_err(|e| ApiError::internal(&format!("s3_presign_failed: {}", e)))?;
-                Ok(ApiResponse::new(serde_json::json!({ "deployment_id": r.id, "runtime": r.runtime, "url": url })))
+                Ok(ApiResponse::new(serde_json::json!({
+                    "deployment_id": r.id,
+                    "runtime": r.runtime,
+                    "url": url,
+                    "input_schema": r.input_schema,
+                    "output_schema": r.output_schema,
+                })))
             } else if let Some(code) = r.bundle_code {
-                Ok(ApiResponse::new(serde_json::json!({ "deployment_id": r.id, "runtime": r.runtime, "code": code })))
+                Ok(ApiResponse::new(serde_json::json!({
+                    "deployment_id": r.id,
+                    "runtime": r.runtime,
+                    "code": code,
+                    "input_schema": r.input_schema,
+                    "output_schema": r.output_schema,
+                })))
             } else {
                 Err(ApiError::not_found("no_bundle_found"))
             }

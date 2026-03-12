@@ -334,10 +334,21 @@ async fn deploy_wasm_dir(
         .file_name(entry.to_string())
         .mime_str("application/wasm")?;
 
-    let form = multipart::Form::new()
+    let mut form = multipart::Form::new()
         .text("name",    name.to_string())
         .text("runtime", "wasm".to_string())
         .part("bundle",  part);
+
+    // Attach input/output schemas from the `schema` key in flux.json (if present).
+    // Mirrors the Deno deploy path — enables Rust-side schema validation at runtime.
+    if let Some(schema) = metadata.get("schema") {
+        if let Some(is) = schema.get("input").filter(|v| !v.is_null()) {
+            form = form.text("input_schema", is.to_string());
+        }
+        if let Some(os) = schema.get("output").filter(|v| !v.is_null()) {
+            form = form.text("output_schema", os.to_string());
+        }
+    }
 
     let elapsed_ms = t0.elapsed().as_millis();
     match client.deploy_function(form).await {

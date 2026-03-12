@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         control_plane_url: settings.control_plane_url.clone(),
         service_token: settings.service_token.clone(),
         bundle_cache: cache::bundle_cache::BundleCache::new(100),
+        schema_cache: cache::schema_cache::SchemaCache::new(200),
         isolate_pool,
         wasm_pool,
     });

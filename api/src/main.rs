@@ -145,6 +145,7 @@ pub fn create_app(state: AppState) -> Router {
     let internal_routes = Router::new()
         .route("/secrets", get(secrets::routes::get_internal_runtime_secrets))
         .route("/bundle", get(routes::deployments::get_internal_bundle))
+        .route("/introspect", get(routes::introspect::get_project_introspect))
         .route("/logs", post(logs::routes::create_log))
         .route("/logs", get(logs::routes::list_logs))
         // Emits a table-change event to all connected SSE clients for the project.

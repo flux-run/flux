@@ -10,6 +10,8 @@ use uuid::Uuid;
 use crate::engine::pool::IsolatePool;
 use crate::engine::wasm_pool::WasmPool;
 use crate::secrets::secrets_client::SecretsClient;
+use crate::cache::schema_cache::SchemaCache;
+use crate::engine::schema_validator;
 
 #[derive(Deserialize)]
 pub struct ExecuteRequest {
@@ -36,6 +38,8 @@ pub struct AppState {
     pub control_plane_url: String,
     pub service_token: String,
     pub bundle_cache: crate::cache::bundle_cache::BundleCache,
+    /// JSON Schema cache for function input/output contracts (keyed by function_id, TTL 60s).
+    pub schema_cache: SchemaCache,
     /// Deno V8 isolate pool (JavaScript / TypeScript functions)
     pub isolate_pool: IsolatePool,
     /// Wasmtime execution pool (WASM functions — any language)
@@ -53,6 +57,33 @@ fn bundle_sha(code: &str) -> String {
     let mut hasher = DefaultHasher::new();
     code.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+/// Check the schema cache for this function and validate the payload.
+///
+/// Returns `None` when the payload is valid (or no schema is registered).
+/// Returns `Some(Response)` with a 400 error when validation fails.
+fn validate_schema(
+    schema_cache: &SchemaCache,
+    function_id: &str,
+    payload: &Value,
+) -> Option<axum::response::Response> {
+    let schema = schema_cache.get(function_id)?;
+    let input_schema = schema.input.as_ref()?;
+    match schema_validator::validate_input(input_schema, payload) {
+        Ok(_) => None,
+        Err(violations) => Some(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "INPUT_VALIDATION_ERROR",
+                    "message": "Payload does not match the function's input schema",
+                    "violations": violations,
+                })),
+            )
+                .into_response(),
+        ),
+    }
 }
 
 /// Extra trace context captured once per request and threaded through all lifecycle spans.
@@ -207,6 +238,10 @@ pub async fn execute_handler(
                 Json(serde_json::json!({ "error": "SecretFetchError", "message": e })),
             ).into_response(),
         };
+        // ── JSON Schema validation (Rust, ~50µs) ─────────────────────────
+        if let Some(err) = validate_schema(&state.schema_cache, &req.function_id, &req.payload) {
+            return err;
+        }
         post_trace_span(&state.http_client, log_url.clone(), state.service_token.clone(),
             req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
             &trace_ctx, "info", "execution_start".into(), "start", "started", None);
@@ -296,6 +331,10 @@ pub async fn execute_handler(
                 Json(serde_json::json!({ "error": "SecretFetchError", "message": e })),
             ).into_response(),
         };
+        // ── JSON Schema validation (Rust, ~50µs) ─────────────────────────
+        if let Some(err) = validate_schema(&state.schema_cache, &req.function_id, &req.payload) {
+            return err;
+        }
         // execution_start span: anchors the trace tree and records code_sha + parent link.
         post_trace_span(&state.http_client, log_url.clone(), state.service_token.clone(),
             req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
@@ -476,6 +515,24 @@ pub async fn execute_handler(
                 (d_id.map(|s| s.to_string()), u_id.map(|s| s.to_string()), c_id.map(|s| s.to_string()))
             };
 
+            // ── Cache function contract schemas from bundle response ───────────
+            // The control plane now returns input_schema + output_schema alongside
+            // the bundle. Store them so warm-path executions can validate without
+            // hitting the control plane again.
+            {
+                use crate::cache::schema_cache::FunctionSchema;
+                let input_schema  = json.get("data").and_then(|d| d.get("input_schema")).cloned()
+                    .filter(|v| !v.is_null());
+                let output_schema = json.get("data").and_then(|d| d.get("output_schema")).cloned()
+                    .filter(|v| !v.is_null());
+                if input_schema.is_some() || output_schema.is_some() {
+                    state.schema_cache.insert(req.function_id.clone(), FunctionSchema {
+                        input:  input_schema,
+                        output: output_schema,
+                    });
+                }
+            }
+
             // ── WASM cold execution path ─────────────────────────────────────────
             if bundle_runtime == "wasm" {
                 // WASM binaries are downloaded as bytes (not UTF-8 text).
@@ -516,6 +573,10 @@ pub async fn execute_handler(
                 trace_ctx.code_sha = Some(bundle_sha(&String::from_utf8_lossy(&wasm_bytes)));
                 state.wasm_pool.cache_bytes(req.function_id.clone(), std::sync::Arc::new(wasm_bytes.clone())).await;
 
+                // ── JSON Schema validation (Rust, ~50µs) ──────────────────────
+                if let Some(err) = validate_schema(&state.schema_cache, &req.function_id, &req.payload) {
+                    return err;
+                }
                 post_trace_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
                     req.function_id.clone(), req.tenant_id, req.project_id, request_id.clone(),
                     &trace_ctx, "info", "execution_start".into(), "start", "started", None);
@@ -650,6 +711,11 @@ pub async fn execute_handler(
 
     // Fingerprint the bundle for replay correlation.
     trace_ctx.code_sha = Some(bundle_sha(&code));
+
+    // ── JSON Schema validation (Rust, ~50µs) ──────────────────────────────
+    if let Some(err) = validate_schema(&state.schema_cache, &req.function_id, &req.payload) {
+        return err;
+    }
 
     // execution_start span: anchors the trace tree and records code_sha + parent link.
     post_trace_span(&state.http_client, log_url_nc.clone(), state.service_token.clone(),
@@ -811,7 +877,9 @@ pub async fn invalidate_cache_handler(
     if let Some(ref fid) = req.function_id {
         state.bundle_cache.invalidate_function(fid);
         state.wasm_pool.evict(fid).await;
+        state.schema_cache.invalidate(fid);
         evicted.push("function_bundle");
+        evicted.push("function_schema");
     }
     if let Some(ref did) = req.deployment_id {
         state.bundle_cache.invalidate_deployment(did);

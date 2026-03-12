@@ -112,7 +112,11 @@ fn scaffold(name: &str, language: &Language) -> anyhow::Result<()> {
 fn scaffold_typescript(dir: &Path, name: &str) -> anyhow::Result<()> {
     let flux_json = serde_json::json!({
         "runtime": "deno",
-        "entry": "index.ts"
+        "entry": "index.ts",
+        "schema": {
+            "input":  { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] },
+            "output": { "type": "object", "properties": { "message": { "type": "string" } } }
+        }
     });
     fs::write(dir.join("flux.json"), serde_json::to_string_pretty(&flux_json)?)?;
 
@@ -162,7 +166,11 @@ fn scaffold_rust(dir: &Path, name: &str) -> anyhow::Result<()> {
     let flux_json = serde_json::json!({
         "runtime": "wasm",
         "entry":   "handler.wasm",
-        "build":   "cargo build --target wasm32-wasip1 --release && cp target/wasm32-wasip1/release/handler.wasm handler.wasm"
+        "build":   "cargo build --target wasm32-wasip1 --release && cp target/wasm32-wasip1/release/handler.wasm handler.wasm",
+        "schema": {
+            "input":  { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] },
+            "output": { "type": "object", "properties": { "message": { "type": "string" } } }
+        }
     });
     fs::write(dir.join("flux.json"), serde_json::to_string_pretty(&flux_json)?)?;
 
@@ -218,7 +226,11 @@ fn scaffold_go(dir: &Path, name: &str) -> anyhow::Result<()> {
     let flux_json = serde_json::json!({
         "runtime": "wasm",
         "entry":   "handler.wasm",
-        "build":   "tinygo build -o handler.wasm -target wasip1 -scheduler none -no-debug ."
+        "build":   "tinygo build -o handler.wasm -target wasip1 -scheduler none -no-debug .",
+        "schema": {
+            "input":  { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] },
+            "output": { "type": "object", "properties": { "message": { "type": "string" } } }
+        }
     });
     fs::write(dir.join("flux.json"), serde_json::to_string_pretty(&flux_json)?)?;
 
@@ -274,7 +286,11 @@ fn scaffold_assemblyscript(dir: &Path, name: &str) -> anyhow::Result<()> {
     let flux_json = serde_json::json!({
         "runtime": "wasm",
         "entry":   "build/handler.wasm",
-        "build":   "npx asc assembly/index.ts --target release --outFile build/handler.wasm --exportRuntime"
+        "build":   "npx asc assembly/index.ts --target release --outFile build/handler.wasm --exportRuntime",
+        "schema": {
+            "input":  { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] },
+            "output": { "type": "object", "properties": { "message": { "type": "string" } } }
+        }
     });
     fs::write(dir.join("flux.json"), serde_json::to_string_pretty(&flux_json)?)?;
 
@@ -360,7 +376,11 @@ fn scaffold_c(dir: &Path, name: &str) -> anyhow::Result<()> {
     let flux_json = serde_json::json!({
         "runtime": "wasm",
         "entry":   "handler.wasm",
-        "build":   "make"
+        "build":   "make",
+        "schema": {
+            "input":  { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] },
+            "output": { "type": "object", "properties": { "message": { "type": "string" } } }
+        }
     });
     fs::write(dir.join("flux.json"), serde_json::to_string_pretty(&flux_json)?)?;
 
@@ -465,7 +485,11 @@ fn scaffold_zig(dir: &Path, name: &str) -> anyhow::Result<()> {
     let flux_json = serde_json::json!({
         "runtime": "wasm",
         "entry":   "zig-out/bin/handler.wasm",
-        "build":   "zig build -Dtarget=wasm32-wasip1 -Doptimize=ReleaseSmall"
+        "build":   "zig build -Dtarget=wasm32-wasip1 -Doptimize=ReleaseSmall",
+        "schema": {
+            "input":  { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] },
+            "output": { "type": "object", "properties": { "message": { "type": "string" } } }
+        }
     });
     fs::write(dir.join("flux.json"), serde_json::to_string_pretty(&flux_json)?)?;
 
@@ -553,7 +577,11 @@ fn scaffold_python(dir: &Path, name: &str) -> anyhow::Result<()> {
     let flux_json = serde_json::json!({
         "runtime": "wasm",
         "entry":   "handler.wasm",
-        "build":   "py2wasm handler.py -o handler.wasm"
+        "build":   "py2wasm handler.py -o handler.wasm",
+        "schema": {
+            "input":  { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] },
+            "output": { "type": "object", "properties": { "message": { "type": "string" } } }
+        }
     });
     fs::write(dir.join("flux.json"), serde_json::to_string_pretty(&flux_json)?)?;
 
