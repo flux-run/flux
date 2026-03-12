@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(worker::worker::start(
         pool.clone(),
         config.runtime_url.clone(),
+        config.service_token.clone(),
         config.worker_concurrency,
         config.poll_interval_ms,
     ));

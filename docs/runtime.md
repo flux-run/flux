@@ -11,6 +11,151 @@
 |---|---|
 | Service name | `flux-runtime` |
 | Role | Function execution engine |
+| Tech | Rust, Axum, `deno_core` (V8 isolates), Wasmtime |
+| Default port | `:8083` |
+| Exposed to internet | No — receives traffic from Gateway and Queue only |
+
+The Runtime executes user functions inside sandboxed Deno V8 isolates (and Wasmtime
+for WASM bundles). It handles bundle fetching, secrets injection, `ctx` object
+construction, structured logging, and execution trace emission.
+
+```
+Gateway :8081          Queue :8084
+     │  POST /execute       │  POST /execute
+     └──────────┬───────────┘
+                ▼
+         Runtime :8083
+              ├── BundleCache  (function-level TTL 60s + deployment-level LRU)
+              ├── SchemaCache  (input/output JSON Schema per function)
+              ├── SecretsClient (LRU cache)
+              ├── IsolatePool  (bounded channel, backpressure, V8 isolates)
+              │       └── Worker thread N
+              │              ├── JsRuntime (V8 isolate)
+              │              └── FluxContext sandbox
+              └── WasmPool    (compiled-module cache, Wasmtime)
+```
+
+---
+
+## Execution flow
+
+1. **Receive** `POST /execute` from Gateway or Queue — includes `function_id`, `project_id`, request body
+2. **Check warm caches** — WasmPool bytes cache → BundleCache (function and deployment level)
+3. **Cold fetch** — `GET /internal/bundle?function_id=...` from API service → R2/S3 presigned URL
+4. **Fetch secrets** — SecretsClient with LRU cache
+5. **Validate schema** — optional JSON Schema check on the input payload
+6. **Execute** — dispatch to IsolatePool (Deno) or WasmPool (WASM) with timeout enforcement
+7. **Emit trace** — spans + `ctx.log()` lines → API service `/internal/logs`
+8. **Return result** — JSON response to caller
+
+---
+
+## IsolatePool
+
+The isolate pool manages a fixed number of V8 worker threads:
+
+```
+IsolatePool {
+  workers: min(2 × CPU, 16)
+  channel: bounded tokio::mpsc (capacity = workers × 2)
+}
+```
+
+- Each worker runs an independent `deno_core::JsRuntime`
+- Isolates are reused across invocations
+- If all workers are busy, requests queue in the channel
+- If the channel is full, requests are rejected with 503
+
+---
+
+## FluxContext sandbox
+
+The Runtime constructs a `ctx` object for each invocation:
+
+| ctx property | Runtime implementation |
+|---|---|
+| `ctx.payload` | The inbound payload passed directly |
+| `ctx.env` / `ctx.secrets.get()` | In-memory from SecretsClient cache |
+| `ctx.log(msg, level)` | Structured log → collected and shipped at end of execution |
+| `ctx.workflow.run(steps)` | Sequential step runner with per-step spans |
+| `ctx.workflow.parallel(steps)` | `Promise.allSettled`-based parallel runner |
+| `ctx.agent.run(options)` | LLM-driven tool-calling loop (requires `FLUXBASE_LLM_KEY` secret) |
+
+---
+
+## Bundle caching
+
+Two-level cache:
+
+| Level | Key | TTL | Description |
+|---|---|---|---|
+| Function-level | `function_id` | 60s | Quick lookup for repeat invocations |
+| Deployment-level | `deployment_id` | LRU eviction | Avoids re-downloading from R2/S3 |
+
+On cache miss: `GET /internal/bundle?function_id=...` → API service → R2/S3.
+
+---
+
+## WASM support
+
+Wasmtime-based WASM execution runs in parallel with the Deno pool.
+The `WasmPool` compiles WASM modules once and caches them by `function_id`.
+The runtime auto-detects whether to use Deno or WASM based on the bundle
+`runtime` field returned by the API, or the `X-Function-Runtime` hint header
+from the Gateway.
+
+---
+
+## Secrets
+
+`SecretsClient` fetches secrets from the API service with an LRU cache.
+Secrets are never logged, never included in execution records, never returned
+in error messages.
+
+---
+
+## Queue integration (retry)
+
+The Queue service dispatches jobs directly to `POST /execute` with the same
+payload shape as the Gateway. Failed executions are retried with exponential
+backoff (5s × 2^attempt), then moved to dead-letter after `max_attempts`.
+
+---
+
+## Resource limits
+
+| Limit | Default |
+|---|---|
+| Execution timeout (Deno) | 30s |
+| WASM fuel limit | 1 billion instructions ≈ a few hundred ms |
+| Request body size | 1 MB (runtime-side) / 10 MB (gateway-side) |
+
+---
+
+## Configuration
+
+| Env var | Default | Description |
+|---|---|---|
+| `PORT` | `8083` | HTTP listen port |
+| `API_URL` | `http://localhost:8080` | API service for bundle fetch, secrets, log emission |
+| `CONTROL_PLANE_URL` | — | Backward-compat alias for `API_URL` |
+| `SERVICE_TOKEN` | — | Service-to-service auth token |
+| `ISOLATE_WORKERS` | `min(2 × CPU, 16)` | Number of V8 worker threads |
+
+---
+
+*Source: `runtime/src/`. For the full architecture, see
+[framework.md §4](framework.md#4-architecture).*
+
+
+---
+
+## Overview
+
+| Property | Value |
+|---|---|
+| Service name | `flux-runtime` |
+| Role | Function execution engine |
 | Tech | Rust, Axum, `deno_core` (V8 isolates) |
 | Default port | `:8083` |
 | Exposed to internet | No — receives traffic from Gateway only |

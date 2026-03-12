@@ -29,9 +29,9 @@ impl Settings {
             .unwrap_or_else(|_| "stub_token".to_string());
 
         let port = env::var("PORT")
-            .unwrap_or_else(|_| "8081".to_string())
+            .unwrap_or_else(|_| "8083".to_string())
             .parse()
-            .unwrap_or(8081);
+            .unwrap_or(8083);
 
         let default_workers = std::thread::available_parallelism()
             .map(|n| (n.get() * 2).clamp(2, 16))

@@ -6,6 +6,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 pub struct Config {
     pub database_url: String,
     pub runtime_url: String,
+    pub service_token: String,
     pub port: u16,
     pub worker_concurrency: usize,
     pub poll_interval_ms: u64,
@@ -16,10 +17,13 @@ pub fn load() -> Config {
     Config {
         database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL required"),
         runtime_url: std::env::var("RUNTIME_URL")
-            .unwrap_or_else(|_| "http://localhost:3002".to_string()),
+            .unwrap_or_else(|_| "http://localhost:8083".to_string()),
+        service_token: std::env::var("INTERNAL_SERVICE_TOKEN")
+            .or_else(|_| std::env::var("SERVICE_TOKEN"))
+            .unwrap_or_else(|_| "stub_token".to_string()),
         port: std::env::var("PORT")
             .or_else(|_| std::env::var("QUEUE_PORT"))
-            .unwrap_or_else(|_| "8080".to_string())
+            .unwrap_or_else(|_| "8084".to_string())
             .parse()
             .expect("PORT must be a number"),
         worker_concurrency: std::env::var("WORKER_CONCURRENCY")

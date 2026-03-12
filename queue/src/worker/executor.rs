@@ -17,7 +17,7 @@ async fn log_job(pool: &PgPool, job_id: Uuid, message: &str) {
     .await;
 }
 
-pub async fn execute(pool: PgPool, runtime_url: String, client: Client, job: Job) {
+pub async fn execute(pool: PgPool, runtime_url: String, service_token: String, client: Client, job: Job) {
     info!(job_id = %job.id, function_id = %job.function_id, "job started");
     log_job(&pool, job.id, "job started").await;
 
@@ -30,13 +30,15 @@ pub async fn execute(pool: PgPool, runtime_url: String, client: Client, job: Job
     .execute(&pool)
     .await;
 
-    let runtime_endpoint = format!("{}/internal/execute", runtime_url.trim_end_matches('/'));
+    let runtime_endpoint = format!("{}/execute", runtime_url.trim_end_matches('/'));
 
     let res = client
         .post(&runtime_endpoint)
+        .bearer_auth(&service_token)
         .json(&serde_json::json!({
             "function_id": job.function_id,
-            "payload": job.payload
+            "project_id":  job.project_id,
+            "payload":     job.payload
         }))
         .send()
         .await;
