@@ -1,68 +1,92 @@
-# Observability
+# Observability & Debugging
 
-Fluxbase automatically instruments every request end-to-end. No code changes
-required — just run `flux trace <request-id>`.
+Flux automatically instruments every request end-to-end. No code changes,
+no SDK calls, no OpenTelemetry setup. Every function execution produces an
+[Execution Record](concepts.md#execution-record) containing spans, database
+mutations, external calls, and timing — all linked by `request_id`.
 
 ---
 
 ## Distributed tracing
 
 Every request routed through the gateway receives a unique `x-request-id`
-(UUID v4).  Spans are written to the `platform_logs` table as the request
-flows through each service:
+(UUID). Spans are written to the `execution_spans` table as the request flows
+through each service:
 
 | Source | What is instrumented |
 |---|---|
-| `gateway` | Route matched, cache hit/miss |
-| `runtime` | Bundle cache, R2 fetch, execution start/end |
-| `function` | `ctx.log()` calls |
-| `db` | Every `/db/query` — table, duration, cache, filter columns |
-| `hook` | Row-level hooks triggered by mutations |
-| `event` | Events emitted by functions (`ctx.event.emit`) |
-| `workflow` | Workflow step start/end |
-| `cron` | Schedule trigger execution |
+| Gateway | Route match, auth, rate limit, cache hit/miss |
+| Runtime | Bundle cache, execution start/end, tool calls |
+| Function | `ctx.log.info()` / `ctx.log.warn()` / `ctx.log.error()` calls |
+| Data Engine | Every DB query — table, duration, row count |
+| Queue | Job enqueue, worker pickup, execution, retry |
 
 ### Reading a trace
 
 ```bash
-# Get the request ID from the response header
-curl -D - https://YOUR_GATEWAY/greet -d '...' 2>&1 | grep x-request-id
+# Get request-id from response header
+curl -D - http://localhost:4000/create_user \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Ada","email":"ada@acme.com"}' 2>&1 | grep x-request-id
 
 # Display the full trace
 flux trace a3f9d2b1-4c8e-4f7d-b2e1-9d0c3a5f8e2b
 ```
 
-Sample output:
+```
+Trace a3f9d2b1-...  24ms end-to-end
+
+  09:41:02.000  +0ms   ▶ [gateway/create_user]  route matched: POST /create_user
+  09:41:02.002  +2ms   · [runtime/create_user]  bundle cache hit
+  09:41:02.003  +1ms   ▶ [runtime/create_user]  executing function
+  09:41:02.008  +5ms   · [db/users]              INSERT 1 row (5ms)
+  09:41:02.014  +6ms   · [runtime/create_user]  queue push: send_welcome_email
+  09:41:02.018  +4ms   ■ [runtime/create_user]  execution completed (15ms)
+
+  6 spans  •  24ms total
+
+  State changes:
+    users  INSERT  id=e4a9c3f1  name="Ada"  email="ada@acme.com"
+```
+
+---
+
+## `flux why` — Root cause in 10 seconds
+
+```bash
+flux why <request-id>
+```
 
 ```
-Trace a3f9d2b1-...  284ms end-to-end
-  ⚠ 1 slow span (>500ms)
+✗  POST /create_user  (240ms, 500)
 
-  12:00:01.000  +0ms     ▶ [gateway/list_posts]  INFO   route matched: POST /list_posts
-  12:00:01.002  +2ms     · [runtime/list_posts]  DEBUG  bundle cache hit
-  12:00:01.006  +4ms     ▶ [runtime/list_posts]  INFO   executing function
-  12:00:01.010  +4ms     · [db/posts]            INFO   db query on posts (8ms)
-  12:00:01.010  +0ms     · [db/posts]            INFO   db query on posts (6ms) ⚠ N+1
-  12:00:01.011  +1ms     · [db/posts]            WARN   slow db query on posts (72ms) ⚠ N+1
-  12:00:01.084  +73ms    ■ [runtime/list_posts]  INFO   execution completed (78ms)
+ROOT CAUSE:
+  error: relation "users" does not exist
+  span:  db/users INSERT (line 8 of create_user/index.ts)
 
-  7 spans  •  284ms total
+LIKELY ISSUE:
+  Schema not pushed. The users table doesn't exist in the database.
 
-  3 probable N+1 patterns:
-    ⚠ table posts (3 queries)  consider batching with IN or preloading all at once
-
-  1 slow db query (>50ms) — check indexes on the flagged tables
-
-  1 missing index suggestion:
-    → posts.user_id  run: CREATE INDEX ON posts(user_id);
+FIX:
+  Run: flux db push
 ```
+
+`flux why` reads the execution record — spans, mutations, errors, timing — and
+finds the root cause. No LLM required. It reads the data that's already there
+and pattern-matches the most common failures: missing tables, constraint
+violations, external API timeouts, N+1 patterns, permission errors.
 
 ---
 
 ## Slow span detection
 
-Spans whose duration exceeds **500 ms** are automatically flagged as slow in
-the trace summary.  The threshold is configurable per call:
+Spans whose duration exceeds **500ms** are automatically flagged:
+
+```
+  09:41:02.008  +5ms   · [tool/stripe.charge]   3200ms  ⚠ SLOW
+```
+
+Configurable per command:
 
 ```bash
 flux trace <id> --slow-threshold 200   # flag spans >200ms
@@ -72,265 +96,139 @@ flux trace <id> --slow-threshold 200   # flag spans >200ms
 
 ## N+1 query detection
 
-If the same table is queried **≥ 3 times** within a single request, Fluxbase
-flags it as a probable N+1 pattern.  Affected spans are tagged with `⚠ N+1`
-in the trace view, and the summary lists each table with a fix hint.
+If the same table is queried **≥ 3 times** within a single request, Flux
+flags it as a probable N+1 pattern:
 
-**Example N+1 scenario:**
+```
+  3 probable N+1 patterns:
+    ⚠ table posts (3 queries)  consider batching with IN or preloading
+```
 
-```javascript
+**Before:**
+```typescript
 // ❌ N+1 — queries posts table once per user
-const users = await getUsers();
+const users = await ctx.db.users.findMany();
 for (const user of users) {
-  const posts = await getPosts(user.id);   // 1 query per user
+  const posts = await ctx.db.posts.findMany({ where: { user_id: { eq: user.id } } });
 }
 ```
 
-**Fix:**
-
-```javascript
-// ✅ Single query — fetch all posts at once
-const users = await getUsers();
+**After:**
+```typescript
+// ✅ Single query
+const users = await ctx.db.users.findMany();
 const userIds = users.map(u => u.id);
-const posts = await getPostsByUserIds(userIds);   // 1 query total
-const postsByUser = groupBy(posts, p => p.user_id);
-```
-
----
-
-## Slow query detection
-
-Individual DB queries taking **> 50 ms** are emitted at `WARN` level in the
-trace.  The span includes:
-
-```json
-{
-  "source": "db",
-  "level": "warn",
-  "message": "slow db query on orders (72ms)",
-  "metadata": {
-    "table": "orders",
-    "duration_ms": 72,
-    "cache": "miss",
-    "slow": true,
-    "filter_cols": ["user_id", "status"]
-  }
-}
-```
-
----
-
-## Automatic index suggestions
-
-When Fluxbase detects the same `(table, filter_column)` pair in **≥ 2 slow spans**
-within a single request, it automatically emits a `CREATE INDEX` suggestion in
-the trace envelope:
-
-```json
-{
-  "suggested_indexes": [
-    {
-      "table":  "orders",
-      "column": "user_id",
-      "ddl":    "CREATE INDEX ON orders(user_id);"
-    }
-  ]
-}
-```
-
-The CLI renders this at the bottom of the trace output:
-
-```
-1 missing index suggestion:
-  → orders.user_id  run: CREATE INDEX ON orders(user_id);
-```
-
-You can copy-paste the DDL and run it against your project's database.
-
-This detection (slow + repeated filter on the same column = missing index) is:
-
-- Zero configuration — works out of the box
-- Non-intrusive — no query plan analysis, no EXPLAIN calls
-- Actionable — produces ready-to-run DDL
-
----
-
-## Flame graph
-
-For a visual waterfall of span durations:
-
-```bash
-flux trace <id> --flame
-```
-
-```
-  Flame graph
-
-  gateway/list_...  ████░░░░░░░░░░░░░░░░░░░░░░░░░░  +0ms      10ms
-  runtime/list_...  ░░░░████████████████████████████  +10ms    274ms
-  db/posts         ░░░░░░██░░░░░░░░░░░░░░░░░░░░░░░░  +12ms      8ms  (3×)
-```
-
----
-
-## Raw trace data
-
-Traces are accessible via the API for integrations:
-
-```bash
-curl https://api.fluxbase.co/logs/trace/<request-id> \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Fluxbase-Tenant: $TENANT_ID"
-```
-
-Response envelope fields:
-
-| Field | Description |
-|---|---|
-| `spans` | Array of span objects with metadata |
-| `total_duration_ms` | End-to-end wall time |
-| `slow_span_count` | Spans exceeding the slow threshold |
-| `n_plus_one_tables` | Tables flagged for N+1 patterns |
-| `slow_db_count` | DB spans flagged as slow |
-| `suggested_indexes` | Auto-generated `CREATE INDEX` DDL |
-
----
-
-## State mutation log
-
-Every write through the Fluxbase data engine is recorded in `fluxbase_internal.state_mutations`. This is the foundation for `flux why`, `flux state history`, `flux state blame`, and `flux incident replay`.
-
-### Schema
-
-```sql
-CREATE TABLE fluxbase_internal.state_mutations (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id   uuid NOT NULL,
-    project_id  uuid NOT NULL,
-    request_id  text,          -- links to platform_logs / trace
-    table_name  text NOT NULL,
-    record_pk   jsonb NOT NULL, -- e.g. {"id": 42}
-    operation   text NOT NULL,  -- insert | update | delete
-    before_state jsonb,
-    after_state  jsonb,
-    actor_id    text,           -- api-key slug, user ID, or system
-    version     bigint NOT NULL DEFAULT 1,
-    created_at  timestamptz NOT NULL DEFAULT now()
+const posts = await ctx.db.query(
+  "SELECT * FROM posts WHERE user_id = ANY($1)", [userIds]
 );
 ```
 
-Rows are immutable: every write appends a new version. `version` is incremented per-row atomically in a transaction.
+---
 
-### Data engine endpoints
+## Missing index suggestions
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /db/mutations?request_id=&limit=` | All mutations caused by one request (used by `flux why`) |
-| `GET /db/history/:database/:table?id=&limit=` | Version history for a single row (used by `flux state history`) |
-| `GET /db/blame/:database/:table?limit=` | Last writer per row (used by `flux state blame`) |
-| `GET /db/replay/:database?from=&to=&limit=` | All mutations in a time window (used by `flux incident replay`) |
+When a DB query scans more rows than it returns and no matching index exists,
+Flux suggests one:
 
-### Using the API directly
-
-```bash
-# All state mutations caused by one request
-curl https://api.fluxbase.co/db/mutations?request_id=9624a58d \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Fluxbase-Tenant: $TENANT_ID" \
-  -H "X-Fluxbase-Project: $PROJECT_ID"
-
-# Response
-{
-  "request_id": "9624a58d...",
-  "count": 2,
-  "mutations": [
-    {
-      "table_name":   "users",
-      "record_pk":    {"id": 42},
-      "operation":    "insert",
-      "before_state": null,
-      "after_state":  {"id": 42, "email": "ada@example.com", "plan": "free"},
-      "actor_id":     "api-key-prod",
-      "version":      1,
-      "created_at":   "2026-03-11T14:01:12Z"
-    },
-    {
-      "table_name":   "users",
-      "record_pk":    {"id": 42},
-      "operation":    "update",
-      "before_state": {"plan": "free"},
-      "after_state":  {"plan": "pro"},
-      "actor_id":     "api-key-prod",
-      "version":      2,
-      "created_at":   "2026-03-11T14:01:12Z"
-    }
-  ]
-}
+```
+  1 missing index suggestion:
+    → posts.user_id  run: CREATE INDEX ON posts(user_id);
 ```
 
 ---
 
-## x-request-id propagation
+## State inspection
 
-`x-request-id` is generated at the gateway edge and propagated through every service boundary in the call chain. All platform components write it into every span and log line they produce.
+### Row history
 
-### Propagation chain
-
-```
-Client
-  ↓  (response header: x-request-id)
-Gateway
-  ↓  x-request-id, x-parent-span-id  (forwarded to Runtime + Data Engine)
-Runtime
-  ↓  x-request-id  (forwarded to Control Plane for log ingestion)
-Hooks     ← x-request-id passed as parent context when hooks fire
-Events    ← x-request-id stored alongside every emitted event
-Workflows ← x-request-id propagated into each workflow step execution
-Cron jobs ← x-request-id generated at trigger time, carried through execution
+```bash
+flux state history users --id e4a9c3f1
 ```
 
-This means a single `flux trace <id>` or `flux why <id>` call can recover the full causal chain — gateway → function → db → hooks → downstream events — for any request.
+```
+  v1  INSERT  2026-03-12 09:41:02  request a3f9d2b1  create_user
+      name="Ada"  email="ada@acme.com"
 
-### Headers forwarded by the gateway
+  v2  UPDATE  2026-03-12 09:42:15  request 72af9c1d  update_user
+      name="Ada"  → name="Ada Lovelace"
 
-| Header | Type | Description |
+  v3  UPDATE  2026-03-12 09:45:03  request 8be14a2f  upgrade_plan
+      plan="free"  → plan="pro"
+```
+
+Every version linked to the request that caused it.
+
+### Blame
+
+```bash
+flux state blame users
+```
+
+```
+  id=e4a9c3f1  last_write: request 8be14a2f  upgrade_plan  2026-03-12 09:45
+  id=7f3a1b2c  last_write: request 550e8400  create_user   2026-03-12 09:41
+```
+
+---
+
+## Incident replay
+
+```bash
+flux incident replay <request-id>
+```
+
+Re-executes the request with the original input and code version. External
+calls are mocked using the recorded responses. Side effects (emails, webhooks)
+are suppressed. The replay produces a new execution record that can be compared
+with the original:
+
+```bash
+flux trace diff <original-id> <replay-id>
+```
+
+```
+  SPAN              ORIGINAL    REPLAY     DELTA
+  gateway           2ms         2ms        0ms
+  create_user       1ms         1ms        0ms
+  db.users SELECT   12ms        11ms       -1ms
+  stripe.charge     3200ms      95ms       -3105ms  ✗→✔
+
+  → stripe.charge regressed by 3105ms
+```
+
+---
+
+## Live monitoring
+
+```bash
+flux tail                    # stream all requests
+flux tail --errors           # only errors
+flux logs create_user --follow   # tail one function
+flux errors                  # per-function error summary
+```
+
+```
+POST  /create_user    create_user   24ms   ✔
+  users.id=e4a9c3f1  INSERT  name="Ada"
+
+POST  /checkout       checkout      3.2s   ✗ 500
+  error: Stripe timeout
+  → flux why 550e8400
+```
+
+---
+
+## Execution record retention
+
+| Environment | Default retention | Override |
 |---|---|---|
-| `x-request-id` | UUID v4 | Unique per request; client may supply, gateway generates if absent |
-| `x-parent-span-id` | UUID v4 | Current gateway span ID; becomes the parent for runtime spans |
-| `X-Tenant-Id` | UUID | Tenant identifier |
-| `X-Tenant-Slug` | string | Human-readable tenant slug |
+| Local (`flux dev`) | Forever (until `flux dev --clean`) | — |
+| Self-hosted | 30 days | `RETENTION_DAYS` env var |
+| Fluxbase cloud | 90 days (free), 1 year (pro) | Dashboard setting |
+
+Errors are always retained at the maximum tier regardless of sample rate.
 
 ---
 
-## Replay mode (`x-flux-replay: true`)
-
-When the `x-flux-replay: true` header is present on a request, Fluxbase suppresses all side effects while still applying state mutations. This enables deterministic replay of past incidents without re-triggering emails, webhooks, or external API calls.
-
-### What is suppressed in replay mode
-
-| Component | Replay behaviour |
-|---|---|
-| Row-level hooks | Not fired |
-| Event emission (`ctx.event.emit`) | Silently dropped |
-| Workflow triggers | Not started |
-| Cron-triggered executions | Not re-scheduled |
-| State mutations (`/db/query`) | **Applied** — this is the point of replay |
-
-### How replay requests are identified
-
-The `x-request-id` for replay requests uses the format `replay:<original-request-id>` so replays are distinguishable in traces and logs from the original runs.
-
-### Invoking replay directly
-
-```bash
-# Replay a single request (side effects suppressed)
-curl -X POST https://api.fluxbase.co/db/query \
-  -H "x-flux-replay: true" \
-  -H "x-request-id: replay:9624a58d-57e7-..." \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Fluxbase-Tenant: $TENANT_ID" \
-  -H "X-Fluxbase-Project: $PROJECT_ID" \
-  -d '{"database": "default", "table": "users", "operation": "update", ...}'
-```
-
-The CLI commands `flux incident replay` and `flux trace <id> --replay` handle constructing the correct mutation payloads and headers automatically.
+*For the complete observability spec, see
+[framework.md §18](framework.md#18-observability--debugging).*

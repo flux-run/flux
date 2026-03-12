@@ -1,154 +1,45 @@
 # Example — Webhook Worker
 
-Process incoming webhooks reliably: validate the signature, persist the event,
-and dispatch processing — all in one Fluxbase function.
+Receive, verify, and process webhooks from Stripe, GitHub, or any provider.
+Full execution recording means every webhook is traceable and debuggable.
 
 ---
 
 ## What you'll build
 
 A webhook receiver that:
-
-1. Verifies the webhook signature (HMAC-SHA256) before any processing
+1. Verifies the webhook signature (HMAC-SHA256)
 2. Stores the raw event in a `webhook_events` table
-3. Dispatches type-specific handling (e.g. payment events, user events)
-4. Returns a `200 OK` immediately after verification so the sender isn't blocked
+3. Dispatches type-specific handling
+4. Returns `200 OK` immediately so the sender isn't blocked
 
 ---
 
-## Schema
+## Step 1 — Create the project
 
-Create a `webhook_events` table:
-
-| Column | Type |
-|---|---|
-| `id` | `uuid` (primary key, auto) |
-| `source` | `text` — e.g. `"stripe"`, `"github"` |
-| `event_type` | `text` — e.g. `"payment.succeeded"` |
-| `payload` | `jsonb` — raw event body |
-| `processed` | `boolean` — default `false` |
-| `created_at` | `timestamptz` — auto |
+```bash
+flux init webhook-worker && cd webhook-worker
+```
 
 ---
 
-## The function
+## Step 2 — Define the schema
 
-Create `on_webhook/index.ts`:
+`schemas/webhook_events.sql`:
 
-```typescript
-import { defineFunction } from "@fluxbase/functions";
-import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
-import { createHmac, timingSafeEqual } from "node:crypto";
+```sql
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source     TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload    JSONB NOT NULL,
+  processed  BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+```
 
-// Minimal signature check — works with Stripe, GitHub, and most providers
-function verifySignature(
-  payloadRaw: string,
-  signature: string,
-  secret: string,
-): boolean {
-  const expected = createHmac("sha256", secret)
-    .update(payloadRaw)
-    .digest("hex");
-  // Prefix may vary by provider (Stripe uses "sha256=", GitHub uses "sha256=")
-  const incoming = signature.replace(/^sha256=/, "");
-  try {
-    return timingSafeEqual(
-      Buffer.from(expected, "hex"),
-      Buffer.from(incoming, "hex"),
-    );
-  } catch {
-    return false;
-  }
-}
-
-export default defineFunction({
-  name: "on_webhook",
-  // Webhooks come in as a raw body + signature header in the payload wrapper
-  input: z.object({
-    source:    z.string(),                       // "stripe" | "github" | ...
-    signature: z.string(),                       // X-Hub-Signature-256 / Stripe-Signature
-    raw:       z.string(),                       // raw JSON string body
-  }),
-  output: z.object({ received: z.boolean() }),
-
-  handler: async ({ input, ctx }) => {
-    // 1. Verify signature before anything else
-    const sigSecret = ctx.secrets.get(`${input.source.toUpperCase()}_WEBHOOK_SECRET`);
-    if (!sigSecret) {
-      ctx.log(`No webhook secret for source: ${input.source}`, "warn");
-      throw new Error("Webhook source not configured");
-    }
-
-    if (!verifySignature(input.raw, input.signature, sigSecret)) {
-      ctx.log("Webhook signature verification failed", "warn");
-      throw new Error("Invalid signature");
-    }
-
-    const event = JSON.parse(input.raw);
-
-    const flux = createClient({
-      url:       ctx.env.GATEWAY_URL,
-      apiKey:    ctx.env.API_KEY,
-      projectId: ctx.env.PROJECT_ID,
-    });
-
-    // 2. Persist the raw event
-    const [record] = await flux.db.webhook_events
-      .insert({
-        source:     input.source,
-        event_type: event.type ?? "unknown",
-        payload:    event,
-        processed:  false,
-      })
-      .returning(["id"])
-      .execute();
-
-    ctx.log(`Stored webhook event ${record.id} (${input.source}/${event.type})`);
-
-    // 3. Dispatch type-specific handling inline (or enqueue async)
-    try {
-      await handleEvent(input.source, event, { flux, ctx });
-
-      await flux.db.webhook_events
-        .update({ processed: true })
-        .where("id", "eq", record.id)
-        .execute();
-    } catch (err) {
-      // Log the failure but still return 200 — the event is stored and
-      // can be retried later via a cron job querying processed=false
-      ctx.log(`Event handling failed: ${err}`, "error");
-    }
-
-    // 4. Always reply quickly
-    return { received: true };
-  },
-});
-
-// ─── Event dispatch ───────────────────────────────────────────────────────────
-
-async function handleEvent(
-  source: string,
-  event: Record<string, unknown>,
-  { flux, ctx }: { flux: ReturnType<typeof createClient>; ctx: FluxContext },
-) {
-  switch (`${source}/${event.type}`) {
-    case "stripe/payment_intent.succeeded": {
-      const amount = (event.data as any)?.object?.amount;
-      ctx.log(`Payment succeeded — amount: ${amount}`);
-      // update orders table, send confirmation email, etc.
-      break;
-    }
-    case "github/push": {
-      const ref = event.ref as string;
-      ctx.log(`Push to ${ref}`);
-      // trigger a build pipeline, notify Slack, etc.
-      break;
-    }
-    default:
-      ctx.log(`Unhandled event: ${source}/${event.type}`, "warn");
-  }
-}
+```bash
+flux db push
 ```
 
 ---
@@ -156,62 +47,142 @@ async function handleEvent(
 ## Step 3 — Set secrets
 
 ```bash
-flux secrets set STRIPE_WEBHOOK_SECRET   whsec_...
-flux secrets set GITHUB_WEBHOOK_SECRET   ghw_...
-flux secrets set GATEWAY_URL             "https://YOUR_GATEWAY_URL"
-flux secrets set API_KEY                 "YOUR_API_KEY"
-flux secrets set PROJECT_ID              "YOUR_PROJECT_ID"
+flux secrets set STRIPE_WEBHOOK_SECRET  whsec_...
+flux secrets set GITHUB_WEBHOOK_SECRET  ghw_...
 ```
 
 ---
 
-## Step 4 — Deploy
+## Step 4 — Write the function
+
+`functions/on_webhook/index.ts`:
+
+```typescript
+import { defineFunction } from "@flux/functions";
+import { z } from "zod";
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+function verifySignature(payload: string, signature: string, secret: string): boolean {
+  const expected = createHmac("sha256", secret).update(payload).digest("hex");
+  const incoming = signature.replace(/^sha256=/, "");
+  try {
+    return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(incoming, "hex"));
+  } catch {
+    return false;
+  }
+}
+
+export default defineFunction({
+  name: "on_webhook",
+  input: z.object({
+    source:    z.string(),          // "stripe" | "github" | ...
+    signature: z.string(),          // X-Hub-Signature-256 / Stripe-Signature
+    raw:       z.string(),          // raw JSON string body
+  }),
+  output: z.object({ received: z.boolean() }),
+
+  handler: async ({ input, ctx }) => {
+    // 1. Verify signature
+    const secret = ctx.secrets.get(`${input.source.toUpperCase()}_WEBHOOK_SECRET`);
+    if (!secret) return ctx.error(400, "config_error", `No webhook secret for ${input.source}`);
+
+    if (!verifySignature(input.raw, input.signature, secret)) {
+      return ctx.error(401, "invalid_signature", "Webhook signature verification failed");
+    }
+
+    const event = JSON.parse(input.raw);
+
+    // 2. Store the raw event
+    const record = await ctx.db.webhook_events.insert({
+      source:     input.source,
+      event_type: event.type ?? "unknown",
+      payload:    event,
+      processed:  false,
+    });
+
+    ctx.log.info(`Stored webhook ${record.id} (${input.source}/${event.type})`);
+
+    // 3. Dispatch type-specific handling
+    try {
+      await handleEvent(input.source, event, ctx);
+      await ctx.db.webhook_events.update(record.id, { processed: true });
+    } catch (err) {
+      // Log failure but return 200 — event is stored, can retry later
+      ctx.log.error(`Event handling failed: ${err}`);
+    }
+
+    return { received: true };
+  },
+});
+
+async function handleEvent(source: string, event: any, ctx: any) {
+  switch (`${source}/${event.type}`) {
+    case "stripe/payment_intent.succeeded": {
+      const amount = event.data?.object?.amount;
+      ctx.log.info(`Payment succeeded: ${amount}`);
+      // Update orders, send confirmation, etc.
+      break;
+    }
+    case "github/push": {
+      ctx.log.info(`Push to ${event.ref}`);
+      // Trigger build, notify Slack, etc.
+      break;
+    }
+    default:
+      ctx.log.warn(`Unhandled: ${source}/${event.type}`);
+  }
+}
+```
+
+---
+
+## Step 5 — Start and test
 
 ```bash
-flux deploy on_webhook
+flux dev
 ```
-
----
-
-## Step 5 — Configure your webhook provider
-
-Point your Stripe / GitHub webhook to:
-
-```
-https://YOUR_GATEWAY/on_webhook
-```
-
----
-
-## Tracing a webhook
 
 ```bash
-# Simulate a webhook call
-curl -X POST https://YOUR_GATEWAY/on_webhook \
+# Simulate a webhook
+curl -X POST http://localhost:4000/on_webhook \
   -H "Content-Type: application/json" \
   -d '{
     "source": "github",
     "signature": "sha256=...",
     "raw": "{\"type\":\"push\",\"ref\":\"refs/heads/main\"}"
-  }' -D - | grep x-request-id
-
-flux trace <request-id>
+  }'
 ```
 
 ---
 
-## Retry pattern for failed events
+## Step 6 — Trace the webhook
 
-Query events that weren't processed (via a cron function):
-
-```typescript
-const failed = await flux.db.webhook_events
-  .where("processed", "eq", false)
-  .where("created_at", "lt", new Date(Date.now() - 60_000).toISOString())
-  .limit(50)
-  .execute();
-
-for (const event of failed) {
-  await handleEvent(event.source, event.payload as any, { flux, ctx });
-}
+```bash
+flux trace <request-id>
 ```
+
+```
+Trace 7f3a1b2c-...  15ms end-to-end
+
+  09:41:02.000  +0ms   ▶ [gateway/on_webhook]    route matched
+  09:41:02.003  +3ms   ▶ [runtime/on_webhook]    executing function
+  09:41:02.005  +2ms   · [runtime/on_webhook]    signature verified
+  09:41:02.010  +5ms   · [db/webhook_events]     INSERT 1 row (5ms)
+  09:41:02.013  +3ms   · [db/webhook_events]     UPDATE processed=true (2ms)
+  09:41:02.015  +2ms   ■ [runtime/on_webhook]    completed (12ms)
+
+  State changes:
+    webhook_events  INSERT  id=a1b2c3d4  source="github"  event_type="push"
+    webhook_events  UPDATE  id=a1b2c3d4  processed: false → true
+```
+
+If a webhook fails silently, `flux why` shows exactly what happened — including
+the unprocessed event in the database.
+
+---
+
+## Why this works with POST-only routing
+
+Webhook providers (Stripe, GitHub, Twilio, etc.) send POST requests. Flux
+functions are POST endpoints by design, so inbound webhooks work without any
+routing configuration. Point the provider at `https://your-gateway/on_webhook`.

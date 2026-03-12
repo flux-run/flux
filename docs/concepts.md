@@ -1,215 +1,282 @@
 # Core Concepts
 
+Flux has a small number of concepts. This page covers all of them.
+For the complete spec, see [framework.md](framework.md).
+
+---
+
+## Flux vs Fluxbase
+
+**Flux** is the open-source backend framework. It runs locally, self-hosted, or anywhere.
+
+**Fluxbase** is the managed cloud — like Vercel for Next.js or GitHub for Git.
+You never need Fluxbase to use Flux.
+
+```
+Flux (framework, open source)
+  flux init, flux dev, flux deploy, flux test, flux trace, flux why
+
+Fluxbase (managed cloud, optional)
+  Global anycast gateway, multi-tenant routing, hosted Postgres, observability UI
+```
+
+---
+
+## Execution Record
+
+The core primitive. Every function call automatically captures:
+
+- **Input/output** — what went in, what came out
+- **Spans** — timing for every layer (gateway, runtime, DB, external calls)
+- **Database mutations** — before/after JSONB for every INSERT, UPDATE, DELETE
+- **External calls** — HTTP requests, tool calls, queue pushes
+- **Code SHA** — which git commit was deployed
+
+All linked by a single `request_id`. This is what makes `flux trace`,
+`flux why`, `flux incident replay`, and `flux bug bisect` possible.
+
+```typescript
+interface ExecutionRecord {
+  request_id:    string;
+  function_name: string;
+  code_sha:      string;
+  input:         JsonValue;
+  output:        JsonValue | null;
+  error:         FluxError | null;
+  duration_ms:   number;
+  spans:         ExecutionSpan[];
+  db_mutations:  DbMutation[];
+  external_calls: ExternalCall[];
+}
+```
+
 ---
 
 ## Functions
 
-A **function** is the primary compute unit in Fluxbase.  Functions are
-language-independent compute units: write them in JavaScript, TypeScript, Rust,
-Go, or any language that compiles to WebAssembly.  Each function is deployed as
-an isolated bundle and executed inside one of two sandboxed runtimes:
+Every function lives in its own directory under `functions/`:
 
-| Runtime | `flux.json` field | Languages | Use cases |
-|---|---|---|---|
-| **Deno V8** | `"runtime": "deno"` | JavaScript, TypeScript | APIs, scripts, workflows, AI agents |
-| **WASM** | `"runtime": "wasm"` | Rust, Go, C, AssemblyScript, … | CPU-bound compute, ML inference, native libraries |
-
-See [WASM Runtime](./wasm-runtime.md) for the full design and language guides.
-
-### Handler signatures
-
-**Raw handler** (quick scripts, prototyping):
-
-```javascript
-// index.js
-export default async function(ctx) {
-  const { name } = ctx.payload;
-  ctx.log(`called with name=${name}`);
-  return { message: `Hello, ${name}!` };
-}
+```
+functions/
+├── hello/
+│   └── index.ts
+├── create_user/
+│   └── index.ts
+└── send_email/
+    └── index.ts
 ```
 
-**Schema-validated handler** (production, type-safe):
+Every function directory becomes a `POST` endpoint:
+- `functions/hello/` → `POST /hello`
+- `functions/create_user/` → `POST /create_user`
+
+Functions are defined with `defineFunction()` from `@flux/functions`:
 
 ```typescript
-// index.ts
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
 
 export default defineFunction({
-  name: "create_todo",
-  input:  z.object({ title: z.string(), done: z.boolean().default(false) }),
+  name: "create_user",
+  input:  z.object({ name: z.string(), email: z.string().email() }),
   output: z.object({ id: z.string() }),
-  handler: async ({ input }) => {
-    // input is fully typed as { title: string; done: boolean }
-    const todo = await db.todos.insert(input);
-    return { id: todo.id };
+  handler: async ({ input, ctx }) => {
+    const user = await ctx.db.users.insert(input);
+    return { id: user.id };
   },
 });
 ```
 
-### The `ctx` object
+No raw handlers, no manual routing, no decorators.
 
-| Property | Type | Description |
-|---|---|---|
-| `ctx.payload` | `unknown` | Raw request body (JSON-decoded) |
-| `ctx.secrets.get(key)` | `string \| null` | Named secret value |
-| `ctx.env` | `Record<string, string>` | Same secrets as a flat map |
-| `ctx.log(msg, level?)` | `void` | Emit a structured log line |
+---
 
-`defineFunction` exposes `input` (validated payload) via `{ input, ctx }`.
+## The `ctx` Object
 
-### Manifest — `flux.json`
+Every handler receives `ctx` — the single interface to all Flux capabilities:
 
-**Deno (JavaScript / TypeScript):**
-
-```json
-{
-  "runtime": "deno",
-  "entry": "index.ts"
-}
-```
-
-**WASM (Rust, Go, C, AssemblyScript, …):**
-
-```json
-{
-  "runtime": "wasm",
-  "entry":   "handler.wasm",
-  "build":   "cargo build --target wasm32-wasip1 --release && cp target/wasm32-wasip1/release/my_fn.wasm handler.wasm",
-  "memory_mb": 64
-}
-```
-
-| Field | Description |
+| Property | What it does |
 |---|---|
-| `runtime` | `"deno"` or `"wasm"` |
-| `entry` | Entry file — `.ts`/`.js` for Deno, `.wasm` for WASM |
-| `build` | Optional shell command run by `flux deploy` before upload |
-| `memory_mb` | WASM only — linear memory cap (default 64 MB) |
+| `ctx.db` | Database access — typed from `schemas/` via `flux generate` |
+| `ctx.queue` | Push async jobs — `ctx.queue.push("send_email", payload)` |
+| `ctx.workflow` | Start workflows — `ctx.workflow.start("onboarding", input)` |
+| `ctx.function` | Call other functions — `ctx.function.invoke("validate", data)` |
+| `ctx.secrets` | Read secrets — `ctx.secrets.get("STRIPE_KEY")` |
+| `ctx.tools` | Third-party integrations (Stripe, OpenAI, etc.) |
+| `ctx.log` | Structured logging — attached to execution record |
+| `ctx.error()` | Throw structured error — stops execution |
+| `ctx.requestId` | UUID propagated through entire execution |
+| `ctx.headers` | Request headers |
+| `ctx.user` | Set by auth middleware |
+
+No imports, no client instantiation, no connection strings.
 
 ---
 
 ## Database
 
-Fluxbase provides a fully managed Postgres database accessed through a
-structured query API.  You never write SQL directly.
+Flux manages your application database. Postgres only. SQL schemas are the
+source of truth — no ORM.
 
-### Query format
+### Schema files
 
-Queries are JSON objects submitted to the gateway's `/db/query` endpoint:
-
-```json
-{
-  "table":     "todos",
-  "operation": "select",
-  "columns":   ["id", "title", "done"],
-  "filters":   [{ "column": "done", "op": "eq", "value": false }],
-  "limit":     20,
-  "offset":    0
-}
+```sql
+-- schemas/users.sql
+CREATE TABLE IF NOT EXISTS users (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name       TEXT NOT NULL,
+  email      TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
 ```
 
-**Supported operations:** `select`, `insert`, `update`, `delete`
-
-**Supported filter operators:** `eq`, `neq`, `gt`, `gte`, `lt`, `lte`,
-`like`, `ilike`, `is_null`, `not_null`
-
-### Typed SDK client
-
-Use the generated SDK for a type-safe experience:
-
-```typescript
-import { createClient } from "@fluxbase/sdk";
-
-const flux = createClient({
-  url:       ctx.env.GATEWAY_URL,
-  apiKey:    ctx.env.API_KEY,
-  projectId: ctx.env.PROJECT_ID,
-});
-
-// Fully typed — IDE infers the row shape
-const todos = await flux.db.todos
-  .where("done", "eq", false)
-  .orderBy("created_at", "desc")
-  .limit(20)
-  .execute();
-```
-
-Generate the typed SDK for your schema:
+### Commands
 
 ```bash
-flux sdk generate
+flux db push       # apply schemas/*.sql
+flux db diff       # preview changes (never executes)
+flux db migrate    # save diff as timestamped migration
+flux db seed       # apply tests/fixtures/*.sql
+flux db reset      # drop + recreate + push + seed
 ```
 
-This writes `fluxbase.d.ts` to your project directory.
+### ctx.db
 
-### Edge query cache
+`ctx.db` is a thin typed wrapper that compiles to SQL inside the Data Engine.
+It is **not** an ORM — schemas are raw SQL, types are derived by `flux generate`
+from `information_schema`.
 
-Read-only `select` queries are automatically cached at the gateway for 30 s.
-Writes invalidate the cache for the affected table immediately.
+```typescript
+// Typed accessors (compiled to SQL by Data Engine)
+const user = await ctx.db.users.insert({ name: "Ada", email: "ada@acme.com" });
+const users = await ctx.db.users.findMany({ where: { email: { eq: "ada@acme.com" } } });
 
-Cache status is exposed via the `x-cache` response header (`HIT` / `MISS` /
-`BYPASS`) and as a span in distributed traces.
+// Raw SQL escape hatch (also goes through Data Engine, also recorded)
+const results = await ctx.db.query("SELECT * FROM users WHERE created_at > $1", [date]);
+```
+
+Both paths go through the Data Engine, so both are recorded in execution records.
+Every write captures before/after state — that's the foundation of `flux why`.
+
+---
+
+## flux.toml
+
+One config file per project:
+
+```toml
+[project]
+name = "my-app"
+version = "0.1.0"
+
+[dev]
+port = 4000
+hot_reload = true
+
+[deploy]
+target = "local"   # "local" | "docker" | "k8s" | "fluxbase"
+
+[limits]
+timeout_ms = 30000
+memory_mb = 128
+
+[observability]
+record_sample_rate = 1.0   # every execution is a record
+
+[middleware]
+global = ["middleware/auth.ts"]
+```
 
 ---
 
 ## Secrets
 
-Secrets are key-value pairs stored encrypted at rest and injected into function
-context at invocation time.  They are scoped per project.
-
 ```bash
-# Set a secret
-flux secrets set OPENAI_API_KEY sk-...
-
-# List secrets (values redacted)
+flux secrets set STRIPE_KEY sk_live_...
 flux secrets list
-
-# Delete a secret
-flux secrets delete OPENAI_API_KEY
+flux secrets delete STRIPE_KEY
 ```
 
-Inside a function:
-
-```javascript
-const apiKey = ctx.secrets.get("OPENAI_API_KEY");
-// or
-const apiKey = ctx.env.OPENAI_API_KEY;
-```
+Inside a function: `ctx.secrets.get("STRIPE_KEY")`.
+Locally stored in `.env.local` (gitignored). In Fluxbase cloud, encrypted at rest.
 
 ---
 
-## Gateway
+## Queue
 
-The **gateway** is the public-facing HTTP server for your tenant.  It:
+Push async jobs from any function:
 
-- Routes requests to the correct function by path (`/FUNCTION_NAME`)
-- Handles CORS, authentication, and rate limiting
-- Proxies structure queries to the data engine (with edge-layer caching)
-- Assigns a `x-request-id` to every inbound request for distributed tracing
-
----
-
-## Deployments
-
-A **deployment** is an immutable snapshot of a function + its bundle.
-
-```bash
-flux deploy            # deploy current directory
-flux deployments list  # show deployment history
+```typescript
+await ctx.queue.push("send_email", { user_id: user.id }, { delay: "5m" });
 ```
 
-Each deploy produces a versioned artifact.  Traffic switches to the new
-revision immediately after a successful deploy.
+Jobs execute via the Queue service → Runtime. Same execution recording, same
+`flux trace` / `flux why` debugging. See [queue.md](queue.md) for internals.
 
 ---
 
-## Projects and tenants
+## Workflows
 
-| Concept | Scope | Description |
+Multi-step, long-running processes:
+
+```typescript
+import { defineWorkflow } from "@flux/functions";
+
+export default defineWorkflow({
+  name: "onboarding",
+  steps: [
+    { fn: "create_user",       input: (ctx) => ctx.input },
+    { fn: "send_welcome_email", input: (prev) => ({ user_id: prev.id }) },
+    { fn: "assign_trial_plan",  input: (prev) => ({ user_id: prev.user_id }) },
+  ],
+});
+```
+
+Each step is a function call. Each step produces an execution record.
+If a step fails, the workflow pauses and can be resumed.
+
+---
+
+## Middleware
+
+Request middleware runs before the handler:
+
+```typescript
+import { defineMiddleware } from "@flux/functions";
+
+export default defineMiddleware({
+  name: "auth",
+  handler: async ({ ctx, next }) => {
+    const token = ctx.headers.get("authorization")?.replace("Bearer ", "");
+    if (!token) return ctx.error(401, "unauthorized");
+    ctx.user = await verifyToken(token);
+    return next();
+  },
+});
+```
+
+Middleware is assigned in `flux.toml` or per-function in `flux.json`.
+
+---
+
+## Architecture
+
+`flux dev` starts 5 Rust services as one process:
+
+| Service | Port | Responsibility |
 |---|---|---|
-| **Tenant** | Account-level | Billing and user boundary |
-| **Project** | Tenant-level | Isolated namespace (DB, secrets, functions) |
+| Gateway | `:4000` | Routing, auth, rate limiting, trace roots |
+| Runtime | `:8083` | Deno V8 execution, secrets, tool dispatch |
+| API | `:8080` | Function registry, logs, schema management |
+| Data Engine | `:8082` | DB queries, mutation recording, hooks, cron |
+| Queue | `:8084` | Async jobs, retries, dead letter |
 
-One tenant can have many projects (e.g. `staging`, `production`).
+All services are Rust + Axum. The Runtime uses `deno_core` for V8 isolate
+execution. Database is Postgres.
+
+Only the Gateway is exposed to the internet. All other services communicate
+internally via `x-service-token`.
+
+---
+
+*For the complete specification, see [framework.md](framework.md).*

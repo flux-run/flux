@@ -1,7 +1,7 @@
 # Example — Todo API
 
-A classic CRUD API backed by Fluxbase's managed database.  Four functions,
-one schema, zero infrastructure to manage.
+A CRUD API with full execution recording. Four functions, one schema, zero
+infrastructure.
 
 ---
 
@@ -9,71 +9,72 @@ one schema, zero infrastructure to manage.
 
 | Endpoint | Function | Description |
 |---|---|---|
-| `POST /create_todo` | `create_todo` | Create a new to-do item |
-| `POST /list_todos` | `list_todos` | List all to-dos, with filtering |
-| `POST /update_todo` | `update_todo` | Mark a to-do done (or update title) |
+| `POST /create_todo` | `create_todo` | Create a to-do item |
+| `POST /list_todos` | `list_todos` | List all to-dos with filtering |
+| `POST /update_todo` | `update_todo` | Update title or done status |
 | `POST /delete_todo` | `delete_todo` | Delete a to-do by ID |
 
 ---
 
-## Step 1 — Define the schema
+## Step 1 — Create the project
 
-In the [Fluxbase dashboard](https://dashboard.fluxbase.co), create a table
-`todos` with the following columns:
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `uuid` | Auto-generated primary key |
-| `title` | `text` | Required |
-| `done` | `boolean` | Default `false` |
-| `created_at` | `timestamptz` | Auto-set to `now()` |
-| `updated_at` | `timestamptz` | Auto-updated on write |
+```bash
+flux init todo-api && cd todo-api
+```
 
 ---
 
-## Step 2 — Create the functions
+## Step 2 — Define the schema
 
-```bash
-mkdir todo-api && cd todo-api
-flux init
+Create `schemas/todos.sql`:
+
+```sql
+CREATE TABLE IF NOT EXISTS todos (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title      TEXT NOT NULL,
+  done       BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
 ```
 
-Create `create_todo/index.ts`:
+Push it:
+
+```bash
+flux db push
+```
+
+---
+
+## Step 3 — Write the functions
+
+### create_todo
+
+`functions/create_todo/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
 
 export default defineFunction({
   name: "create_todo",
   input:  z.object({ title: z.string().min(1).max(255) }),
   output: z.object({ id: z.string(), title: z.string(), done: z.boolean() }),
-
   handler: async ({ input, ctx }) => {
-    const flux = createClient({
-      url:       ctx.env.GATEWAY_URL,
-      apiKey:    ctx.env.API_KEY,
-      projectId: ctx.env.PROJECT_ID,
-    });
-
-    const [todo] = await flux.db.todos
-      .insert({ title: input.title, done: false })
-      .returning(["id", "title", "done"])
-      .execute();
-
-    ctx.log(`Created todo: ${todo.id}`);
-    return todo;
+    const todo = await ctx.db.todos.insert({ title: input.title, done: false });
+    ctx.log.info(`Created todo: ${todo.id}`);
+    return { id: todo.id, title: todo.title, done: todo.done };
   },
 });
 ```
 
-Create `list_todos/index.ts`:
+### list_todos
+
+`functions/list_todos/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
 
 export default defineFunction({
   name: "list_todos",
@@ -82,35 +83,27 @@ export default defineFunction({
     limit:  z.number().int().min(1).max(100).default(20),
     offset: z.number().int().min(0).default(0),
   }),
-
   handler: async ({ input, ctx }) => {
-    const flux = createClient({
-      url:       ctx.env.GATEWAY_URL,
-      apiKey:    ctx.env.API_KEY,
-      projectId: ctx.env.PROJECT_ID,
-    });
-
-    let query = flux.db.todos
-      .select({ id: true, title: true, done: true, created_at: true })
-      .orderBy("created_at", "desc")
-      .limit(input.limit)
-      .offset(input.offset);
-
+    let todos;
     if (input.done !== undefined) {
-      query = query.where("done", "eq", input.done);
+      todos = await ctx.db.todos.findMany({
+        where: { done: { eq: input.done } },
+      });
+    } else {
+      todos = await ctx.db.todos.findMany();
     }
-
-    return { todos: await query.execute() };
+    return { todos };
   },
 });
 ```
 
-Create `update_todo/index.ts`:
+### update_todo
+
+`functions/update_todo/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
 
 export default defineFunction({
   name: "update_todo",
@@ -119,55 +112,32 @@ export default defineFunction({
     done:  z.boolean().optional(),
     title: z.string().min(1).optional(),
   }),
-
   handler: async ({ input, ctx }) => {
-    const flux = createClient({
-      url:       ctx.env.GATEWAY_URL,
-      apiKey:    ctx.env.API_KEY,
-      projectId: ctx.env.PROJECT_ID,
-    });
-
     const { id, ...updates } = input;
     if (Object.keys(updates).length === 0) {
-      throw new Error("Provide at least one field to update");
+      return ctx.error(400, "bad_request", "Provide at least one field to update");
     }
-
-    const [todo] = await flux.db.todos
-      .update(updates)
-      .where("id", "eq", id)
-      .returning(["id", "title", "done"])
-      .execute();
-
-    if (!todo) throw new Error(`Todo ${id} not found`);
-    return todo;
+    const todo = await ctx.db.todos.update(id, updates);
+    if (!todo) return ctx.error(404, "not_found", `Todo ${id} not found`);
+    return { id: todo.id, title: todo.title, done: todo.done };
   },
 });
 ```
 
-Create `delete_todo/index.ts`:
+### delete_todo
+
+`functions/delete_todo/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
 
 export default defineFunction({
   name: "delete_todo",
   input:  z.object({ id: z.string().uuid() }),
   output: z.object({ deleted: z.boolean() }),
-
   handler: async ({ input, ctx }) => {
-    const flux = createClient({
-      url:       ctx.env.GATEWAY_URL,
-      apiKey:    ctx.env.API_KEY,
-      projectId: ctx.env.PROJECT_ID,
-    });
-
-    await flux.db.todos
-      .delete()
-      .where("id", "eq", input.id)
-      .execute();
-
+    await ctx.db.todos.delete(input.id);
     return { deleted: true };
   },
 });
@@ -175,23 +145,10 @@ export default defineFunction({
 
 ---
 
-## Step 3 — Set secrets
+## Step 4 — Start the dev server
 
 ```bash
-flux secrets set GATEWAY_URL  "https://YOUR_GATEWAY_URL"
-flux secrets set API_KEY      "YOUR_API_KEY"
-flux secrets set PROJECT_ID   "YOUR_PROJECT_ID"
-```
-
----
-
-## Step 4 — Deploy
-
-```bash
-flux deploy create_todo
-flux deploy list_todos
-flux deploy update_todo
-flux deploy delete_todo
+flux dev
 ```
 
 ---
@@ -200,29 +157,54 @@ flux deploy delete_todo
 
 ```bash
 # Create
-flux invoke create_todo --data '{"title": "Buy groceries"}'
-# → { "id": "abc...", "title": "Buy groceries", "done": false }
+flux invoke create_todo --data '{"title": "Learn Flux"}'
+# → { "id": "e4a9c3f1-...", "title": "Learn Flux", "done": false }
 
-# List open todos
-flux invoke list_todos --data '{"done": false}'
+# List
+flux invoke list_todos --data '{}'
+# → { "todos": [{ "id": "e4a9c3f1-...", "title": "Learn Flux", "done": false }] }
 
-# Complete one
-flux invoke update_todo --data '{"id": "abc...", "done": true}'
+# Update
+flux invoke update_todo --data '{"id": "e4a9c3f1-...", "done": true}'
+# → { "id": "e4a9c3f1-...", "title": "Learn Flux", "done": true }
 
 # Delete
-flux invoke delete_todo --data '{"id": "abc..."}'
+flux invoke delete_todo --data '{"id": "e4a9c3f1-..."}'
+# → { "deleted": true }
 ```
 
 ---
 
-## Tracing a request
+## Step 6 — Trace an execution
 
 ```bash
-# The gateway returns x-request-id on every call
-curl -D - https://YOUR_GATEWAY/list_todos -d '{"done":false}' | grep x-request-id
-
-flux trace <that-id>
+flux trace <request-id>
 ```
 
-If `list_todos` makes more than 3 queries to `todos` in a single request (e.g.
-from a loop), the trace will flag it as an N+1 pattern automatically.
+```
+Trace e4a9c3f1-...  18ms end-to-end
+
+  09:41:02.000  +0ms   ▶ [gateway/create_todo]   route matched
+  09:41:02.003  +3ms   ▶ [runtime/create_todo]   executing function
+  09:41:02.008  +5ms   · [db/todos]               INSERT 1 row (5ms)
+  09:41:02.015  +7ms   ■ [runtime/create_todo]   completed (12ms)
+
+  State changes:
+    todos  INSERT  id=e4a9c3f1  title="Learn Flux"  done=false
+```
+
+Every database mutation is visible in the trace. If something goes wrong:
+
+```bash
+flux why <request-id>
+```
+
+---
+
+## Key differences from traditional CRUD
+
+1. **No HTTP client setup** — `ctx.db` is injected, no connection strings
+2. **No ORM** — schemas are raw SQL, types generated by `flux generate`
+3. **Automatic tracing** — every request has an execution record
+4. **State changes visible** — `flux trace` shows exactly what data changed
+5. **Debug in production** — `flux why` gives root cause without log diving
