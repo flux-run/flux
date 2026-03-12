@@ -38,6 +38,10 @@ async fn main() -> anyhow::Result<()> {
     let worker_http = Arc::new(app_state.http_client.clone());
     let worker_runtime_url = cfg.runtime_url.clone();
 
+    // Cache invalidation listener — keeps all instances in sync via
+    // Postgres LISTEN/NOTIFY when running horizontally scaled.
+    cache::invalidation::start_listener(Arc::clone(&app_state), cfg.database_url.clone());
+
     // Events delivery worker
     let ev_pool = Arc::clone(&worker_pool);
     let ev_http = Arc::clone(&worker_http);

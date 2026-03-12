@@ -1,3 +1,4 @@
+pub mod invalidation;
 pub mod manager;
 pub use manager::CacheManager;
 
