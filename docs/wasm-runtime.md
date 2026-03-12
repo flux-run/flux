@@ -54,13 +54,13 @@ WasmPool {
 WASM functions access Flux capabilities via host imports:
 
 ```
-fluxbase.secret_get(key_ptr, key_len) → (val_ptr, val_len)
-fluxbase.log(level, msg_ptr, msg_len)
-fluxbase.http_fetch(req_ptr, req_len) → (resp_ptr, resp_len)
-fluxbase.db_query(req_ptr, req_len) → (resp_ptr, resp_len)
+flux.secret_get(key_ptr, key_len) → (val_ptr, val_len)
+flux.log(level, msg_ptr, msg_len)
+flux.http_fetch(req_ptr, req_len) → (resp_ptr, resp_len)
+flux.db_query(req_ptr, req_len) → (resp_ptr, resp_len)
 ```
 
-Guest allocator: `fluxbase_alloc(size) → ptr` / `fluxbase_free(ptr, size)`.
+Guest allocator: `flux_alloc(size) → ptr` / `flux_free(ptr, size)`.
 
 ### Language support
 

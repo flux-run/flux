@@ -1,8 +1,7 @@
 # Storage
 
 Flux gives every project file columns backed by S3-compatible object storage.
-By default in Fluxbase cloud, files land in a managed bucket. For self-hosted
-deployments, you configure your own bucket.
+You configure your own S3-compatible bucket.
 
 ---
 

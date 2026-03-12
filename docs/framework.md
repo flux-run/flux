@@ -9,7 +9,7 @@
 > Every function call captures inputs, outputs, database mutations, external calls,
 > and spans — automatically. Production bugs become reproducible with one command.
 >
-> Flux is Git for backend execution. Fluxbase is GitHub for it.
+> Flux is Git for backend execution.
 
 ---
 
@@ -17,7 +17,7 @@
 
 0. [Why Flux Exists](#0-why-flux-exists)
 1. [What Flux Is](#1-what-flux-is)
-2. [Flux vs Fluxbase](#2-flux-vs-fluxbase)
+2. [Standalone & Self-Hosted](#2-standalone--self-hosted)
 3. [Execution Record](#3-execution-record)
 4. [Architecture](#4-architecture)
 5. [Golden Path](#5-golden-path)
@@ -120,18 +120,10 @@ and replay.
 
 ---
 
-## 2. Flux vs Fluxbase
+## 2. Standalone & Self-Hosted
 
-The framework and the cloud are separate products.
-
-| | **Flux** (open source) | **Fluxbase** (managed cloud) |
-|---|---|---|
-| What it is | Backend framework | Hosted platform for Flux projects |
-| Self-hostable | Yes — local, Docker, K8s | No — managed service |
-| Requires Fluxbase | No | — |
-| Like | Next.js, Rails | Vercel, Heroku |
-| Provides | Functions, DB, queue, cron, CLI, local dev | Global gateway, hosted artifacts, managed Postgres, production UI |
-| Deploy targets | Local, Docker, Kubernetes, Fluxbase | — |
+Flux is a standalone open-source framework. There is no managed cloud service.
+You run it locally, in Docker, or on Kubernetes — on your own infrastructure.
 
 ```
 Flux (framework)
@@ -141,18 +133,15 @@ Flux (framework)
   flux test       → test runner
   flux trace      → execution records
   flux why        → root cause
-
-Fluxbase (cloud)
-  Global anycast gateway
-  Multi-tenant routing
-  Hosted artifact storage
-  Managed Postgres per project
-  Production observability UI
 ```
 
-Everything below describes the **framework**. Cloud-specific concerns (tenant
-routing, subdomain resolution, artifact CDN) appear only when discussing
-the Fluxbase deploy target.
+| Deploy target | What it means |
+|---|---|
+| `local` | Hot-swap into running `flux dev` |
+| `docker` | Build a `FROM flux/runtime` image |
+| `k8s` | Generate Kubernetes manifests |
+
+No vendor lock-in. Your Postgres, your data, your network.
 
 ---
 
@@ -294,7 +283,7 @@ flux why <request-id>           # root cause in 10 seconds
 **Constraints:**
 - `flux dev` works with zero config — no `.env`, no Docker setup required
 - First invocation error prints exactly which file to create
-- Fluxbase cloud is never required
+- No cloud account or external service required
 
 ---
 
@@ -339,11 +328,7 @@ hot_reload         = true
 reload_debounce_ms = 100
 
 [deploy]
-target = "local"              # "local" | "docker" | "k8s" | "fluxbase"
-
-# Only when target = "fluxbase"
-# project_id = "..."
-# api_url    = "https://api.fluxbase.co"
+target = "local"              # "local" | "docker" | "k8s"
 
 [limits]
 timeout_ms = 30000
@@ -370,8 +355,7 @@ admin     = ["middleware/auth.ts", "middleware/require_admin.ts"]
 **Opinionated defaults:**
 - Deploy target defaults to `local`, not cloud
 - Errors are always recorded — not configurable
-- One config file, no `.fluxbase/config.json` per-project
-- Auth context for Fluxbase lives in `~/.fluxbase/config.json` (global, not per-project)
+- One config file, everything in `flux.toml`
 
 ---
 
@@ -394,7 +378,7 @@ flux dev
 
 ### Gateway local mode
 
-In production, the gateway resolves tenants from subdomains (`acme.fluxbase.co`).
+In production, the gateway resolves tenants from subdomains.
 In local mode: skip tenant resolution, disable JWT auth, route directly to
 localhost runtime. Same routing logic, just bypassed tenant lookup.
 
@@ -1117,8 +1101,6 @@ Execution records grow with traffic. Retention policy:
   A background job in the Data Engine prunes `execution_records`,
   `execution_spans`, `execution_mutations`, and `execution_calls`
   older than the configured threshold. Runs daily.
-- **Fluxbase cloud:** managed retention with configurable tiers.
-
 Errors are retained 3x longer than successful requests by default
 (e.g., 90 days vs 30 days) because debugging value concentrates in failures.
 
@@ -1216,7 +1198,6 @@ flux deploy                        # reads target from flux.toml
 flux deploy --target local         # hot-swap into running flux dev
 flux deploy --target docker        # build Docker image
 flux deploy --target k8s           # generate Kubernetes manifests
-flux deploy --target fluxbase      # upload to Fluxbase cloud
 ```
 
 | Target | What happens |
@@ -1224,13 +1205,12 @@ flux deploy --target fluxbase      # upload to Fluxbase cloud
 | `local` | `POST /internal/cache/invalidate` — zero downtime |
 | `docker` | Builds `FROM flux/runtime` image with artifacts baked in |
 | `k8s` | Generates deployment manifests referencing the Docker image |
-| `fluxbase` | Uploads multipart form with artifact + metadata to Fluxbase API |
 
 ---
 
 ## 22. Self-Hosted Deployment
 
-Flux runs entirely on your own infrastructure. No Fluxbase account required.
+Flux runs entirely on your own infrastructure.
 
 ### Docker Compose (simplest)
 
@@ -1297,15 +1277,6 @@ Everything in the framework:
 - Full execution recording and replay
 - All CLI commands work (`flux trace`, `flux why`, `flux incident replay`)
 - Your Postgres, your data, your network
-
-### What Fluxbase adds (not required)
-
-- Global anycast gateway (lower latency)
-- Managed Postgres (no ops)
-- Hosted artifact storage
-- Production observability UI (web dashboard)
-- Multi-tenant routing
-- SLA + support
 
 ---
 
@@ -1480,7 +1451,6 @@ Estimated 2-4 weeks.
 >
 > Git made every code change inspectable, diffable, and revertable.
 > Flux makes every backend execution inspectable, diffable, and replayable.
-> Fluxbase is GitHub for it.
 
 ---
 
@@ -1505,4 +1475,4 @@ major versions may break.
 
 ---
 
-*For implementation details and code reuse paths, see the source at `github.com/fluxbase/flux`.*
+*For implementation details and code reuse paths, see the source at `github.com/flux-framework/flux`.*

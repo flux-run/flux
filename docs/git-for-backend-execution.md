@@ -154,4 +154,3 @@ replay, bisect, and blame work.
 >
 > Git made every code change inspectable, diffable, and revertable.
 > Flux makes every backend execution inspectable, diffable, and replayable.
-> Fluxbase is GitHub for it.

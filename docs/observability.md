@@ -224,7 +224,6 @@ POST  /checkout       checkout      3.2s   ✗ 500
 |---|---|---|
 | Local (`flux dev`) | Forever (until `flux dev --clean`) | — |
 | Self-hosted | 30 days | `RETENTION_DAYS` env var |
-| Fluxbase cloud | 90 days (free), 1 year (pro) | Dashboard setting |
 
 Errors are always retained at the maximum tier regardless of sample rate.
 

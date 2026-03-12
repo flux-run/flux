@@ -1,7 +1,7 @@
 # Flux Documentation
 
 > **Flux** is a backend framework where every execution is a record.
-> **Fluxbase** is the managed cloud for Flux — like GitHub for Git, or Vercel for Next.js.
+> Self-hosted, no managed cloud — your infrastructure, your data.
 
 ---
 

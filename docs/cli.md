@@ -14,7 +14,7 @@ framework goes through it.
 - Flags over positional args
 - Every command is scriptable: `--output json`, `--confirm`, `--dry-run`
 - Destructive commands require confirmation unless `--confirm` is passed
-- Context stored in `~/.fluxbase/config.json` (global)
+- Context stored in `~/.flux/config.json` (global)
 
 ---
 
@@ -84,8 +84,7 @@ flux secrets list                 # List all keys (values redacted)
 flux secrets delete <key>         # Delete a secret
 ```
 
-Locally stored in `.env.local` (gitignored). In Fluxbase cloud, encrypted
-at rest with AES-256-GCM.
+Locally stored in `.env.local` (gitignored). Never committed to version control.
 
 ---
 

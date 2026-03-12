@@ -5,19 +5,18 @@ For the complete spec, see [framework.md](framework.md).
 
 ---
 
-## Flux vs Fluxbase
+## What Flux Is
 
-**Flux** is the open-source backend framework. It runs locally, self-hosted, or anywhere.
-
-**Fluxbase** is the managed cloud — like Vercel for Next.js or GitHub for Git.
-You never need Fluxbase to use Flux.
+Flux is a standalone open-source backend framework. There is no managed cloud —
+you run it locally, in Docker, or on Kubernetes.
 
 ```
-Flux (framework, open source)
-  flux init, flux dev, flux deploy, flux test, flux trace, flux why
-
-Fluxbase (managed cloud, optional)
-  Global anycast gateway, multi-tenant routing, hosted Postgres, observability UI
+flux init      → create project
+flux dev       → local dev server
+flux deploy    → push to any target (local, docker, k8s)
+flux test      → test runner
+flux trace     → execution records
+flux why       → root cause
 ```
 
 ---
@@ -174,7 +173,7 @@ port = 4000
 hot_reload = true
 
 [deploy]
-target = "local"   # "local" | "docker" | "k8s" | "fluxbase"
+target = "local"   # "local" | "docker" | "k8s"
 
 [limits]
 timeout_ms = 30000
@@ -198,7 +197,7 @@ flux secrets delete STRIPE_KEY
 ```
 
 Inside a function: `ctx.secrets.get("STRIPE_KEY")`.
-Locally stored in `.env.local` (gitignored). In Fluxbase cloud, encrypted at rest.
+Locally stored in `.env.local` (gitignored). Never committed to version control.
 
 ---
 
