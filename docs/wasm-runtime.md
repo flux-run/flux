@@ -203,16 +203,84 @@ Go via `wasm-tools`) auto-generate the ABI glue from this interface.
 
 ## Language Support Matrix
 
-| Language | Toolchain | WASM target | Notes |
-|---|---|---|---|
-| **Rust** | `cargo` + `wasm32-wasip1` | ✅ First-class | Best-in-class WASM support |
-| **Go** | TinyGo | ✅ Supported | Use TinyGo ≥ 0.30 for WASIP1 |
-| **C / C++** | `clang` + `wasm32-wasi` | ✅ Supported | Emscripten also works |
-| **AssemblyScript** | `asc` | ✅ Supported | TypeScript-like syntax, tiny binary |
-| **Python** | py2wasm / Nuitka | 🧪 Experimental | Large binary (~8 MB), slow cold start |
-| **Kotlin** | Kotlin/Wasm | 🧪 Experimental | Compose/Wasm only today |
-| **Swift** | SwiftWasm | 🧪 Experimental | Partial stdlib support |
-| **Java / Kotlin (JVM)** | GraalVM native | ❌ Not planned | Too large for edge isolates |
+| Language | Toolchain | SDK | Status | Build command |
+|---|---|---|---|---|
+| **TypeScript / JS** | Deno (no WASM) | `@fluxbase/functions` | ✅ Production | _(bundled by Deno)_ |
+| **Rust** | `cargo` + `wasm32-wasip1` | `packages/wasm-sdk/rust` | ✅ Production | `cargo build --target wasm32-wasip1 --release` |
+| **Go** | TinyGo ≥ 0.30 | `packages/wasm-sdk/go` | ✅ Supported | `tinygo build -o handler.wasm -target wasip1 -scheduler none .` |
+| **AssemblyScript** | `asc` (npm) | `packages/wasm-sdk/assemblyscript` | ✅ Supported | `npx asc assembly/index.ts --outFile build/handler.wasm --exportRuntime` |
+| **C / C++** | wasi-sdk `clang` or `emcc` | `packages/wasm-sdk/c/fluxbase.h` | ✅ Supported | `make` (see SDK Makefile template) |
+| **Zig** | `zig build` | `packages/wasm-sdk/zig` | ✅ Supported | `zig build -Dtarget=wasm32-wasip1 -Doptimize=ReleaseSmall` |
+| **Python** | py2wasm | `packages/wasm-sdk/python` | 🧪 Experimental | `py2wasm handler.py -o handler.wasm` |
+| **Kotlin/Wasm** | Kotlin 2.0+ | _(no SDK yet)_ | 🔮 Planned | `./gradlew wasmJsBrowserDistribution` |
+| **Swift** | SwiftWasm | _(no SDK yet)_ | 🔮 Planned | `swift build --triple wasm32-unknown-wasi` |
+
+### Scaffolding a new function
+
+Use `flux function create` to scaffold a function in any supported language:
+
+```bash
+# TypeScript (default)
+flux function create greet
+
+# Rust WASM
+flux function create greet --language rust
+
+# Go (TinyGo)
+flux function create greet --language go
+
+# AssemblyScript
+flux function create greet --language assemblyscript
+
+# C / C++
+flux function create greet --language c
+
+# Zig
+flux function create greet --language zig
+
+# Python (py2wasm)
+flux function create greet --language python
+
+# Show all languages + required toolchains
+flux function languages
+```
+
+Each scaffold writes a `flux.json` with the correct `runtime`, `entry`, and `build` fields, plus the hand-holding comment: **`flux deploy` handles the compile step automatically.**
+
+### Toolchain install links
+
+| Language | Install |
+|---|---|
+| Rust + wasm32-wasip1 | `rustup target add wasm32-wasip1` |
+| TinyGo | https://tinygo.org/getting-started/install/ |
+| AssemblyScript | `npm install -g assemblyscript` |
+| wasi-sdk (C/C++) | https://github.com/WebAssembly/wasi-sdk |
+| Zig | https://ziglang.org/download/ |
+| py2wasm | `pip install py2wasm` |
+
+### Example functions
+
+Working end-to-end examples for every language live under `test_functions/`:
+
+```
+test_functions/
+  hello_wasm/        ← Rust (original)
+  hello_wasm_go/     ← Go (TinyGo)
+  hello_wasm_as/     ← AssemblyScript
+  hello_wasm_c/      ← C (wasi-sdk)
+  hello_wasm_zig/    ← Zig
+  hello_wasm_py/     ← Python (py2wasm)
+```
+
+Build and deploy any example:
+
+```bash
+cd test_functions/hello_wasm_go
+# Install TinyGo first, then:
+flux deploy
+flux invoke hello_wasm_go '{"name":"Alice"}'
+# → {"message":"Hello Alice!"}
+```
 
 ---
 

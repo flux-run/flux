@@ -235,6 +235,18 @@ async fn deploy_wasm_dir(
 ) -> anyhow::Result<DeployResult> {
     // (a) Optional build step — e.g. `cargo build --target wasm32-wasip1 --release`
     if let Some(build_cmd) = metadata["build"].as_str() {
+        // ── Toolchain pre-flight check ────────────────────────────────────
+        if let Some(hint) = check_wasm_toolchain(build_cmd) {
+            eprintln!("     {} {}", "✗".red(), hint);
+            return Ok(DeployResult {
+                name: name.to_string(),
+                version: None,
+                url: None,
+                error: Some(hint),
+                elapsed_ms: t0.elapsed().as_millis(),
+            });
+        }
+
         println!("     {} Building WASM: {}", "▸".cyan(), build_cmd.dimmed());
         let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
         let flag  = if cfg!(target_os = "windows") { "/C" } else { "-c" };
@@ -363,6 +375,90 @@ fn discover_function_dirs(root: &Path) -> Vec<PathBuf> {
     }
     dirs.sort();
     dirs
+}
+
+// ── WASM toolchain pre-flight ─────────────────────────────────────────────────
+
+/// Inspect the build command and verify that the required toolchain binary is
+/// present on `$PATH`.  Returns `Some(hint_message)` when the check fails so
+/// the caller can bail early with a human-readable error.
+fn check_wasm_toolchain(build_cmd: &str) -> Option<String> {
+    struct Check {
+        needle:  &'static str,
+        binary:  &'static str,
+        install: &'static str,
+    }
+
+    let checks: &[Check] = &[
+        Check {
+            needle:  "tinygo",
+            binary:  "tinygo",
+            install: "https://tinygo.org/getting-started/install/",
+        },
+        Check {
+            needle:  "asc ",
+            binary:  "asc",
+            install: "npm install -g assemblyscript  (https://www.assemblyscript.org)",
+        },
+        Check {
+            needle:  "npx asc",
+            binary:  "npx",
+            install: "https://nodejs.org",
+        },
+        Check {
+            needle:  "zig build",
+            binary:  "zig",
+            install: "https://ziglang.org/download/",
+        },
+        Check {
+            needle:  "py2wasm",
+            binary:  "py2wasm",
+            install: "pip install py2wasm  (https://github.com/astral-sh/py2wasm)",
+        },
+        Check {
+            needle:  "emcc",
+            binary:  "emcc",
+            install: "https://emscripten.org/docs/getting_started/downloads.html",
+        },
+        Check {
+            needle:  "cargo build",
+            binary:  "cargo",
+            install: "rustup  (https://rustup.rs)",
+        },
+    ];
+
+    for check in checks {
+        if build_cmd.contains(check.needle) {
+            if which::which(check.binary).is_err() {
+                return Some(format!(
+                    "required toolchain '{}' not found on PATH.\n\
+                     Install it from: {}",
+                    check.binary, check.install,
+                ));
+            }
+            // Additional wasm32-wasip1 target check for Rust
+            if check.binary == "cargo" && build_cmd.contains("wasm32-wasip1") {
+                use std::process::Command;
+                let targets = Command::new("rustup")
+                    .args(["target", "list", "--installed"])
+                    .output()
+                    .ok();
+                let has_target = targets
+                    .as_ref()
+                    .and_then(|o| String::from_utf8(o.stdout.clone()).ok())
+                    .map(|s| s.contains("wasm32-wasip1"))
+                    .unwrap_or(false);
+                if !has_target {
+                    return Some(
+                        "wasm32-wasip1 target not installed.\n\
+                         Run: rustup target add wasm32-wasip1"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    None
 }
 
 // ── Project-level deploy ──────────────────────────────────────────────────

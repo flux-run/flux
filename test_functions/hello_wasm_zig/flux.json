@@ -1,0 +1,5 @@
+{
+  "runtime": "wasm",
+  "entry": "zig-out/bin/handler.wasm",
+  "build": "zig build -Dtarget=wasm32-wasip1 -Doptimize=ReleaseSmall"
+}

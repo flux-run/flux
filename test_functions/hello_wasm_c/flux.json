@@ -1,0 +1,5 @@
+{
+  "runtime": "wasm",
+  "entry": "handler.wasm",
+  "build": "make"
+}

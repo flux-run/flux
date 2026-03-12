@@ -1,0 +1,5 @@
+{
+  "runtime": "wasm",
+  "entry": "build/handler.wasm",
+  "build": "npx asc assembly/index.ts --target release --outFile build/handler.wasm --exportRuntime"
+}
