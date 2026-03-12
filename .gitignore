@@ -11,6 +11,7 @@
 **/.env
 **/.env.*
 # ...but commit example templates so teammates know what vars to set:
+!**/.env.example
 !**/.env.*.example
 
 # ── OS ───────────────────────────────────────────────────────────────────────

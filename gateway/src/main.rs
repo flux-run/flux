@@ -25,6 +25,10 @@ async fn main() -> anyhow::Result<()> {
     // Setup database pool
     let db_pool = PgPoolOptions::new()
         .max_connections(20)
+        .after_connect(|conn, _meta| Box::pin(async move {
+            sqlx::query("SET search_path = flux, public").execute(conn).await?;
+            Ok(())
+        }))
         .connect(&config.database_url)
         .await?;
 

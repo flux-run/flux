@@ -1,0 +1,156 @@
+# Fluxbase self-host stack — production
+#
+# Requires:
+#   - Docker 24+ with docker compose v2
+#   - A Postgres 14+ instance (supply DATABASE_URL in .env)
+#   - A FLUXBASE_LICENSE_KEY (get one at https://fluxbase.co/self-host)
+#
+# Quick start (single server):
+#   cp .env.example .env          # fill in DATABASE_URL and LICENSE_KEY
+#   docker compose pull
+#   docker compose run --rm api migrate
+#   docker compose up -d
+#
+# Horizontal scaling:
+#   docker compose up -d --scale gateway=4 --scale runtime=8
+#
+# All services are stateless — scale any of them independently.
+# State lives exclusively in Postgres (DATABASE_URL).
+
+version: "3.9"
+
+x-common-env: &common-env
+  DATABASE_URL:           "${DATABASE_URL}"
+  FLUXBASE_LICENSE_KEY:   "${FLUXBASE_LICENSE_KEY}"
+  INTERNAL_SERVICE_TOKEN: "${INTERNAL_SERVICE_TOKEN:-changeme-set-in-env}"
+  RUST_LOG:               "${LOG_LEVEL:-info}"
+
+services:
+
+  # ─── API (management plane) ─────────────────────────────────────────────────
+  api:
+    image: ghcr.io/fluxbase/fluxbase-api:${FLUXBASE_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      <<: *common-env
+      PORT:                   "8080"
+      ALLOWED_ORIGINS:        "${ALLOWED_ORIGINS:-}"
+      FIREBASE_PROJECT_ID:    "${FIREBASE_PROJECT_ID:-}"
+      DATA_ENGINE_URL:        "http://data-engine:8082"
+      GATEWAY_URL:            "http://gateway:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ─── Gateway (public edge, executes functions) ───────────────────────────────
+  gateway:
+    image: ghcr.io/fluxbase/fluxbase-gateway:${FLUXBASE_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-8081}:8081"
+    environment:
+      <<: *common-env
+      GATEWAY_PORT:   "8081"
+      RUNTIME_URL:    "http://runtime:8083"
+      DATA_ENGINE_URL:"http://data-engine:8082"
+      API_URL:        "http://api:8080"
+      QUEUE_URL:      "http://queue:8084"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ─── Data Engine (mutation logging, query engine) ────────────────────────────
+  data-engine:
+    image: ghcr.io/fluxbase/fluxbase-data-engine:${FLUXBASE_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${DATA_ENGINE_PORT:-8082}:8082"
+    environment:
+      <<: *common-env
+      PORT:               "8082"
+      RUNTIME_URL:        "http://runtime:8083"
+      MAX_NEST_DEPTH:     "${MAX_NEST_DEPTH:-6}"
+      MAX_QUERY_LIMIT:    "${MAX_QUERY_LIMIT:-5000}"
+      DEFAULT_QUERY_LIMIT:"${DEFAULT_QUERY_LIMIT:-100}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ─── Runtime (serverless function executor) ─────────────────────────────────
+  runtime:
+    image: ghcr.io/fluxbase/fluxbase-runtime:${FLUXBASE_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${RUNTIME_PORT:-8083}:8083"
+    environment:
+      PORT:              "8083"
+      CONTROL_PLANE_URL: "http://api:8080"
+      SERVICE_TOKEN:     "${INTERNAL_SERVICE_TOKEN:-changeme-set-in-env}"
+      RUST_LOG:          "${LOG_LEVEL:-info}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ─── Queue (async job worker) ────────────────────────────────────────────────
+  queue:
+    image: ghcr.io/fluxbase/fluxbase-queue:${FLUXBASE_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${QUEUE_PORT:-8084}:8084"
+    environment:
+      <<: *common-env
+      QUEUE_PORT:              "8084"
+      RUNTIME_URL:             "http://runtime:8083"
+      WORKER_CONCURRENCY:      "${WORKER_CONCURRENCY:-10}"
+      WORKER_POLL_INTERVAL_MS: "${WORKER_POLL_INTERVAL_MS:-500}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      api:
+        condition: service_healthy
+      runtime:
+        condition: service_healthy
+
+  # ─── Dashboard (optional — remove if you use Fluxbase Cloud dashboard) ───────
+  dashboard:
+    image: ghcr.io/fluxbase/fluxbase-dashboard:${FLUXBASE_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-3000}:80"
+    environment:
+      VITE_API_URL:     "${VITE_API_URL:-http://localhost:8080}"
+      VITE_GATEWAY_URL: "${VITE_GATEWAY_URL:-http://localhost:8081}"
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  default:
+    name: fluxbase

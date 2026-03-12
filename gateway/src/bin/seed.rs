@@ -6,6 +6,10 @@ async fn main() -> anyhow::Result<()> {
     let database_url = "postgresql://neondb_owner:npg_Y4qPDJWC6oLh@ep-red-water-a1cnxz0z-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require";
     let pool = PgPoolOptions::new()
         .max_connections(1)
+        .after_connect(|conn, _meta| Box::pin(async move {
+            sqlx::query("SET search_path = flux, public").execute(conn).await?;
+            Ok(())
+        }))
         .connect(database_url)
         .await?;
 

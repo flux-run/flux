@@ -3,6 +3,12 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 pub async fn init_pool(database_url: &str) -> PgPool {
     PgPoolOptions::new()
         .max_connections(20)
+        .after_connect(|conn, _meta| Box::pin(async move {
+            // data-engine owns fluxbase_internal; flux holds platform tables;
+            // public holds user application data.
+            sqlx::query("SET search_path = fluxbase_internal, flux, public").execute(conn).await?;
+            Ok(())
+        }))
         .connect(database_url)
         .await
         .expect("Failed to connect to database")

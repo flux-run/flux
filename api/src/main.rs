@@ -362,6 +362,10 @@ mod tests {
         });
         let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
         let pool = sqlx::postgres::PgPoolOptions::new()
+            .after_connect(|conn, _meta| Box::pin(async move {
+                sqlx::query("SET search_path = flux, public").execute(conn).await?;
+                Ok(())
+            }))
             .connect(&db_url)
             .await
             .unwrap();

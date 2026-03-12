@@ -8,6 +8,12 @@ pub async fn init_pool() -> Result<PgPool, sqlx::Error> {
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
+        .after_connect(|conn, _meta| Box::pin(async move {
+            // Keep Fluxbase-internal tables in the `flux` schema.
+            // User application tables live in `public`.
+            sqlx::query("SET search_path = flux, public").execute(conn).await?;
+            Ok(())
+        }))
         .connect(&database_url)
         .await?;
 
