@@ -492,6 +492,7 @@ interface FluxContext {
       update(id: string, data: object): Promise<Row>;
       delete(id: string): Promise<void>;
       findById(id: string): Promise<Row | null>;
+      findOne(query: QueryFilter): Promise<Row | null>;
       findMany(query?: QueryFilter): Promise<Row[]>;
       query(sql: string, params?: any[]): Promise<Row[]>;
     };
@@ -783,14 +784,14 @@ Every error across all services uses one structure:
 ### Throwing errors in functions
 
 ```typescript
-import { error } from "@flux/functions";
-
 if (!input.email.includes("@")) {
-  error("INVALID_EMAIL", "Email address is not valid");
+  return ctx.error(400, "INVALID_EMAIL", "Email address is not valid");
 }
 ```
 
-The runtime catches the structured throw and maps it to the standard envelope.
+The `ctx.error()` helper throws a structured error that the runtime catches
+and maps to the standard envelope. Same signature as in the FluxContext:
+`ctx.error(httpCode, errorCode, message?)`.
 JSON Schema validation runs **before** the function executes (Rust layer),
 Zod validation runs inside the function.
 
@@ -1331,6 +1332,8 @@ Everything in the framework:
 |---------|--------|-------------|
 | `flux trace <id>` | 🔧 | Full distributed trace — infra exists, CLI wrapper in progress |
 | `flux trace <id> --flame` | 🔧 | Waterfall visualization — infra exists, CLI wrapper in progress |
+| `flux trace list` | 🔧 | List recent traces with filtering/sorting — infra exists, CLI wrapper in progress |
+| `flux trace debug <id>` | 🔧 | Interactive step-through mode — infra exists, CLI wrapper in progress |
 | `flux why <id>` | 🔧 | Root cause + fix suggestion — infra exists, CLI wrapper in progress |
 | `flux tail` | 🔧 | Live request stream — infra exists, CLI wrapper in progress |
 | `flux logs <fn> --follow` | 🔧 | Tail function logs — infra exists, CLI wrapper in progress |
@@ -1351,6 +1354,7 @@ Everything in the framework:
 | `flux worker` | 📋 | Start local queue worker |
 | `flux queue list` | 📋 | List jobs |
 | `flux queue retry <id>` | 📋 | Retry failed job |
+| `flux queue dead-letter` | 📋 | List dead-letter jobs |
 | `flux cron list` | 📋 | List cron jobs |
 
 ### Code Generation

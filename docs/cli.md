@@ -93,6 +93,8 @@ Locally stored in `.env.local` (gitignored). Never committed to version control.
 ```bash
 flux trace <request-id>           # Full distributed trace (spans, timing, mutations)
 flux trace <id> --flame           # Waterfall / flame chart visualization
+flux trace list                   # List recent traces with filtering/sorting
+flux trace debug <id>             # Interactive step-through mode
 flux why <request-id>             # Root cause + fix suggestion (10-second diagnosis)
 flux tail                         # Live request stream (htop for your backend)
 flux logs <fn> --follow           # Tail function logs
@@ -122,6 +124,7 @@ flux bug bisect --function <name> --good <sha> --bad <sha>  # Find regression co
 flux worker                       # Start local queue worker
 flux queue list                   # List jobs (pending, running, failed)
 flux queue retry <job-id>         # Retry a failed job
+flux queue dead-letter            # List dead-letter jobs
 flux cron list                    # List cron jobs and next fire times
 ```
 

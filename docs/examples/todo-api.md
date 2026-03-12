@@ -115,10 +115,10 @@ export default defineFunction({
   handler: async ({ input, ctx }) => {
     const { id, ...updates } = input;
     if (Object.keys(updates).length === 0) {
-      return ctx.error(400, "bad_request", "Provide at least one field to update");
+      return ctx.error(400, "BAD_REQUEST", "Provide at least one field to update");
     }
     const todo = await ctx.db.todos.update(id, updates);
-    if (!todo) return ctx.error(404, "not_found", `Todo ${id} not found`);
+    if (!todo) return ctx.error(404, "NOT_FOUND", `Todo ${id} not found`);
     return { id: todo.id, title: todo.title, done: todo.done };
   },
 });

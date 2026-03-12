@@ -84,10 +84,10 @@ export default defineFunction({
   handler: async ({ input, ctx }) => {
     // 1. Verify signature
     const secret = ctx.secrets.get(`${input.source.toUpperCase()}_WEBHOOK_SECRET`);
-    if (!secret) return ctx.error(400, "config_error", `No webhook secret for ${input.source}`);
+    if (!secret) return ctx.error(400, "CONFIG_ERROR", `No webhook secret for ${input.source}`);
 
     if (!verifySignature(input.raw, input.signature, secret)) {
-      return ctx.error(401, "invalid_signature", "Webhook signature verification failed");
+      return ctx.error(401, "INVALID_SIGNATURE", "Webhook signature verification failed");
     }
 
     const event = JSON.parse(input.raw);

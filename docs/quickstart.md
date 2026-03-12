@@ -1,7 +1,7 @@
 # Quickstart — Build a debuggable backend in 5 minutes
 
-Flux gives you functions, a managed database, secrets, queues, and automatic
-execution recording — all from a single CLI campaign. No Docker, no `.env`
+Flux gives you functions, an integrated database, secrets, queues, and automatic
+execution recording — all from a single CLI. No Docker, no `.env`
 files, no infrastructure setup.
 
 ---

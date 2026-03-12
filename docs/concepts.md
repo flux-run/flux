@@ -223,10 +223,18 @@ import { defineWorkflow } from "@flux/functions";
 
 export default defineWorkflow({
   name: "onboarding",
+  trigger: { type: "function", function: "create_user" },
   steps: [
-    { fn: "create_user",       input: (ctx) => ctx.input },
-    { fn: "send_welcome_email", input: (prev) => ({ user_id: prev.id }) },
-    { fn: "assign_trial_plan",  input: (prev) => ({ user_id: prev.user_id }) },
+    {
+      name: "send_welcome_email",
+      function: "send_email",
+      input: (ctx) => ({ to: ctx.trigger.output.email, subject: "Welcome!" }),
+    },
+    {
+      name: "assign_trial_plan",
+      function: "assign_plan",
+      input: (ctx) => ({ user_id: ctx.trigger.output.id }),
+    },
   ],
 });
 ```
@@ -243,14 +251,11 @@ Request middleware runs before the handler:
 ```typescript
 import { defineMiddleware } from "@flux/functions";
 
-export default defineMiddleware({
-  name: "auth",
-  handler: async ({ ctx, next }) => {
-    const token = ctx.headers.get("authorization")?.replace("Bearer ", "");
-    if (!token) return ctx.error(401, "unauthorized");
-    ctx.user = await verifyToken(token);
-    return next();
-  },
+export default defineMiddleware(async (ctx, next) => {
+  const token = ctx.headers.get("authorization")?.replace("Bearer ", "");
+  if (!token) return ctx.error(401, "UNAUTHORIZED");
+  ctx.user = await verifyToken(token);
+  return next();
 });
 ```
 

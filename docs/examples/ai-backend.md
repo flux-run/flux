@@ -116,7 +116,7 @@ export default defineFunction({
     const latencyMs = Date.now() - start;
 
     if (!response.ok) {
-      return ctx.error(502, "openai_error", `OpenAI returned ${response.status}`);
+      return ctx.error(502, "OPENAI_ERROR", `OpenAI returned ${response.status}`);
     }
 
     const data = await response.json();
