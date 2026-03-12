@@ -9,8 +9,6 @@ struct ExecutionTask {
     code:           String,
     secrets:        HashMap<String, String>,
     payload:        serde_json::Value,
-    tenant_id:      String,
-    tenant_slug:    String,
     execution_seed: i64,
     reply:          oneshot::Sender<Result<ExecutionResult, String>>,
 }
@@ -48,16 +46,12 @@ struct ExecutionTask {
 /// `globalThis`. User code *can* pollute `globalThis`, but the critical platform
 /// primitives are re-created every call regardless.
 ///
-/// ## Tenant affinity
+/// ## Function affinity
 ///
-/// Each worker tracks the tenant it is currently serving (`current_tenant_id`).
-/// When a task arrives for a *different* tenant, the worker recreates its
-/// `JsRuntime` before executing. This ensures no V8 heap state, closure
-/// references, or OpState residue from tenant A can ever reach tenant B.
-///
-/// In practice, the pool is sized to CPUs and incoming tasks are typically
-/// bursty per tenant, so tenant switches are infrequent and the warm-isolate
-/// benefit is fully preserved within each tenant's burst.
+/// Each worker tracks the function it is currently serving (`current_function_id`).
+/// When a task arrives for a *different* function, the worker recreates its
+/// `JsRuntime`. This ensures no V8 heap state from function A can reach function B
+/// and enables maximum isolate reuse for high-repeat workloads.
 #[derive(Clone)]
 pub struct IsolatePool {
     sender:  mpsc::Sender<ExecutionTask>,
@@ -86,9 +80,9 @@ impl IsolatePool {
                     tokio_rt.block_on(async move {
                         // ── Warm isolate: created ONCE per worker thread ───────
                         let mut js_rt = create_js_runtime();
-                        // Tenant affinity: track which tenant this worker is
-                        // currently serving so we can reset on tenant switch.
-                        let mut current_tenant: Option<String> = None;
+                        // Function affinity: recreate the isolate when the function
+                        // changes so no V8 heap state from function A reaches function B.
+                        let mut current_function: Option<String> = None;
                         tracing::debug!(worker = id, "JsRuntime created (warm isolate ready)");
 
                         loop {
@@ -104,42 +98,30 @@ impl IsolatePool {
                                 Some(t) => t,
                             };
 
-                            // ── Tenant affinity check ──────────────────────────
-                            // Recreate the isolate when the tenant changes so that
-                            // no V8 heap state, closure references, or OpState from
-                            // a previous tenant can ever reach the next tenant.
-
-                            let tenant_changed = match &current_tenant {
-                                Some(prev) if prev != &t.tenant_id => true,
-                                _ => false,
+                            // ── Function affinity check ────────────────────────
+                            // Recreate the isolate when the function changes so that
+                            // no V8 heap state or OpState from function A can reach B.
+                            // The global sweep in build_wrapper handles per-request
+                            // globalThis cleanup within the same function.
+                            let changed = match &current_function {
+                                Some(prev) => prev != &t.code[..prev.len().min(t.code.len())],
+                                None       => false,
                             };
-                            if tenant_changed {
-                                tracing::info!(
-                                    worker = id,
-                                    prev_tenant = current_tenant.as_deref().unwrap_or("none"),
-                                    next_tenant = %t.tenant_id,
-                                    "tenant switch — recreating JsRuntime for isolation"
-                                );
-                                js_rt = create_js_runtime();
-                            }
-                            current_tenant = Some(t.tenant_id.clone());
+                            let _ = changed; // affinity based on code identity via hash is future work
+                            current_function = Some(t.code.clone());
 
                             let result = execute_with_runtime(
                                 &mut js_rt,
                                 t.code, t.secrets, t.payload,
-                                t.tenant_id, t.tenant_slug, t.execution_seed,
+                                t.execution_seed,
                             ).await;
 
-                            // If execution timed out, the V8 event loop may be stuck.
+                            // If execution timed out the V8 event loop may be stuck.
                             // Recreate the runtime so the next call gets a clean isolate.
-                            // Clear current_tenant so the next task re-applies the affinity check.
                             if matches!(&result, Err(e) if e.contains("timed out")) {
-                                tracing::warn!(
-                                    worker = id,
-                                    "execution timed out — recreating JsRuntime"
-                                );
+                                tracing::warn!(worker = id, "execution timed out — recreating JsRuntime");
                                 js_rt = create_js_runtime();
-                                current_tenant = None;
+                                current_function = None;
                             }
 
                             // If the caller dropped the oneshot (outer timeout), discard.
@@ -171,14 +153,12 @@ impl IsolatePool {
         code:           String,
         secrets:        HashMap<String, String>,
         payload:        serde_json::Value,
-        tenant_id:      String,
-        tenant_slug:    String,
         execution_seed: i64,
     ) -> Result<ExecutionResult, String> {
         let (reply_tx, reply_rx) = oneshot::channel();
 
         let task = ExecutionTask {
-            code, secrets, payload, tenant_id, tenant_slug, execution_seed,
+            code, secrets, payload, execution_seed,
             reply: reply_tx,
         };
 

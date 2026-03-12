@@ -1,1 +1,1 @@
-pub mod secrets_client;
+pub mod client;

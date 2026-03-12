@@ -12,5 +12,7 @@ pub mod registry;
 pub mod executor;
 pub mod composio;
 
+#[allow(unused_imports)]
 pub use executor::ToolExecutor;
+#[allow(unused_imports)]
 pub use registry::{ToolRegistry, ToolMeta};

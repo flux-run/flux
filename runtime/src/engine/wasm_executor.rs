@@ -53,7 +53,6 @@ pub struct WasmExecutionParams {
     pub bytes:        Vec<u8>,
     pub secrets:      HashMap<String, String>,
     pub payload:      serde_json::Value,
-    pub tenant_id:    String,
     /// Per-function key used to look up the compiled `Module` in the pool cache.
     pub function_id:  String,
     /// Maximum WASM CPU fuel (instructions).  1 billion ≈ a few hundred ms.
@@ -71,7 +70,6 @@ impl Default for WasmExecutionParams {
             bytes:             Vec::new(),
             secrets:           HashMap::new(),
             payload:           serde_json::Value::Null,
-            tenant_id:         String::new(),
             function_id:       String::new(),
             fuel_limit:        1_000_000_000,
             allowed_http_hosts: Vec::new(),

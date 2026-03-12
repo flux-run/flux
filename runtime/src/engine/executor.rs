@@ -152,8 +152,6 @@ fn build_wrapper(
     secrets_json:     &str,
     payload_json:     &str,
     transformed_code: &str,
-    tenant_id:        &str,
-    tenant_slug:      &str,
     execution_seed:   i64,
 ) -> String {
     format!(r#"
@@ -213,10 +211,7 @@ fn build_wrapper(
 
             // ── Full FluxContext implementation ────────────────────────
             const __ctx = {{
-                tenant: {{
-                    id:   "{tenant_id}",
-                    slug: "{tenant_slug}",
-                }},
+
                 payload: __payload,
                 env:     __secrets,
 
@@ -418,8 +413,6 @@ fn build_wrapper(
         secrets_json     = secrets_json,
         payload_json     = payload_json,
         transformed_code = transformed_code,
-        tenant_id        = tenant_id,
-        tenant_slug      = tenant_slug,
         execution_seed   = execution_seed,
     )
 }
@@ -494,16 +487,13 @@ pub async fn execute_with_runtime(
     code:           String,
     secrets:        HashMap<String, String>,
     payload:        serde_json::Value,
-    tenant_id:      String,
-    tenant_slug:    String,
     execution_seed: i64,
 ) -> Result<ExecutionResult, String> {
     // ── Per-request OpState injection ─────────────────────────────────────────
     // Use try_take + put to handle both the first call and subsequent reuse.
-    // try_take removes the existing value (if any) without panicking.
     let composio_api_key = std::env::var("COMPOSIO_API_KEY").ok();
     let entity_id = std::env::var("COMPOSIO_ENTITY_ID")
-        .unwrap_or_else(|_| tenant_id.clone());
+        .unwrap_or_else(|_| "default".to_string());
 
     {
         let op_state = rt.op_state();
@@ -526,7 +516,7 @@ pub async fn execute_with_runtime(
     let transformed_code = code;
 
     let wrapper = build_wrapper(
-        &secrets_json, &payload_json, &transformed_code, &tenant_id, &tenant_slug, execution_seed,
+        &secrets_json, &payload_json, &transformed_code, execution_seed,
     );
 
     let res = timeout(Duration::from_secs(30), async {
@@ -563,21 +553,13 @@ pub async fn execute_function(
     code:           String,
     secrets:        HashMap<String, String>,
     payload:        serde_json::Value,
-    tenant_id:      String,
-    tenant_slug:    String,
     execution_seed: i64,
 ) -> Result<ExecutionResult, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
 
-    // Composio is a first-party Fluxbase service — the platform-level API key is set as
-    // an env var on the runtime service (COMPOSIO_API_KEY). Users do not supply their own key.
-    // Each tenant is a separate Composio entity, scoped under their tenant_id.
     let composio_api_key = std::env::var("COMPOSIO_API_KEY").ok();
-
-    // Each tenant is a Composio "entity" — their connected accounts are scoped under this ID.
-    // Allow override via COMPOSIO_ENTITY_ID (e.g., for a shared demo entity like "fluxbase-demo").
     let entity_id = std::env::var("COMPOSIO_ENTITY_ID")
-        .unwrap_or_else(|_| tenant_id.clone());
+        .unwrap_or_else(|_| "default".to_string());
 
     std::thread::spawn(move || {
         let tokio_rt = tokio::runtime::Builder::new_current_thread()
@@ -613,7 +595,7 @@ pub async fn execute_function(
 
             let secrets_json = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
             let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-            let wrapper = build_wrapper(&secrets_json, &payload_json, &code, &tenant_id, &tenant_slug, execution_seed);
+            let wrapper = build_wrapper(&secrets_json, &payload_json, &code, execution_seed);
 
             let res = timeout(Duration::from_secs(30), async {
                 let res = rt.execute_script("<anon>", wrapper)
