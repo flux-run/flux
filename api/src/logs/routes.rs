@@ -8,9 +8,8 @@
 ///
 /// # Read path
 ///
-/// `GET /logs` — project-scoped, Firebase-auth.  Filters by `source`, `resource`,
-/// `level`, `since`, and `limit`.  When `since` reaches back past the hot window
-/// the call is transparently enriched with archived NDJSON from R2/S3.
+/// `GET /logs` — project-scoped.  Filters by `source`, `resource`,
+/// `level`, `since`, and `limit`.  Hot path only (uses Postgres).
 
 use axum::{
     extract::{Extension, Path, Query, State},
@@ -19,7 +18,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
-use crate::types::response::{ApiResponse, ApiError};
+use crate::error::{ApiResponse, ApiError};
 use crate::types::context::RequestContext;
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
@@ -30,7 +29,7 @@ fn validate_service_token(headers: &HeaderMap) -> Result<(), ApiError> {
     let token = headers.get("X-Service-Token").and_then(|h| h.to_str().ok()).unwrap_or("");
     let expected = std::env::var("INTERNAL_SERVICE_TOKEN")
         .unwrap_or_else(|_| "stub_token".to_string());
-    if token != expected { return Err(ApiError::unauth("invalid_service_token")); }
+    if token != expected { return Err(ApiError::unauthorized("invalid_service_token")); }
     Ok(())
 }
 
@@ -171,7 +170,7 @@ pub async fn list_logs(
     Ok(ApiResponse::new(serde_json::json!({ "logs": logs })))
 }
 
-// ─── GET /logs  (project-scoped, Firebase auth) ───────────────────────────────
+// ─── GET /logs  (project-scoped) ───────────────────────────────────────────────
 //
 // Query params:
 //   source   — subsystem: function | db | workflow | event | queue | system
@@ -180,9 +179,6 @@ pub async fn list_logs(
 //   level    — error | warn | info | debug
 //   limit    — max rows (default 100, max 1000)
 //   since    — ISO-8601 timestamp; return only rows newer than this
-//
-// Hot path  (since within LOG_HOT_DAYS): Postgres only.
-// Cold path (since older than LOG_HOT_DAYS): Postgres + R2/S3 archive merge.
 
 #[derive(Deserialize)]
 pub struct ProjectLogQuery {
@@ -199,10 +195,9 @@ pub async fn list_project_logs(
     Extension(context): Extension<RequestContext>,
     Query(params): Query<ProjectLogQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let project_id = context.project_id;
     let pool       = &state.pool;
     let limit      = params.limit.unwrap_or(100).min(1_000);
-    let limit_us   = limit as usize;
 
     // Backward compat: ?function=echo → source=function, resource=echo.
     let source   = params.source.as_deref()
@@ -276,50 +271,6 @@ pub async fn list_project_logs(
         "tier":       "hot",
     })).collect();
 
-    // ── Archive read (cold path) ──────────────────────────────────────────
-    let hot_cutoff = chrono::Utc::now() - chrono::Duration::days(state.log_archiver.hot_days);
-
-    if let Some(since_ts) = since {
-        if since_ts < hot_cutoff {
-            #[derive(sqlx::FromRow)] struct TenantId { tenant_id: Uuid }
-            let t = sqlx::query_as::<_, TenantId>(
-                "SELECT tenant_id FROM projects WHERE id = $1 LIMIT 1",
-            ).bind(project_id).fetch_optional(pool).await.unwrap_or(None);
-
-            if let Some(t) = t {
-                let s = source.unwrap_or("function");
-                let r = resource.unwrap_or("");
-                let archived = state.log_archiver
-                    .fetch_archived(t.tenant_id, s, r, since_ts, hot_cutoff, limit_us)
-                    .await;
-
-                for mut entry in archived {
-                    if let Some(lf) = level {
-                        if entry.get("level").and_then(|l| l.as_str()) != Some(lf) { continue; }
-                    }
-                    if let Some(obj) = entry.as_object_mut() {
-                        if let Some(rid) = obj.get("resource_id").cloned() {
-                            let src_str = obj.get("source")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("")
-                                .to_string();  // owned — avoids borrow conflict
-                            obj.insert("resource".into(), rid.clone());
-                            obj.insert("function".into(), if src_str == "function" { rid } else { serde_json::json!("") });
-                        }
-                        obj.insert("tier".into(), serde_json::json!("archive"));
-                    }
-                    logs.push(entry);
-                }
-
-                logs.sort_by(|a, b| {
-                    a.get("timestamp").and_then(|t| t.as_str()).unwrap_or("")
-                        .cmp(b.get("timestamp").and_then(|t| t.as_str()).unwrap_or(""))
-                });
-                logs.truncate(limit_us);
-            }
-        }
-    }
-
     Ok(ApiResponse::new(serde_json::json!({ "logs": logs })))
 }
 
@@ -345,7 +296,7 @@ pub async fn get_trace(
     Path(request_id): Path<String>,
     Query(params): Query<TraceQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id  = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let project_id  = context.project_id;
     let pool        = &state.pool;
     let slow_thresh = params.slow_ms.unwrap_or(500);   // 500ms default
 
@@ -548,7 +499,7 @@ pub async fn list_traces(
     Extension(context): Extension<RequestContext>,
     Query(params): Query<ListTracesQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let project_id = context.project_id;
     let pool       = &state.pool;
     let limit      = params.limit.unwrap_or(5).min(20);
     let exclude    = params.exclude.unwrap_or_default();

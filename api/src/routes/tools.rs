@@ -100,9 +100,7 @@ pub async fn list_tools(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
 ) -> ApiResult<Value> {
-    let project_id = context
-        .project_id
-        .ok_or(ApiError::bad_request("missing_project"))?;
+    let project_id = context.project_id;
 
     // Fetch connected providers for this project
     let rows = sqlx::query_as::<_, (String,)>(
@@ -139,9 +137,7 @@ pub async fn list_connected(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
 ) -> ApiResult<Value> {
-    let project_id = context
-        .project_id
-        .ok_or(ApiError::bad_request("missing_project"))?;
+    let project_id = context.project_id;
 
     let rows = sqlx::query_as::<_, IntegrationRow>(
         "SELECT id, provider, account_label, composio_connection_id, status, metadata, connected_at, created_at \
@@ -185,8 +181,8 @@ pub async fn connect_provider(
     Path(provider): Path<String>,
     Json(payload): Json<Option<ConnectPayload>>,
 ) -> ApiResult<Value> {
-    let tenant_id  = context.tenant_id.ok_or(ApiError::bad_request("missing_tenant"))?;
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let tenant_id  = context.tenant_id;
+    let project_id = context.project_id;
     let api_key    = get_composio_key()?;
 
     // entity_id = tenant_id — Composio scopes credentials per entity
@@ -324,7 +320,7 @@ pub async fn disconnect_provider(
     Extension(context): Extension<RequestContext>,
     Path(provider): Path<String>,
 ) -> ApiResult<Value> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let project_id = context.project_id;
 
     let deleted = sqlx::query(
         "DELETE FROM integrations WHERE project_id = $1 AND provider = $2"

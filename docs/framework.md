@@ -138,7 +138,7 @@ Flux (framework)
 | Deploy target | What it means |
 |---|---|
 | `local` | Hot-swap into running `flux dev` |
-| `docker` | Build a `FROM flux/runtime` image |
+| `docker` | Build a `FROM flux/server` image |
 | `k8s` | Generate Kubernetes manifests |
 
 No vendor lock-in. Your Postgres, your data, your network.
@@ -230,8 +230,7 @@ Four Postgres tables, all linked by `request_id`:
 
 ## 4. Architecture
 
-Developers interact with Flux as **one runtime** via `flux dev`.
-Internally it is composed of services — but you never manage them directly.
+Flux is a **single binary**. One process, one port, everything in-process.
 
 ```
 my-app/
@@ -240,20 +239,35 @@ my-app/
 ├── schemas/
 └── tests/
 
-$ flux dev → http://localhost:4000  ← the only port you use
+$ flux dev → http://localhost:4000  ← the only port
 
-  Internally:
-    Gateway     :4000   routing, rate limiting, execution record roots
-    Runtime     :8083   Deno V8 execution, secrets, tool dispatch
-    API         :8080   function registry, logs, schema management
-    Data Engine :8082   DB queries, mutation recording, hooks, cron
-    Queue       :8084   async jobs, retries, dead letter
+  One binary, five modules:
+    Gateway      routing, rate limiting, CORS, auth
+    Runtime      Deno V8 execution, secrets, tool dispatch
+    API          function registry, logs, schema management
+    Data Engine  DB queries, mutation recording, hooks, cron
+    Queue        async jobs, retries, dead letter
 
-Every request → x-request-id → ExecutionRecord → queryable via CLI
+  All modules communicate in-process — no HTTP between them.
+  Every request → x-request-id → ExecutionRecord → queryable via CLI
 ```
 
-All services are Rust + Axum. Single binary. The Runtime uses `deno_core`
-for V8 isolate execution. Database is Postgres.
+Rust + Axum. Single binary, single port. The Runtime uses `deno_core`
+for V8 isolate execution. Database is Postgres. All modules share one
+`PgPool` and one tokio runtime. Scaling is horizontal: run more copies
+of the same binary behind a load balancer.
+
+```
+Load Balancer
+  ├── flux-server (instance 1)  ← full stack, port 4000
+  ├── flux-server (instance 2)  ← full stack, port 4000
+  └── flux-server (instance 3)  ← full stack, port 4000
+          │
+      Postgres (shared)
+```
+
+Every module is stateless. Postgres holds all state. No service discovery,
+no inter-service URLs, no independent scaling of individual components.
 
 ---
 
@@ -361,26 +375,22 @@ admin     = ["middleware/auth.ts", "middleware/require_admin.ts"]
 
 ## 7. Local Dev — flux dev
 
-`flux dev` is a process orchestrator. Starts all services, wires them,
-watches for changes, hot-reloads.
+`flux dev` starts the Flux binary and a managed local Postgres.
+One process, one port, watches for changes, hot-reloads.
 
 ```
 flux dev
-  ├─ Start Postgres     → :5432  (auto-managed, data at .flux/pgdata/)
-  ├─ Start API          → :8080
-  ├─ Start Data Engine  → :8082
-  ├─ Start Runtime      → :8083
-  ├─ Start Queue        → :8084
-  ├─ Start Gateway      → :4000  (LOCAL_MODE=true)
-  ├─ Watch functions/   → on change: build + deploy + invalidate cache
+  ├─ Start Postgres       (auto-managed, data at .flux/pgdata/)
+  ├─ Start flux-server    → http://localhost:4000  (single process)
+  ├─ Watch functions/     → on change: build + invalidate cache
   └─ Print: Flux running at http://localhost:4000
 ```
 
-### Gateway local mode
+### Local mode
 
-In production, the gateway resolves tenants from subdomains.
-In local mode: skip tenant resolution, disable JWT auth, route directly to
-localhost runtime. Same routing logic, just bypassed tenant lookup.
+In local mode (`flux dev`): skip tenant resolution, disable JWT auth,
+route directly to the in-process runtime. Same routing logic, just
+bypassed tenant lookup.
 
 ### Hot reload
 
@@ -543,7 +553,7 @@ interface FluxContext {
 ```
 
 **How `ctx.db` works under the hood:**
-- `ctx.db.users.insert(data)` → HTTP call to Data Engine (`:8082`)
+- `ctx.db.users.insert(data)` → in-process call to the Data Engine module
 - Data Engine executes the SQL, captures before/after state as a `DbMutation`
 - Mutation is written to `execution_mutations` linked by `request_id`
 - This is why Flux requires its own DB layer — mutation recording needs control
@@ -1203,8 +1213,8 @@ flux deploy --target k8s           # generate Kubernetes manifests
 
 | Target | What happens |
 |--------|-------------|
-| `local` | `POST /internal/cache/invalidate` — zero downtime |
-| `docker` | Builds `FROM flux/runtime` image with artifacts baked in |
+| `local` | Invalidate in-process cache — zero downtime |
+| `docker` | Builds `FROM flux/server` image with artifacts baked in |
 | `k8s` | Generates deployment manifests referencing the Docker image |
 
 ---
@@ -1226,34 +1236,13 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
-  gateway:
-    image: flux/gateway
+  flux:
+    image: flux/server
     ports: ["4000:4000"]
     environment:
-      LOCAL_MODE: "true"
-      RUNTIME_URL: http://runtime:8083
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres/flux
-
-  runtime:
-    image: flux/runtime
-    environment:
-      CONTROL_PLANE_URL: http://api:8080
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres/flux
-
-  api:
-    image: flux/api
-    environment:
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres/flux
-
-  data-engine:
-    image: flux/data-engine
-    environment:
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres/flux
-
-  queue:
-    image: flux/queue
-    environment:
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres/flux
+    depends_on:
+      - postgres
 
 volumes:
   pgdata:
@@ -1264,6 +1253,8 @@ docker compose up -d
 flux deploy --target docker
 ```
 
+Two containers: Postgres and Flux. That's the entire production stack.
+
 ### Kubernetes
 
 ```bash
@@ -1271,10 +1262,13 @@ flux deploy --target k8s    # generates manifests in .flux/k8s/
 kubectl apply -f .flux/k8s/
 ```
 
+Scale horizontally by increasing `replicas`. Every replica runs the full
+Flux binary — all modules in-process, stateless against Postgres.
+
 ### What you get self-hosted
 
 Everything in the framework:
-- All 5 services running on your infra
+- One binary running on your infra (all modules in-process)
 - Full execution recording and replay
 - All CLI commands work (`flux trace`, `flux why`, `flux incident replay`)
 - Your Postgres, your data, your network
@@ -1333,7 +1327,7 @@ Global flags on every command: `--json` `--no-color` `--quiet` `--verbose`
 
 All recording infrastructure exists in Rust (`trace_requests`, `platform_logs`,
 `state_mutations` tables). CLI rewrite removes tenant/project auth and points at
-`localhost:8080` instead of `api.fluxbase.io`.
+`localhost:4000` (the single Flux port).
 
 | Command | Status | Description |
 |---------|--------|-------------|
@@ -1446,10 +1440,12 @@ No workflows, no cron, no queue CLI, no middleware, no hot reload.
 Just: create project, start runtime, call a function, see the record, debug.
 
 **What this requires building:**
-- `cli/src/dev.rs` — process orchestrator: spawn 5 services, combined log output,
-  graceful Ctrl+C shutdown, service health checks (~300 lines)
+- `server` crate — single binary that composes all 5 modules (Gateway, Runtime,
+  API, Data Engine, Queue) into one process on one port (~200 lines)
+- `cli/src/dev.rs` — spawn `flux-server` + managed Postgres, combined log output,
+  graceful Ctrl+C shutdown, health check (~200 lines)
 - `flux.toml` — TOML parser in CLI, `flux init` writes it (~100 lines)
-- Gateway `LOCAL_MODE` — skip tenant resolution, accept all requests (~50 lines)
+- Local mode — skip tenant resolution, accept all requests (~50 lines)
 - Embedded Postgres — auto-start, data directory at `.flux/pgdata/`, port assignment
 - Wire `flux trace` and `flux why` CLI commands end-to-end (infrastructure exists
   in `platform_logs` + `state_mutations` tables; the CLI needs to query, format,

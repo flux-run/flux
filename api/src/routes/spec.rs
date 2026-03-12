@@ -28,12 +28,8 @@ pub async fn project_spec(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
 ) -> Result<ApiResponse<Value>, ApiError> {
-    let project_id = ctx
-        .project_id
-        .ok_or_else(|| ApiError::bad_request("missing_project"))?;
-    let tenant_id = ctx
-        .tenant_id
-        .ok_or_else(|| ApiError::bad_request("missing_tenant"))?;
+    let project_id = ctx.project_id;
+    let tenant_id  = ctx.tenant_id;
 
     // ── Project info ──────────────────────────────────────────────────────
     let project_row = sqlx::query(

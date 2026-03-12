@@ -162,9 +162,7 @@ pub async fn spec(
     Extension(ctx): Extension<RequestContext>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let project_id = ctx
-        .project_id
-        .ok_or_else(|| ApiError::bad_request("missing_project"))?;
+    let project_id = ctx.project_id;
 
     let (db_schema, func_values, schema_hash) =
         fetch_schema_graph_pub(&state, project_id, &headers).await?;

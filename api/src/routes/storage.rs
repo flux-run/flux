@@ -54,7 +54,7 @@ pub async fn get_provider(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
 ) -> ApiResult<Value> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let project_id = context.project_id;
 
     let row = sqlx::query(
         r#"
@@ -113,8 +113,8 @@ pub async fn upsert_provider(
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<UpsertProviderRequest>,
 ) -> ApiResult<Value> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
-    let tenant_id  = context.tenant_id .ok_or(ApiError::bad_request("missing_tenant"))?;
+    let project_id = context.project_id;
+    let tenant_id  = context.tenant_id;
 
     // Validate provider string
     if !VALID_PROVIDERS.contains(&payload.provider.as_str()) {
@@ -202,7 +202,7 @@ pub async fn delete_provider(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
 ) -> ApiResult<Value> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
+    let project_id = context.project_id;
 
     sqlx::query("DELETE FROM project_storage_providers WHERE project_id = $1")
         .bind(project_id)
@@ -228,8 +228,8 @@ pub async fn presign(
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<PresignRequest>,
 ) -> ApiResult<Value> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project"))?;
-    let tenant_id  = context.tenant_id .ok_or(ApiError::bad_request("missing_tenant"))?;
+    let project_id = context.project_id;
+    let tenant_id  = context.tenant_id;
 
     // Derive the S3 object key
     let base_path_prefix = {
@@ -285,6 +285,5 @@ pub async fn presign(
         "key": key,
         "kind": payload.kind,
         "expires_in": 900,
-        "bucket": state.storage_config.files_bucket,
     })))
 }

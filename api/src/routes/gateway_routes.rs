@@ -2,7 +2,7 @@ use axum::{
     extract::{Extension, Path, Query, State},
     Json,
 };
-use crate::types::response::{ApiResponse, ApiError};
+use crate::error::{ApiResponse, ApiError};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -87,10 +87,7 @@ pub async fn create_gateway_route(
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<CreateRoutePayload>,
 ) -> ApiResult<RouteRow> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project_id"))?;
-    
-    // Ensure project_id matches if provided in some other way or just use context
-    // Here we use context.project_id for security.
+    let project_id = context.project_id;
 
     let id = Uuid::new_v4();
     
@@ -121,7 +118,7 @@ pub async fn update_gateway_route(
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<UpdateRoutePayload>,
 ) -> ApiResult<RouteRow> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project_id"))?;
+    let project_id = context.project_id;
 
     // Check ownership
     #[derive(sqlx::FromRow)]
@@ -183,7 +180,7 @@ pub async fn delete_gateway_route(
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context.project_id.ok_or(ApiError::bad_request("missing_project_id"))?;
+    let project_id = context.project_id;
 
     let result = sqlx::query("DELETE FROM routes WHERE id = $1 AND project_id = $2")
         .bind(id)

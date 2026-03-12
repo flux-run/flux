@@ -1,237 +1,222 @@
+//! Function registry routes.
+//!
+//! All functions belong to the active project (from `RequestContext::project_id`).
+//! Run URLs point at the local gateway (`AppState::gateway_url/{name}`) instead of
+//! cloud-hosted tenant subdomains.
+//!
+//! ## SOLID note (Single Responsibility)
+//! This file is HTTP-only: request parsing, delegation to SQL, response shaping.
+//! No auth logic, no tenant resolution, no schema validation beyond what the DB enforces.
+
 use axum::{
     extract::{Extension, Path, Query, State},
     Json,
 };
-use crate::types::response::{ApiResponse, ApiError};
+use crate::error::{ApiError, ApiResponse, ApiResult};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 use crate::types::context::RequestContext;
+use crate::AppState;
 
-// ── Row structs ────────────────────────────────────────────────────────────
+// ── Row structs ─────────────────────────────────────────────────────────────
 
-// Using sqlx::FromRow derive with runtime query_as to avoid SQLX_OFFLINE cache
-// requirement for the new schema columns (input_schema, output_schema).
 #[derive(sqlx::FromRow)]
 struct FunctionRow {
-    id: Uuid,
-    name: String,
-    runtime: String,
-    description: Option<String>,
+    id:           Uuid,
+    name:         String,
+    runtime:      String,
+    description:  Option<String>,
     input_schema: Option<serde_json::Value>,
     output_schema: Option<serde_json::Value>,
-    created_at: chrono::NaiveDateTime,
-    tenant_slug: String,
+    created_at:   chrono::NaiveDateTime,
 }
 
-// ── Payloads ───────────────────────────────────────────────────────────────
+// ── Payloads ─────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct CreateFunctionPayload {
-    pub name: String,
-    pub runtime: String,
+    pub name:    String,
+    pub runtime: Option<String>,
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
-type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
-
-fn db_err() -> ApiError {
-    ApiError::internal("database_error")
+/// Build a local run URL: `http://localhost:PORT/name`
+fn run_url(gateway_url: &str, name: &str) -> String {
+    format!("{}/{}", gateway_url.trim_end_matches('/'), name)
 }
 
-// ── Handlers ───────────────────────────────────────────────────────────────
+fn row_to_json(r: FunctionRow, gateway_url: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id":           r.id,
+        "name":         r.name,
+        "runtime":      r.runtime,
+        "description":  r.description,
+        "input_schema": r.input_schema,
+        "output_schema": r.output_schema,
+        "created_at":   r.created_at.to_string(),
+        "run_url":      run_url(gateway_url, &r.name),
+    })
+}
+
+// ── Handlers ────────────────────────────────────────────────────────────────
 
 pub async fn list_functions(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Extension(context): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context
-        .project_id
-        .ok_or(ApiError::bad_request("missing_project"))?;
-
     let records = sqlx::query_as::<_, FunctionRow>(
-        "SELECT f.id, f.name, f.runtime, f.description, f.input_schema, f.output_schema, f.created_at, t.slug as tenant_slug \
-         FROM functions f \
-         JOIN tenants t ON t.id = f.tenant_id \
-         WHERE f.project_id = $1 ORDER BY f.created_at DESC"
+        "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
+         FROM functions \
+         WHERE project_id = $1 \
+         ORDER BY created_at DESC",
     )
-    .bind(project_id)
-    .fetch_all(&pool)
+    .bind(context.project_id)
+    .fetch_all(&state.pool)
     .await
-    .map_err(|_| db_err())?;
+    .map_err(ApiError::from)?;
 
     let functions: Vec<_> = records
         .into_iter()
-        .map(|r| {
-            let run_url = format!("https://{}.fluxbase.co/{}", r.tenant_slug, r.name);
-            serde_json::json!({
-                "id": r.id,
-                "name": r.name,
-                "runtime": r.runtime,
-                "description": r.description,
-                "input_schema": r.input_schema,
-                "output_schema": r.output_schema,
-                "created_at": r.created_at.to_string(),
-                "run_url": run_url
-            })
-        })
+        .map(|r| row_to_json(r, &state.gateway_url))
         .collect();
 
     Ok(ApiResponse::new(serde_json::json!({ "functions": functions })))
 }
 
+pub async fn get_function(
+    State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<serde_json::Value> {
+    let record = sqlx::query_as::<_, FunctionRow>(
+        "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
+         FROM functions \
+         WHERE id = $1 AND project_id = $2",
+    )
+    .bind(id)
+    .bind(context.project_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(ApiError::from)?
+    .ok_or_else(|| ApiError::not_found("function not found"))?;
+
+    Ok(ApiResponse::new(row_to_json(record, &state.gateway_url)))
+}
+
 pub async fn create_function(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<CreateFunctionPayload>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context
-        .project_id
-        .ok_or(ApiError::bad_request("missing_project"))?;
+    if payload.name.is_empty() {
+        return Err(ApiError::bad_request("name is required"));
+    }
 
-    let tenant_id = context
-        .tenant_id
-        .ok_or(ApiError::bad_request("missing_tenant"))?;
-
-    // Validate runtime against platform registry
-    #[derive(sqlx::FromRow)]
-    struct RuntimeValidationRow { _id: Uuid }
-    let _runtime_valid = sqlx::query_as::<_, RuntimeValidationRow>(
-        "SELECT id as _id FROM platform_runtimes WHERE name = $1 AND status = 'active'"
-    )
-    .bind(&payload.runtime)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| db_err())?
-    .ok_or(ApiError::bad_request("invalid_or_inactive_runtime"))?;
-
+    let runtime = payload.runtime.as_deref().unwrap_or("deno").to_string();
     let function_id = Uuid::new_v4();
 
-    sqlx::query!(
-        "INSERT INTO functions (id, tenant_id, project_id, name, runtime) VALUES ($1, $2, $3, $4, $5)",
-        function_id,
-        tenant_id,
-        project_id,
-        payload.name,
-        payload.runtime
+    sqlx::query(
+        "INSERT INTO functions (id, tenant_id, project_id, name, runtime) \
+         VALUES ($1, $2, $3, $4, $5)",
     )
-    .execute(&pool)
+    .bind(function_id)
+    .bind(context.tenant_id)
+    .bind(context.project_id)
+    .bind(&payload.name)
+    .bind(&runtime)
+    .execute(&state.pool)
     .await
-    .map_err(|_| db_err())?;
-    
-    // TODO: Publish to actual event bus
-    println!(r#"{{"event": "function.created", "function_id": "{}", "tenant_id": "{}", "project_id": "{}"}}"#, function_id, tenant_id, project_id);
+    .map_err(ApiError::from)?;
 
-    Ok(ApiResponse::new(serde_json::json!({ "function_id": function_id })))
-}
-
-pub async fn get_function(
-    Path(id): Path<Uuid>,
-    State(pool): State<PgPool>,
-    Extension(context): Extension<RequestContext>,
-) -> ApiResult<serde_json::Value> {
-    let project_id = context
-        .project_id
-        .ok_or(ApiError::bad_request("missing_project"))?;
-
-    let record = sqlx::query_as::<_, FunctionRow>(
-        "SELECT f.id, f.name, f.runtime, f.description, f.input_schema, f.output_schema, f.created_at, t.slug as tenant_slug \
-         FROM functions f \
-         JOIN tenants t ON t.id = f.tenant_id \
-         WHERE f.id = $1 AND f.project_id = $2"
-    )
-    .bind(id)
-    .bind(project_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| db_err())?
-    .ok_or(ApiError::not_found("function_not_found"))?;
-
-    let run_url = format!("https://{}.fluxbase.co/{}", record.tenant_slug, record.name);
+    tracing::info!(
+        function_id = %function_id,
+        name        = %payload.name,
+        project_id  = %context.project_id,
+        "function created",
+    );
 
     Ok(ApiResponse::new(serde_json::json!({
-        "id": record.id,
-        "name": record.name,
-        "runtime": record.runtime,
-        "description": record.description,
-        "input_schema": record.input_schema,
-        "output_schema": record.output_schema,
-        "created_at": record.created_at.to_string(),
-        "run_url": run_url
+        "function_id": function_id,
+        "name":        payload.name,
+        "runtime":     runtime,
+        "run_url":     run_url(&state.gateway_url, &payload.name),
     })))
 }
 
 pub async fn delete_function(
-    Path(id): Path<Uuid>,
     State(pool): State<PgPool>,
     Extension(context): Extension<RequestContext>,
+    Path(id): Path<Uuid>,
 ) -> ApiResult<serde_json::Value> {
-    if context.role.as_deref() != Some("owner") && context.role.as_deref() != Some("admin") {
-        return Err(ApiError::forbidden("Only owners or admins can delete functions"));
-    }
-
-    let project_id = context
-        .project_id
-        .ok_or(ApiError::bad_request("missing_project"))?;
-
-    sqlx::query!(
+    let deleted = sqlx::query(
         "DELETE FROM functions WHERE id = $1 AND project_id = $2",
-        id,
-        project_id
     )
+    .bind(id)
+    .bind(context.project_id)
     .execute(&pool)
     .await
-    .map_err(|_| db_err())?;
+    .map_err(ApiError::from)?
+    .rows_affected();
+
+    if deleted == 0 {
+        return Err(ApiError::not_found("function not found"));
+    }
 
     Ok(ApiResponse::new(serde_json::json!({ "deleted": true })))
 }
 
-// ── Internal: function name → ID resolution ───────────────────────────────────
-//
-// Used by the runtime's ctx.queue.push() op to resolve a user-facing function
-// name ("send_email") to the UUIDs required by the Queue service.
-// Protected by the service-token middleware on /internal/*.
+// ── Internal: resolve function name → id for que / runtime ──────────────────
 
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 pub struct ResolveQuery {
     pub name:       String,
-    pub project_id: Uuid,
+    pub project_id: Option<Uuid>,
 }
 
 #[derive(sqlx::FromRow)]
 struct ResolveRow {
-    id:        Uuid,
-    tenant_id: Uuid,
+    id:         Uuid,
+    project_id: Uuid,
 }
 
 pub async fn resolve_function(
     State(pool): State<PgPool>,
     Query(q): axum::extract::Query<ResolveQuery>,
 ) -> Result<axum::Json<serde_json::Value>, (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
-    let row = sqlx::query_as::<_, ResolveRow>(
-        "SELECT id, tenant_id FROM functions WHERE name = $1 AND project_id = $2 LIMIT 1",
-    )
-    .bind(&q.name)
-    .bind(q.project_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| (
-        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-        axum::Json(serde_json::json!({ "error": "database_error" })),
-    ))?;
+    let query = if let Some(pid) = q.project_id {
+        sqlx::query_as::<_, ResolveRow>(
+            "SELECT id, project_id FROM functions WHERE name = $1 AND project_id = $2 LIMIT 1",
+        )
+        .bind(&q.name)
+        .bind(pid)
+        .fetch_optional(&pool)
+        .await
+    } else {
+        sqlx::query_as::<_, ResolveRow>(
+            "SELECT id, project_id FROM functions WHERE name = $1 LIMIT 1",
+        )
+        .bind(&q.name)
+        .fetch_optional(&pool)
+        .await
+    };
 
-    match row {
-        Some(r) => Ok(axum::Json(serde_json::json!({
-            "function_id": r.id,
-            "tenant_id":   r.tenant_id,
+    match query {
+        Ok(Some(row)) => Ok(axum::Json(serde_json::json!({
+            "function_id": row.id,
+            "project_id":  row.project_id,
         }))),
-        None => Err((
+        Ok(None) => Err((
             axum::http::StatusCode::NOT_FOUND,
-            axum::Json(serde_json::json!({
-                "error": "function_not_found",
-                "name":  q.name,
-            })),
+            axum::Json(serde_json::json!({ "error": "NOT_FOUND", "message": "function not found" })),
         )),
+        Err(e) => {
+            tracing::error!(error = %e, "resolve_function db error");
+            Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": "FUNCTION_ERROR", "message": "database_error" })),
+            ))
+        }
     }
 }

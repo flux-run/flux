@@ -41,9 +41,7 @@ pub async fn create_secret(
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<CreateSecretRequest>,
 ) -> ApiResult<Value> {
-    let tenant_id = context
-        .tenant_id
-        .ok_or(ApiError::bad_request("missing_tenant"))?;
+    let tenant_id = context.tenant_id;
 
     let (secret_id, version) = svc_create(&pool, tenant_id, payload).await.map_err(map_err)?;
 
@@ -56,9 +54,7 @@ pub async fn update_secret(
     Path(key): Path<String>,
     Json(payload): Json<UpdateSecretRequest>,
 ) -> ApiResult<Value> {
-    let tenant_id = context
-        .tenant_id
-        .ok_or(ApiError::bad_request("missing_tenant"))?;
+    let tenant_id = context.tenant_id;
 
     let version = svc_update(&pool, tenant_id, &key, payload).await.map_err(map_err)?;
 
@@ -76,9 +72,7 @@ pub async fn delete_secret(
     Path(key): Path<String>,
     Query(query): Query<DeleteSecretQuery>,
 ) -> ApiResult<Value> {
-    let tenant_id = context
-        .tenant_id
-        .ok_or(ApiError::bad_request("missing_tenant"))?;
+    let tenant_id = context.tenant_id;
 
     svc_delete(&pool, tenant_id, query.project_id, &key).await.map_err(map_err)?;
 
@@ -95,9 +89,7 @@ pub async fn list_secrets(
     Extension(context): Extension<RequestContext>,
     Query(query): Query<ListSecretsQuery>,
 ) -> ApiResult<Value> {
-    let tenant_id = context
-        .tenant_id
-        .ok_or(ApiError::bad_request("missing_tenant"))?;
+    let tenant_id = context.tenant_id;
 
     let secrets = svc_list(&pool, tenant_id, query.project_id).await.map_err(map_err)?;
 
@@ -125,7 +117,7 @@ pub async fn get_internal_runtime_secrets(
     let expected_token = std::env::var("INTERNAL_SERVICE_TOKEN").unwrap_or_else(|_| "stub_token".to_string());
     
     if token != expected_token {
-        return Err(ApiError::unauth("invalid_service_token"));
+        return Err(ApiError::unauthorized("invalid_service_token"));
     }
 
     let map = svc_get_runtime(&pool, query.tenant_id, query.project_id)

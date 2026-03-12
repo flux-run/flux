@@ -99,9 +99,7 @@ pub async fn graph(
         .unwrap_or("-")
         .to_owned();
 
-    let project_id = ctx
-        .project_id
-        .ok_or_else(|| ApiError::bad_request("missing_project"))?;
+    let project_id = ctx.project_id;
 
     // ── 1. Fetch DB schema from Data Engine ───────────────────────────────
     let mut de_url = format!("{}/db/schema", state.data_engine_url);

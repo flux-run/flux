@@ -1,123 +1,88 @@
+//! Authentication + project-context middleware.
+//!
+//! ## Two operating modes
+//!
+//! | Mode | When | Behaviour |
+//! |------|------|-----------|
+//! | **Local** (default) | `FLUX_API_KEY` env var is **not** set | All requests pass through — optimised for `flux dev` |
+//! | **Protected** | `FLUX_API_KEY` is set | `Authorization: Bearer <key>` checked on every request |
+//!
+//! In both modes the middleware:
+//!   1. Reads the optional `X-Flux-Project` header (UUID) and uses it as `project_id`.
+//!   2. Falls back to `AppState::local_project_id` when the header is absent.
+//!   3. Injects a fully-populated [`RequestContext`] so downstream handlers
+//!      never need to deal with `Option<Uuid>`.
+//!
+//! ## SOLID note (Dependency Inversion)
+//! Routes depend on `RequestContext` (abstraction), not on how auth works.
+//! Swapping from local-mode to external auth = change this one middleware.
+
 use axum::{
     extract::{Request, State},
     http::StatusCode,
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
+    Json,
 };
 use uuid::Uuid;
+
 use crate::types::context::RequestContext;
-use sqlx::PgPool;
+use crate::AppState;
 
-use std::sync::Arc;
-use firebase_auth::FirebaseAuth;
-
-pub async fn verify_auth(
-    State(pool): State<PgPool>,
-    State(firebase_auth): State<Arc<FirebaseAuth>>,
+/// Auth + context middleware — mounted via `from_fn_with_state` on the API router.
+pub async fn require_auth(
+    State(state): State<AppState>,
     mut req: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
+) -> Response {
+    // CORS preflights never need auth.
     if req.method() == axum::http::Method::OPTIONS {
-        return Ok(next.run(req).await);
+        return next.run(req).await;
     }
 
-    let auth_header = req
+    // ── Optional bearer-token guard ──────────────────────────────────────
+    //
+    // If `FLUX_API_KEY` is set the request MUST carry:
+    //   Authorization: Bearer <FLUX_API_KEY value>
+    //
+    // If the variable is absent we are in local / dev mode and skip the check.
+    if let Ok(expected) = std::env::var("FLUX_API_KEY") {
+        let provided = req
+            .headers()
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .unwrap_or("");
+
+        if provided != expected {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error":   "UNAUTHORIZED",
+                    "message": "Invalid or missing API key. Set Authorization: Bearer <FLUX_API_KEY>",
+                    "code":    401u16,
+                })),
+            )
+            .into_response();
+        }
+    }
+
+    // ── Project context ──────────────────────────────────────────────────
+    //
+    // The CLI sends `X-Flux-Project: <uuid>` on every request.
+    // If absent (e.g. unauthenticated dashboard calls) fall back to the
+    // local default so handlers always receive a valid Uuid.
+    let project_id: Uuid = req
         .headers()
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
-    
-    // 1 Extract Authorization header
-    if !auth_header.starts_with("Bearer ") {
-        tracing::error!("Auth header missing 'Bearer ' prefix: {}", auth_header);
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    
-    let token = &auth_header["Bearer ".len()..];
+        .get("X-Flux-Project")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .unwrap_or(state.local_project_id);
 
-    if token.starts_with("flux_") {
-        let hash = crate::api_keys::crypto::generate_hash(token);
-        let api_key = match crate::api_keys::service::mark_key_used(&pool, &hash).await {
-            Ok(k) => k,
-            Err(_) => return Err(StatusCode::UNAUTHORIZED),
-        };
+    req.extensions_mut().insert(RequestContext {
+        project_id,
+        tenant_id: state.local_tenant_id,
+    });
 
-        // Resolve the tenant owner so that routes which write to user-FK columns
-        // (tenants.owner_id, tenant_members.user_id) receive a valid users.id.
-        // Also fetch tenant + project slugs so the data-engine proxy can inject them.
-        let tenant_row: Option<(Uuid, String)> = sqlx::query_as(
-            "SELECT owner_id, slug FROM tenants WHERE id = $1"
-        )
-        .bind(api_key.tenant_id)
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten();
-
-        let (owner_id, tenant_slug) = tenant_row
-            .map(|(id, slug)| (Some(id), Some(slug)))
-            .unwrap_or((None, None));
-
-        let project_slug: Option<String> = sqlx::query_scalar(
-            "SELECT slug FROM projects WHERE id = $1"
-        )
-        .bind(api_key.project_id)
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten();
-
-        let context = RequestContext {
-            user_id: owner_id.unwrap_or(api_key.id),
-            firebase_uid: "api_key".to_string(),
-            tenant_id: Some(api_key.tenant_id),
-            project_id: Some(api_key.project_id),
-            tenant_slug,
-            project_slug,
-            role: Some("owner".to_string()),
-        };
-        req.extensions_mut().insert(context);
-        return Ok(next.run(req).await);
-    }
-
-    // 2 Verify Firebase JWT & 3 Extract firebase_uid
-    #[cfg(not(test))]
-    let (firebase_uid, email) = {
-        // The verify call cryptographically checks the JWT signature against Google's public JWKs
-        let user: firebase_auth::FirebaseUser = firebase_auth
-            .verify(token)
-            .map_err(|e| {
-                tracing::error!("Firebase JWT Verification failed: {:?}", e);
-                StatusCode::UNAUTHORIZED
-            })?;
-        (user.user_id, user.email.unwrap_or_default())
-    };
-
-    #[cfg(test)]
-    let (firebase_uid, email) = (format!("mock-uid-{}", token), "mock@example.com".to_string());
-    
-    let user_id = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO users (id, firebase_uid, email, name) VALUES ($1, $2, $3, $4) ON CONFLICT (firebase_uid) DO UPDATE SET email = EXCLUDED.email RETURNING id"
-    )
-    .bind(Uuid::new_v4())
-    .bind(firebase_uid.clone())
-    .bind(email)
-    .bind("Fluxbase User")
-    .fetch_one(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // 5 Store user_id in request context
-    let context = RequestContext {
-        user_id,
-        firebase_uid,
-        tenant_id: None,
-        project_id: None,
-        tenant_slug: None,
-        project_slug: None,
-        role: None,
-    };
-    req.extensions_mut().insert(context);
-
-    Ok(next.run(req).await)
+    next.run(req).await
 }

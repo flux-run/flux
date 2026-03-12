@@ -3,13 +3,19 @@ name = "api"
 version = "0.1.0"
 edition = "2024"
 
+# ──────────────────────────────────────────────────────────────────────────────
+# API service dependencies
+#
+# Removed from previous cloud-SaaS build:
+#   firebase-auth   — replaced by optional FLUX_API_KEY env var
+#   jsonwebtoken    — was firebase dependency
+#   tokio-stream    — was SSE events broadcast (removed in Phase 0)
+#   flate2          — was S3 log archiver gzip compression (removed)
+# ──────────────────────────────────────────────────────────────────────────────
 [dependencies]
 axum = { version = "0.8.8", features = ["multipart"] }
-tokio-stream = { version = "0.1", features = ["sync", "time"] }
 chrono = { version = "0.4.44", features = ["serde"] }
 dotenvy = "0.15.7"
-firebase-auth = { version = "0.5.1", default-features = false, features = ["rustls"] }
-jsonwebtoken = "10.3.0"
 reqwest = { version = "0.13.2", features = ["json", "rustls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -21,12 +27,15 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 uuid = { version = "1.22.0", features = ["v4", "serde"] }
 
-# Crypto
+# Crypto — AES-256-GCM encryption for secrets at rest
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
-sha2 = "0.10.9"
-hex = "0.4.3"
+
+# Schema hashing — SHA-256 for schema_versions content-based cache key
+sha2 = "0.10"
+hex = "0.4"
+
+# Object storage — function bundle upload/download (minio in dev, S3/R2 in prod)
 aws-sdk-s3 = "1.125.0"
 aws-config = "1.8.15"
-flate2 = "1"

@@ -101,9 +101,7 @@ pub async fn schema(
     Extension(ctx): Extension<RequestContext>,
     headers: HeaderMap,
 ) -> ApiResult<Value> {
-    let project_id = ctx
-        .project_id
-        .ok_or_else(|| ApiError::bad_request("missing_project"))?;
+    let project_id = ctx.project_id;
 
     let (db_schema, func_values, schema_hash) =
         fetch_schema_graph_pub(&state, project_id, &headers).await?;
@@ -158,46 +156,12 @@ pub async fn typescript(
     Extension(ctx): Extension<RequestContext>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let project_id = ctx
-        .project_id
-        .ok_or_else(|| ApiError::bad_request("missing_project"))?;
+    let project_id = ctx.project_id;
 
     let (db_schema, func_values, schema_hash) =
         fetch_schema_graph_pub(&state, project_id, &headers).await?;
 
-    let cache_key = format!("{}:{}", project_id, schema_hash);
-
-    // ── Cache read ─────────────────────────────────────────────────────────
-    {
-        let cache = state.sdk_cache.read().await;
-        if let Some(cached) = cache.get(&cache_key) {
-            return Ok((
-                [
-                    (header::CONTENT_TYPE, "application/typescript; charset=utf-8"),
-                    (header::CACHE_CONTROL, "public, max-age=3600"),
-                ],
-                [(
-                    axum::http::HeaderName::from_static("x-schema-hash"),
-                    axum::http::HeaderValue::from_str(&schema_hash)
-                        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("-")),
-                )],
-                cached.clone(),
-            )
-                .into_response());
-        }
-    }
-
-    // ── Generate ───────────────────────────────────────────────────────────
     let sdk = generate_sdk(&db_schema, &func_values, &schema_hash);
-
-    // ── Cache write ────────────────────────────────────────────────────────
-    // Keep at most 1 entry per project — evict old hash entries for the same
-    // project so the map doesn't grow unboundedly.
-    {
-        let mut cache = state.sdk_cache.write().await;
-        cache.retain(|k, _| !k.starts_with(&format!("{}:", project_id)));
-        cache.insert(cache_key, sdk.clone());
-    }
 
     Ok((
         [
