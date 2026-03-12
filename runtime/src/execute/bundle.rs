@@ -21,7 +21,7 @@ use crate::trace::emitter::TraceEmitter;
 /// The resolved bundle, ready for execution.
 pub enum ResolvedBundle {
     /// JavaScript/TypeScript code (Deno V8 path).
-    Deno { code: String, deployment_id: Option<String> },
+    Deno { code: String },
     /// Compiled WASM bytes.
     Wasm { bytes: Vec<u8> },
 }
@@ -122,14 +122,14 @@ impl<'a> BundleResolver<'a> {
             if let Some(cached) = self.bundle_cache.get(d_id) {
                 tracing::debug!(function_id, deployment_id = %d_id, "bundle cache hit (deployment-level)");
                 self.bundle_cache.insert_both(function_id.to_string(), Some(d_id.clone()), cached.clone());
-                return Ok(ResolvedBundle::Deno { code: cached, deployment_id: Some(d_id.clone()) });
+                return Ok(ResolvedBundle::Deno { code: cached });
             }
         }
 
         let code = self.fetch_js_code(
             function_id, deployment_id.clone(), url_opt, code_opt, tracer
         ).await?;
-        Ok(ResolvedBundle::Deno { code, deployment_id })
+        Ok(ResolvedBundle::Deno { code })
     }
 
     // ── private helpers ───────────────────────────────────────────────────

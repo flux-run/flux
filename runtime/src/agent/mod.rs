@@ -6,7 +6,7 @@
 /// OpenAI-compatible LLM endpoint and returns the next action decision.
 ///
 /// The single execution rule is preserved:
-///   Agent → op_agent_llm_call (decide) → ctx.tools.run() → ToolExecutor → Composio
+///   Agent → op_agent_llm_call (decide) → returns action decision
 ///
 /// Configuration secrets:
 ///   FLUXBASE_LLM_KEY   — API key for the LLM provider  (required for agents)

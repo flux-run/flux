@@ -59,7 +59,7 @@ impl<'a> ExecutionRunner<'a> {
 
         // ── dispatch to the right engine ──────────────────────────────────
         let (result, duration_ms) = match bundle {
-            ResolvedBundle::Deno { code, .. } => {
+            ResolvedBundle::Deno { code } => {
                 self.run_deno(code, secrets, ctx, tracer, start).await
             }
             ResolvedBundle::Wasm { bytes } => {

@@ -36,25 +36,19 @@ use crate::engine::executor::{ExecutionResult, LogLine};
 
 /// Data owned by the Wasmtime `Store` — accessible from host import callbacks.
 pub struct HostState {
-    pub secrets: HashMap<String, String>,
-    pub logs:    Vec<LogLine>,
-    /// Scratch buffer used by `secrets_get` to write values back to WASM memory.
-    pub secrets_scratch: Vec<u8>,
+    pub secrets:            HashMap<String, String>,
+    pub logs:               Vec<LogLine>,
     /// `http_fetch` allow-list.  Empty vec = deny all.  Contains `"*"` = allow all.
     pub allowed_http_hosts: Vec<String>,
     /// Shared reqwest client for outbound HTTP from `fluxbase.http_fetch`.
-    pub http_client: reqwest::Client,
+    pub http_client:        reqwest::Client,
 }
 
 // ─── Params ────────────────────────────────────────────────────────────────
 
 pub struct WasmExecutionParams {
-    /// Raw WASM bytecode.
-    pub bytes:        Vec<u8>,
     pub secrets:      HashMap<String, String>,
     pub payload:      serde_json::Value,
-    /// Per-function key used to look up the compiled `Module` in the pool cache.
-    pub function_id:  String,
     /// Maximum WASM CPU fuel (instructions).  1 billion ≈ a few hundred ms.
     pub fuel_limit:   u64,
     /// Hosts the WASM function is allowed to call via `fluxbase.http_fetch`.
@@ -67,10 +61,8 @@ pub struct WasmExecutionParams {
 impl Default for WasmExecutionParams {
     fn default() -> Self {
         Self {
-            bytes:             Vec::new(),
             secrets:           HashMap::new(),
             payload:           serde_json::Value::Null,
-            function_id:       String::new(),
             fuel_limit:        1_000_000_000,
             allowed_http_hosts: Vec::new(),
             http_client:       None,
@@ -128,7 +120,6 @@ fn execute_wasm_sync(
     let host = HostState {
         secrets:            params.secrets,
         logs:               Vec::new(),
-        secrets_scratch:    vec![0u8; 4096],
         allowed_http_hosts: params.allowed_http_hosts,
         http_client:        params.http_client.unwrap_or_else(reqwest::Client::new),
     };
@@ -432,38 +423,4 @@ fn execute_wasm_sync(
 
     let logs = store.into_data().logs;
     Ok(ExecutionResult { output, logs })
-}
-
-// ─── WASM binary validation ────────────────────────────────────────────────
-
-/// Validate that a WASM binary exports the required symbols.
-/// Called by `flux deploy` before uploading a WASM bundle.
-pub fn validate_wasm_exports(bytes: &[u8]) -> Result<(), String> {
-    // Check magic bytes: 0x00 0x61 0x73 0x6D
-    if bytes.len() < 4 || &bytes[0..4] != b"\x00asm" {
-        return Err("not a valid WASM binary (bad magic bytes)".to_string());
-    }
-
-    let engine = build_engine();
-    let module = compile_module(&engine, bytes)?;
-
-    let exports: Vec<String> = module.exports().map(|e| e.name().to_string()).collect();
-    let required = ["handle", "__flux_alloc", "memory"];
-
-    let missing: Vec<&str> = required
-        .iter()
-        .filter(|req| !exports.iter().any(|e| e.as_str() == **req))
-        .copied()
-        .collect();
-
-    if !missing.is_empty() {
-        return Err(format!(
-            "WASM module is missing required exports: {}. \
-             All three are required: handle, __flux_alloc, memory. \
-             Use the flux-wasm-sdk crate — the flux_handler! macro generates them automatically.",
-            missing.join(", ")
-        ));
-    }
-
-    Ok(())
 }

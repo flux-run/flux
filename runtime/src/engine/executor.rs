@@ -5,61 +5,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use tokio::time::{timeout, Duration};
 
-use crate::tools::executor::ToolOpState;
-use crate::tools::registry::ToolRegistry;
-use crate::tools::composio;
 use crate::agent::AgentOpState;
 
-// ── Tool execution Deno op ────────────────────────────────────────────────────
-//
-// This is the bridge between the JS sandbox and the Rust tool executor.
-// ctx.tools.run("slack.send_message", { ... }) calls this op.
-// One execution path: Function → op_execute_tool → ToolExecutor → Composio.
-
-#[deno_core::op2(async)]
-#[serde]
-pub async fn op_execute_tool(
-    state: Rc<RefCell<OpState>>,
-    #[string] tool_name: String,
-    #[serde] input: serde_json::Value,
-) -> Result<serde_json::Value, std::io::Error> {
-    // Clone state before await boundary (Rc<RefCell> cannot cross await)
-    let (api_key, entity_id) = {
-        let s = state.borrow();
-        let ts = s.borrow::<ToolOpState>();
-        (ts.api_key.clone(), ts.entity_id.clone())
-    };
-
-    let registry = ToolRegistry::new();
-    let (composio_action, app_name) = registry.resolve_action_with_app(&tool_name);
-    let start = std::time::Instant::now();
-
-    let api_key_str = api_key.as_deref().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "tools_not_configured: Composio integration is not available on this runtime",
-        )
-    })?;
-
-    let result = composio::execute_action(api_key_str, &entity_id, &composio_action, app_name.as_deref(), input)
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-    let duration_ms = start.elapsed().as_millis() as u64;
-    let mut response = serde_json::json!({
-        "_tool":        &tool_name,
-        "_duration_ms": duration_ms,
-        "_success":     true,
-    });
-    if let Some(data) = result.data {
-        if let serde_json::Value::Object(map) = data {
-            if let serde_json::Value::Object(ref mut resp_map) = response {
-                resp_map.extend(map);
-            }
-        }
-    }
-    Ok(response)
-}
 
 // ── Agent LLM op ──────────────────────────────────────────────────────────────
 //
@@ -94,11 +41,11 @@ pub async fn op_agent_llm_call(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
-/// Build the Fluxbase runtime extension — tools + agent ops.
+/// Build the Fluxbase runtime extension — agent ops.
 pub fn build_fluxbase_extension() -> Extension {
     Extension {
         name: "fluxbase",
-        ops: Cow::Owned(vec![op_execute_tool(), op_agent_llm_call()]),
+        ops: Cow::Owned(vec![op_agent_llm_call()]),
         ..Default::default()
     }
 }
@@ -146,8 +93,6 @@ pub fn create_js_runtime() -> JsRuntime {
 }
 
 /// Build the JS IIFE wrapper that injects FluxContext and executes the bundle.
-/// Extracted so both `execute_with_runtime` (warm path) and `execute_function`
-/// (cold path / fallback) produce identical sandboxes.
 fn build_wrapper(
     secrets_json:     &str,
     payload_json:     &str,
@@ -230,43 +175,10 @@ fn build_wrapper(
                     }});
                 }},
 
-                // ── Tools — 900+ app integrations ─────────────────────
-                // ctx.tools.run("slack.send_message", input)
-                // Each call emits a trace span: tool:slack.send_message 45ms
+                // ── Tools ─────────────────────────────────────────────
                 tools: {{
-                    run: async (toolName, input) => {{
-                        const _start = Date.now();
-                        try {{
-                            const result = await Deno.core.ops.op_execute_tool(
-                                toolName,
-                                input || {{}}
-                            );
-                            const duration = result._duration_ms || (Date.now() - _start);
-                            __fluxbase_logs.push({{
-                                level:           "info",
-                                message:         `tool:${{toolName}}  ${{duration}}ms`,
-                                span_type:       "tool",
-                                source:          "tool",
-                                duration_ms:     duration,
-                                tool_name:       toolName,
-                                execution_state: "completed",
-                            }});
-                            // Strip internal metadata before returning to user
-                            const {{ _tool, _duration_ms, _success, ...data }} = result;
-                            return data;
-                        }} catch (e) {{
-                            const duration = Date.now() - _start;
-                            __fluxbase_logs.push({{
-                                level:           "error",
-                                message:         `tool:${{toolName}}  failed (${{duration}}ms): ${{e.message}}`,
-                                span_type:       "tool",
-                                source:          "tool",
-                                duration_ms:     duration,
-                                tool_name:       toolName,
-                                execution_state: "error",
-                            }});
-                            throw new Error(`tool:${{toolName}} failed: ${{e.message}}`);
-                        }}
+                    run: async () => {{
+                        throw new Error("ctx.tools is not available in this runtime");
                     }},
                 }},
 
@@ -491,15 +403,9 @@ pub async fn execute_with_runtime(
 ) -> Result<ExecutionResult, String> {
     // ── Per-request OpState injection ─────────────────────────────────────────
     // Use try_take + put to handle both the first call and subsequent reuse.
-    let composio_api_key = std::env::var("COMPOSIO_API_KEY").ok();
-    let entity_id = std::env::var("COMPOSIO_ENTITY_ID")
-        .unwrap_or_else(|_| "default".to_string());
-
     {
         let op_state = rt.op_state();
         let mut state = op_state.borrow_mut();
-        let _ = state.try_take::<ToolOpState>();
-        state.put(ToolOpState { api_key: composio_api_key, entity_id: entity_id.clone() });
 
         let llm_key   = secrets.get("FLUXBASE_LLM_KEY").cloned();
         let llm_url   = secrets.get("FLUXBASE_LLM_URL").cloned()
@@ -510,7 +416,7 @@ pub async fn execute_with_runtime(
         state.put(AgentOpState { llm_key, llm_url, llm_model });
     }
 
-    // ── Build + execute the IIFE wrapper (identical to execute_function) ──────
+    // ── Build + execute the IIFE wrapper ───────────────────────────────────
     let secrets_json     = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
     let payload_json     = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
     let transformed_code = code;
@@ -546,93 +452,5 @@ pub async fn execute_with_runtime(
         }
         Ok(Err(e)) => Err(e),
         Err(_)     => Err("Function execution timed out after 30 seconds".to_string()),
-    }
-}
-
-pub async fn execute_function(
-    code:           String,
-    secrets:        HashMap<String, String>,
-    payload:        serde_json::Value,
-    execution_seed: i64,
-) -> Result<ExecutionResult, String> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-
-    let composio_api_key = std::env::var("COMPOSIO_API_KEY").ok();
-    let entity_id = std::env::var("COMPOSIO_ENTITY_ID")
-        .unwrap_or_else(|_| "default".to_string());
-
-    std::thread::spawn(move || {
-        let tokio_rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let result = tokio_rt.block_on(async move {
-            // Initialize Deno with the tools + agent extension registered
-            let ext = build_fluxbase_extension();
-            let mut rt = JsRuntime::new(RuntimeOptions {
-                extensions: vec![ext],
-                ..Default::default()
-            });
-
-            // Inject tool state so op_execute_tool can read it
-            rt.op_state().borrow_mut().put(ToolOpState {
-                api_key:   composio_api_key,
-                entity_id: entity_id.clone(),
-            });
-
-            // Inject agent LLM state so op_agent_llm_call can read it
-            let llm_key   = secrets.get("FLUXBASE_LLM_KEY").cloned();
-            let llm_url   = secrets
-                .get("FLUXBASE_LLM_URL")
-                .cloned()
-                .unwrap_or_else(|| "https://api.openai.com/v1/chat/completions".to_string());
-            let llm_model = secrets
-                .get("FLUXBASE_LLM_MODEL")
-                .cloned()
-                .unwrap_or_else(|| "gpt-4o-mini".to_string());
-            rt.op_state().borrow_mut().put(AgentOpState { llm_key, llm_url, llm_model });
-
-            let secrets_json = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
-            let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-            let wrapper = build_wrapper(&secrets_json, &payload_json, &code, execution_seed);
-
-            let res = timeout(Duration::from_secs(30), async {
-                let res = rt.execute_script("<anon>", wrapper)
-                    .map_err(|e| format!("Execution error: {}", e))?;
-
-                let resolved_future = rt.resolve(res);
-                let resolved = rt.with_event_loop_promise(resolved_future, Default::default()).await
-                    .map_err(|e| format!("Promise resolution error: {}", e))?;
-
-                let mut scope = rt.handle_scope();
-                let local     = deno_core::v8::Local::new(&mut scope, resolved);
-
-                let json_val = deno_core::serde_v8::from_v8::<serde_json::Value>(&mut scope, local)
-                    .map_err(|e| format!("Serialization error: {}", e))?;
-
-                Ok(json_val)
-            }).await;
-
-            match res {
-                Ok(Ok(val)) => {
-                    let output = val.get("result").cloned().unwrap_or(val.clone());
-                    let logs: Vec<LogLine> = val.get("logs")
-                        .and_then(|l| serde_json::from_value(l.clone()).ok())
-                        .unwrap_or_default();
-                    Ok(ExecutionResult { output, logs })
-                }
-                Ok(Err(e)) => Err(e),
-                Err(_)     => Err("Function execution timed out after 30 seconds".to_string()),
-            }
-        });
-
-        let _ = tx.send(result);
-    });
-
-    match timeout(Duration::from_secs(32), rx).await {
-        Ok(Ok(val)) => val,
-        Ok(Err(_))  => Err("Thread execution channel dropped".to_string()),
-        Err(_)      => Err("Thread execution timed out".to_string()),
     }
 }

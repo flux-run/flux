@@ -5,7 +5,6 @@ mod schema;
 mod bundle;
 mod secrets;
 mod engine;
-mod tools;
 mod agent;
 
 use std::sync::Arc;

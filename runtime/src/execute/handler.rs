@@ -52,7 +52,6 @@ pub async fn execute_handler(
         execution_seed,
         request_id:     request_id.clone(),
         parent_span_id: parent_span_id.clone(),
-        runtime_hint:   runtime_hint.clone(),
     };
 
     let log_url = format!("{}/internal/logs", state.api_url);
@@ -99,7 +98,7 @@ pub async fn execute_handler(
             tracer.post_event("debug", "bundle cache hit — skipping fetch".into());
             tracer.code_sha = Some(bundle_sha(cached_code.as_bytes()));
             let secrets = match fetch_secrets(&state, ctx.project_id).await { Ok(s) => s, Err(r) => return r };
-            return runner.run(ResolvedBundle::Deno { code: cached_code, deployment_id: None }, secrets, &ctx, &tracer, start).await;
+            return runner.run(ResolvedBundle::Deno { code: cached_code }, secrets, &ctx, &tracer, start).await;
         }
     }
 

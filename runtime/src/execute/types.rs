@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -15,13 +15,6 @@ pub struct ExecuteRequest {
     pub execution_seed: Option<i64>,
 }
 
-/// Outbound response to the Gateway.
-#[derive(Serialize)]
-pub struct ExecuteResponse {
-    pub result:      Value,
-    pub duration_ms: u64,
-}
-
 /// Per-request context threaded through every layer of the execute pipeline.
 /// Derived once from the HTTP request; never mutated after construction.
 #[derive(Clone)]
@@ -34,6 +27,4 @@ pub struct InvocationCtx {
     pub request_id:     Option<String>,
     /// Forwarded `x-parent-span-id` header — links to the Gateway span.
     pub parent_span_id: Option<String>,
-    /// "deno" | "wasm" | "" — forwarded from `X-Function-Runtime` by the gateway.
-    pub runtime_hint:   String,
 }

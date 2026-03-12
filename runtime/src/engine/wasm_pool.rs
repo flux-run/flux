@@ -138,10 +138,8 @@ impl WasmPool {
 
         // ── Execute on a blocking thread ──────────────────────────────────
         let params = WasmExecutionParams {
-            bytes,
             secrets,
             payload,
-            function_id,
             fuel_limit:          fuel_limit.unwrap_or(1_000_000_000),
             allowed_http_hosts,
             http_client:         Some(http_client),
