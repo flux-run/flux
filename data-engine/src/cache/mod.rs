@@ -1,27 +1,30 @@
-//! Two-layer query plan cache.
-//!
-//! **Layer 1 — Schema cache**
-//! Caches `(col_meta, relationships)` per `(tenant, project, schema, table)`.
-//! Eliminates two DB round-trips on the hot read path.
-//! TTL: 60 s; explicitly invalidated on DDL mutations.
-//!
-//! **Layer 2 — Plan cache**
-//! Caches the compiled SQL template for SELECT queries, keyed by request shape
-//! + policy fingerprint.  On a cache hit the caller rebuilds the bind parameters
-//! directly from the request (O(n) walk of the filter list) instead of running
-//! the full compiler pipeline.
-//! TTL: 300 s; invalidated together with Layer 1.
-//!
-//! ## Why this matters
-//!
-//! Each `POST /db/query` would otherwise pay:
-//!   1. `TransformEngine::load_columns`   — 1 DB round-trip
-//!   2. `load_relationships`              — 1 DB round-trip
-//!   3. `QueryCompiler::compile`          — CPU: parse selectors, resolve cols,
-//!                                          expand lateral subqueries, build WHERE
-//!
-//! With both caches warm, steps 1-2 become an in-memory HashMap lookup and
-//! step 3 becomes a filter-list walk to collect bind values.
+pub mod manager;
+pub use manager::CacheManager;
+
+// ─── Two-layer query plan cache ───────────────────────────────────────────────
+//
+// Layer 1 — Schema cache
+//   Caches (col_meta, relationships) per (tenant, project, schema, table).
+//   Eliminates two DB round-trips on the hot read path.
+//   TTL: 60 s; explicitly invalidated on DDL mutations.
+//
+// **Layer 2 — Plan cache**
+// Caches the compiled SQL template for SELECT queries, keyed by request shape
+// + policy fingerprint.  On a cache hit the caller rebuilds the bind parameters
+// directly from the request (O(n) walk of the filter list) instead of running
+// the full compiler pipeline.
+// TTL: 300 s; invalidated together with Layer 1.
+//
+// ## Why this matters
+//
+// Each `POST /db/query` would otherwise pay:
+//   1. `TransformEngine::load_columns`   — 1 DB round-trip
+//   2. `load_relationships`              — 1 DB round-trip
+//   3. `QueryCompiler::compile`          — CPU: parse selectors, resolve cols,
+//                                          expand lateral subqueries, build WHERE
+//
+// With both caches warm, steps 1-2 become an in-memory HashMap lookup and
+// step 3 becomes a filter-list walk to collect bind values.
 
 use std::time::Duration;
 

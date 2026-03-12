@@ -32,8 +32,8 @@ pub async fn handler(
             "timeout_ms":      state.query_guard.timeout.as_millis() as u64,
         },
         "cache": {
-            "schema_entries": state.schema_cache.entry_count(),
-            "plan_entries":   state.plan_cache.entry_count(),
+            "schema_entries": state.cache.schema_cache.entry_count(),
+            "plan_entries":   state.cache.plan_cache.entry_count(),
         },
         "version": env!("CARGO_PKG_VERSION"),
     })))

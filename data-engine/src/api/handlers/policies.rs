@@ -103,8 +103,8 @@ pub async fn create(
     let id: Uuid = row.get("id");
 
     // Invalidate policy cache + plan cache (plans embed policy fingerprint).
-    state.invalidate_policy_cache(auth.tenant_id, auth.project_id).await;
-    state.invalidate_tenant_schema(auth.tenant_id, auth.project_id).await;
+    state.cache.invalidate_policy(auth.tenant_id, auth.project_id).await;
+    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
 
     Ok(Json(json!({
         "id":     id,
@@ -138,8 +138,8 @@ pub async fn delete(
     }
 
     // Invalidate policy cache + plan cache (plans embed policy fingerprint).
-    state.invalidate_policy_cache(auth.tenant_id, auth.project_id).await;
-    state.invalidate_tenant_schema(auth.tenant_id, auth.project_id).await;
+    state.cache.invalidate_policy(auth.tenant_id, auth.project_id).await;
+    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
 
     Ok(Json(json!({ "id": id, "status": "deleted" })))
 }

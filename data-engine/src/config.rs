@@ -1,5 +1,4 @@
 use dotenvy::dotenv;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub struct Config {
     pub database_url: String,
@@ -83,13 +82,7 @@ pub fn load() -> Config {
     }
 }
 
+/// Load `.env` file if present. Must be called before `load()`.
 pub fn init() {
     dotenv().ok();
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "data_engine=debug,tower_http=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
 }

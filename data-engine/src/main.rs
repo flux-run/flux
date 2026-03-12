@@ -13,6 +13,7 @@ mod policy;
 mod query_guard;
 mod router;
 mod state;
+mod telemetry;
 mod transform;
 mod workflow;
 
@@ -20,7 +21,8 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    config::init();
+    config::init();    // loads .env
+    telemetry::init(); // sets up tracing subscriber
     let cfg = config::load();
 
     tracing::info!("connecting to database...");

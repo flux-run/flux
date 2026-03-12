@@ -100,7 +100,7 @@ pub async fn create(
     .map_err(EngineError::Db)?;
 
     let id: Uuid = row.get("id");
-    state.invalidate_tenant_schema(auth.tenant_id, auth.project_id).await;
+    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
     Ok(Json(json!({ "id": id, "status": "created" })))
 }
 
@@ -136,7 +136,8 @@ pub async fn update(
     if affected == 0 {
         return Err(EngineError::DatabaseNotFound(format!("hook {}", id)));
     }
-    state.invalidate_tenant_schema(auth.tenant_id, auth.project_id).await;    Ok(Json(json!({ "id": id, "enabled": body.enabled })))
+    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
+    Ok(Json(json!({ "id": id, "enabled": body.enabled })))
 }
 
 // ─── DELETE /db/hooks/:id ─────────────────────────────────────────────────────
@@ -164,6 +165,6 @@ pub async fn delete(
         return Err(EngineError::DatabaseNotFound(format!("hook {}", id)));
     }
 
-    state.invalidate_tenant_schema(auth.tenant_id, auth.project_id).await;
+    state.cache.invalidate_tenant(auth.tenant_id, auth.project_id);
     Ok(Json(json!({ "id": id, "status": "deleted" })))
 }

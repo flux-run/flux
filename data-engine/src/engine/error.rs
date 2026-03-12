@@ -38,18 +38,33 @@ pub enum EngineError {
 }
 
 impl EngineError {
+    /// Machine-readable error code string used in API responses (framework §12).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::AccessDenied { .. }      => "ACCESS_DENIED",
+            Self::InvalidIdentifier(_)     => "INVALID_IDENTIFIER",
+            Self::DatabaseNotFound(_)      => "NOT_FOUND",
+            Self::UnsupportedOperation(_)  => "UNSUPPORTED_OPERATION",
+            Self::MissingField(_)          => "MISSING_FIELD",
+            Self::QueryTooComplex { .. }   => "QUERY_TOO_COMPLEX",
+            Self::NestDepthExceeded { .. } => "NEST_DEPTH_EXCEEDED",
+            Self::QueryTimeout             => "TIMEOUT",
+            Self::Db(_) | Self::Internal(_) => "INTERNAL_ERROR",
+        }
+    }
+
     pub fn status(&self) -> axum::http::StatusCode {
         use axum::http::StatusCode;
         match self {
-            Self::AccessDenied { .. }        => StatusCode::FORBIDDEN,
-            Self::InvalidIdentifier(_)         => StatusCode::BAD_REQUEST,
-            Self::DatabaseNotFound(_)          => StatusCode::NOT_FOUND,
-            Self::UnsupportedOperation(_)      => StatusCode::BAD_REQUEST,
-            Self::MissingField(_)              => StatusCode::BAD_REQUEST,
-            Self::QueryTooComplex { .. }       => StatusCode::BAD_REQUEST,
-            Self::NestDepthExceeded { .. }     => StatusCode::BAD_REQUEST,
-            Self::QueryTimeout                 => StatusCode::REQUEST_TIMEOUT,
-            Self::Db(_) | Self::Internal(_)    => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::AccessDenied { .. }       => StatusCode::FORBIDDEN,
+            Self::InvalidIdentifier(_)      => StatusCode::BAD_REQUEST,
+            Self::DatabaseNotFound(_)       => StatusCode::NOT_FOUND,
+            Self::UnsupportedOperation(_)   => StatusCode::BAD_REQUEST,
+            Self::MissingField(_)           => StatusCode::BAD_REQUEST,
+            Self::QueryTooComplex { .. }    => StatusCode::BAD_REQUEST,
+            Self::NestDepthExceeded { .. }  => StatusCode::BAD_REQUEST,
+            Self::QueryTimeout              => StatusCode::REQUEST_TIMEOUT,
+            Self::Db(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -57,7 +72,12 @@ impl EngineError {
 impl axum::response::IntoResponse for EngineError {
     fn into_response(self) -> axum::response::Response {
         let status = self.status();
-        let body = serde_json::json!({ "error": self.to_string() });
+        // Framework §12: { "error": "CODE", "message": "human text", "code": 400 }
+        let body = serde_json::json!({
+            "error":   self.code(),
+            "message": self.to_string(),
+            "code":    status.as_u16(),
+        });
         (status, axum::Json(body)).into_response()
     }
 }

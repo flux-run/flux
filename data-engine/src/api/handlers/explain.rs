@@ -78,7 +78,7 @@ pub async fn handler(
         &auth,
         &req.table,
         &req.operation,
-        &state.policy_cache,
+        &state.cache.policy_cache,
     )
     .await?;
 
