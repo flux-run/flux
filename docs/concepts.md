@@ -265,11 +265,11 @@ Middleware is assigned in `flux.toml` or per-function in `flux.json`.
 
 ## Architecture
 
-`flux dev` starts 5 Rust services as one process:
+`flux dev` starts the full stack via Docker Compose (`flux stack up`):
 
 | Service | Port | Responsibility |
 |---|---|---|
-| Gateway | `:4000` | Routing, auth, rate limiting, trace roots |
+| Gateway | `:8081` | Routing, auth, rate limiting, trace roots |
 | Runtime | `:8083` | Deno V8 execution, secrets, tool dispatch |
 | API | `:8080` | Function registry, logs, schema management |
 | Data Engine | `:8082` | DB queries, mutation recording, hooks, cron |

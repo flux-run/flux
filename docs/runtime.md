@@ -20,7 +20,7 @@ handles bundle fetching, secrets injection, `ctx` object construction,
 structured logging, and execution trace emission.
 
 ```
-Gateway :4000
+Gateway :8081
      │  POST /execute
      ▼
 Runtime :8083
@@ -129,7 +129,7 @@ Precedence: `defineFunction()` > `flux.json` > `flux.toml [limits]`.
 | `CONTROL_PLANE_URL` | `http://localhost:8080` | API service for bundle + secrets |
 | `DATA_ENGINE_URL` | `http://localhost:8082` | Data Engine for DB operations |
 | `QUEUE_URL` | `http://localhost:8084` | Queue service |
-| `GATEWAY_URL` | `http://localhost:4000` | For `ctx.function.invoke()` |
+| `GATEWAY_URL` | `http://localhost:8081` | For `ctx.function.invoke()` |
 | `DATABASE_URL` | — | Postgres for execution record writes |
 | `INTERNAL_SERVICE_TOKEN` | — | Service-to-service auth |
 | `ISOLATE_POOL_SIZE` | `min(2 × CPU, 16)` | Number of V8 workers |
