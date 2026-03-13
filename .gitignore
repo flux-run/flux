@@ -31,3 +31,13 @@ Thumbs.db
 *.swp
 *.swo
 frontend/
+
+# ── Flux local state (per-project, never shared) ─────────────────────────────
+# Generated type stubs, embedded postgres data, dev port, manifest cache.
+# Recreated automatically by: flux dev, flux generate
+.flux/
+
+# ── Test / scratch functions (developer local only) ──────────────────────────
+# Real project functions live in functions/ and are committed.
+# test_functions/ is a local scratch pad — never deploy these.
+test_functions/
