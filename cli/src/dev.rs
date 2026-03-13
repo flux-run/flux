@@ -47,6 +47,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use colored::Colorize;
+use serde::Deserialize;
 use tokio::process::Command;
 use tokio::signal;
 
@@ -89,7 +90,10 @@ pub async fn execute() -> anyhow::Result<()> {
     // 4. Start Flux server
     let mut server = start_server(DEFAULT_SERVER_PORT, &database_url).await?;
 
-    // 5. Print banner
+    // 5. First-run: if no admin account exists, prompt to create one.
+    prompt_admin_setup_if_needed(DEFAULT_SERVER_PORT).await;
+
+    // 6. Print banner
     print_banner(DEFAULT_SERVER_PORT);
 
     // 6. Wait for Ctrl+C or server exit
@@ -304,6 +308,35 @@ async fn start_server(port: u16, database_url: &str) -> anyhow::Result<tokio::pr
     }
 
     Ok(child)
+}
+
+// ── First-run admin setup ─────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AuthStatus { user_count: u64 }
+
+/// After the server starts, silently check if any admin account exists.
+/// If not, print a one-time prompt so the developer can immediately log into
+/// the dashboard without having to remember a separate CLI command.
+async fn prompt_admin_setup_if_needed(port: u16) {
+    let base = format!("http://localhost:{}/flux/api", port);
+    let Ok(res) = reqwest::get(format!("{}/auth/status", base)).await else { return };
+    let Ok(status) = res.json::<AuthStatus>().await else { return };
+    if status.user_count > 0 { return; }   // already set up
+
+    println!();
+    println!("  {} No admin account found.", "→".cyan().bold());
+    println!("  Run {} to create one and open the dashboard:", "flux login".cyan().bold());
+    println!("  Or call: {} to do it now? [y/N] ", "admin setup".cyan());
+
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_ok() && line.trim().eq_ignore_ascii_case("y") {
+        if let Err(e) = crate::auth::execute().await {
+            println!("  {} {}", "✗".red(), e);
+        }
+    } else {
+        println!("  Run {} whenever you're ready.\n", "flux login".cyan().bold());
+    }
 }
 
 // ── Banner ────────────────────────────────────────────────────────────────────

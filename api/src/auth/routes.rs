@@ -164,3 +164,16 @@ fn require_admin(claims: &super::models::Claims) -> Result<(), ApiError> {
         Ok(())
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /auth/status  — public, returns user_count so CLI can detect first-run
+// ─────────────────────────────────────────────────────────────────────────────
+pub async fn status(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let count = service::count_users(&state.pool).await?;
+    Ok(Json(json!({
+        "setup_complete": count > 0,
+        "user_count": count,
+    })))
+}

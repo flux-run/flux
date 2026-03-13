@@ -196,6 +196,7 @@ pub fn create_app(state: AppState) -> Router {
 
     // ── Auth: public routes (no require_auth guard) ───────────────────────
     let auth = Router::new()
+        .route("/auth/status",         get(auth::routes::status))
         .route("/auth/setup",          post(auth::routes::setup))
         .route("/auth/login",          post(auth::routes::login))
         .route("/auth/logout",         post(auth::routes::logout))

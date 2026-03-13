@@ -118,8 +118,12 @@ enum BugCommands {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Authenticate with Fluxbase
+    /// Login to the Flux dashboard (prompts for email + password).
+    /// On first run, creates the initial admin account.
     Login,
+    /// Create the initial admin account (alias for `flux login` on first run).
+    #[command(name = "admin-setup", visible_alias = "setup")]
+    AdminSetup,
     /// Show the current authenticated identity
     Whoami,
 
@@ -702,8 +706,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        Commands::Login   => auth::execute().await?,
-        Commands::Whoami  => whoami::execute().await?,
+        Commands::Login        => auth::execute().await?,
+        Commands::AdminSetup   => auth::execute().await?,
+        Commands::Whoami       => whoami::execute().await?,
 
         Commands::Tenant  { command } => tenant::execute(command).await?,
         Commands::Project { command } => projects::execute(command).await?,
