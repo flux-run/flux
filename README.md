@@ -1,13 +1,12 @@
 # Flux
 
-Flux is a source-available backend runtime where every execution is a record.
+Flux is an open-source backend runtime where every execution is a record.
 
 It combines functions, HTTP routing, database access, queues, schedules, agents, secrets, and a debugging CLI into one system. The product goal is not "more backend features." The product goal is to make production debugging deterministic because Flux owns the execution path.
 
-Flux is source-available. You can use, modify, and redistribute the software,
-but you may not offer it as a hosted or managed service, and you may not use
-the Flux brand without permission. See [LICENSE](LICENSE) and
-[TRADEMARKS.md](TRADEMARKS.md).
+Flux is open source under Apache 2.0. You can use, modify, self-host, and
+redistribute the software. The Flux brand, name, and logos are not part of the
+code license. See [LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).
 
 ## Why Flux Exists
 
@@ -116,7 +115,7 @@ See [docs/single-binary-architecture.md](docs/single-binary-architecture.md) for
 
 ## Open Source Direction
 
-Flux is a source-available backend runtime for teams that want:
+Flux is an open-source backend runtime for teams that want:
 
 - full control over runtime and data
 - a simpler local-to-production mental model

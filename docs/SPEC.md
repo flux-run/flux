@@ -1,10 +1,10 @@
 # Flux Product Spec
 
-This document defines the product shape of Flux as a backend runtime and source-available project.
+This document defines the product shape of Flux as a backend runtime and open-source project.
 
 ## Product Summary
 
-Flux is a source-available backend runtime for teams that want a complete backend system and materially better production debugging.
+Flux is an open-source backend runtime for teams that want a complete backend system and materially better production debugging.
 
 Flux includes:
 

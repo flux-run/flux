@@ -65,7 +65,7 @@ Retention is documented and operator-visible, not buried in infrastructure defau
 
 ## Backup And Recovery
 
-As a source-available runtime, Flux documents backup expectations for:
+As an open-source runtime, Flux documents backup expectations for:
 
 - Postgres data
 - bundle artifacts
