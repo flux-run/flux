@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useStore } from '@/state/tenantStore'
 import { apiFetch } from '@/lib/api'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -471,17 +472,21 @@ await fb.db.${table || 'users'}.update({ id: rowId, ${column || 'avatar'}: key }
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function StoragePage() {
+  const { projectId, projectName } = useStore()
   const [tab, setTab] = useState<'provider' | 'tester'>('provider')
 
   return (
     <div className="flex flex-col h-full overflow-auto">
-      <div className="px-6 pt-6 pb-0 shrink-0">
-        <div className="mb-4">
-          <h1 className="text-xl font-semibold tracking-tight">Storage</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Connect your own S3-compatible bucket or use Fluxbase-managed storage.
-          </p>
-        </div>
+      <PageHeader
+        title="Storage"
+        description="Connect your own S3-compatible bucket or use Fluxbase-managed storage"
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Storage' },
+        ]}
+      />
+      <div className="px-6 pt-4 pb-0 shrink-0">
         <div className="flex gap-0 border-b border-white/8">
           <Tab label="Storage Provider" active={tab === 'provider'} onClick={() => setTab('provider')} />
           <Tab label="URL Tester"       active={tab === 'tester'}   onClick={() => setTab('tester')} />

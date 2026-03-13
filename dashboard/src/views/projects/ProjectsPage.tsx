@@ -21,6 +21,7 @@ import {
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from '@/components/ui/card'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 interface Project { id: string; name: string }
 
@@ -67,20 +68,20 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold">Projects</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {projects.length} project{projects.length !== 1 ? 's' : ''} in this tenant
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)} disabled={!tenantId}>
-          <Plus className="w-4 h-4" />
-          New project
-        </Button>
-      </div>
+    <div className="flex flex-col h-full">
+      <PageHeader
+        title="Projects"
+        description={tenantId ? `${projects.length} project${projects.length !== 1 ? 's' : ''} in this workspace` : 'Select a tenant to view projects'}
+        actions={
+          tenantId && (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="w-3.5 h-3.5" /> New project
+            </Button>
+          )
+        }
+      />
+      <div className="flex-1 overflow-y-auto">
+        <div className="p-6 max-w-5xl mx-auto">
 
       {!tenantId && (
         <div className="rounded-xl border border-dashed p-10 text-center text-muted-foreground">
@@ -319,6 +320,8 @@ export default function ProjectsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+        </div>
+      </div>
     </div>
   )
 }

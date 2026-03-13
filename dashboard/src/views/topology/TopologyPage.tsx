@@ -4,6 +4,7 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useStore } from '@/state/tenantStore'
 import { apiFetch } from '@/lib/api'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { useRouter } from 'next/navigation'
@@ -117,7 +118,7 @@ function EmptyTier({ message }: { message: string }) {
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function TopologyPage() {
-  const { projectId } = useStore()
+  const { projectId, projectName } = useStore()
   const router = useRouter()
   const pid = projectId
 
@@ -160,14 +161,17 @@ export default function TopologyPage() {
   const nav = (seg: string) => pid && router.push(`/dashboard/projects/${pid}/${seg}`)
 
   return (
-    <div className="flex flex-col h-full overflow-auto px-6 py-6 gap-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">System Topology</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Live view of your project's architecture — click any node to navigate.
-        </p>
-      </div>
+    <div className="flex flex-col h-full overflow-auto">
+      <PageHeader
+        title="System Topology"
+        description="Live view of your project's architecture — click any node to navigate"
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Topology' },
+        ]}
+      />
+      <div className="px-6 py-6 flex flex-col gap-6">
 
       {isLoading ? (
         <div className="grid gap-4">
@@ -352,6 +356,7 @@ export default function TopologyPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

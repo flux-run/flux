@@ -12,11 +12,12 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 interface Secret { id: string; key: string; scope: string; created_at: string }
 
 export default function SecretsPage() {
-  const { projectId } = useStore()
+  const { projectId, projectName } = useStore()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [key, setKey] = useState('')
@@ -51,18 +52,23 @@ export default function SecretsPage() {
   const secrets = data?.secrets ?? []
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold">Secrets</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Environment variables injected at runtime. Values are never shown after creation.
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="w-4 h-4" /> Add secret
-        </Button>
-      </div>
+    <div className="flex flex-col h-full">
+      <PageHeader
+        title="Secrets"
+        description={secrets.length > 0 ? `${secrets.length} secret${secrets.length !== 1 ? 's' : ''}` : 'Environment variables injected at runtime'}
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Secrets' },
+        ]}
+        actions={
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="w-3.5 h-3.5" /> Add secret
+          </Button>
+        }
+      />
+      <div className="flex-1 overflow-y-auto">
+      <div className="p-6 max-w-4xl mx-auto">
 
       {isLoading ? (
         <div className="space-y-2">
@@ -165,6 +171,8 @@ export default function SecretsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
+      </div>
     </div>
   )
 }

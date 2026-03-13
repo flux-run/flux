@@ -10,6 +10,7 @@ import {
 } from '@tanstack/react-table'
 import { apiFetch, gatewayFetch } from '@/lib/api'
 import { useStore } from '@/state/tenantStore'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -301,7 +302,7 @@ function ResultTable({ rows, onExpand }: { rows: Record<string, unknown>[]; onEx
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function QueryExplorerPage() {
-  const { projectId } = useStore()
+  const { projectId, projectName } = useStore()
 
   /* Selectors */
   const [database, setDatabase] = useState('')
@@ -440,7 +441,17 @@ export default function QueryExplorerPage() {
   const canExecute = !!database && !!table && !executeMutation.isPending
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
+      <PageHeader
+        title="Query Explorer"
+        description="Build and run queries against your data engine visually"
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Query' },
+        ]}
+      />
+      <div className="flex flex-1 overflow-hidden">
       {/* Left panel — Query builder */}
       <aside className="w-72 shrink-0 flex flex-col border-r border-white/5 overflow-y-auto bg-background/40">
         <div className="px-4 pt-5 pb-3">
@@ -800,6 +811,7 @@ export default function QueryExplorerPage() {
       {expandedJson !== null && (
         <JsonExpandDialog value={expandedJson} onClose={() => setExpandedJson(null)} />
       )}
+      </div>
     </div>
   )
 }

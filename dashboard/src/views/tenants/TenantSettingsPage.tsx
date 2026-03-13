@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Separator } from '@/components/ui/separator'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 interface Member { user_id: string; email: string; role: string }
 
@@ -60,9 +61,14 @@ export default function TenantSettingsPage() {
   const members = data?.members ?? []
 
   return (
-    <div className="p-8 max-w-3xl mx-auto">
-      <h1 className="text-2xl font-bold mb-1">Tenant Settings</h1>
-      <p className="text-sm text-muted-foreground mb-8">{tenantName}</p>
+    <div className="flex flex-col h-full">
+      <PageHeader
+        title="Tenant Settings"
+        description={tenantName ?? 'Manage your workspace'}
+        breadcrumbs={[{ label: 'Dashboard', href: '/dashboard' }, { label: 'Tenant Settings' }]}
+      />
+      <div className="flex-1 overflow-y-auto">
+      <div className="p-6 max-w-3xl mx-auto">
 
       {/* Tenant Info */}
       <section className="mb-8">
@@ -204,6 +210,8 @@ export default function TenantSettingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
+      </div>
     </div>
   )
 }

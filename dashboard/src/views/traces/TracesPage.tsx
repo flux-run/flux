@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useStore } from '@/state/tenantStore'
 import { apiFetch } from '@/lib/api'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -232,7 +233,7 @@ function TraceDrawer({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function TracesPage() {
-  const { projectId } = useStore()
+  const { projectId, projectName } = useStore()
   const [limit, setLimit] = useState('50')
   const [filter, setFilter] = useState('all')
   const [selected, setSelected] = useState<LogEntry | null>(null)
@@ -277,36 +278,30 @@ export default function TracesPage() {
   }, [])
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
+      <PageHeader
+        title="Execution Timeline"
+        description="Live execution stream — click any row to inspect the trace"
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Traces' },
+        ]}
+        actions={
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+            onClick={() => refetch()}
+            disabled={isFetching}
+          >
+            <RefreshCw className={cn('w-3.5 h-3.5', isFetching && 'animate-spin')} />
+            Refresh
+          </Button>
+        }
+      />
       {/* Main panel */}
-      <div className={cn('flex flex-col flex-1 overflow-hidden transition-all', selected && 'border-r border-white/5')}>
-        {/* Header */}
-        <div className="px-6 pt-6 pb-4 shrink-0">
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-semibold tracking-tight">Execution Timeline</h1>
-              {!isFetching && logs.length > 0 && (
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute h-full w-full rounded-full bg-emerald-400 opacity-60" />
-                  <span className="relative rounded-full h-2 w-2 bg-emerald-400" />
-                </span>
-              )}
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
-              onClick={() => refetch()}
-              disabled={isFetching}
-            >
-              <RefreshCw className={cn('w-3.5 h-3.5', isFetching && 'animate-spin')} />
-              Refresh
-            </Button>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Live execution stream — click any row to inspect the trace.
-          </p>
-        </div>
+      <div className={cn('flex flex-1 overflow-hidden transition-all', selected && 'border-r border-white/5')}>
 
         {/* Summary stats */}
         {allLogs.length > 0 && (

@@ -13,6 +13,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { PageHeader } from '@/components/layout/PageHeader'
+import { useStore } from '@/state/tenantStore'
 
 interface Subscription {
   id: string
@@ -32,6 +34,7 @@ const TARGET_COLOR: Record<string, string> = {
 
 export default function EventsPage() {
   const { projectId } = useParams() as any
+  const { projectName } = useStore()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({
@@ -71,18 +74,23 @@ export default function EventsPage() {
   const subs = data?.subscriptions ?? []
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold">Events</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Subscribe to database change events and route them to functions, webhooks, or queues
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="w-4 h-4 mr-1.5" /> New subscription
-        </Button>
-      </div>
+    <div className="flex flex-col h-full">
+      <PageHeader
+        title="Events"
+        description={subs.length > 0 ? `${subs.length} subscription${subs.length !== 1 ? 's' : ''}` : 'Database change event subscriptions'}
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Events' },
+        ]}
+        actions={
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="w-3.5 h-3.5" /> New subscription
+          </Button>
+        }
+      />
+      <div className="flex-1 overflow-y-auto">
+      <div className="p-6 max-w-5xl mx-auto">
 
       {isLoading ? (
         <div className="space-y-2">
@@ -190,6 +198,8 @@ export default function EventsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
+      </div>
     </div>
   )
 }

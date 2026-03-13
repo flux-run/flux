@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, XCircle, ExternalLink, Unplug } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useStore } from '@/state/tenantStore'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -83,7 +84,7 @@ function groupByProvider(tools: Tool[]): ProviderGroup[] {
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function IntegrationsPage() {
-  const { projectId } = useStore()
+  const { projectId, projectName } = useStore()
   const queryClient   = useQueryClient()
 
   const [disconnectTarget, setDisconnectTarget] = useState<string | null>(null)
@@ -123,18 +124,18 @@ export default function IntegrationsPage() {
   const connected = groups.filter(g => g.connected).length
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold">Integrations</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Connect external apps to use them in your functions with{' '}
-          <code className="font-mono bg-muted px-1 py-0.5 rounded text-xs">ctx.tools.run()</code>.
-          {connected > 0 && (
-            <span className="ml-2 text-green-600 font-medium">{connected} connected</span>
-          )}
-        </p>
-      </div>
+    <div className="flex flex-col h-full">
+      <PageHeader
+        title="Integrations"
+        description={connected > 0 ? `${connected} connected` : 'Connect external services to use them in your functions with ctx.tools.run()'}
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Integrations' },
+        ]}
+      />
+      <div className="flex-1 overflow-y-auto">
+      <div className="p-8 max-w-5xl mx-auto">
 
       {/* Grid */}
       {isLoading ? (
@@ -185,6 +186,8 @@ export default function IntegrationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
+      </div>
     </div>
   )
 }

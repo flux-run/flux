@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { useStore } from '@/state/tenantStore'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -349,15 +350,18 @@ function CronTab() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function LogsPage() {
+  const { projectId, projectName } = useStore()
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div className="px-6 pt-6 pb-4 shrink-0">
-        <h1 className="text-xl font-semibold tracking-tight">Logs Explorer</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Inspect function logs, monitor workflows, and track cron jobs.
-        </p>
-      </div>
+      <PageHeader
+        title="Logs"
+        description="Function logs, workflow runs, and cron executions"
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Logs' },
+        ]}
+      />
 
       {/* Tabs */}
       <Tabs defaultValue="functions" className="flex-1 flex flex-col overflow-hidden px-6 pb-4">

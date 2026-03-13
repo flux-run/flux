@@ -13,6 +13,8 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { apiFetch } from '@/lib/api'
+import { useStore } from '@/state/tenantStore'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 const AUTH_TYPES = [
@@ -23,6 +25,7 @@ const AUTH_TYPES = [
 
 export default function RoutesPage() {
   const { projectId } = useParams() as any
+  const { projectName } = useStore()
   const queryClient = useQueryClient()
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
@@ -171,17 +174,23 @@ export default function RoutesPage() {
   if (isLoading) return <div className="p-8 animate-pulse text-muted-foreground">Loading routes...</div>
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">API Routes</h1>
-          <p className="text-muted-foreground">Manage public HTTP endpoints for your functions.</p>
-        </div>
-        <Button className="gap-2" onClick={() => { resetForm(); setCreateOpen(true); }}>
-          <Plus className="w-4 h-4" />
-          Create Route
-        </Button>
-      </div>
+    <div className="flex flex-col h-full">
+      <PageHeader
+        title="API Routes"
+        description={routes && routes.length > 0 ? `${routes.length} route${routes.length !== 1 ? 's' : ''}` : 'Public HTTP endpoints mapped to functions'}
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Routes' },
+        ]}
+        actions={
+          <Button size="sm" className="gap-2" onClick={() => { resetForm(); setCreateOpen(true); }}>
+            <Plus className="w-3.5 h-3.5" /> Create route
+          </Button>
+        }
+      />
+      <div className="flex-1 overflow-y-auto">
+      <div className="p-6 space-y-6 max-w-6xl mx-auto">
 
       <Card>
         <CardContent className="p-0">
@@ -491,6 +500,8 @@ export default function RoutesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
+      </div>
     </div>
   )
 }

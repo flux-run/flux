@@ -13,6 +13,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { PageHeader } from '@/components/layout/PageHeader'
+import { useStore } from '@/state/tenantStore'
 
 interface CronJob {
   id: string
@@ -42,6 +44,7 @@ const PRESETS: { label: string; value: string }[] = [
 
 export default function CronPage() {
   const { projectId } = useParams() as any
+  const { projectName } = useStore()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [preset, setPreset] = useState('0 * * * *')
@@ -93,18 +96,23 @@ export default function CronPage() {
   const jobs = data?.cron ?? []
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold">Cron Jobs</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Scheduled functions and queue jobs on a cron expression
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="w-4 h-4 mr-1.5" /> New job
-        </Button>
-      </div>
+    <div className="flex flex-col h-full">
+      <PageHeader
+        title="Cron Jobs"
+        description={jobs.length > 0 ? `${jobs.length} scheduled` : 'Scheduled functions and queue jobs'}
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Cron' },
+        ]}
+        actions={
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="w-3.5 h-3.5" /> New job
+          </Button>
+        }
+      />
+      <div className="flex-1 overflow-y-auto">
+      <div className="p-6 max-w-5xl mx-auto">
 
       {isLoading ? (
         <div className="space-y-2">
@@ -239,6 +247,8 @@ export default function CronPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
+      </div>
     </div>
   )
 }

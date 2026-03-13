@@ -12,11 +12,12 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
+import { PageHeader } from '@/components/layout/PageHeader'
 
 interface ApiKey { id: string; name: string; created_at: string; last_used_at?: string }
 
 export default function ApiKeysPage() {
-  const { projectId } = useStore()
+  const { projectId, projectName } = useStore()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [showKeyDialog, setShowKeyDialog] = useState(false)
@@ -59,18 +60,23 @@ export default function ApiKeysPage() {
   const apiKeys = Array.isArray(data) ? data : []
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold">API Keys</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Used by the CLI and external services to authenticate against this project.
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="w-4 h-4" /> Create key
-        </Button>
-      </div>
+    <div className="flex flex-col h-full">
+      <PageHeader
+        title="API Keys"
+        description={apiKeys.length > 0 ? `${apiKeys.length} active key${apiKeys.length !== 1 ? 's' : ''}` : 'Service authentication keys for this project'}
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'API Keys' },
+        ]}
+        actions={
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="w-3.5 h-3.5" /> Create key
+          </Button>
+        }
+      />
+      <div className="flex-1 overflow-y-auto">
+      <div className="p-6 max-w-4xl mx-auto">
 
       {isLoading ? (
         <div className="space-y-2">
@@ -178,6 +184,8 @@ export default function ApiKeysPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
+      </div>
     </div>
   )
 }

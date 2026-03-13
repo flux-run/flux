@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useStore } from '@/state/tenantStore'
 import { apiFetch } from '@/lib/api'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -420,7 +421,7 @@ function RunRow({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function AgentsPage() {
-  const { projectId } = useStore()
+  const { projectId, projectName } = useStore()
   const [selectedRun, setSelectedRun] = useState<AgentRun | null>(null)
 
   const { data: wfData, isLoading: wfLoading, refetch, isFetching } = useQuery({
@@ -456,19 +457,18 @@ export default function AgentsPage() {
   }, [runs])
 
   return (
-    <div className="flex h-full overflow-hidden">
-      {/* Left panel */}
-      <div className={cn('flex flex-col overflow-hidden transition-all', selectedRun ? 'w-[420px] shrink-0 border-r border-white/5' : 'flex-1')}>
-        {/* Header */}
-        <div className="px-5 pt-6 pb-4 shrink-0">
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2">
-              <Brain className="w-5 h-5 text-[#a78bfa]" />
-              <h1 className="text-xl font-semibold tracking-tight">Agent Runs</h1>
-              <Badge variant="outline" className="text-[9px] h-4 px-1.5 bg-[#6c63ff]/10 text-[#a78bfa] border-[#6c63ff]/30 ml-1">
-                beta
-              </Badge>
-            </div>
+    <div className="flex flex-col h-full overflow-hidden">
+      <PageHeader
+        title="Agent Runs"
+        description="Full execution trace for every agent workflow — inputs, tool calls, mutations and errors"
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Agents' },
+        ]}
+        actions={
+          <>
+            <Badge variant="outline" className="text-[9px] h-5 px-1.5 bg-[#6c63ff]/10 text-[#a78bfa] border-[#6c63ff]/30">beta</Badge>
             <Button
               variant="ghost" size="sm"
               className="h-7 px-2 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
@@ -477,11 +477,12 @@ export default function AgentsPage() {
               <RefreshCw className={cn('w-3.5 h-3.5', isFetching && 'animate-spin')} />
               Refresh
             </Button>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Full execution trace for every agent workflow — inputs, tool calls, mutations and errors.
-          </p>
-        </div>
+          </>
+        }
+      />
+      <div className="flex flex-1 overflow-hidden">
+      {/* Left panel */}
+      <div className={cn('flex flex-col overflow-hidden transition-all', selectedRun ? 'w-[420px] shrink-0 border-r border-white/5' : 'flex-1')}>
 
         {/* Stat chips */}
         {runs.length > 0 && (
@@ -569,6 +570,7 @@ export default function AgentsPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

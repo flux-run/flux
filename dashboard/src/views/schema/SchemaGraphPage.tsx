@@ -21,6 +21,8 @@ import {
   AlertCircle, Table2, Zap,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import { useStore } from '@/state/tenantStore'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useState } from 'react'
@@ -192,6 +194,7 @@ function gridLayout(
 
 export default function SchemaGraphPage() {
   const { projectId } = useParams() as any
+  const { projectName } = useStore()
   const queryClient = useQueryClient()
   const [copied, setCopied] = useState(false)
 
@@ -231,67 +234,64 @@ export default function SchemaGraphPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
-        <div className="flex items-center gap-3">
-          <Share2 className="w-5 h-5 text-primary" />
-          <div>
-            <h1 className="text-lg font-semibold">Schema Graph</h1>
-            <p className="text-xs text-muted-foreground">
-              Live visual map of your tables, relationships, and functions
-            </p>
+      <PageHeader
+        title="Schema Graph"
+        description={data ? `${data.tables.length} tables · ${data.relationships.length} relationships · ${data.functions.length} functions` : 'Live visual map of your tables, relationships, and functions'}
+        breadcrumbs={[
+          { label: 'Projects', href: '/dashboard' },
+          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
+          { label: 'Schema' },
+        ]}
+        actions={
+          <div className="flex items-center gap-2">
+            {data && (
+              <Badge variant="outline" className="text-[10px] font-mono">
+                v{data.schema_version}
+              </Badge>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleCopyHash}
+              disabled={!data}
+              className="gap-1.5 text-xs h-8"
+            >
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? 'Copied!' : 'Copy hash'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDownloadOpenAPI}
+              disabled={!data}
+              className="gap-1.5 text-xs h-8"
+            >
+              <Download className="w-3.5 h-3.5" />
+              OpenAPI
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDownloadSDK}
+              disabled={!data}
+              className="gap-1.5 text-xs h-8"
+            >
+              <Download className="w-3.5 h-3.5" />
+              SDK (.ts)
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ['sdk-schema', projectId] })}
+              disabled={isLoading}
+              className="gap-1.5 text-xs h-8"
+            >
+              <RefreshCw className={cn('w-3.5 h-3.5', isLoading && 'animate-spin')} />
+              Refresh
+            </Button>
           </div>
-          {data && (
-            <Badge variant="outline" className="ml-2 text-[10px] font-mono">
-              v{data.schema_version}
-            </Badge>
-          )}
-        </div>
-
-        {/* Toolbar */}
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCopyHash}
-            disabled={!data}
-            className="gap-1.5 text-xs h-8"
-          >
-            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-            {copied ? 'Copied!' : 'Copy hash'}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDownloadOpenAPI}
-            disabled={!data}
-            className="gap-1.5 text-xs h-8"
-          >
-            <Download className="w-3.5 h-3.5" />
-            OpenAPI
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDownloadSDK}
-            disabled={!data}
-            className="gap-1.5 text-xs h-8"
-          >
-            <Download className="w-3.5 h-3.5" />
-            SDK (.ts)
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => queryClient.invalidateQueries({ queryKey: ['sdk-schema', projectId] })}
-            disabled={isLoading}
-            className="gap-1.5 text-xs h-8"
-          >
-            <RefreshCw className={cn('w-3.5 h-3.5', isLoading && 'animate-spin')} />
-            Refresh
-          </Button>
-        </div>
-      </div>
+        }
+      />
 
       {/* Canvas */}
       <div className="flex-1 relative">
