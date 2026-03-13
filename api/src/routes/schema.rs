@@ -9,6 +9,7 @@
 use axum::{
     extract::{Extension, Query, State},
     http::HeaderMap,
+    Json,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -163,5 +164,130 @@ pub async fn graph(
         "relationships": db_schema.get("relationships").cloned().unwrap_or(json!([])),
         "policies":      db_schema.get("policies").cloned().unwrap_or(json!([])),
         "functions":     functions,
+    })))
+}
+
+// ── push_schema ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SchemaManifest {
+    pub table: String,
+    pub file: Option<String>,
+    pub columns: serde_json::Value,
+    pub indexes: Option<serde_json::Value>,
+    pub foreign_keys: Option<serde_json::Value>,
+    pub rules: Option<serde_json::Value>,
+    pub hooks: Option<serde_json::Value>,
+    pub on: Option<serde_json::Value>,
+}
+
+pub async fn push_schema(
+    State(state): State<AppState>,
+    Json(manifest): Json<SchemaManifest>,
+) -> ApiResult<serde_json::Value> {
+    let tenant_id = state.local_tenant_id;
+    let project_id = state.local_project_id;
+
+    // Ensure schema_rules column exists
+    sqlx::query(
+        "ALTER TABLE fluxbase_internal.table_metadata \
+         ADD COLUMN IF NOT EXISTS schema_rules JSONB",
+    )
+    .execute(&state.pool)
+    .await
+    .map_err(|e| {
+        eprintln!("push_schema migrate error: {:?}", e);
+        ApiError::internal("migrate_error")
+    })?;
+
+    // Upsert table metadata
+    sqlx::query(
+        "INSERT INTO fluxbase_internal.table_metadata \
+         (tenant_id, project_id, schema_name, table_name, columns, schema_rules, updated_at) \
+         VALUES ($1, $2, 'public', $3, $4, $5, now()) \
+         ON CONFLICT (tenant_id, project_id, schema_name, table_name) \
+         DO UPDATE SET columns = EXCLUDED.columns, schema_rules = EXCLUDED.schema_rules, updated_at = now()",
+    )
+    .bind(tenant_id)
+    .bind(project_id)
+    .bind(&manifest.table)
+    .bind(&manifest.columns)
+    .bind(&manifest.rules)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| {
+        eprintln!("push_schema upsert error: {:?}", e);
+        ApiError::internal("upsert_error")
+    })?;
+
+    // Process hooks
+    if let Some(hooks_val) = &manifest.hooks {
+        if let Some(hooks_obj) = hooks_val.as_object() {
+            for (event_name, fn_arr) in hooks_obj {
+                if let Some(arr) = fn_arr.as_array() {
+                    for fn_item in arr {
+                        let fn_id_str = fn_item.as_str().unwrap_or_default();
+                        if let Ok(function_id) = uuid::Uuid::parse_str(fn_id_str) {
+                            sqlx::query(
+                                "INSERT INTO fluxbase_internal.hooks \
+                                 (tenant_id, project_id, table_name, event, function_id) \
+                                 VALUES ($1, $2, $3, $4, $5) \
+                                 ON CONFLICT (tenant_id, project_id, table_name, event) \
+                                 DO UPDATE SET function_id = EXCLUDED.function_id, enabled = true",
+                            )
+                            .bind(tenant_id)
+                            .bind(project_id)
+                            .bind(&manifest.table)
+                            .bind(event_name)
+                            .bind(function_id)
+                            .execute(&state.pool)
+                            .await
+                            .map_err(|e| {
+                                eprintln!("push_schema hook upsert error: {:?}", e);
+                                ApiError::internal("hook_upsert_error")
+                            })?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Process event subscriptions (on field)
+    if let Some(on_val) = &manifest.on {
+        if let Some(on_arr) = on_val.as_array() {
+            for item in on_arr {
+                let event_pattern = item
+                    .get("event_pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("*");
+                let target_config = item
+                    .get("target_config")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+
+                sqlx::query(
+                    "INSERT INTO fluxbase_internal.event_subscriptions \
+                     (tenant_id, project_id, event_pattern, target_type, target_config) \
+                     VALUES ($1, $2, $3, 'function', $4) \
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(tenant_id)
+                .bind(project_id)
+                .bind(event_pattern)
+                .bind(&target_config)
+                .execute(&state.pool)
+                .await
+                .map_err(|e| {
+                    eprintln!("push_schema subscription upsert error: {:?}", e);
+                    ApiError::internal("subscription_upsert_error")
+                })?;
+            }
+        }
+    }
+
+    Ok(ApiResponse::new(serde_json::json!({
+        "status": "applied",
+        "table": manifest.table,
     })))
 }

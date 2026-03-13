@@ -4,7 +4,7 @@ use axum::{
 };
 use crate::error::{ApiResponse, ApiError};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use crate::types::context::RequestContext;
 
@@ -191,6 +191,188 @@ pub async fn delete_gateway_route(
 
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("route_not_found"));
+    }
+
+    Ok(ApiResponse::new(serde_json::json!({ "success": true })))
+}
+
+// ── Gateway extras ─────────────────────────────────────────────────────────
+
+#[derive(sqlx::FromRow, Serialize)]
+pub struct RouteFullRow {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub path: String,
+    pub method: String,
+    pub function_id: Uuid,
+    pub is_async: bool,
+    pub auth_type: String,
+    pub cors_enabled: bool,
+    pub rate_limit: Option<i32>,
+    pub created_at: chrono::NaiveDateTime,
+    pub jwks_url: Option<String>,
+    pub jwt_audience: Option<String>,
+    pub jwt_issuer: Option<String>,
+    pub cors_origins: Option<Vec<String>>,
+    pub cors_headers: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+pub struct RateLimitPayload {
+    pub requests_per_second: i32,
+}
+
+#[derive(Deserialize)]
+pub struct CorsPayload {
+    pub origins: Vec<String>,
+    pub headers: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MiddlewareCreatePayload {
+    pub route_id: Uuid,
+    #[serde(rename = "type")]
+    pub middleware_type: String,
+    pub config: serde_json::Value,
+}
+
+pub async fn get_gateway_route_by_id(
+    Path(id): Path<Uuid>,
+    State(pool): State<PgPool>,
+    Extension(context): Extension<RequestContext>,
+) -> ApiResult<RouteFullRow> {
+    let project_id = context.project_id;
+    let row = sqlx::query_as::<_, RouteFullRow>(
+        "SELECT id, project_id, path, method, function_id, is_async, auth_type, cors_enabled, \
+         rate_limit, created_at, jwks_url, jwt_audience, jwt_issuer, cors_origins, cors_headers \
+         FROM routes WHERE id = $1 AND project_id = $2",
+    )
+    .bind(id)
+    .bind(project_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| ApiError::not_found("route_not_found"))?;
+
+    Ok(ApiResponse::new(row))
+}
+
+pub async fn set_rate_limit(
+    Path(id): Path<Uuid>,
+    State(pool): State<PgPool>,
+    Extension(context): Extension<RequestContext>,
+    Json(payload): Json<RateLimitPayload>,
+) -> ApiResult<serde_json::Value> {
+    sqlx::query("UPDATE routes SET rate_limit = $1 WHERE id = $2 AND project_id = $3")
+        .bind(payload.requests_per_second)
+        .bind(id)
+        .bind(context.project_id)
+        .execute(&pool)
+        .await
+        .map_err(db_err)?;
+
+    Ok(ApiResponse::new(serde_json::json!({ "success": true })))
+}
+
+pub async fn delete_rate_limit(
+    Path(id): Path<Uuid>,
+    State(pool): State<PgPool>,
+    Extension(context): Extension<RequestContext>,
+) -> ApiResult<serde_json::Value> {
+    sqlx::query("UPDATE routes SET rate_limit = NULL WHERE id = $1 AND project_id = $2")
+        .bind(id)
+        .bind(context.project_id)
+        .execute(&pool)
+        .await
+        .map_err(db_err)?;
+
+    Ok(ApiResponse::new(serde_json::json!({ "success": true })))
+}
+
+pub async fn get_cors(
+    Path(id): Path<Uuid>,
+    State(pool): State<PgPool>,
+    Extension(context): Extension<RequestContext>,
+) -> ApiResult<serde_json::Value> {
+    let row = sqlx::query("SELECT cors_origins, cors_headers FROM routes WHERE id = $1 AND project_id = $2")
+        .bind(id)
+        .bind(context.project_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| ApiError::not_found("route_not_found"))?;
+
+    let origins: Option<Vec<String>> = row.try_get("cors_origins").unwrap_or(None);
+    let headers: Option<Vec<String>> = row.try_get("cors_headers").unwrap_or(None);
+
+    Ok(ApiResponse::new(serde_json::json!({
+        "cors_origins": origins,
+        "cors_headers": headers,
+    })))
+}
+
+pub async fn set_cors(
+    Path(id): Path<Uuid>,
+    State(pool): State<PgPool>,
+    Extension(context): Extension<RequestContext>,
+    Json(payload): Json<CorsPayload>,
+) -> ApiResult<serde_json::Value> {
+    sqlx::query(
+        "UPDATE routes SET cors_origins = $1, cors_headers = $2 WHERE id = $3 AND project_id = $4",
+    )
+    .bind(&payload.origins)
+    .bind(&payload.headers)
+    .bind(id)
+    .bind(context.project_id)
+    .execute(&pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(ApiResponse::new(serde_json::json!({ "success": true })))
+}
+
+pub async fn create_middleware(
+    State(pool): State<PgPool>,
+    Extension(context): Extension<RequestContext>,
+    Json(payload): Json<MiddlewareCreatePayload>,
+) -> ApiResult<serde_json::Value> {
+    if payload.middleware_type == "jwt" {
+        let jwks_url = payload.config.get("jwks_url").and_then(|v| v.as_str()).map(String::from);
+        let audience = payload.config.get("audience").and_then(|v| v.as_str()).map(String::from);
+        let issuer = payload.config.get("issuer").and_then(|v| v.as_str()).map(String::from);
+
+        sqlx::query(
+            "UPDATE routes SET jwks_url = $1, jwt_audience = $2, jwt_issuer = $3 \
+             WHERE id = $4 AND project_id = $5",
+        )
+        .bind(jwks_url)
+        .bind(audience)
+        .bind(issuer)
+        .bind(payload.route_id)
+        .bind(context.project_id)
+        .execute(&pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    Ok(ApiResponse::new(serde_json::json!({ "success": true })))
+}
+
+pub async fn delete_middleware(
+    Path((route_id, middleware_type)): Path<(Uuid, String)>,
+    State(pool): State<PgPool>,
+    Extension(context): Extension<RequestContext>,
+) -> ApiResult<serde_json::Value> {
+    if middleware_type == "jwt" {
+        sqlx::query(
+            "UPDATE routes SET jwks_url = NULL, jwt_audience = NULL, jwt_issuer = NULL \
+             WHERE id = $1 AND project_id = $2",
+        )
+        .bind(route_id)
+        .bind(context.project_id)
+        .execute(&pool)
+        .await
+        .map_err(db_err)?;
     }
 
     Ok(ApiResponse::new(serde_json::json!({ "success": true })))
