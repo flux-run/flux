@@ -8,6 +8,9 @@ Flux is open source under Apache 2.0. You can use, modify, self-host, and
 redistribute the software. The Flux brand, name, and logos are not part of the
 code license. See [LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).
 
+Website: [fluxbase.co](https://fluxbase.co)  
+Docs: [fluxbase.co/docs](https://fluxbase.co/docs)
+
 ## Why Flux Exists
 
 Modern backends scatter evidence across logs, traces, queues, deploy history, and database state. When something breaks, teams spend hours reconstructing what happened.
