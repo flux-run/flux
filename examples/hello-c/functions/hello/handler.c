@@ -1,18 +1,15 @@
-// hello — Flux function (compiled to WASM via clang --target=wasm32)
-// Build: clang --target=wasm32 -nostdlib -Wl,--no-entry -Wl,--export-all -o hello.wasm handler.c
+// hello — Flux function (compiled to WASM via wasi-sdk)
+// Build: see Makefile  (requires wasi-sdk — https://github.com/WebAssembly/wasi-sdk)
 #include <stdint.h>
-#include <string.h>
 
-// Simple JSON response helper — replace with a proper JSON library.
-static char output_buf[1024];
+// Static response in WASM linear memory.
+static const char RESP[] = "{\"ok\":true}";
+#define RESP_LEN ((uint32_t)(sizeof(RESP) - 1))
 
 __attribute__((export_name("hello_handler")))
-uint64_t handler(uint8_t *input, uint32_t input_len) {
-    (void)input; (void)input_len;
-
-    const char *resp = "{\"ok\":true}";
-    uint32_t resp_len = (uint32_t)strlen(resp);
-    memcpy(output_buf, resp, resp_len);
-
-    return ((uint64_t)(uintptr_t)output_buf << 32) | resp_len;
+uint64_t hello_handler(uint32_t input_ptr, uint32_t input_len) {
+    (void)input_ptr;
+    (void)input_len;
+    // Return (pointer << 32) | length packed into uint64.
+    return ((uint64_t)(uintptr_t)RESP << 32) | RESP_LEN;
 }

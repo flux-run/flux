@@ -1,16 +1,30 @@
-// hello — Flux function (compiled to WASM via GraalVM Native Image + WASI)
-// Build: native-image --no-fallback -H:Kind=SHARED_LIBRARY Handler.java
-import com.oracle.svm.core.c.CTypedef;
-import org.graalvm.nativeimage.c.function.CEntryPoint;
-import java.nio.charset.*;
+// hello — Flux function
+// Build to WASM: ./gradlew nativeCompile  (see build.gradle — requires GraalVM JDK)
+// Type-check:    javac Handler.java        (works with standard JDK 21+)
+import java.nio.charset.StandardCharsets;
 
-public class HelloHandler {
+public class Handler {
 
-    @CEntryPoint(name = "hello_handler")
-    public static long handle(org.graalvm.word.Pointer inputPtr, int inputLen) {
-        // TODO: decode input
+    /**
+     * Flux runtime entry point — exported as "hello_handler" in the WASM binary.
+     *
+     * When using GraalVM Native Image, annotate with @CEntryPoint and accept an
+     * IsolateThread as the first argument. For development and type-checking, this
+     * plain static method compiles with any standard JDK.
+     *
+     * @param inputPtr  pointer to JSON-encoded input in WASM linear memory
+     * @param inputLen  byte length of the input
+     * @return          (outputPtr &lt;&lt; 32) | outputLen
+     */
+    public static long handle(long inputPtr, int inputLen) {
+        // TODO: decode JSON input from linear memory at inputPtr
         byte[] resp = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
-        // Return pointer + length packed into long.
-        return ((long) resp.hashCode() << 32) | resp.length;
+        // Return (outputPtr << 32) | outputLen packed into a long.
+        return ((long) inputPtr << 32) | resp.length;
+    }
+
+    public static void main(String[] args) {
+        // Local smoke-test
+        System.out.println(handle(0, 0));
     }
 }

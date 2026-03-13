@@ -13,6 +13,15 @@ java {
     targetCompatibility = JavaVersion.VERSION_21
 }
 
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // GraalVM Native Image API — needed for @CEntryPoint annotation
+    compileOnly 'org.graalvm.sdk:graal-sdk:23.1.4'
+}
+
 graalvmNative {
     binaries {
         main {

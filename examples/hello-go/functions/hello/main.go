@@ -4,7 +4,7 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
+	"os"
 )
 
 type Input struct {
@@ -15,27 +15,13 @@ type Output struct {
 	OK bool `json:"ok"`
 }
 
-//export hello_handler
-func handler(inputPtr, inputLen uint32) uint64 {
-	inputBytes := readMemory(inputPtr, inputLen)
-
+func main() {
 	var input Input
-	if err := json.Unmarshal(inputBytes, &input); err != nil {
-		panic(fmt.Sprintf("hello: unmarshal input: %v", err))
+	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
+		os.Exit(1)
 	}
-
 	out := Output{OK: true}
-	outBytes, _ := json.Marshal(out)
-	return writeMemory(outBytes)
+	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+		os.Exit(1)
+	}
 }
-
-// Memory helpers (provided by the Flux WASM runtime).
-func readMemory(ptr, length uint32) []byte {
-	return (*[1 << 30]byte)(unsafe.Pointer(uintptr(ptr)))[:length:length]
-}
-func writeMemory(data []byte) uint64 {
-	ptr := uintptr(unsafe.Pointer(&data[0]))
-	return (uint64(ptr) << 32) | uint64(len(data))
-}
-
-func main() {}

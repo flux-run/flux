@@ -4,7 +4,7 @@
 import json
 
 def handler(input_json: str) -> str:
-    \"\"\"Entry point called by the Flux runtime.\"\"\"
+    '''Entry point called by the Flux runtime.'''
     payload = json.loads(input_json)
 
     # TODO: implement hello

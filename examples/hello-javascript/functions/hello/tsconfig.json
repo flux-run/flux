@@ -3,12 +3,14 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": true,
     "strict": true,
     "skipLibCheck": true,
-    "lib": ["ESNext"],
+    "noEmit": true,
     "paths": {
       "@fluxbase/functions": ["./@fluxbase-functions"]
     }
   },
-  "files": ["assembly.d.ts", "index.ts"]
+  "include": ["*.js"]
 }

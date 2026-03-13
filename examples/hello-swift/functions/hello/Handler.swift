@@ -1,6 +1,5 @@
 // hello — Flux function (compiled to WASM via swiftwasm)
 // Build: swiftc -target wasm32-unknown-wasi Handler.swift -o hello.wasm
-import Foundation
 
 @_cdecl("hello_handler")
 func HelloHandler(inputPtr: UnsafePointer<UInt8>, inputLen: UInt32) -> UInt64 {
