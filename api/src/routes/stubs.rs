@@ -250,38 +250,6 @@ pub async fn environments_clone() -> (StatusCode, Json<Value>) {
     not_impl("Environment cloning")
 }
 
-// ── Extra tool endpoints ──────────────────────────────────────────────────────
-
-/// GET /tools/{tool} — fetch a single tool from the static catalog.
-pub async fn tool_get(Path(tool): Path<String>) -> (StatusCode, Json<Value>) {
-    // Minimal catalog lookup — if not found by name/prefix return 404.
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({
-            "error":   "not_found",
-            "message": format!("Tool '{}' not found in catalog. Use `flux tool list` to see available tools.", tool),
-        })),
-    )
-}
-
-/// POST /tools/run — run a tool action.
-pub async fn tools_run() -> (StatusCode, Json<Value>) {
-    not_impl("Tool execution via API (use the runtime context.tools API instead)")
-}
-
-/// POST /tools/connect — connect an integration (provider name in JSON body).
-pub async fn tools_connect_body(Json(body): Json<Value>) -> Json<Value> {
-    let app = body["app"].as_str().unwrap_or("unknown");
-    Json(json!({
-        "data": {
-            "app":        app,
-            "status":     "pending",
-            "auth_url":   null,
-            "message":    "OAuth connection not yet configured on this server.",
-        }
-    }))
-}
-
 // ── Gateway extras ────────────────────────────────────────────────────────────
 
 /// GET /gateway/routes/{id} — get a single route by ID.

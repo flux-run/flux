@@ -8,6 +8,5 @@ pub mod schema;
 pub mod sdk;
 pub mod spec;
 pub mod storage;
-pub mod tools;
 pub mod introspect;
 pub mod stubs;

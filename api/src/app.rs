@@ -131,14 +131,6 @@ pub fn create_app(state: AppState) -> Router {
         .route("/sdk/typescript",    get(routes::sdk::typescript))
         .route("/openapi.json",      get(routes::openapi::spec))
         .route("/spec",              get(routes::spec::project_spec))
-        // Tools / integrations
-        .route("/tools",                       get(routes::tools::list_tools))
-        .route("/tools/connected",             get(routes::tools::list_connected))
-        .route("/tools/connect",               post(routes::stubs::tools_connect_body))
-        .route("/tools/connect/{provider}",    post(routes::tools::connect_provider))
-        .route("/tools/disconnect/{provider}", delete(routes::tools::disconnect_provider))
-        .route("/tools/run",                   post(routes::stubs::tools_run))
-        .route("/tools/{tool}",                get(routes::stubs::tool_get))
         // Storage
         .route("/storage/provider",  get(routes::storage::get_provider)
                                     .put(routes::storage::upsert_provider)
@@ -202,8 +194,6 @@ pub fn create_app(state: AppState) -> Router {
         .route("/execute/{*path}",             any(routes::system::execution_not_allowed))
         .route("/functions/{name}/run",        any(routes::system::execution_not_allowed))
         .route("/functions/{name}/invoke",     any(routes::system::execution_not_allowed))
-        // ── OAuth callback (no auth) ───────────────────────────────────────
-        .route("/tools/oauth/callback",        get(routes::tools::oauth_callback))
         // ── Swagger UI ────────────────────────────────────────────────────
         .route("/openapi/ui",                  get(routes::openapi::ui))
         // ── Utility ───────────────────────────────────────────────────────

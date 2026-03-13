@@ -36,7 +36,6 @@ mod stack;
 mod state;
 mod tail;
 mod tenant;
-mod tool;
 mod trace;
 mod trace_debug;
 mod trace_diff;
@@ -482,13 +481,6 @@ enum Commands {
         command: event::EventCommands,
     },
 
-    // ── Tools ────────────────────────────────────────────────────────────────
-    /// Third-party tool integration (list, connect, disconnect, run)
-    Tool {
-        #[command(subcommand)]
-        command: tool::ToolCommands,
-    },
-
     // ── Environments ─────────────────────────────────────────────────────────
     /// Environment management (create, delete, clone)
     Env {
@@ -706,7 +698,6 @@ async fn main() -> anyhow::Result<()> {
         Commands::Schedule { command } => schedule::execute(command).await?,
         Commands::Queue    { command } => queue::execute(command).await?,
         Commands::Event    { command } => event::execute(command).await?,
-        Commands::Tool     { command } => tool::execute(command).await?,
         Commands::Env      { command } => env_cmd::execute(command).await?,
 
         Commands::Db { command } => db::execute(command).await?,
