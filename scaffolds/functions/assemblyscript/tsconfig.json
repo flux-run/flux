@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["ESNext"],
+    "paths": {
+      "@fluxbase/functions": ["./@fluxbase-functions"]
+    }
+  },
+  "files": ["assembly.d.ts", "index.ts"]
+}

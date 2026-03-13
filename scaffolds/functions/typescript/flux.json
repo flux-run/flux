@@ -1,0 +1,16 @@
+{
+  "name": "{name}",
+  "description": "TODO: describe what {name} does",
+  "runtime": "typescript",
+  "input": {
+    "type": "object",
+    "properties": {}
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "ok": { "type": "boolean" }
+    },
+    "required": ["ok"]
+  }
+}

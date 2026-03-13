@@ -1,0 +1,19 @@
+{
+  "name": "{name}",
+  "runtime": "wasm",
+  "entry": "index.wasm",
+  "description": "TODO: describe what {name} does",
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": [],
+      "properties": {
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+      }
+    }
+  }
+}
