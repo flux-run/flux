@@ -1,16 +1,17 @@
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@fluxbase/functions"
 
 export default defineFunction({
   name: "hello",
+  description: "TODO: describe what hello does",
+
   handler: async ({ input, ctx }) => {
-    ctx.log("Running hello");
+    ctx.log("hello invoked")
 
-    // ctx.db.<table>.find({ where: ... })   — query your database
-    // ctx.secrets.get("MY_SECRET")            — read a secret
-    // ctx.functions.<other>(input)            — call another function
+    // ctx.db.<table>.find / findOne / insert / update / delete
+    // ctx.secrets.get("MY_SECRET")
+    // ctx.queue.push("email", { ... })
+    // ctx.tools.run("slack.send_message", { ... })
 
-    return {
-      ok: true,
-    };
+    return { ok: true }
   },
-});
+})

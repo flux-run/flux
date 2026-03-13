@@ -1,19 +1,16 @@
 {
   "name": "hello",
-  "runtime": "deno",
-  "entry": "index.js",
   "description": "TODO: describe what hello does",
-  "schema": {
-    "input": {
-      "type": "object",
-      "required": [],
-      "properties": {
-      }
+  "runtime": "javascript",
+  "input": {
+    "type": "object",
+    "properties": {}
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "ok": { "type": "boolean" }
     },
-    "output": {
-      "type": "object",
-      "properties": {
-      }
-    }
+    "required": ["ok"]
   }
 }

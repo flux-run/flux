@@ -48,6 +48,7 @@ mod db_push;
 mod new_function;
 mod why;
 mod generate;
+mod toolchain;
 #[derive(Parser)]
 #[command(name = "flux")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -140,6 +141,13 @@ enum Commands {
         #[command(subcommand)]
         command: functions::FunctionCommands,
     },
+
+    // ── Toolchain ─────────────────────────────────────────────────────────────
+    /// Manage pinned language runtimes and compilers
+    Toolchain {
+        #[command(subcommand)]
+        command: toolchain::ToolchainCommand,
+    },
     /// Deploy to Fluxbase.
     ///
     /// In a function directory (has flux.json): deploys that single function.
@@ -204,8 +212,8 @@ enum Commands {
     ///   flux init --name my-api --runtime bun
     ///   flux init --gateway-port 4000 --api-port 8080
     Init {
-        /// Project name (written to flux.toml `name` field)
-        #[arg(long, value_name = "NAME")]
+        /// Project name — creates a new directory. Defaults to current directory name.
+        #[arg(value_name = "NAME")]
         name: Option<String>,
         /// Runtime identifier (nodejs20 | bun | deno). Default: nodejs20
         #[arg(long, value_name = "RUNTIME")]
@@ -701,6 +709,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Project { command } => projects::execute(command).await?,
 
         Commands::Function    { command } => functions::execute(command).await?,
+        Commands::Toolchain   { command } => toolchain::execute(command).await?,
         Commands::Deploy { context, only, force, name: _, runtime: _ } =>
             deploy::execute(context, only, force).await?,
         Commands::Invoke      { name, payload, gateway } => invoke::execute(&name, None, payload, gateway).await?,
