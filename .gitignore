@@ -41,3 +41,13 @@ frontend/
 # Real project functions live in functions/ and are committed.
 # test_functions/ is a local scratch pad — never deploy these.
 test_functions/
+
+# ── Docker (not used — flux dev uses embedded Postgres, no Docker needed) ────
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# ── Env files and examples (flux dev auto-configures; no manual setup needed) -
+.env.example
+.env.dev.example
+*/.env.example
