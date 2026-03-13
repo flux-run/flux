@@ -262,7 +262,7 @@ pub async fn init_local_mode(pool: &sqlx::PgPool) -> Result<(Uuid, Uuid), sqlx::
     let tenant_id = Uuid::parse_str(LOCAL_TENANT_ID).unwrap();
 
     sqlx::query(
-        "INSERT INTO tenants (id, name) VALUES ($1, 'local') ON CONFLICT (id) DO NOTHING"
+        "INSERT INTO tenants (id, name, slug) VALUES ($1, 'local', 'local') ON CONFLICT (id) DO NOTHING"
     )
     .bind(tenant_id)
     .execute(pool)
@@ -274,7 +274,7 @@ pub async fn init_local_mode(pool: &sqlx::PgPool) -> Result<(Uuid, Uuid), sqlx::
         .unwrap_or_else(|| Uuid::parse_str(LOCAL_PROJECT_ID).unwrap());
 
     sqlx::query(
-        "INSERT INTO projects (id, tenant_id, name) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING"
+        "INSERT INTO projects (id, tenant_id, name, slug) VALUES ($1, $2, $3, $3) ON CONFLICT (id) DO NOTHING"
     )
     .bind(project_id)
     .bind(tenant_id)

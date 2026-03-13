@@ -66,13 +66,13 @@ pub async fn to_runtime(
     };
 
     let req = ExecuteRequest {
-        function_id:    route.function_id.to_string(),
+        function_id:    route.function_name.clone(),
         project_id:     Some(route.project_id),
         payload,
         execution_seed: None,
         request_id:     Some(request_id.to_string()),
         parent_span_id: parent_span.map(|s| s.to_string()),
-        runtime_hint:   Some(route.runtime.clone()),
+        runtime_hint:   None,
         user_id,
         jwt_claims,
     };

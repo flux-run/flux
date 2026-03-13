@@ -1,233 +1,128 @@
-# Quickstart — Build a debuggable backend in 5 minutes
+# Quickstart
 
-Flux gives you functions, an integrated database, secrets, queues, and automatic
-execution recording — all from a single CLI. No Docker, no `.env`
-files, no infrastructure setup.
+This quickstart describes the intended first-run experience for Flux.
 
----
+> Flux is still in development. Treat this document as the target 0.1 beta workflow and the product contract the codebase is moving toward.
 
-## Prerequisites
+## 1. Build The CLI
 
-- Node.js 18+
-- The Flux CLI:
+From the repository root:
 
 ```bash
-# macOS
-brew install flux
-
-# or from npm
-npm install -g @flux/cli
-
-# or curl
-curl -fsSL https://flux.dev/install.sh | sh
+cargo build -p cli
 ```
 
----
+The CLI binary is `target/debug/flux`.
 
-## Step 1 — Create a project
+## 2. Initialize A Project
 
 ```bash
-flux init my-app && cd my-app
+target/debug/flux init my-app
+cd my-app
 ```
 
-This creates:
-```
-my-app/
-├── flux.toml               # project config
-├── functions/
-│   └── hello/
-│       └── index.ts         # starter function
-├── schemas/                 # SQL schema files (empty)
-└── tests/                   # test directory (empty)
-```
+The scaffold should give you a complete starting point:
 
----
+- `flux.toml`
+- `functions/`
+- `schemas/`
+- `middleware/`
+- `queues/`
+- `agents/`
+- `.env.example`
+- local `.flux/` state for generated files and dev metadata
 
-## Step 2 — Start the dev server
+## 3. Start The Local Runtime
 
 ```bash
-flux dev
+target/debug/flux dev
 ```
 
-This starts all 5 services + a local Postgres instance. No Docker required.
+The target local experience is:
 
-```
-✓ Postgres    → :5432  (data at .flux/pgdata/)
-✓ API         → :8080
-✓ Data Engine → :8082
-✓ Runtime     → :8083
-✓ Queue       → :8084
-✓ Gateway     → :4000
+- one command starts the stack
+- Postgres is bootstrapped or connected automatically
+- framework and project schema are applied
+- the operator API and dashboard are reachable
+- the CLI prints the next commands you are likely to need
 
-Flux running at http://localhost:4000
-Watching functions/ for changes...
-```
-
----
-
-## Step 3 — Write a function
-
-Edit `functions/hello/index.ts`:
-
-```typescript
-import { defineFunction } from "@flux/functions";
-import { z } from "zod";
-
-export default defineFunction({
-  name: "hello",
-  input:  z.object({ name: z.string() }),
-  output: z.object({ message: z.string() }),
-  handler: async ({ input, ctx }) => {
-    ctx.log.info(`Greeting ${input.name}`);
-    return { message: `Hello, ${input.name}!` };
-  },
-});
-```
-
-Save the file. Hot reload picks it up in <200ms.
-
----
-
-## Step 4 — Call it
+## 4. Create A Function
 
 ```bash
-flux invoke hello --data '{"name": "World"}'
+target/debug/flux function create create_user
 ```
 
-```json
-{ "message": "Hello, World!" }
-```
+Flux should scaffold a function that is ready to edit immediately.
 
-Or via HTTP:
+## 5. Invoke The System
 
 ```bash
-curl -X POST http://localhost:4000/hello \
-  -H "Content-Type: application/json" \
-  -d '{"name": "World"}'
+target/debug/flux invoke create_user --gateway --payload '{"email":"user@example.com"}'
 ```
 
-Every function directory in `functions/` becomes a `POST` endpoint automatically.
+The `--gateway` path is the most representative local path because it includes:
 
----
+- routing
+- middleware
+- auth and validation hooks
+- tracing and request IDs
 
-## Step 5 — See the execution record
-
-Every request gets a `x-request-id`. Trace it:
+## 6. Inspect The Execution Record
 
 ```bash
-flux trace <request-id>
+target/debug/flux trace
+target/debug/flux trace <request_id>
+target/debug/flux why <request_id>
 ```
 
-```
-Trace a3f9d2b1-...  12ms end-to-end
+After one request, the system should already feel different from a logs-first stack:
 
-  09:41:02.000  +0ms   ▶ [gateway/hello]   route matched: POST /hello
-  09:41:02.002  +2ms   · [runtime/hello]   bundle cache hit
-  09:41:02.004  +2ms   ▶ [runtime/hello]   executing function
-  09:41:02.010  +6ms   · [runtime/hello]   Greeting World
-  09:41:02.012  +2ms   ■ [runtime/hello]   execution completed (8ms)
+- you have one request record
+- you can inspect spans without stitching systems together manually
+- you can see which code version ran
+- you can connect the request to database mutations and downstream work
 
-  5 spans  •  12ms total
-```
+## 7. Evolve The Database
 
----
-
-## Step 6 — Add a database table
-
-Create `schemas/users.sql`:
-
-```sql
-CREATE TABLE IF NOT EXISTS users (
-  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name       TEXT NOT NULL,
-  email      TEXT NOT NULL UNIQUE,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-```
-
-Push it:
+Update your schema or migration files, then apply them:
 
 ```bash
-flux db push
+target/debug/flux db push
 ```
 
----
+Flux is meant to treat the database as part of the execution model, not as a separate debugging blind spot.
 
-## Step 7 — Write a function that uses the database
-
-Create `functions/create_user/index.ts`:
-
-```typescript
-import { defineFunction } from "@flux/functions";
-import { z } from "zod";
-
-export default defineFunction({
-  name: "create_user",
-  input:  z.object({ name: z.string(), email: z.string().email() }),
-  output: z.object({ id: z.string() }),
-  handler: async ({ input, ctx }) => {
-    const user = await ctx.db.users.insert(input);
-    ctx.log.info(`Created user ${user.id}`);
-    return { id: user.id };
-  },
-});
-```
-
-Call it:
+## 8. Deploy
 
 ```bash
-flux invoke create_user --data '{"name": "Ada", "email": "ada@example.com"}'
+target/debug/flux deploy
 ```
 
-Now trace it — you'll see the database mutation in the execution record:
+The intended deployment loop is:
+
+- detect what changed
+- bundle and upload code
+- record the deployment
+- attach deploy metadata to future executions
+
+## 9. Debug A Real Incident
+
+The real product loop starts after the first failure:
 
 ```bash
-flux trace <request-id>
+target/debug/flux errors
+target/debug/flux debug
+target/debug/flux why <request_id>
+target/debug/flux incident replay --request-id <request_id>
+target/debug/flux trace diff <original_id> <replay_id>
 ```
 
-```
-Trace 7f3a1b2c-...  18ms end-to-end
+## What Quickstart Must Prove
 
-  09:42:01.000  +0ms   ▶ [gateway/create_user]   route matched
-  09:42:01.003  +3ms   ▶ [runtime/create_user]   executing function
-  09:42:01.008  +5ms   · [db/users]               INSERT 1 row (5ms)
-  09:42:01.015  +7ms   ■ [runtime/create_user]   completed (12ms)
+Flux is ready for serious beta testing when a new developer can:
 
-  State changes:
-    users  INSERT  id=e4a9c3f1  name="Ada"  email="ada@example.com"
-```
-
----
-
-## Step 8 — Debug with `flux why`
-
-If something fails, run:
-
-```bash
-flux why <request-id>
-```
-
-```
-✗  POST /create_user  (24ms, 500)
-
-ROOT CAUSE:
-  error: duplicate key value violates unique constraint "users_email_key"
-  span:  db/users INSERT (line 8 of create_user/index.ts)
-
-STATE AT FAILURE:
-  users  id=e4a9c3f1  email="ada@example.com"  (already exists)
-
-FIX SUGGESTION:
-  Check for existing user before insert, or use ON CONFLICT
-```
-
-One command. Root cause, state context, fix suggestion.
-
----
-
-## Next steps
-
-- [Core Concepts](concepts.md) — understand execution records, the ctx object, and flux.toml
-- [Framework](framework.md) — the complete spec (architecture, API, config, phases)
-- [Observability](observability.md) — N+1 detection, slow spans, `flux trace diff`
-- [Examples](examples/todo-api.md) — full CRUD API with database + tracing
+1. start a project without reading internal docs
+2. create and invoke one function without port confusion
+3. inspect one execution record immediately
+4. understand one failure with `flux why`
+5. feel that debugging is materially better than their existing stack

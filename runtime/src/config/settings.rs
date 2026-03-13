@@ -21,7 +21,7 @@ impl Settings {
         if env::var("RUST_LOG").is_err() {
             unsafe { env::set_var("RUST_LOG", "info,runtime=debug") };
         }
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let api_url = env::var("API_URL")
             .or_else(|_| env::var("CONTROL_PLANE_URL"))   // backward-compat alias

@@ -53,5 +53,5 @@ pub fn init() {
                 .unwrap_or_else(|_| "queue=debug,tower_http=debug,axum::rejection=trace".into()),
         )
         .with(tracing_subscriber::fmt::layer())
-        .init();
+        .try_init().ok();
 }

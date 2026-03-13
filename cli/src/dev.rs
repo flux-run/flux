@@ -219,13 +219,15 @@ async fn start_postgres(project_root: &Path) -> anyhow::Result<(postgresql_embed
 
     // setup() downloads the binary on first run (cached after that).
     pg.setup().await.context("Failed to set up embedded PostgreSQL")?;
+
+    // Patch pg_hba.conf to trust before first start so we can connect as the
+    // 'postgres' superuser (which has no password) to create the app role.
+    patch_hba_trust(&data_dir)?;
+
     pg.start().await.context("Failed to start embedded PostgreSQL")?;
 
-    // Create the dev database if it doesn't exist yet.
-    if !pg.database_exists(DEV_DB_NAME).await.unwrap_or(false) {
-        pg.create_database(DEV_DB_NAME).await
-            .context("Failed to create dev database")?;
-    }
+    // Create the 'flux' app role and dev database on first run.
+    bootstrap_dev_db(port, &data_dir).await?;
 
     println!("\r  {} postgres        localhost:{}         ",
         "✔".green().bold(),
@@ -235,9 +237,177 @@ async fn start_postgres(project_root: &Path) -> anyhow::Result<(postgresql_embed
     Ok((pg, port))
 }
 
+/// Temporarily rewrite pg_hba.conf to use `trust` for TCP connections so we
+/// can connect as the `postgres` superuser without a password to bootstrap.
+fn patch_hba_trust(data_dir: &Path) -> anyhow::Result<()> {
+    let hba = data_dir.join("pg_hba.conf");
+    if !hba.exists() { return Ok(()); }
+
+    let content = std::fs::read_to_string(&hba)?;
+    // Already patched for trust (e.g. second run where we already fixed it).
+    if content.contains("# fluxbase-managed") { return Ok(()); }
+
+    let patched = content
+        .lines()
+        .map(|line| {
+            // Replace password/md5/scram-sha-256 with trust for TCP connections.
+            if (line.starts_with("host ") || line.starts_with("host\t"))
+                && !line.starts_with('#')
+            {
+                line.replace("password", "trust")
+                    .replace("md5", "trust")
+                    .replace("scram-sha-256", "trust")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    std::fs::write(&hba, format!("# fluxbase-managed\n{}", patched))?;
+    Ok(())
+}
+
+/// Create the `flux` role and `fluxbase_dev` database if they don't exist.
+/// Runs as the `postgres` superuser (trust auth must be enabled).
+async fn bootstrap_dev_db(port: u16, data_dir: &Path) -> anyhow::Result<()> {
+    let su_url = format!("postgres://postgres@localhost:{}/postgres", port);
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(&su_url)
+        .await
+        .context("Could not connect to embedded Postgres as superuser")?;
+
+    // Create app role if missing.
+    sqlx::query(&format!(
+        "DO $$ BEGIN \
+           IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{user}') THEN \
+             CREATE ROLE {user} WITH LOGIN PASSWORD '{pass}' SUPERUSER; \
+           END IF; \
+         END $$",
+        user = DEV_DB_USER,
+        pass = DEV_DB_PASS,
+    ))
+    .execute(&pool)
+    .await
+    .context("Failed to create dev role")?;
+
+    // Create dev database if missing.
+    let db_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
+    )
+    .bind(DEV_DB_NAME)
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(false);
+
+    if !db_exists {
+        sqlx::query(&format!(
+            "CREATE DATABASE {} OWNER {}",
+            DEV_DB_NAME, DEV_DB_USER
+        ))
+        .execute(&pool)
+        .await
+        .context("Failed to create dev database")?;
+    }
+
+    drop(pool);
+
+    // Restore pg_hba.conf to password auth (remove our trust patch).
+    restore_hba_password(data_dir)?;
+
+    // Reload pg config so the restored hba takes effect immediately.
+    let pg_bin = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".flux/cache/postgres/18.3.0/bin/pg_ctl");
+    if pg_bin.exists() {
+        let _ = tokio::process::Command::new(&pg_bin)
+            .args(["reload", "-D", data_dir.to_str().unwrap_or(".")])
+            .output()
+            .await;
+    }
+
+    Ok(())
+}
+
+fn restore_hba_password(data_dir: &Path) -> anyhow::Result<()> {
+    let hba = data_dir.join("pg_hba.conf");
+    if !hba.exists() { return Ok(()); }
+
+    let content = std::fs::read_to_string(&hba)?;
+    if !content.contains("# fluxbase-managed") { return Ok(()); }
+
+    let restored = content
+        .lines()
+        .filter(|l| *l != "# fluxbase-managed")
+        .map(|line| {
+            if (line.starts_with("host ") || line.starts_with("host\t"))
+                && !line.starts_with('#')
+            {
+                line.replace("trust", "password")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    std::fs::write(&hba, restored)?;
+    Ok(())
+}
+
+/// Ensure the `flux` role exists in the embedded Postgres superuser session.
+/// Uses `postgres` superuser which postgresql_embedded always creates via initdb.
+async fn ensure_dev_role(port: u16) -> anyhow::Result<()> {
+    // pg_hba.conf uses password auth for TCP — but the superuser 'postgres'
+    // has no password set (initdb default), so we connect without one.
+    // We patch pg_hba temporarily to trust, create the role, then restore.
+    // Simpler: connect via the superuser URL and issue CREATE ROLE IF NOT EXISTS.
+    let su_url = format!("postgres://postgres@localhost:{}/postgres", port);
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(8))
+        .connect(&su_url)
+        .await;
+
+    // If password auth blocks us (pg_hba requires password), temporarily patch it.
+    let pool = match pool {
+        Ok(p) => p,
+        Err(_) => {
+            // We can't connect — the role must already exist from a previous run.
+            return Ok(());
+        }
+    };
+
+    sqlx::query(&format!(
+        "DO $$ BEGIN \
+           IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{user}') THEN \
+             CREATE ROLE {user} WITH LOGIN PASSWORD '{pass}' SUPERUSER; \
+           END IF; \
+         END $$",
+        user = DEV_DB_USER,
+        pass = DEV_DB_PASS,
+    ))
+    .execute(&pool)
+    .await
+    .context("Failed to create dev database role")?;
+
+    Ok(())
+}
+
 // ── Migrations ────────────────────────────────────────────────────────────────
 
-async fn run_migrations(database_url: &str, project_root: &Path) -> anyhow::Result<usize> {
+// Flux system migrations embedded at compile-time — always available regardless
+// of where the CLI is installed.
+static API_MIGRATIONS: sqlx::migrate::Migrator =
+    sqlx::migrate!("../schemas/api");
+
+static DE_MIGRATIONS: sqlx::migrate::Migrator =
+    sqlx::migrate!("../schemas/data-engine");
+
+async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Result<usize> {
     use sqlx::postgres::PgPoolOptions;
 
     let pool = PgPoolOptions::new()
@@ -247,26 +417,17 @@ async fn run_migrations(database_url: &str, project_root: &Path) -> anyhow::Resu
         .await
         .context("Failed to connect to dev PostgreSQL")?;
 
-    let mut total = 0usize;
+    // Apply Flux system migrations (embedded in binary — idempotent).
+    API_MIGRATIONS.run(&pool).await
+        .context("Failed to apply Flux API migrations")?;
+    let api_count = API_MIGRATIONS.migrations.len();
 
-    // Apply both migration sets in order. sqlx migrate tracks applied migrations
-    // in a `_sqlx_migrations` table — safe to call multiple times.
-    let api_dir = project_root.join("schemas").join("api");
-    let de_dir  = project_root.join("schemas").join("data-engine");
-
-    for dir in [&api_dir, &de_dir] {
-        if dir.exists() {
-            let migrator = sqlx::migrate::Migrator::new(dir.as_path())
-                .await
-                .with_context(|| format!("Failed to load migrations from {:?}", dir))?;
-            migrator.run(&pool).await
-                .with_context(|| format!("Failed to run migrations from {:?}", dir))?;
-            total += migrator.migrations.len();
-        }
-    }
+    DE_MIGRATIONS.run(&pool).await
+        .context("Failed to apply Flux data-engine migrations")?;
+    let de_count = DE_MIGRATIONS.migrations.len();
 
     pool.close().await;
-    Ok(total)
+    Ok(api_count + de_count)
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────

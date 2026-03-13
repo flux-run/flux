@@ -61,13 +61,12 @@ impl GatewaySnapshot {
     /// Pull routes from the database and atomically swap the snapshot.
     pub async fn refresh(&self) -> anyhow::Result<()> {
         let rows = sqlx::query_as::<_, RouteRecord>(
-            "SELECT r.id, r.project_id, r.function_id, r.path, r.method,
-                    COALESCE(f.runtime, 'deno') AS runtime,
-                    r.auth_type, r.cors_enabled, r.rate_limit,
+            "SELECT r.id, r.project_id, r.function_name, r.path, r.method,
+                    r.auth_type, r.cors_enabled, r.rate_limit_per_minute,
                     r.jwks_url, r.jwt_audience, r.jwt_issuer,
                     r.json_schema, r.cors_origins, r.cors_headers
-             FROM   routes r
-             JOIN   functions f ON f.id = r.function_id",
+             FROM   flux.routes r
+             WHERE  r.is_active = TRUE",
         )
         .fetch_all(&self.db_pool)
         .await?;

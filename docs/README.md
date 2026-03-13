@@ -1,84 +1,56 @@
 # Flux Documentation
 
-> **Flux** is a backend framework where every execution is a record.
-> Self-hosted, no managed cloud — your infrastructure, your data.
+This directory explains the product Flux is intended to become: a complete backend runtime built around deterministic debugging.
 
----
+The rest of the docs describe the target 0.1 beta shape. When implementation still lags the product story, [implementation-status.md](implementation-status.md) is the place that should say so explicitly.
 
-## Start here
+## Recommended Reading Order
 
-| Guide | Description |
-|---|---|
-| [Framework](framework.md) | **The complete spec** — architecture, ctx API, config, phases |
-| [Quickstart](quickstart.md) | First function to traced debug in 5 minutes |
-| [Core Concepts](concepts.md) | Execution records, ctx, functions, database, flux.toml |
-| [CLI Reference](cli.md) | Every `flux` command |
-| [Observability](observability.md) | `flux trace`, `flux why`, N+1 detection, debugging |
+1. [../README.md](../README.md)
+2. [quickstart.md](quickstart.md)
+3. [concepts.md](concepts.md)
+4. [cli.md](cli.md)
+5. [single-binary-architecture.md](single-binary-architecture.md)
+6. [production-debugging.md](production-debugging.md)
+
+## Product Docs
+
+- [framework.md](framework.md) - what Flux is, what it includes, and how it should feel
+- [SPEC.md](SPEC.md) - product goals, non-goals, user model, and 0.1 beta target
+- [quickstart.md](quickstart.md) - first-run developer workflow
+- [concepts.md](concepts.md) - core mental model and primitives
+- [cli.md](cli.md) - command-line workflows and command philosophy
+- [implementation-status.md](implementation-status.md) - target state versus current repo state
+
+## Architecture Docs
+
+- [single-binary-architecture.md](single-binary-architecture.md) - overall system architecture and deployment model
+- [api.md](api.md) - operator-facing API responsibilities
+- [gateway.md](gateway.md) - ingress routing and policy enforcement
+- [runtime.md](runtime.md) - execution engine for user code
+- [data-engine.md](data-engine.md) - database execution and mutation recording
+- [queue.md](queue.md) - background work and retries
+- [observability.md](observability.md) - execution record, spans, logs, and debugging surfaces
+- [storage.md](storage.md) - persisted state, bundles, caches, and retention
+- [database-schema.md](database-schema.md) - logical schema layout
+- [wasm-runtime.md](wasm-runtime.md) - target-state WebAssembly story
+
+## Product Narrative And Debugging Docs
+
+- [production-debugging.md](production-debugging.md) - incident response workflow
+- [flux-why-the-viral-command.md](flux-why-the-viral-command.md) - why `flux why` is the hero feature
+- [git-for-backend-execution.md](git-for-backend-execution.md) - execution record as a version-control-like model
+- [workflow-to-agents-migration.md](workflow-to-agents-migration.md) - how orchestration fits into the broader product
+
+## Operational And Reference Docs
+
+- [api-reference.md](api-reference.md) - target-state route groups and API surface
+- [gateway-production-checklist.md](gateway-production-checklist.md) - production hardening checklist
+- [FOLDER_STRUCTURE.md](FOLDER_STRUCTURE.md) - repo layout and generated project layout
+- [cli-rewrite-plan.md](cli-rewrite-plan.md) - CLI design roadmap for keeping the product loop simple
 
 ## Examples
 
-| Example | What it covers |
-|---|---|
-| [Todo API](examples/todo-api.md) | CRUD with `ctx.db`, schemas, `flux trace` |
-| [Webhook Worker](examples/webhook-worker.md) | Verify signature, store event, use `ctx.queue` |
-| [AI Backend](examples/ai-backend.md) | OpenAI + `ctx.db` caching + full tracing |
-
-## Service internals (for contributors)
-
-| Service | Port | Role |
-|---|---|---|
-| [Gateway](gateway.md) | `:8081` | Routing, auth, rate limiting, trace roots |
-| [Runtime](runtime.md) | `:8083` | Deno V8 execution, secrets, tool dispatch |
-| [API](api.md) | `:8080` | Function registry, logs, schema management |
-| [Data Engine](data-engine.md) | `:8082` | DB queries, mutation recording, hooks, cron |
-| [Queue](queue.md) | `:8084` | Async jobs, retries, dead letter |
-
-## Additional docs
-
-| Doc | Purpose |
-|---|---|
-| [Storage](storage.md) | File columns, S3-compatible storage, BYO bucket |
-| [Database Schema](database-schema.md) | Table ownership, naming conventions, flux vs public schema |
-| [Production Debugging](production-debugging.md) | Deep dive: replay, bisect, trace diff |
-| [Git for Backend Execution](git-for-backend-execution.md) | The conceptual model behind Flux |
-| [flux why — The Viral Command](flux-why-the-viral-command.md) | Why `flux why` changes how you debug |
-
----
-
-## Architecture at a glance
-
-```
-my-app/
-├── flux.toml
-├── functions/        → POST endpoints (one directory per function)
-├── schemas/          → SQL files (source of truth for DB)
-├── middleware/        → request middleware
-├── workflows/        → multi-step workflows
-└── tests/
-
-$ flux dev → http://localhost:4000
-
-  Gateway     :8081   routing, rate limiting, execution record roots
-  Runtime     :8083   Deno V8 execution, secrets, tool dispatch
-  API         :8080   function registry, schema management
-  Data Engine :8082   DB queries, mutation recording, hooks
-  Queue       :8084   async jobs, retries, dead letter
-
-Every request → x-request-id → ExecutionRecord → flux trace / flux why
-```
-
-## Quick reference
-
-```bash
-flux init my-app && cd my-app   # scaffold project
-flux dev                        # start all services + local Postgres
-flux invoke hello --data '{}'   # call a function
-flux trace <request-id>         # inspect execution record
-flux why <request-id>           # root cause in 10 seconds
-flux db push                    # apply schemas/*.sql
-flux deploy                     # deploy to target from flux.toml
-```
-
----
-
-*The [Framework doc](framework.md) is the single source of truth for all Flux design decisions.*
+- [examples/todo-api.md](examples/todo-api.md)
+- [examples/webhook-worker.md](examples/webhook-worker.md)
+- [examples/ai-backend.md](examples/ai-backend.md)

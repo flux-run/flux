@@ -1,97 +1,55 @@
 # Implementation Status
 
-**Date:** March 12, 2026
-**Source of truth:** [framework.md §24](framework.md#24-implementation-phases)
+This page keeps the rest of the docs honest.
 
----
+Most of the documentation in this repo describes the intended 0.1 beta product shape. This document explains where the codebase is still converging toward that shape.
 
-## Phase summary
+## Status Levels
 
-| Phase | Focus | Status | Estimate |
-|---|---|---|---|
-| **Phase 0** | Prove the debugging magic | Not started | 2–4 weeks |
-| **Phase 1** | Developer experience | Not started | — |
-| **Phase 2** | Type safety & database | Not started | — |
-| **Phase 3** | Production readiness | Not started | — |
-| **Phase 4+** | WASM, advanced features | Not started | — |
+- `Active` - the direction is correct and the core implementation exists
+- `Shaping` - the product surface is clear but the implementation is still being aligned
+- `Experimental` - useful for exploration, not yet a stable promise
+- `Needs hardening` - the feature exists, but the operational contract is not ready
 
----
+## Current Snapshot
 
-## Phase 0 — Prove the debugging magic
+| Area | Status | Notes |
+| --- | --- | --- |
+| Product narrative | Active | The strongest product direction is clear: complete runtime, debug-first story. |
+| Documentation | Active | The docs now describe the intended product shape and should be the canonical narrative. |
+| Single-binary direction | Active | The `server` crate is the right architectural direction even though individual crates still exist and are still used during development. |
+| CLI core loop | Shaping | The right commands exist, but command naming, config resolution, and contract cleanup still need work. |
+| Local dev story | Active | `flux dev` is the right idea and one of the most important product surfaces. |
+| Gateway | Active | The request pipeline is strong and aligned with the product model. |
+| Runtime | Active | Execution, bundle loading, and caching are substantive. Some endpoint and auth surfaces still need cleanup. |
+| Data engine | Active | Mutation-aware execution is a core strength of the repo. |
+| Queue and schedules | Shaping | Important to the complete-system story, but still need smoother execution-record integration and operator polish. |
+| Replay and diff | Shaping | High value, but trustworthiness matters more than breadth here. |
+| Agents | Experimental | Useful as part of the system, but not yet the headline feature. |
+| WASM and multi-language parity | Experimental | Ambitious and worth keeping, but not yet a dependable flagship capability. |
+| Auth and service hardening | Needs hardening | Safe defaults and service isolation need more work before broad beta testing. |
 
-Smallest version that validates the core value proposition end-to-end.
+## What Must Feel Excellent Before 0.1 Beta
 
-**Scope:**
-```
-flux init     → scaffold project with flux.toml + functions/
-flux dev      → starts all services locally (orchestrator + embedded Postgres)
-flux invoke   → call a function via gateway
-flux trace    → show execution record
-flux why      → root cause from execution record
-```
+These are the gates that matter most:
 
-**What needs building:**
+1. `flux init -> flux dev -> flux invoke -> flux trace -> flux why` feels clean
+2. project and config resolution are easy to understand
+3. one deployment is visibly linked to one execution record
+4. one replay-plus-diff flow is believable enough to trust
+5. async work preserves the same debugging model
+6. defaults are safe enough for real beta users
 
-| Component | Work | Estimate |
-|---|---|---|
-| `cli/src/dev.rs` | Process orchestrator: spawn 5 services, combined logs, graceful shutdown, health checks | ~300 lines |
-| `flux.toml` parser | TOML parser in CLI, `flux init` writes it | ~100 lines |
-| Gateway `LOCAL_MODE` | Skip tenant resolution, accept all requests | ~50 lines |
-| Embedded Postgres | Auto-start, data at `.flux/pgdata/`, port assignment | ~200 lines |
-| `flux trace` CLI | Query execution records, format output | ~150 lines |
-| `flux why` CLI | Parse execution record, pattern-match root cause | ~200 lines |
+## How To Use The Docs
 
-**What already exists in the Rust codebase:**
+Use the rest of the docs for:
 
-| Component | Status | Location |
-|---|---|---|
-| CLI framework | ✅ 50+ commands | `cli/src/` |
-| Gateway routing | ✅ Production-grade | `gateway/src/` |
-| Runtime (Deno V8) | ✅ Isolate pool + execution | `runtime/src/` |
-| Data Engine | ✅ Query compiler, hooks, events | `data-engine/src/` |
-| Queue | ✅ Worker pool, retries, dead letter | `queue/src/` |
-| API | ✅ 19 route modules | `api/src/` |
-| Span recording | ✅ `platform_logs` table | `gateway/src/routes/proxy.rs` |
-| Mutation recording | ✅ `state_mutations` table | `data-engine/src/` |
-| Request envelope | ✅ `trace_requests` table | `gateway/src/routes/proxy.rs` |
+- product intent
+- architecture
+- desired workflows
 
-The recording infrastructure exists. The work is wiring it into a coherent
-`flux dev` experience and finishing CLI output formatting.
+Use this page for:
 
----
-
-## What Phase 0 proves
-
-- Execution recording works automatically (no user code changes)
-- `flux why` genuinely saves debugging time
-- Developers want Flux for the debugging alone
-
----
-
-## Existing CLI commands (implemented)
-
-| Category | Commands |
-|---|---|
-| Auth | `flux login`, `flux logout`, `flux auth status` |
-| Project | `flux init`, `flux new` |
-| Functions | `flux function create/list/delete`, `flux invoke`, `flux deploy` |
-| Secrets | `flux secrets set/get/list/delete` |
-| Tools | `flux tools list`, `flux tools connected` |
-| Gateway | `flux route create/list/delete/activate` |
-
----
-
-## Not yet implemented (by phase)
-
-| Phase | Commands |
-|---|---|
-| 0 | `flux dev`, `flux trace`, `flux why` |
-| 1 | Hot reload, `flux build`, `flux deploy --target local` |
-| 2 | `flux generate`, `flux db push/diff/migrate` |
-| 3 | `flux test`, `flux add <tool>`, `defineMiddleware()` |
-| 4+ | WASM support, `flux incident replay`, `flux bug bisect` |
-
----
-
-*For the full phase breakdown, see
-[framework.md §24](framework.md#24-implementation-phases).*
+- implementation caveats
+- maturity expectations
+- deciding which areas are ready for hard external testing

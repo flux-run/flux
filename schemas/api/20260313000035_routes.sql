@@ -3,8 +3,14 @@
 -- Every `flux deploy` writes the [[routes]] from flux.toml into this table,
 -- replacing the previous active set for the project. The gateway then picks
 -- them up without a restart.
+--
+-- The old `routes` table (migration 013) was moved to the flux schema by
+-- migration 028 but had an incompatible schema. Drop and recreate with the
+-- canonical column set.
 
-CREATE TABLE IF NOT EXISTS flux.routes (
+DROP TABLE IF EXISTS flux.routes CASCADE;
+
+CREATE TABLE flux.routes (
     id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id              UUID        NOT NULL REFERENCES flux.projects(id) ON DELETE CASCADE,
 
@@ -31,15 +37,25 @@ CREATE TABLE IF NOT EXISTS flux.routes (
     -- Only one active route set per project. flux deploy flips is_active.
     is_active               BOOLEAN     NOT NULL DEFAULT TRUE,
 
+    -- Auth / CORS / validation — configured per route in flux.toml
+    auth_type               TEXT        NOT NULL DEFAULT 'none',
+    cors_enabled            BOOLEAN     NOT NULL DEFAULT FALSE,
+    jwks_url                TEXT,
+    jwt_audience            TEXT,
+    jwt_issuer              TEXT,
+    json_schema             JSONB,
+    cors_origins            TEXT[],
+    cors_headers            TEXT[],
+
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Fast dispatch lookup: gateway queries (project_id, is_active=true) on every request.
-CREATE INDEX IF NOT EXISTS idx_routes_project_active
+CREATE INDEX idx_routes_project_active
     ON flux.routes (project_id, is_active)
     WHERE is_active = TRUE;
 
 -- Enforce uniqueness of (project_id, method, path) among active routes.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_routes_project_method_path_active
+CREATE UNIQUE INDEX idx_routes_project_method_path_active
     ON flux.routes (project_id, method, path)
     WHERE is_active = TRUE;

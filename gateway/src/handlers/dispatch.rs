@@ -118,8 +118,8 @@ pub async fn handle(
     // Keyed on route_id × client_ip so each function gets an independent
     // per-caller counter.  The route-level limit overrides the global default
     // when configured; negative DB values are clamped to zero.
-    let limit = route.rate_limit
-        .map(|r| r.max(0) as u32)
+    let limit = route.rate_limit_per_minute
+        .map(|r| r.max(0) as u32 / 60)
         .unwrap_or(state.rate_limit_per_sec);
 
     let client_ip = headers

@@ -10,6 +10,7 @@
 //! The saved JWT is used by `ApiClient` as `Authorization: Bearer <token>`.
 
 use anyhow::{Context, bail};
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 
 use crate::client::ApiClient;
@@ -84,6 +85,24 @@ async fn is_first_run(client: &ApiClient) -> bool {
 
 pub async fn execute() -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
+
+    // Check server is reachable before prompting for credentials.
+    let health = client
+        .client
+        .get(format!("{}/health", client.base_url))
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await;
+
+    if health.is_err() {
+        eprintln!();
+        eprintln!("  {} Cannot reach Flux server at {}", "✖".red(), client.base_url);
+        eprintln!();
+        eprintln!("  The server is not running. Start it first:");
+        eprintln!("    {}", "flux dev".bold().cyan());
+        eprintln!();
+        bail!("server unreachable");
+    }
 
     let first_run = is_first_run(&client).await;
 
