@@ -169,6 +169,7 @@ dependencies = [
  "base64",
  "chrono",
  "dotenvy",
+ "futures-util",
  "hex",
  "job_contract",
  "jsonwebtoken 9.3.1",

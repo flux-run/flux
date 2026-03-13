@@ -48,6 +48,19 @@ pub async fn require_auth(
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(str::to_owned);
 
+    // Allow SSE clients to pass JWT as ?token= query param (EventSource can't
+    // set custom headers in all browsers).
+    let bearer = bearer.or_else(|| {
+        req.uri().query().and_then(|q| {
+            q.split('&').find_map(|pair| {
+                let mut it = pair.splitn(2, '=');
+                let key = it.next()?;
+                let val = it.next()?;
+                if key == "token" { Some(val.to_owned()) } else { None }
+            })
+        })
+    });
+
     // ── 1. Try dashboard JWT first ────────────────────────────────────────
     if let Some(ref token) = bearer {
         if let Some(claims) = auth_service::verify_token(token) {

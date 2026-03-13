@@ -11,6 +11,7 @@ import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useEventStream, type ExecutionEvent } from '@/hooks/useEventStream'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -145,6 +146,9 @@ export default function MonitorPage() {
     queryFn: () => apiFetch('/flux/api/monitor'),
     refetchInterval: 30_000,
   })
+
+  const { events: executions, connected: execConnected, clear: clearExec } =
+    useEventStream<ExecutionEvent>('executions', { maxEvents: 150 })
 
   const lastUpdated = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString()
@@ -364,6 +368,61 @@ export default function MonitorPage() {
             <span>Data at</span>
             <span className="text-foreground font-mono">{data?.checked_at ? new Date(data.checked_at).toLocaleString() : '—'}</span>
           </div>
+        </div>
+      </section>
+
+      {/* ── Live execution tail ─────────────────────────────────────────────── */}
+      <section>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            {execConnected
+              ? <Wifi className="w-4 h-4 text-emerald-500" />
+              : <WifiOff className="w-4 h-4 text-muted-foreground" />}
+            <h2 className="text-sm font-semibold text-muted-foreground">Live Requests</h2>
+            <span className="text-[10px] text-muted-foreground">
+              {execConnected ? 'streaming' : 'connecting…'}
+            </span>
+          </div>
+          {executions.length > 0 && (
+            <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={clearExec}>
+              Clear
+            </Button>
+          )}
+        </div>
+        <div className="rounded-xl border border-border bg-card font-mono text-[11px] divide-y max-h-72 overflow-y-auto">
+          {executions.length === 0 ? (
+            <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+              No requests yet — make a database call to see live traffic here.
+            </p>
+          ) : (
+            [...executions].reverse().map((ex, i) => (
+              <div key={i} className={cn(
+                'flex items-center gap-3 px-4 py-2 hover:bg-muted/10 transition-colors',
+                !ex.ok && 'bg-red-500/5'
+              )}>
+                <span className="text-muted-foreground shrink-0 tabular-nums">
+                  {new Date(ex.ts).toLocaleTimeString()}
+                </span>
+                <span className={cn(
+                  'shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded',
+                  ex.ok ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                        : 'bg-red-500/10 text-red-700 dark:text-red-400'
+                )}>
+                  {ex.status ?? '?'}
+                </span>
+                <span className="font-medium shrink-0">{ex.method}</span>
+                <span className="text-muted-foreground truncate flex-1">{ex.path}</span>
+                {ex.duration_ms != null && (
+                  <span className={cn(
+                    'shrink-0 tabular-nums',
+                    ex.duration_ms > 500 ? 'text-amber-500' : 'text-muted-foreground'
+                  )}>
+                    {ex.duration_ms}ms
+                  </span>
+                )}
+              </div>
+            ))
+          )}
         </div>
       </section>
     </div>

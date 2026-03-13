@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { Bell, Plus, Trash2, Radio } from 'lucide-react'
+import { Bell, Plus, Trash2, Radio, Wifi, WifiOff } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,6 +15,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { useStore } from '@/state/tenantStore'
+import { useEventStream, type AppEvent } from '@/hooks/useEventStream'
 
 interface Subscription {
   id: string
@@ -30,6 +31,12 @@ const TARGET_COLOR: Record<string, string> = {
   webhook:      'bg-sky-500/10 text-sky-700 dark:text-sky-400',
   function:     'bg-purple-500/10 text-purple-700 dark:text-purple-400',
   queue_job:    'bg-amber-500/10 text-amber-700 dark:text-amber-400',
+}
+
+const OP_COLOR: Record<string, string> = {
+  insert: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+  update: 'bg-sky-500/10 text-sky-700 dark:text-sky-400',
+  delete: 'bg-red-500/10 text-red-700 dark:text-red-400',
 }
 
 export default function EventsPage() {
@@ -71,6 +78,9 @@ export default function EventsPage() {
     },
   })
 
+  // Live event stream
+  const { events: liveEvents, connected, clear } = useEventStream<AppEvent>('events', { maxEvents: 100 })
+
   const subs = data?.subscriptions ?? []
 
   return (
@@ -90,8 +100,51 @@ export default function EventsPage() {
         }
       />
       <div className="flex-1 overflow-y-auto">
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className="p-6 max-w-5xl mx-auto space-y-6">
 
+      {/* ── Live stream panel ─────────────────────────────────────────── */}
+      <div className="rounded-xl border bg-card overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
+          <div className="flex items-center gap-2">
+            {connected
+              ? <Wifi className="w-3.5 h-3.5 text-emerald-500" />
+              : <WifiOff className="w-3.5 h-3.5 text-muted-foreground" />}
+            <span className="text-xs font-semibold">Live event stream</span>
+            {liveEvents.length > 0 && (
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{liveEvents.length}</Badge>
+            )}
+          </div>
+          {liveEvents.length > 0 && (
+            <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={clear}>
+              Clear
+            </Button>
+          )}
+        </div>
+        <div className="font-mono text-[11px] divide-y max-h-64 overflow-y-auto">
+          {liveEvents.length === 0 ? (
+            <p className="px-4 py-5 text-center text-muted-foreground text-xs">
+              Waiting for events… trigger a database mutation to see them here.
+            </p>
+          ) : (
+            [...liveEvents].reverse().map((ev, i) => (
+              <div key={i} className="flex items-center gap-3 px-4 py-2 hover:bg-muted/10">
+                <span className="text-muted-foreground shrink-0 tabular-nums">
+                  {new Date(ev.ts).toLocaleTimeString()}
+                </span>
+                <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${OP_COLOR[ev.operation] ?? 'bg-muted'}`}>
+                  {ev.operation}
+                </span>
+                <span className="font-medium">{ev.event_type}</span>
+                {ev.record_id && (
+                  <span className="text-muted-foreground truncate">#{ev.record_id}</span>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* ── Subscriptions ──────────────────────────────────────────────── */}
       {isLoading ? (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => (
@@ -203,3 +256,4 @@ export default function EventsPage() {
     </div>
   )
 }
+

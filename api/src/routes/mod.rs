@@ -20,3 +20,4 @@ pub mod events;
 pub mod queue_mgmt;
 pub mod environments;
 pub mod monitor;
+pub mod stream;

@@ -188,6 +188,10 @@ pub fn create_app(state: AppState) -> Router {
         // ── Routes (gateway config) ───────────────────────────────────────────
         .route("/routes",                get(routes::gateway_config::list_routes))
         .route("/routes/sync",           post(routes::gateway_config::sync_routes))
+        // ── SSE live streams ──────────────────────────────────────────────────
+        .route("/stream/events",         get(routes::stream::stream_events))
+        .route("/stream/executions",     get(routes::stream::stream_executions))
+        .route("/stream/mutations",      get(routes::stream::stream_mutations))
         // Auth middleware injects RequestContext
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
