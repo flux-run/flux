@@ -74,9 +74,10 @@ impl<'a> QueryPipeline<'a> {
     ///  4. Assert schema + table exist
     ///  5. Evaluate row-level policy (cached)
     ///  5.5 Evaluate schema rules from flux db push (RuleExpr AST, mutations only)
+    ///  5.6 Apply TransformExpr before-hooks (compiled TypeScript transforms, mutations only)
     ///  6. Load schema metadata + relationships (L1 cache)
     ///  7. Compile SQL (L2 plan cache for SELECT)
-    ///  8. Before-hook (mutations only, skipped on replay)
+    ///  8. Before-hook (function invocations, mutations only, skipped on replay)
     ///  9. Execute (single or batched, wrapped in timeout)
     /// 10. After-hook (non-fatal, skipped on replay)
     /// 11. Transform: S3 file columns → presigned URLs
@@ -88,6 +89,13 @@ impl<'a> QueryPipeline<'a> {
     ) -> Result<(serde_json::Value, QueryMeta), EngineError> {
         // ── Step 1: Auth ──────────────────────────────────────────────────────
         let auth = AuthContext::from_headers(headers).map_err(EngineError::MissingField)?;
+
+        // Extract request_id early — needed by schema rules + transform hooks.
+        let request_id = headers
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-")
+            .to_string();
 
         // ── Step 2: Schema name ───────────────────────────────────────────────
         let schema =
@@ -117,10 +125,6 @@ impl<'a> QueryPipeline<'a> {
         // Skipped in replay mode (rules would re-deny replayed mutations).
         if !auth.is_replay && req.operation != "select" {
             let input = req.data.as_ref().unwrap_or(&serde_json::Value::Null);
-            let rid = headers
-                .get("x-request-id")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("-");
             SchemaRuleEngine::enforce(
                 &self.state.pool,
                 &auth,
@@ -128,9 +132,62 @@ impl<'a> QueryPipeline<'a> {
                 &req.operation,
                 input,
                 &serde_json::Value::Null, // pre-read row not yet available at this stage
-                rid,
+                &request_id,
             )
             .await?;
+        }
+
+        // ── Step 5.6: TransformExpr before-hooks ──────────────────────────────
+        // Apply compiled TypeScript transforms stored in fluxbase_internal.hooks.
+        // These are pure-Rust evaluated TransformExpr AST nodes — zero function
+        // invocation overhead.  Must run BEFORE compilation (step 7) because SQL
+        // parameters are baked in at compile time.
+        let mut req = req; // shadow as mutable so transform can update req.data
+        if !auth.is_replay && req.operation != "select" {
+            let before_event = format!("before_{}", &req.operation);
+            if let Ok(Some(transform_json)) = sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT transform_expr FROM fluxbase_internal.hooks \
+                 WHERE table_name = $1 AND event = $2 \
+                   AND enabled = true AND transform_expr IS NOT NULL \
+                 LIMIT 1",
+            )
+            .bind(&req.table)
+            .bind(&before_event)
+            .fetch_optional(&self.state.pool)
+            .await
+            {
+                match serde_json::from_value::<crate::schema::hooks::TransformExpr>(
+                    transform_json,
+                ) {
+                    Ok(expr) => {
+                        let eval_ctx = crate::schema::eval::EvalCtx {
+                            user: crate::schema::eval::UserCtx {
+                                id:     Some(auth.user_id.clone()),
+                                role:   Some(auth.role.clone()),
+                                email:  None,
+                                claims: serde_json::Value::Null,
+                            },
+                            request_id: Some(request_id.clone()),
+                        };
+                        let input = req.data.clone().unwrap_or(serde_json::Value::Null);
+                        if let Some(transformed) = expr.apply(
+                            &eval_ctx,
+                            &input,                       // row (same as input pre-write)
+                            &serde_json::Value::Null,     // prev (not yet fetched)
+                            &input,
+                        ) {
+                            req.data = Some(transformed);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            request_id = %request_id,
+                            error = %e,
+                            "failed to deserialise TransformExpr"
+                        );
+                    }
+                }
+            }
         }
 
         let sk =
@@ -255,11 +312,6 @@ impl<'a> QueryPipeline<'a> {
             CompileResult::Batched { root, .. } => root.sql.clone(),
         };
 
-        let request_id = headers
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("-")
-            .to_string();
         let span_id_owned = headers
             .get("x-span-id")
             .and_then(|v| v.to_str().ok())

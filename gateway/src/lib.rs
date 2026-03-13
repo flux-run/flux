@@ -50,6 +50,7 @@ pub mod auth;
 pub mod config;
 pub mod forward;
 pub mod handlers;
+pub mod metrics;
 pub mod rate_limit;
 pub mod router;
 pub mod snapshot;

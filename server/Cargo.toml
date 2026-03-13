@@ -21,6 +21,7 @@ tokio         = { version = "1", features = ["full"] }
 
 # HTTP server
 axum          = { version = "0.8", features = ["macros"] }
+axum-server   = { version = "0.7", features = ["tls-rustls"] }
 
 # DB
 sqlx          = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "uuid"] }

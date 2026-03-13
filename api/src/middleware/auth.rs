@@ -1,17 +1,16 @@
 //! Authentication + project-context middleware.
 //!
-//! ## Two operating modes
+//! ## Three operating modes (checked in order)
 //!
 //! | Mode | When | Behaviour |
 //! |------|------|-----------|
-//! | **Local** (default) | `FLUX_API_KEY` env var is **not** set | All requests pass through — optimised for `flux dev` |
-//! | **Protected** | `FLUX_API_KEY` is set | `Authorization: Bearer <key>` checked on every request |
+//! | **JWT** | `Authorization: Bearer <jwt>` | Dashboard / user sessions |
+//! | **DB API key** | `Authorization: Bearer flux_<key>` or `X-API-Key: flux_<key>` | CLI / service keys created via POST /api-keys |
+//! | **Static env key** | `FLUX_API_KEY` env var is set | Simple deployment guard |
+//! | **Local** (default) | No env vars, no key | `flux dev` — pass through |
 //!
-//! In both modes the middleware:
-//!   1. Reads the optional `X-Flux-Project` header (UUID) and uses it as `project_id`.
-//!   2. Falls back to `AppState::local_project_id` when the header is absent.
-//!   3. Injects a fully-populated [`RequestContext`] so downstream handlers
-//!      never need to deal with `Option<Uuid>`.
+//! In all modes the middleware injects a [`RequestContext`] so downstream
+//! handlers never need to deal with `Option<Uuid>`.
 //!
 //! ## SOLID note (Dependency Inversion)
 //! Routes depend on `RequestContext` (abstraction), not on how auth works.
@@ -24,6 +23,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::service as auth_service;
@@ -101,6 +101,76 @@ pub async fn require_auth(
                 })),
             )
             .into_response();
+        }
+    }
+
+    // ── 2b. DB-stored API key (created via POST /api-keys) ────────────────
+    // Keys have the format `flux_<32 lowercase hex chars>`.
+    // We SHA-256 hash the raw key and compare against key_hash in flux.api_keys.
+    // This runs only when no static FLUX_API_KEY env var is configured, so the
+    // two modes are mutually exclusive.
+    let raw_key = bearer
+        .as_deref()
+        .map(|s| s.to_owned())
+        .or_else(|| {
+            req.headers()
+                .get("X-API-Key")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_owned())
+        });
+
+    if let Some(ref key) = raw_key {
+        if key.starts_with("flux_") && std::env::var("FLUX_API_KEY").is_err() {
+            let hash = format!("{:x}", Sha256::digest(key.as_bytes()));
+            match sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM flux.api_keys WHERE key_hash = $1 AND revoked_at IS NULL)",
+            )
+            .bind(&hash)
+            .fetch_one(&state.pool)
+            .await
+            {
+                Ok(true) => {
+                    // Valid key — fire-and-forget last_used_at update.
+                    let pool = state.pool.clone();
+                    let h = hash.clone();
+                    tokio::spawn(async move {
+                        let _ = sqlx::query(
+                            "UPDATE flux.api_keys SET last_used_at = now() WHERE key_hash = $1",
+                        )
+                        .bind(&h)
+                        .execute(&pool)
+                        .await;
+                    });
+
+                    let project_id: Uuid = req
+                        .headers()
+                        .get("X-Flux-Project")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| Uuid::parse_str(s).ok())
+                        .unwrap_or(state.local_project_id);
+
+                    req.extensions_mut().insert(RequestContext {
+                        project_id,
+                        tenant_id: state.local_tenant_id,
+                    });
+                    return next.run(req).await;
+                }
+                Ok(false) => {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({
+                            "error":   "UNAUTHORIZED",
+                            "message": "Invalid or revoked API key",
+                            "code":    401,
+                        })),
+                    )
+                    .into_response();
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "api_key DB lookup failed");
+                    // Fall through to dev/local mode on DB error rather than hard-failing.
+                }
+            }
         }
     }
 

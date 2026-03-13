@@ -186,10 +186,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Listen ────────────────────────────────────────────────────────────
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!(port, "Flux monolithic server listening");
 
-    let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    // Optional TLS — set FLUX_TLS_CERT and FLUX_TLS_KEY to paths of PEM files.
+    // When the env vars are absent the server falls back to plain HTTP.
+    let tls_cert = std::env::var("FLUX_TLS_CERT").ok();
+    let tls_key  = std::env::var("FLUX_TLS_KEY").ok();
+
+    match (tls_cert, tls_key) {
+        (Some(cert_path), Some(key_path)) => {
+            info!(port, cert = %cert_path, "Flux server listening (TLS)");
+            let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+                &cert_path,
+                &key_path,
+            )
+            .await
+            .expect("Failed to load TLS certificate/key");
+            axum_server::bind_rustls(addr, tls_config).serve(app.into_make_service()).await?;
+        }
+        _ => {
+            info!(port, "Flux monolithic server listening");
+            let listener = TcpListener::bind(addr).await?;
+            axum::serve(listener, app).await?;
+        }
+    }
 
     Ok(())
 }

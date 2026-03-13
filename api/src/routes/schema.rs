@@ -220,30 +220,56 @@ pub async fn push_schema(
         ApiError::internal("upsert_error")
     })?;
 
-    // Process hooks
+    // Process hooks — two kinds:
+    //   • UUID string → function hook (invoke deployed function)
+    //   • JSON object → TransformExpr hook (evaluated in Rust, zero invocation overhead)
     if let Some(hooks_val) = &manifest.hooks {
         if let Some(hooks_obj) = hooks_val.as_object() {
             for (event_name, fn_arr) in hooks_obj {
                 if let Some(arr) = fn_arr.as_array() {
                     for fn_item in arr {
-                        let fn_id_str = fn_item.as_str().unwrap_or_default();
-                        if let Ok(function_id) = uuid::Uuid::parse_str(fn_id_str) {
+                        if let Some(fn_id_str) = fn_item.as_str() {
+                            // UUID string → function hook
+                            if let Ok(function_id) = uuid::Uuid::parse_str(fn_id_str) {
+                                sqlx::query(
+                                    "INSERT INTO fluxbase_internal.hooks \
+                                     (tenant_id, project_id, table_name, event, function_id) \
+                                     VALUES ($1, $2, $3, $4, $5) \
+                                     ON CONFLICT (tenant_id, project_id, table_name, event) \
+                                     DO UPDATE SET function_id = EXCLUDED.function_id, \
+                                                   transform_expr = NULL, enabled = true",
+                                )
+                                .bind(tenant_id)
+                                .bind(project_id)
+                                .bind(&manifest.table)
+                                .bind(event_name)
+                                .bind(function_id)
+                                .execute(&state.pool)
+                                .await
+                                .map_err(|e| {
+                                    eprintln!("push_schema function hook upsert error: {:?}", e);
+                                    ApiError::internal("hook_upsert_error")
+                                })?;
+                            }
+                        } else if fn_item.is_object() {
+                            // JSON object → TransformExpr hook (compiled TypeScript transform)
                             sqlx::query(
                                 "INSERT INTO fluxbase_internal.hooks \
-                                 (tenant_id, project_id, table_name, event, function_id) \
+                                 (tenant_id, project_id, table_name, event, transform_expr) \
                                  VALUES ($1, $2, $3, $4, $5) \
                                  ON CONFLICT (tenant_id, project_id, table_name, event) \
-                                 DO UPDATE SET function_id = EXCLUDED.function_id, enabled = true",
+                                 DO UPDATE SET transform_expr = EXCLUDED.transform_expr, \
+                                               function_id = NULL, enabled = true",
                             )
                             .bind(tenant_id)
                             .bind(project_id)
                             .bind(&manifest.table)
                             .bind(event_name)
-                            .bind(function_id)
+                            .bind(fn_item)
                             .execute(&state.pool)
                             .await
                             .map_err(|e| {
-                                eprintln!("push_schema hook upsert error: {:?}", e);
+                                eprintln!("push_schema transform hook upsert error: {:?}", e);
                                 ApiError::internal("hook_upsert_error")
                             })?;
                         }
