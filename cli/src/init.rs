@@ -1,17 +1,15 @@
-//! `flux init` — create `flux.toml` for this project directory.
+//! `flux init` — create `flux.toml` and `.flux/config.json` for this project.
 //!
 //! ```text
 //! $ flux init
 //! ✔  Created flux.toml
+//! ✔  Created .flux/config.json
 //!
 //!    name    = "my-project"
 //!    runtime = "nodejs20"
 //!
-//!    [record]  sample_rate = 1.0   retention_days = 30
-//!    [limits]  timeout_ms = 5000   memory_mb = 256
-//!    [dev]     gateway :4000  runtime :8083  api :8080  ...
-//!
 //!    Commit flux.toml to version control.
+//!    .flux/ is gitignored — it contains your local server key.
 //!    Run: flux dev
 //! ```
 
@@ -19,6 +17,8 @@ use std::fmt::Write as FmtWrite;
 
 use colored::Colorize;
 use tokio::fs;
+
+use crate::config::FluxLocalConfig;
 
 // ─── Option bag ──────────────────────────────────────────────────────────────
 //
@@ -76,17 +76,54 @@ pub async fn execute(opts: InitOptions) -> anyhow::Result<()> {
         fs::write(flux_toml_path, &toml_content).await?;
         println!("{} Created {}", "✔".green().bold(), "flux.toml".cyan().bold());
     }
+    // Write .flux/config.json ───────────────────────────────────────
+    //
+    // Contains the server URL and CLI key.  Gitignored — never committed.
+    // The user sets cli_key to match the server's FLUX_API_KEY env var.
+    let flux_local_path = std::path::Path::new(".flux/config.json");
+    if flux_local_path.exists() {
+        println!(
+            "{} {} already exists — skipping",
+            "⚠".yellow().bold(),
+            ".flux/config.json".cyan(),
+        );
+    } else {
+        let local_cfg = FluxLocalConfig {
+            server_url: Some(format!("http://localhost:{}/flux/api", gw_port)),
+            cli_key:    None,   // set this to match FLUX_API_KEY on the server
+        };
+        local_cfg.save().await?;
+        println!("{} Created {}", "✔".green().bold(), ".flux/config.json".cyan().bold());
+    }
 
+    // Update .gitignore to exclude .flux/ ─────────────────────────
+    let gitignore_path = std::path::Path::new(".gitignore");
+    let entry = ".flux/";
+    let should_add = if gitignore_path.exists() {
+        let contents = fs::read_to_string(gitignore_path).await.unwrap_or_default();
+        !contents.lines().any(|l| l.trim() == entry)
+    } else {
+        true
+    };
+    if should_add {
+        let mut gitignore = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(gitignore_path)
+            .await?;
+        use tokio::io::AsyncWriteExt;
+        gitignore.write_all(format!("\n# Flux local config (contains server key)\n{}\n", entry).as_bytes()).await?;
+        println!("{} Added {} to .gitignore", "✔".green().bold(), entry.cyan().bold());
+    }
     // Echo key settings ───────────────────────────────────────────────────────
     println!();
     println!("  {:<10}  {}", "name".bold(),    project_name.cyan());
     println!("  {:<10}  {}", "runtime".bold(), runtime_str.cyan());
     println!();
-    println!("  {:<10}  gateway :{}", "[dev]".bold(), gw_port.to_string().cyan());
-    println!("  {:<10}  runtime :{}",  "".bold(),     rt_port.to_string().cyan());
-    println!("  {:<10}  api     :{}",  "".bold(),     api_port_val.to_string().cyan());
+    println!("  {:<10}  :{}", "server".bold(), gw_port.to_string().cyan());
     println!();
     println!("{}", "Commit flux.toml to version control.".dimmed());
+    println!("{}", ".flux/ is gitignored — edit .flux/config.json to set cli_key once you set FLUX_API_KEY on the server.".dimmed());
     println!("Run: {}", "flux dev".cyan().bold());
 
     Ok(())

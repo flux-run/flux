@@ -115,8 +115,16 @@ pub fn create_app(state: AppState) -> Router {
         .route("/traces/{request_id}", get(logs::routes::get_trace))
         .route("/traces",            get(logs::routes::list_traces))
         // Gateway routes
-        .route("/routes",            get(routes::gateway_routes::list_gateway_routes).post(routes::gateway_routes::create_gateway_route))
-        .route("/routes/{id}",       axum::routing::patch(routes::gateway_routes::update_gateway_route).delete(routes::gateway_routes::delete_gateway_route))
+        .route("/gateway/routes",               get(routes::gateway_routes::list_gateway_routes).post(routes::gateway_routes::create_gateway_route))
+        .route("/gateway/routes/{id}",          get(routes::stubs::get_gateway_route_by_id)
+                                                .patch(routes::gateway_routes::update_gateway_route)
+                                                .delete(routes::gateway_routes::delete_gateway_route))
+        .route("/gateway/middleware",            post(routes::stubs::gateway_middleware_create))
+        .route("/gateway/middleware/{route}/{type}", delete(routes::stubs::gateway_middleware_delete))
+        .route("/gateway/routes/{id}/rate-limit", put(routes::stubs::gateway_route_rate_limit_set)
+                                                 .delete(routes::stubs::gateway_route_rate_limit_delete))
+        .route("/gateway/routes/{id}/cors",      get(routes::stubs::gateway_route_cors_get)
+                                                 .put(routes::stubs::gateway_route_cors_set))
         // Schema / SDK / spec
         .route("/schema/graph",      get(routes::schema::graph))
         .route("/sdk/schema",        get(routes::sdk::schema))
@@ -126,8 +134,11 @@ pub fn create_app(state: AppState) -> Router {
         // Tools / integrations
         .route("/tools",                       get(routes::tools::list_tools))
         .route("/tools/connected",             get(routes::tools::list_connected))
+        .route("/tools/connect",               post(routes::stubs::tools_connect_body))
         .route("/tools/connect/{provider}",    post(routes::tools::connect_provider))
         .route("/tools/disconnect/{provider}", delete(routes::tools::disconnect_provider))
+        .route("/tools/run",                   post(routes::stubs::tools_run))
+        .route("/tools/{tool}",                get(routes::stubs::tool_get))
         // Storage
         .route("/storage/provider",  get(routes::storage::get_provider)
                                     .put(routes::storage::upsert_provider)
@@ -136,6 +147,43 @@ pub fn create_app(state: AppState) -> Router {
         // Data Engine + Files proxy
         .route("/db/{*path}",        any(routes::data_engine::proxy_handler))
         .route("/files/{*path}",     any(routes::data_engine::proxy_handler))
+        // ── API Keys ──────────────────────────────────────────────────────────
+        .route("/api-keys",              get(routes::stubs::api_keys_list).post(routes::stubs::api_key_create))
+        .route("/api-keys/{id}",         delete(routes::stubs::api_key_delete))
+        .route("/api-keys/{id}/rotate",  post(routes::stubs::api_key_rotate))
+        // ── Monitor ───────────────────────────────────────────────────────────
+        .route("/monitor/status",        get(routes::stubs::monitor_status))
+        .route("/monitor/metrics",       get(routes::stubs::monitor_metrics))
+        .route("/monitor/alerts",        get(routes::stubs::monitor_alerts_list).post(routes::stubs::monitor_alert_create))
+        .route("/monitor/alerts/{id}",   delete(routes::stubs::monitor_alert_delete))
+        // ── Events ────────────────────────────────────────────────────────────
+        .route("/events",                post(routes::stubs::events_publish))
+        .route("/events/subscriptions",  get(routes::stubs::events_subscriptions_list).post(routes::stubs::events_subscribe))
+        .route("/events/subscriptions/{id}", delete(routes::stubs::events_unsubscribe))
+        // ── Queue management ──────────────────────────────────────────────────
+        .route("/queues",                get(routes::stubs::queues_list).post(routes::stubs::queue_create))
+        .route("/queues/{name}",         get(routes::stubs::queue_get).delete(routes::stubs::queue_delete))
+        .route("/queues/{name}/messages",post(routes::stubs::queue_publish_message))
+        .route("/queues/{name}/bindings",get(routes::stubs::queue_bindings_list).post(routes::stubs::queue_binding_create))
+        .route("/queues/{name}/purge",   post(routes::stubs::queue_purge))
+        .route("/queues/{name}/dlq",     get(routes::stubs::queue_dlq_list))
+        .route("/queues/{name}/dlq/replay", post(routes::stubs::queue_dlq_replay))
+        // ── Schedules ─────────────────────────────────────────────────────────
+        .route("/schedules",             get(routes::stubs::schedules_list).post(routes::stubs::schedule_create))
+        .route("/schedules/{name}",      delete(routes::stubs::schedule_delete))
+        .route("/schedules/{name}/pause",   post(routes::stubs::schedule_pause))
+        .route("/schedules/{name}/resume",  post(routes::stubs::schedule_resume))
+        .route("/schedules/{name}/run",     post(routes::stubs::schedule_run_now))
+        .route("/schedules/{name}/history", get(routes::stubs::schedule_history))
+        // ── Agents ────────────────────────────────────────────────────────────
+        .route("/agents",                get(routes::stubs::agents_list).post(routes::stubs::agent_create))
+        .route("/agents/{name}",         get(routes::stubs::agent_get).delete(routes::stubs::agent_delete))
+        .route("/agents/{name}/run",     post(routes::stubs::agent_run))
+        .route("/agents/{name}/simulate",post(routes::stubs::agent_simulate))
+        // ── Environments ──────────────────────────────────────────────────────
+        .route("/environments",          get(routes::stubs::environments_list).post(routes::stubs::environment_create))
+        .route("/environments/clone",    post(routes::stubs::environments_clone))
+        .route("/environments/{name}",   delete(routes::stubs::environment_delete))
         // Auth middleware injects RequestContext
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),

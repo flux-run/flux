@@ -8,7 +8,10 @@ use tokio::fs;
 // FluxToml URL helpers, dev.rs service table — reads from here.
 // Override at runtime via flux.toml [dev] or FLUXBASE_*_URL env vars.
 
+/// Legacy separate-binary port \u2014 kept for backward-compat with explicit `flux.toml [dev]` overrides.
+#[allow(dead_code)]
 pub const DEFAULT_API_PORT:         u16 = 8080;
+#[allow(dead_code)]
 pub const DEFAULT_GATEWAY_PORT:     u16 = 8081;
 pub const DEFAULT_RUNTIME_PORT:     u16 = 8083;
 pub const DEFAULT_DATA_ENGINE_PORT: u16 = 8082;
@@ -148,7 +151,66 @@ impl FluxToml {
     }
 }
 
-// ─── CLI runtime config (~/.flux/config.json) ────────────────────────────────
+// ─── .flux/config.json — per-project, single-binary mode ───────────────────
+//
+// Written by `flux init` in the project directory alongside `flux.toml`.
+// Gitignored — contains the CLI key used to authenticate with the local server.
+//
+// Example .flux/config.json:
+//
+//   {
+//     "server_url": "http://localhost:4000/flux/api",
+//     "cli_key":    "dev-cli-key"
+//   }
+//
+// URL precedence (highest → lowest):
+//   FLUX_URL env var → .flux/config.json → FLUXBASE_API_URL → ~/.flux/config.json → default
+//   FLUX_CLI_KEY env var → .flux/config.json → default (empty = no auth)
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct FluxLocalConfig {
+    /// Single-binary API base URL (e.g. http://localhost:4000/flux/api).
+    pub server_url: Option<String>,
+    /// Key sent as `Authorization: Bearer <cli_key>` to the Flux server.
+    /// Must match the server's `FLUX_API_KEY` environment variable.
+    pub cli_key: Option<String>,
+}
+
+impl FluxLocalConfig {
+    const FILE: &'static str = ".flux/config.json";
+
+    /// Walk from cwd toward the root looking for `.flux/config.json`.
+    fn find_path() -> Option<PathBuf> {
+        let mut dir = std::env::current_dir().ok()?;
+        loop {
+            let candidate = dir.join(Self::FILE);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            if !dir.pop() {
+                return None;
+            }
+        }
+    }
+
+    pub fn load_sync() -> Option<Self> {
+        let path = Self::find_path()?;
+        let src  = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&src).ok()
+    }
+
+    /// Write `.flux/config.json` in the current directory.
+    pub async fn save(&self) -> Result<PathBuf, std::io::Error> {
+        let path = PathBuf::from(Self::FILE);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let contents = serde_json::to_string_pretty(self)?;
+        fs::write(&path, contents).await?;
+        Ok(path)
+    }
+}
+
 //
 // Loaded from `~/.flux/config.json`.  Override individual fields with:
 //   FLUXBASE_API_URL   FLUXBASE_GATEWAY_URL   FLUXBASE_RUNTIME_URL
@@ -160,40 +222,47 @@ impl FluxToml {
 
 /// Runtime configuration for the CLI.
 ///
-/// Fields map to local service URLs.  There are no cloud credentials here —
-/// the framework is self-hosted and runs entirely on the developer's machine.
+/// Fields map to service URLs.  `cli_key` is sent as a bearer token so the
+/// server can verify requests come from an authorised CLI instance.
 ///
 /// **URL precedence** (highest → lowest):
-///   1. `flux.toml [dev]` port values
-///   2. `FLUXBASE_*_URL` environment variables
-///   3. `~/.flux/config.json`
-///   4. Compiled-in defaults
+///   1. `FLUX_URL` env var          → api_url
+///   2. `.flux/config.json`  (cwd)  → server_url + cli_key
+///   3. `FLUXBASE_API_URL` env var  → api_url
+///   4. `~/.flux/config.json`       → stored config
+///   5. Compiled-in defaults        → http://localhost:4000/flux/api
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    /// Local API service — `http://localhost:8080`
+    /// Flux server API base — `http://localhost:4000/flux/api` (single binary)
     pub api_url: String,
-    /// Local gateway — `http://localhost:8081`
+    /// Local gateway — `http://localhost:4000`
     #[serde(default)]
     pub gateway_url: String,
-    /// Local runtime — `http://localhost:8083`
+    /// Local runtime — `http://localhost:8083` (legacy separate-binary mode)
     #[serde(default)]
     pub runtime_url: String,
-    /// Local data engine — `http://localhost:8082`
+    /// Local data engine — `http://localhost:8082` (legacy)
     #[serde(default)]
     pub data_engine_url: String,
-    /// Local queue — `http://localhost:8084`
+    /// Local queue — `http://localhost:8084` (legacy)
     #[serde(default)]
     pub queue_url: String,
+    /// Bearer token for CLI → server authentication.
+    /// Set to the server's `FLUX_API_KEY` value.  Empty = no auth (dev mode).
+    #[serde(default)]
+    pub cli_key: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            api_url:         local_url(DEFAULT_API_PORT),
-            gateway_url:     local_url(DEFAULT_GATEWAY_PORT),
+            // Single-binary server — all APIs served at :4000/flux/api.
+            api_url:         format!("http://localhost:{}/flux/api", DEFAULT_SERVER_PORT),
+            gateway_url:     local_url(DEFAULT_SERVER_PORT),
             runtime_url:     local_url(DEFAULT_RUNTIME_PORT),
             data_engine_url: local_url(DEFAULT_DATA_ENGINE_PORT),
             queue_url:       local_url(DEFAULT_QUEUE_PORT),
+            cli_key:         None,
         }
     }
 }
@@ -216,8 +285,26 @@ impl Config {
             Config::default()
         };
 
-        // Env vars override the stored file.
-        // Precedence: flux.toml [dev] > env vars > ~/.flux/config.json > defaults.
+        // ── .flux/config.json (project-local, single-binary mode) ────────
+        // Highest priority for URL + key — overrides everything below.
+        if let Some(local) = FluxLocalConfig::load_sync() {
+            if let Some(url) = local.server_url {
+                config.api_url = url;
+            }
+            if local.cli_key.is_some() {
+                config.cli_key = local.cli_key;
+            }
+        }
+
+        // ── FLUX_URL / FLUX_CLI_KEY override .flux/config.json ───────────
+        if let Ok(url) = std::env::var("FLUX_URL") {
+            config.api_url = url;
+        }
+        if let Ok(key) = std::env::var("FLUX_CLI_KEY") {
+            config.cli_key = Some(key);
+        }
+
+        // ── Legacy env vars ───────────────────────────────────────────────
         if let Ok(url) = std::env::var("FLUXBASE_API_URL") {
             config.api_url = url;
         }

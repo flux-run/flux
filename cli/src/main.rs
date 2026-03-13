@@ -44,8 +44,6 @@ mod upgrade;
 mod version_cmd;
 mod whoami;
 mod why;
-mod workflow;
-
 #[derive(Parser)]
 #[command(name = "flux")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -462,12 +460,7 @@ enum Commands {
         command: gateway::GatewayCommands,
     },
 
-    // ── Workflows, Agents, Schedules ──────────────────────────────────────────
-    /// Workflow operations (create, deploy, run, logs, trace)
-    Workflow {
-        #[command(subcommand)]
-        command: workflow::WorkflowCommands,
-    },
+    // ── Agents, Schedules ─────────────────────────────────────────────────────
     /// AI Agent operations (create, deploy, run, simulate)
     Agent {
         #[command(subcommand)]
@@ -652,7 +645,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Logs { source, resource, follow, limit } => {
-            const SOURCES: &[&str] = &["function", "db", "workflow", "event", "queue", "system"];
+            const SOURCES: &[&str] = &["function", "db", "event", "queue", "system"];
             let (resolved_source, resolved_resource) = match (source, resource) {
                 (Some(s), r) if SOURCES.contains(&s.as_str()) => (Some(s), r),
                 (Some(s), None) => (Some("function".to_string()), Some(s)),
@@ -709,7 +702,6 @@ async fn main() -> anyhow::Result<()> {
         Commands::ApiKey  { command } => api_key::execute(command).await?,
 
         Commands::Gateway  { command } => gateway::execute(command).await?,
-        Commands::Workflow { command } => workflow::execute(command).await?,
         Commands::Agent    { command } => agent::execute(command).await?,
         Commands::Schedule { command } => schedule::execute(command).await?,
         Commands::Queue    { command } => queue::execute(command).await?,

@@ -1,61 +1,73 @@
 //! HTTP transport for the Flux CLI.
 //!
 //! `ApiClient` is a thin wrapper around `reqwest::Client` pre-wired to the
-//! URLs of the local Flux services.  No authentication is required — local
-//! services accept all traffic.
+//! Flux server URL.  When a `cli_key` is configured (from `.flux/config.json`
+//! or `FLUX_CLI_KEY`), it is sent as `Authorization: Bearer <key>` on every
+//! request so the server can verify the request originates from the CLI.
 //!
 //! # URL resolution (highest precedence first)
-//! 1. `flux.toml [dev]` port overrides
-//! 2. `FLUXBASE_*_URL` environment variables
-//! 3. Hard-coded localhost defaults (api :8080, gateway :4000, etc.)
+//! 1. `FLUX_URL` env var
+//! 2. `.flux/config.json` `server_url` in project tree
+//! 3. `FLUXBASE_API_URL` env var
+//! 4. `~/.flux/config.json`
+//! 5. Hard-coded default: http://localhost:4000/flux/api
 
 use std::time::Duration;
 
-use reqwest::Client;
+use reqwest::{Client, header};
 
 use crate::config::Config;
 
 // ─── ApiClient ────────────────────────────────────────────────────────────────
 
-/// HTTP client pre-wired to the local Flux services.
+/// HTTP client pre-wired to the local Flux server.
 ///
 /// Responsibilities (Single Responsibility Principle):
 /// - Hold a single `reqwest::Client` (connection-pool reuse)
 /// - Expose the resolved service base URLs
-/// - Provide lightweight async helpers for common API calls
+/// - Inject `Authorization: Bearer <cli_key>` when a key is configured
 ///
 /// This type intentionally does NOT:
-/// - Perform any authentication
 /// - Know about tenants or projects
 /// - Assume a remote endpoint
 pub struct ApiClient {
-    /// Underlying reqwest connection pool.
+    /// Underlying reqwest connection pool (default headers include auth).
     pub client: Client,
-    /// Local API service — `http://localhost:8080`
+    /// Flux server API base — `http://localhost:4000/flux/api`
     pub base_url: String,
-    /// Local gateway — `http://localhost:8081`
+    /// Gateway / function invocation base — `http://localhost:4000`
     pub gateway_url: String,
-    /// Local runtime — `http://localhost:8083`
+    /// Legacy runtime URL (only used in separate-binary mode).
     pub runtime_url: String,
-    /// Local data engine — `http://localhost:8082`
+    /// Legacy data engine URL.
     pub data_engine_url: String,
-    /// Local queue — `http://localhost:8084`
+    /// Legacy queue URL.
     pub queue_url: String,
-    // dashboard_url intentionally absent — the dashboard is served from the
-    // API binary itself at /ui, so the CLI never needs to address it directly.
 }
 
 impl ApiClient {
     /// Build a client from the resolved [`Config`].
     ///
-    /// Never fails due to missing credentials — local services do not require
-    /// authentication.  The only failure mode is a failure to build the
-    /// `reqwest` connection pool (an OS-level resource exhaustion scenario).
+    /// If `cli_key` is set the reqwest client will send
+    /// `Authorization: Bearer <key>` as a default header on every request,
+    /// so individual command modules don't need to handle auth themselves.
     pub async fn new() -> anyhow::Result<Self> {
         let config = Config::load().await;
 
+        // Build default headers — inject auth key when configured.
+        let mut default_headers = header::HeaderMap::new();
+        if let Some(ref key) = config.cli_key {
+            if !key.is_empty() {
+                let value = format!("Bearer {}", key);
+                if let Ok(hv) = header::HeaderValue::from_str(&value) {
+                    default_headers.insert(header::AUTHORIZATION, hv);
+                }
+            }
+        }
+
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
+            .default_headers(default_headers)
             .build()?;
 
         Ok(Self {
