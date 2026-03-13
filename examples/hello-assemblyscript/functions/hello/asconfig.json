@@ -1,0 +1,13 @@
+{
+  "targets": {
+    "release": {
+      "outFile": "hello.wasm",
+      "sourceMap": false,
+      "optimize": true,
+      "runtime": "stub"
+    }
+  },
+  "options": {
+    "exportRuntime": false
+  }
+}

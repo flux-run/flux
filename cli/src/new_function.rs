@@ -235,23 +235,55 @@ fn scaffold_for_language(lang: &str, name: &str) -> (&'static str, String) {
 }
 
 /// Returns extra files to write alongside the main code file.
-/// TypeScript/JavaScript/AssemblyScript get a local SDK shim + tsconfig with
-/// paths mapping — no npm install required.
+/// Every language gets its build configuration — no manual setup required.
 fn scaffold_extra_files(lang: &str, name: &str) -> Vec<(&'static str, String)> {
     match lang {
         "typescript" => vec![
             ("@fluxbase-functions.ts", FLUX_SDK_SHIM.to_string()),
-            ("tsconfig.json", scaffold_tsconfig()),
+            ("tsconfig.json",          scaffold_tsconfig()),
         ],
         "javascript" => vec![
             ("@fluxbase-functions.js", flux_sdk_shim_js()),
         ],
         "assemblyscript" => vec![
             ("@fluxbase-functions.ts", FLUX_SDK_SHIM.to_string()),
-            ("tsconfig.json", scaffold_tsconfig()),
+            ("tsconfig.json",          scaffold_tsconfig()),
+            ("asconfig.json",          scaffold_asconfig(name)),
         ],
         "rust" => vec![
             ("Cargo.toml", scaffold_rust_cargo(name)),
+        ],
+        "go" => vec![
+            ("go.mod", scaffold_go_mod(name)),
+        ],
+        "python" => vec![
+            ("requirements.txt", scaffold_python_requirements()),
+        ],
+        "c" => vec![
+            ("Makefile", scaffold_c_makefile(name)),
+        ],
+        "cpp" => vec![
+            ("Makefile", scaffold_cpp_makefile(name)),
+        ],
+        "zig" => vec![
+            ("build.zig", scaffold_zig_build(name)),
+        ],
+        "csharp" => vec![
+            ("Handler.csproj", scaffold_csharp_csproj(name)),
+        ],
+        "swift" => vec![
+            ("Package.swift", scaffold_swift_package(name)),
+        ],
+        "kotlin" => vec![
+            ("build.gradle.kts",    scaffold_kotlin_gradle(name)),
+            ("settings.gradle.kts", scaffold_kotlin_settings(name)),
+        ],
+        "java" => vec![
+            ("build.gradle",    scaffold_java_gradle(name)),
+            ("settings.gradle", scaffold_java_settings(name)),
+        ],
+        "ruby" => vec![
+            ("Gemfile", scaffold_ruby_gemfile()),
         ],
         _ => vec![],
     }
@@ -479,6 +511,256 @@ lto       = true
 "#,
         name = name
     )
+}
+
+fn scaffold_go_mod(name: &str) -> String {
+    format!(
+        r#"module {name}
+
+go 1.21
+
+// Build: tinygo build -o {name}.wasm -target=wasi .
+// Install TinyGo: https://tinygo.org/getting-started/install/
+"#,
+        name = name
+    )
+}
+
+fn scaffold_python_requirements() -> String {
+    r#"# Python WASM functions have no external dependencies by default.
+# Add pure-Python packages here — they will be bundled automatically.
+# Note: C-extension packages are not supported in WASM.
+#
+# Build: flux deploy  (the CLI compiles handler.py → WASM via py2wasm)
+# Install py2wasm: pip install py2wasm
+"#
+    .to_string()
+}
+
+fn scaffold_c_makefile(name: &str) -> String {
+    format!(
+        r#"# Build {name} → WASM using wasi-sdk
+# Install: https://github.com/WebAssembly/wasi-sdk/releases
+WASI_SDK ?= /opt/wasi-sdk
+CC        = $(WASI_SDK)/bin/clang
+
+CFLAGS = --target=wasm32-wasi          \
+         -nostdlib                      \
+         -Wl,--no-entry                 \
+         -Wl,--export={name}_handler   \
+         -Wl,--allow-undefined
+
+.PHONY: build clean
+
+build: {name}.wasm
+
+{name}.wasm: handler.c
+	$(CC) $(CFLAGS) -O2 -o $@ $<
+
+clean:
+	rm -f {name}.wasm
+"#,
+        name = name
+    )
+}
+
+fn scaffold_cpp_makefile(name: &str) -> String {
+    format!(
+        r#"# Build {name} → WASM using wasi-sdk
+# Install: https://github.com/WebAssembly/wasi-sdk/releases
+WASI_SDK ?= /opt/wasi-sdk
+CXX       = $(WASI_SDK)/bin/clang++
+
+CXXFLAGS = --target=wasm32-wasi        \
+           -nostdlib                    \
+           -fno-exceptions             \
+           -Wl,--no-entry              \
+           -Wl,--export={name}_handler \
+           -Wl,--allow-undefined
+
+.PHONY: build clean
+
+build: {name}.wasm
+
+{name}.wasm: handler.cpp
+	$(CXX) $(CXXFLAGS) -O2 -o $@ $<
+
+clean:
+	rm -f {name}.wasm
+"#,
+        name = name
+    )
+}
+
+fn scaffold_zig_build(name: &str) -> String {
+    format!(
+        r#"// Build {name} → WASM
+// Install Zig >= 0.12: https://ziglang.org/download/
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {{
+    const lib = b.addSharedLibrary(.{{
+        .name = "{name}",
+        .root_source_file = b.path("handler.zig"),
+        .target = b.resolveTargetQuery(.{{
+            .cpu_arch = .wasm32,
+            .os_tag   = .wasi,
+        }}),
+        .optimize = .ReleaseSmall,
+    }});
+    lib.rdynamic = true;
+    b.installArtifact(lib);
+}}
+"#,
+        name = name
+    )
+}
+
+fn scaffold_asconfig(name: &str) -> String {
+    format!(
+        r#"{{
+  "targets": {{
+    "release": {{
+      "outFile": "{name}.wasm",
+      "sourceMap": false,
+      "optimize": true,
+      "runtime": "stub"
+    }}
+  }},
+  "options": {{
+    "exportRuntime": false
+  }}
+}}
+"#,
+        name = name
+    )
+}
+
+fn scaffold_csharp_csproj(name: &str) -> String {
+    format!(
+        r#"<!-- Build: dotnet build -c Release
+     Install WASI workload: dotnet workload install wasi-experimental -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>{name}</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <RuntimeIdentifier>wasi-wasm</RuntimeIdentifier>
+    <UseAppHost>false</UseAppHost>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.*" />
+  </ItemGroup>
+</Project>
+"#,
+        name = name
+    )
+}
+
+fn scaffold_swift_package(name: &str) -> String {
+    format!(
+        r#"// Build: swift build -c release --triple wasm32-unknown-wasi
+// Install SwiftWasm toolchain: https://swiftwasm.org
+// swift-tools-version: 5.9
+import PackageDescription
+
+let package = Package(
+    name: "{name}",
+    targets: [
+        .executableTarget(
+            name: "{name}",
+            path: ".",
+            swiftSettings: [
+                .unsafeFlags(["-target", "wasm32-unknown-wasi"]),
+            ]
+        ),
+    ]
+)
+"#,
+        name = name
+    )
+}
+
+fn scaffold_kotlin_gradle(name: &str) -> String {
+    let _ = name; // name used only in settings.gradle.kts
+    r#"// Build: ./gradlew wasmWasiBinaries
+// Install: Kotlin >= 1.9 — https://kotlinlang.org/docs/wasm-get-started.html
+plugins {
+    kotlin("multiplatform") version "2.0.0"
+}
+
+kotlin {
+    wasmWasi {
+        binaries.executable()
+    }
+
+    sourceSets {
+        val wasmWasiMain by getting
+    }
+}
+"#
+    .to_string()
+}
+
+fn scaffold_kotlin_settings(name: &str) -> String {
+    format!(
+        r#"rootProject.name = "{name}"
+"#,
+        name = name
+    )
+}
+
+fn scaffold_java_gradle(name: &str) -> String {
+    format!(
+        r#"// Build: gradle nativeCompile   (requires GraalVM JDK)
+// Install GraalVM: https://www.graalvm.org/downloads/
+plugins {{
+    id 'java'
+    id 'org.graalvm.buildtools.native' version '0.10.1'
+}}
+
+group   = 'dev.fluxbase'
+version = '0.1.0'
+
+java {{
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}}
+
+graalvmNative {{
+    binaries {{
+        main {{
+            imageName = '{name}'
+            buildArgs.add('--no-fallback')
+            buildArgs.add('-H:Kind=SHARED_LIBRARY')
+        }}
+    }}
+}}
+"#,
+        name = name
+    )
+}
+
+fn scaffold_java_settings(name: &str) -> String {
+    format!(
+        r#"rootProject.name = '{name}'
+"#,
+        name = name
+    )
+}
+
+fn scaffold_ruby_gemfile() -> String {
+    r#"# frozen_string_literal: true
+source "https://rubygems.org"
+
+# Ruby WASM runtime — bundles Ruby + your handler into a .wasm file.
+# Build: flux deploy  (the CLI runs: ruby.wasm build handler.rb -o <name>.wasm)
+# Install: gem install ruby_wasm
+gem "ruby_wasm", "~> 2.0"
+"#
+    .to_string()
 }
 
 // ─── Rust ─────────────────────────────────────────────────────────────────────
