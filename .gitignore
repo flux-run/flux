@@ -51,3 +51,4 @@ docker-compose*.yml
 .env.example
 .env.dev.example
 */.env.example
+projects/
