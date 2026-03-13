@@ -1,3 +1,31 @@
+//! HTTP handler for `POST /execute` — the Runtime's sole inbound endpoint.
+//!
+//! ## Responsibilities
+//!
+//! 1. Parse `x-request-id`, `x-parent-span-id`, and `X-Function-Runtime` headers.
+//! 2. Build an `InvocationCtx` with a deterministic `execution_seed` (replay uses the
+//!    seed from the queue; live invocations generate a fresh one).
+//! 3. Construct a `TraceEmitter` for this invocation.
+//! 4. Delegate bundle resolution to `BundleResolver` (warm WASM → warm Deno → cold fetch).
+//! 5. Delegate execution to `ExecutionRunner::run_response`.
+//!
+//! ## Bundle resolution order
+//!
+//! ```text
+//! ┌── warm WASM? (WasmPool has bytes for function_id, and runtime_hint ≠ "deno")
+//! │      → yes: skip fetch, run immediately
+//! ├── warm Deno? (BundleCache has code for function_id, and runtime_hint ≠ "wasm")
+//! │      → yes: skip fetch, run immediately
+//! └── cold: fetch bundle from API (control plane → S3/inline), populate both caches
+//! ```
+//!
+//! `X-Function-Runtime` lets the gateway force a specific engine (useful when a function
+//! supports both JS and WASM variants with the same function_id).
+//!
+//! ## Single responsibility
+//!
+//! All business logic lives in `BundleResolver` and `ExecutionRunner`. This file stays
+//! under ~100 lines.
 /// execute_handler — HTTP handler for `POST /execute`.
 ///
 /// Single responsibility: parse the request into an `InvocationCtx`, delegate

@@ -1,3 +1,39 @@
+//! Query compiler — translates the JSON query API into parameterised SQL.
+//!
+//! ## Compilation pipeline
+//!
+//! ```text
+//! QueryRequest (JSON)
+//!        ↓
+//! PolicyEngine::evaluate_cached()   → allowed_columns, row_condition_sql
+//!        ↓
+//! SchemaCache lookup                → column metadata, relationships, computed cols
+//!        ↓
+//! Column allowlist                  → filter requested cols to policy-allowed set
+//!        ↓
+//! Filter → SQL WHERE clause         → each Filter { column, op, value } → "$N" param
+//!        ↓
+//! pre_read_sql generation (UPDATE)  → SELECT * … WHERE … FOR UPDATE (fresh $N indices)
+//!        ↓
+//! CompileResult::Single(CompiledQuery)
+//!   — OR —
+//! CompileResult::Batched { root, plan }  (when nesting depth ≥ BATCH_DEPTH_THRESHOLD)
+//! ```
+//!
+//! ## `pre_read_sql` (UPDATE)
+//!
+//! For UPDATE queries, the compiler emits a second SQL string (`pre_read_sql`) with a
+//! fresh `$1 … $N` parameter list (no SET clause parameters — only WHERE parameters).
+//! The executor runs this SELECT before the UPDATE inside the same transaction so
+//! `state_mutations.before_state` is always a row snapshot from immediately before the
+//! write, preventing the phantom-read problem.
+//!
+//! ## Nested / batched queries
+//!
+//! When the caller requests deeply nested relationships (depth ≥ `BATCH_DEPTH_THRESHOLD`),
+//! a single CTE would produce a cartesian explosion. The compiler instead emits a
+//! `CompileResult::Batched` plan describing each child level. The executor fetches levels
+//! independently and joins in Rust — trading SQL complexity for Rust memory.
 use serde::{Deserialize, Serialize};
 use crate::engine::error::EngineError;
 use crate::policy::PolicyResult;

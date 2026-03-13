@@ -1,11 +1,30 @@
 //! Per-route token-bucket rate limiter.
 //!
-//! Uses a process-global `DashMap` so the same rate-limit counter is shared
-//! across all Tokio worker threads without a mutex.
+//! ## Algorithm — token bucket
 //!
-//! `allow(key, limit_per_sec)` tries to consume one token and returns:
-//!   true  — request is within the limit, proceed
-//!   false — bucket empty, caller should return 429
+//! Each route × client-IP pair gets its own [`Bucket`].  The bucket holds up
+//! to `limit_per_sec` tokens and refills continuously at a rate of
+//! `limit_per_sec` tokens per second.
+//!
+//! On every request:
+//!   1. Calculate elapsed time since last refill.
+//!   2. Add `elapsed × limit_per_sec` tokens, capped at `limit_per_sec` (the
+//!      bucket capacity is equal to the per-second limit, so a burst of at
+//!      most one second's worth of tokens can accumulate).
+//!   3. If `tokens >= 1.0`, consume one and return `true` (allow).
+//!   4. Otherwise return `false` (reject — caller returns HTTP 429).
+//!
+//! ## Process-global state
+//!
+//! The bucket map is stored in a `DashMap` behind a `OnceLock` so it is
+//! shared across all Tokio worker threads without a `Mutex`.  `DashMap`
+//! uses shard-level locking internally, keeping contention low even under
+//! heavy parallel load.
+//!
+//! ## Key format
+//!
+//! Keys are `"{route_uuid}:{client_ip}"` (built by [`key`]).  Using the
+//! route UUID (not path) avoids collisions if two routes share a path prefix.
 use dashmap::DashMap;
 use std::sync::OnceLock;
 use std::time::Instant;

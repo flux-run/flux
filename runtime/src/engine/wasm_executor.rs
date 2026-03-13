@@ -24,6 +24,35 @@
 //! The JSON must have either `"output"` or `"error"` keys at the top level.
 //! Logs are emitted via `fluxbase.log` during execution, not in the result.
 
+//! WASM execution engine — runs `.wasm` modules compiled by Wasmtime (Cranelift AOT).
+//!
+//! ## Compilation strategy
+//!
+//! Wasmtime compiles `.wasm` bytecode to native machine code via Cranelift AOT at first
+//! load. The compiled `Module` is cached in `WasmPool` so subsequent calls for the same
+//! function skip compilation entirely (typically 50–200 ms for small modules).
+//!
+//! ## Fuel-based limits
+//!
+//! Every `Store` is pre-loaded with `fuel_limit` units of "fuel" (1 billion ≈ a few
+//! hundred ms of CPU). When fuel is exhausted Wasmtime traps with `OutOfFuel`, preventing
+//! runaway WASM loops from consuming a worker thread indefinitely.
+//!
+//! ## Host imports (`fluxbase` namespace)
+//!
+//! WASM modules may call the following host functions via linear memory pointers:
+//!
+//! | Import | Purpose |
+//! |---|---|
+//! | `fluxbase.log(level, ptr, len)` | Append a `LogLine` to `HostState::logs` |
+//! | `fluxbase.secrets_get(key_ptr, key_len, out_ptr, out_max) → i32` | Copy a secret value into WASM memory; returns byte length or -1 |
+//! | `fluxbase.http_fetch(...)` | Outbound HTTP (allow-listed hosts only) |
+//!
+//! ## Memory safety
+//!
+//! All pointer/length pairs received from WASM are bounds-checked against
+//! `memory.data_size()` before slicing. Invalid pointers return an error rather than
+//! panicking the host process.
 use std::collections::HashMap;
 use wasmtime::{
     Caller, Config, Engine, Linker, Module, Store,

@@ -1,8 +1,35 @@
-//! Runtime forwarding.
+//! Runtime forwarding — function invocation dispatch.
 //!
-//! Dispatches function-invocation requests to the Runtime service via the
-//! `RuntimeDispatch` trait — either HTTP (multi-process) or in-process
-//! (server crate).  Auth-context is threaded through as structured fields.
+//! ## What `to_runtime` does
+//!
+//! [`to_runtime`] translates a validated, authenticated gateway request into
+//! an [`ExecuteRequest`] and sends it to the Runtime service via the
+//! [`RuntimeDispatch`] trait.  It returns the runtime's response verbatim
+//! (status code + body) so the gateway acts as a transparent proxy.
+//!
+//! ## Why `x-request-id` is echoed back
+//!
+//! The gateway always injects `x-request-id` into the response, even when
+//! the runtime does not set it.  This lets callers run `flux trace <id>` with
+//! the ID from *any* response — the trace root row is guaranteed to exist in
+//! `gateway_trace_requests` under that ID.
+//!
+//! ## Gateway ↔ Runtime contract
+//!
+//! The gateway communicates intent via headers, not URL construction:
+//!
+//! | Header                | Direction  | Purpose                              |
+//! |-----------------------|------------|--------------------------------------|
+//! | `X-Service-Token`     | → runtime  | inter-service authentication         |
+//! | `x-request-id`        | → runtime  | trace correlation                    |
+//! | `x-parent-span-id`    | → runtime  | nested span linkage                  |
+//! | `X-Function-Runtime`  | → runtime  | hint: `"deno"` or `"wasm"`           |
+//! | `X-User-Id`           | → runtime  | authenticated user identity          |
+//! | `X-JWT-Claims`        | → runtime  | full JWT claims as JSON string       |
+//! | `x-request-id`        | ← response | echoed for caller traceability       |
+//!
+//! The runtime must treat `X-Service-Token` as a shared secret; requests
+//! without a valid token should be rejected at the runtime boundary.
 
 pub mod http_impl;
 pub use http_impl::HttpRuntimeDispatch;

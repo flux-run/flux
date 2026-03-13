@@ -5,6 +5,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[derive(Deserialize)]
 pub struct Config {
     pub database_url: String,
+    pub api_url: String,
     pub runtime_url: String,
     pub service_token: String,
     pub port: u16,
@@ -16,6 +17,8 @@ pub struct Config {
 pub fn load() -> Config {
     Config {
         database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL required"),
+        api_url: std::env::var("API_URL")
+            .unwrap_or_else(|_| "http://localhost:8080/flux/api".to_string()),
         runtime_url: std::env::var("RUNTIME_URL")
             .unwrap_or_else(|_| "http://localhost:8083".to_string()),
         service_token: std::env::var("INTERNAL_SERVICE_TOKEN")

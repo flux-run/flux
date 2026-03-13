@@ -1,3 +1,32 @@
+//! Hook engine — invokes user-defined before/after trigger functions.
+//!
+//! ## What hooks do
+//!
+//! Hooks let users attach a Fluxbase function to table events (`before_insert`,
+//! `after_update`, etc.). When an event fires, the hook engine POSTs the row data to
+//! the runtime (`POST /execute`) and waits for the response.
+//!
+//! ## Before hooks (blocking)
+//!
+//! Before hooks run **before** the mutation is committed. If the runtime returns a
+//! non-2xx response or the HTTP call fails, the hook engine returns an error and the
+//! pipeline aborts the operation — the data write never happens. Use before hooks to:
+//! - Validate or transform the payload before writing
+//! - Enforce business rules that policies can't express
+//! - Block writes conditionally (return 422 to reject)
+//!
+//! ## After hooks (non-fatal)
+//!
+//! After hooks run **after** the transaction has committed. Errors are logged but do
+//! not fail the request — the data is already written. Use after hooks to:
+//! - Send notifications / webhooks
+//! - Trigger downstream jobs via `ctx.queue.push()`
+//! - Sync to external systems
+//!
+//! ## request_id forwarding
+//!
+//! `request_id` is forwarded as `x-request-id` to the runtime so hook invocation
+//! spans appear alongside the originating query in `flux trace` output.
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgPool, Row};

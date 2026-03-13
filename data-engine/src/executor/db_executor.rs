@@ -1,3 +1,40 @@
+//! Database executor — wraps user queries in an explicit Postgres transaction.
+//!
+//! ## Transaction pipeline (4 ordered steps)
+//!
+//! Every call to [`execute`] runs the following steps inside a single transaction:
+//!
+//! ### Step 1 — `SET LOCAL search_path = "{schema}", public`
+//!
+//! Prevents unqualified table references from resolving to the wrong tenant's schema.
+//! `SET LOCAL` means the override is scoped to the transaction and automatically reverts
+//! on `COMMIT`/`ROLLBACK` — safe with connection pooling.
+//!
+//! ### Step 2 — `SET LOCAL statement_timeout = 'Nms'`
+//!
+//! Postgres cancels the query at the DB engine level (SQLSTATE 57014) if it runs longer
+//! than the configured budget. This fires even if the Rust `tokio::timeout` has already
+//! dropped the future, protecting BYODB customer databases from runaway hash-joins and
+//! sequential scans.
+//!
+//! ### Step 3 — UPDATE pre-read (`SELECT … FOR UPDATE`)
+//!
+//! For UPDATE operations only: a `SELECT * FROM schema.table WHERE {same conditions} FOR UPDATE`
+//! is executed before the mutation to capture `before_state`. The `FOR UPDATE` also serialises
+//! concurrent writes to the same rows, eliminating lost-update races in the mutation log.
+//!
+//! ### Step 4 — User query + `state_mutations` write
+//!
+//! The user query is wrapped in `json_agg(row_to_json(_r))` so the executor always receives
+//! a JSON array. For INSERT/UPDATE/DELETE, a `state_mutations` row is written for each
+//! affected row inside the same transaction — the **atomic guarantee**: either the data change
+//! and its mutation log entry both commit, or neither does.
+//!
+//! ## Trace comment
+//!
+//! Every SQL statement is prefixed with `/* flux_req:{request_id},span:{span_id} */`.
+//! This makes the query identifiable in `pg_stat_activity`, `auto_explain`, and `pgaudit`
+//! without any extra configuration.
 use anyhow::anyhow;
 use sqlx::postgres::PgArguments;
 use sqlx::{Arguments, PgPool, Row};

@@ -1,8 +1,39 @@
-//! Distributed tracing helpers.
+//! Distributed tracing — request root span capture.
 //!
-//! Responsibilities:
-//!   1. `resolve_request_id`  — pick or synthesise the x-request-id
-//!   2. `write_root`          — fire-and-forget DB write of the trace root span
+//! ## What is a trace root?
+//!
+//! Every function invocation results in one `gateway_trace_requests` row written
+//! at the moment the gateway accepts the request.  That row is the *trace root*:
+//! the anchor that `flux trace <request_id>` queries to reconstruct the full
+//! call graph (gateway → runtime → DB, etc.).
+//!
+//! ## `request_id` resolution — three sources, priority order
+//!
+//!   1. `x-request-id` header    — explicit caller-supplied ID (highest priority)
+//!   2. `traceparent` trace_id   — W3C Trace-Context Level 1, parsed from the
+//!                                 standard 4-segment header format
+//!   3. Freshly generated UUID   — synthesised when neither header is present
+//!
+//! Callers that want end-to-end traceability across services should send
+//! `x-request-id`; the gateway echoes it back in every response.
+//!
+//! ## Fire-and-forget writes
+//!
+//! [`write_root`] spawns a `tokio::spawn` background task so the Postgres
+//! write never adds latency to the hot request path.  The caller receives a
+//! response before (or concurrently with) the trace row committing.
+//!
+//! ## Header redaction
+//!
+//! `dispatch.rs` redacts `authorization`, `x-api-key`, and `cookie` values
+//! to `"[REDACTED]"` before calling [`write_root`].  Credentials are never
+//! persisted to `gateway_trace_requests`.
+//!
+//! ## Responsibilities
+//!
+//!   1. [`resolve_request_id`] — pick or synthesise the x-request-id
+//!   2. [`resolve_parent_span`] — extract the parent-span ID for nested traces
+//!   3. [`write_root`]          — fire-and-forget DB write of the trace root
 use axum::http::HeaderMap;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -47,15 +78,20 @@ pub fn resolve_parent_span(headers: &HeaderMap) -> Option<String> {
 
 /// Persist the trace root envelope to `gateway_trace_requests`.
 ///
-/// Fire-and-forget via `tokio::spawn` — never blocks the hot path.
+/// Includes `query_params` so that `flux trace <id>` can show the full
+/// original URL (path + query) alongside headers and body.
+///
+/// Spawned via `tokio::spawn` — never blocks the hot request path.  The
+/// caller receives its response before (or concurrently with) this write.
 pub fn write_root(
-    pool:       PgPool,
-    route:      &RouteRecord,
-    request_id: &str,
-    method:     &str,
-    path:       &str,
-    headers:    HashMap<String, String>,
-    body:       serde_json::Value,
+    pool:         PgPool,
+    route:        &RouteRecord,
+    request_id:   &str,
+    method:       &str,
+    path:         &str,
+    headers:      HashMap<String, String>,
+    query_params: HashMap<String, String>,
+    body:         serde_json::Value,
 ) {
     let rid = request_id.to_string();
     let pid = route.project_id;
@@ -66,9 +102,9 @@ pub fn write_root(
     tokio::spawn(async move {
         let _ = sqlx::query(
             "INSERT INTO flux.gateway_trace_requests
-             (request_id, project_id, function_id, method, path,
-              headers, body, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+               (request_id, project_id, function_id, method, path,
+                headers, query_params, body, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
              ON CONFLICT (request_id) DO NOTHING",
         )
         .bind(&rid)
@@ -77,6 +113,7 @@ pub fn write_root(
         .bind(&m)
         .bind(&p)
         .bind(serde_json::to_value(&headers).ok())
+        .bind(serde_json::to_value(&query_params).ok())
         .bind(body)
         .execute(&pool)
         .await;

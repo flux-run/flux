@@ -1,12 +1,24 @@
 //! Central cache manager — owns all three in-process caches and exposes
 //! typed invalidation helpers.
 //!
-//! Flux is a single-project framework — there is no tenant/project
-//! scoping in cache keys. Keys are:
+//! ## What is cached
 //!
-//! * `schema_cache` — Moka: `"{schema}:{table}"` → col_meta + relationships
-//! * `plan_cache`   — Moka: `PlanKey` → compiled SQL template
-//! * `policy_cache` — `RwLock<HashMap>`: policy evaluation results
+//! | Cache | Backend | Key | Value | Why |
+//! |---|---|---|---|---|
+//! | `schema_cache` | Moka (L1) | `"{schema}:{table}"` | column metadata + relationships | Avoid `information_schema` round-trips on every query |
+//! | `plan_cache`   | Moka (L2) | `PlanKey { schema, table, operation, … }` | compiled SQL template | Avoid re-running the compiler on repeated identical queries |
+//! | `policy_cache` | `RwLock<HashMap>` | `"{table}:{role}:{operation}"` | `PolicyResult` | Avoid `fluxbase_internal.policies` lookup on every query |
+//!
+//! ## Invalidation
+//!
+//! All invalidation is explicit (no TTL), driven by API events:
+//! - **DDL change** (column add/drop) → `invalidate_table`
+//! - **Hook / relationship change** → `invalidate_schema`
+//! - **Policy add/delete** → `invalidate_policy`
+//! - **Project-wide reset** → `invalidate_all`
+//!
+//! Centralising these helpers in `CacheManager` (rather than scattering `cache.invalidate()`
+//! calls across API handlers) is the SRP win: the cache knows how to invalidate itself.
 
 use std::collections::HashMap;
 use std::sync::Arc;

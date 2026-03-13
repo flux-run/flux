@@ -1,3 +1,27 @@
+//! Policy engine — row-level and column-level security evaluation.
+//!
+//! ## Security model
+//!
+//! Every query is evaluated against a policy stored in `fluxbase_internal.policies`.
+//! A policy row specifies, for a given `(table, role, operation)` triple:
+//!
+//! - **`allowed_columns`** — JSON array of column names the role may read or write.
+//!   Empty array = all columns permitted (SELECT * / write all).
+//! - **`row_condition`** — SQL WHERE expression with `$auth.*` template variables.
+//!   E.g. `"user_id = $auth.uid"` restricts rows to those owned by the current user.
+//!
+//! ## Template variable substitution
+//!
+//! `$auth.uid` and `$auth.role` in `row_condition` are replaced with `$N` bind
+//! parameters at evaluation time, using values from `AuthContext`. This prevents SQL
+//! injection — the substituted values are always bound, never interpolated.
+//!
+//! ## In-process cache
+//!
+//! Policy evaluation results are cached in an in-process `RwLock<HashMap>` keyed by
+//! `"{table}:{role}:{operation}"`. This avoids a DB round-trip on every query.
+//! Cache is invalidated via [`crate::cache::CacheManager::invalidate_policy`] when a
+//! policy row is created or deleted.
 use std::collections::HashMap;
 use sqlx::{FromRow, PgPool};
 use tokio::sync::RwLock;

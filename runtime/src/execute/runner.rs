@@ -1,3 +1,30 @@
+//! ExecutionRunner — single-responsibility execution layer.
+//!
+//! Shared by all three bundle-resolution paths (warm WASM, warm Deno, cold).
+//!
+//! ## Execution pipeline
+//!
+//! 1. **JSON Schema validation** — if the function has an `input` schema configured
+//!    (stored in `SchemaCache`), validate `payload` before touching the isolate.
+//!    Returns HTTP 400 with violation details on failure.
+//!
+//! 2. **`execution_start` span** — fire-and-forget via `TraceEmitter::post_lifecycle`
+//!    so the span appears in `flux trace` even if the function panics.
+//!
+//! 3. **Deno or WASM dispatch** — route to `IsolatePool::execute` (JS) or
+//!    `WasmPool::execute` (WASM) based on the bundle type resolved by `BundleResolver`.
+//!
+//! 4. **Log collection + `execution_end` span** — after the isolate returns,
+//!    `TraceEmitter::emit_logs` ships all `ctx.log()` lines and the final `execution_end`
+//!    span in a `tokio::spawn` (fire-and-forget). Log I/O never adds to gateway-visible
+//!    latency.
+//!
+//! ## Error handling
+//!
+//! Execution errors are parsed for a `{ code, message }` JSON envelope (Deno throws these).
+//! `INPUT_VALIDATION_ERROR` maps to HTTP 400; all others map to HTTP 500. The error span
+//! is emitted before returning so the gateway already has the response on the wire while
+//! the span write is in flight.
 /// ExecutionRunner — single-responsibility execution layer.
 ///
 /// Shared by all three bundle-resolution paths (warm WASM, warm Deno, cold).

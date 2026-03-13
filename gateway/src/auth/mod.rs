@@ -1,11 +1,11 @@
 //! Request authentication.
 //!
-//! The `check()` function is the single entry point.  It dispatches to the
+//! The [`check`] function is the single entry point.  It dispatches to the
 //! appropriate sub-module based on the route's `auth_type` field:
 //!
-//!   "none"    — public endpoint, no credentials required
-//!   "api_key" — `Authorization: Bearer flux_*` or `X-API-Key` header
-//!   "jwt"     — Firebase-style JWT validated against a per-route JWKS URL
+//!   `"none"`    — public endpoint, no credentials required
+//!   `"api_key"` — `Authorization: Bearer flux_*` or `X-API-Key` header
+//!   `"jwt"`     — Firebase-style JWT validated against a per-route JWKS URL
 pub mod api_key;
 pub mod jwt;
 
@@ -18,19 +18,32 @@ use crate::snapshot::RouteRecord;
 
 /// The result of a successful authentication check.
 ///
-/// Forwarded to the runtime as request-context headers.
+/// Every variant is forwarded to the Runtime as request-context headers so
+/// user code can inspect the caller's identity without re-verifying credentials.
+///
+/// | Variant     | Runtime headers injected                               |
+/// |-------------|--------------------------------------------------------|
+/// | `Public`    | none                                                   |
+/// | `ApiKey`    | none (key is not forwarded for security)               |
+/// | `Jwt`       | `X-User-Id`, `X-JWT-Claims` (full claims as JSON)      |
+/// | `Dev`       | `X-Dev-Mode: true` (LOCAL_MODE only, never production) |
 #[derive(Debug, Clone)]
 pub enum AuthContext {
-    /// Route has `auth_type = "none"`.
+    /// Route has `auth_type = "none"` — open endpoint, no identity attached.
     Public,
-    /// Route has `auth_type = "api_key"` and the key was valid.
+    /// Route has `auth_type = "api_key"` and the presented key was valid.
+    /// The raw key value is intentionally NOT forwarded to the runtime.
     ApiKey,
-    /// Route has `auth_type = "jwt"` and the token was valid.
+    /// Route has `auth_type = "jwt"` and the token passed signature and claim
+    /// validation.  `user_id` is extracted from the `sub` or `user_id` claim.
+    /// `claims` carries the full decoded payload for downstream authorisation.
     Jwt {
         user_id: Option<String>,
         claims:  Option<Value>,
     },
-    /// LOCAL_MODE — auth skipped, dev identity injected.
+    /// `LOCAL_MODE=true` — authentication is bypassed entirely.
+    /// Used by `flux dev` so developers can invoke functions without keys.
+    /// This variant must never appear in production deployments.
     Dev,
 }
 

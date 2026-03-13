@@ -1,7 +1,42 @@
 //! Shared application state for the runtime service.
 //!
-//! Extracted from `main.rs` so it can be re-exported by `lib.rs` and
-//! consumed by the monolithic `server` binary.
+//! ## Fields
+//!
+//! - **`secrets_client`** — Secrets client with built-in LRU + TTL cache (50 entries,
+//!   30 s TTL). Backed by `ApiDispatch::get_secrets` — avoids ~5 ms control-plane RTT
+//!   on warm invocations.
+//!
+//! - **`http_client`** — Shared reqwest client for user-facing outbound calls:
+//!   WASM `fluxbase.http_fetch`, agent LLM calls, `ctx.queue.push()` HTTP op.
+//!   Connection pooling is critical here — user functions can be invoked at high
+//!   concurrency and each must not open a new TCP connection.
+//!
+//! - **`api`** — Control-plane dispatch: bundle fetch, span write, secrets fetch.
+//!   In multi-process mode this is `HttpApiDispatch`; in server mode it is
+//!   `InProcessApiDispatch`. The runtime never knows which — DIP satisfied.
+//!
+//! - **`api_url`** — Raw API base URL forwarded into the V8 `op_queue_push` op context.
+//!   Kept alongside `api` until `QueueOpState` is refactored to use `QueueDispatch`.
+//!
+//! - **`queue_url`** — Queue service URL forwarded into `op_queue_push`.
+//!   TODO: replace with `Arc<dyn QueueDispatch>` once the op is refactored.
+//!
+//! - **`service_token`** — Internal service token threaded to queue and API calls
+//!   originating from inside user functions.
+//!
+//! - **`bundle_cache`** — Two-level LRU + TTL bundle cache. `by_function` (60 s TTL)
+//!   skips the control plane entirely on warm invocations. `by_deployment` (LRU only)
+//!   handles explicit deployment-id lookups.
+//!
+//! - **`schema_cache`** — Per-function input JSON Schema cache. Used by
+//!   `ExecutionRunner` to validate the `payload` before dispatching to V8/WASM.
+//!
+//! - **`isolate_pool`** — Fixed pool of OS threads each owning a warm `JsRuntime`
+//!   (V8 heap + Fluxbase extension loaded once). Eliminates per-request V8 init
+//!   overhead (~3–5 ms). Sized by `ISOLATE_WORKERS` env var.
+//!
+//! - **`wasm_pool`** — Pool of pre-compiled Wasmtime `Module` instances. Amortises
+//!   Cranelift AOT compilation cost across requests for the same WASM function.
 
 use std::sync::Arc;
 use crate::secrets::client::SecretsClient;

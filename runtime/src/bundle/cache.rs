@@ -1,3 +1,26 @@
+//! Bundle cache — prevents redundant S3/HTTP downloads.
+//!
+//! ## Two-level strategy
+//!
+//! | Level | Key | Eviction | Rationale |
+//! |---|---|---|---|
+//! | `by_function` | `function_id` | LRU + 60 s TTL | Active deployments are always available without a control-plane call |
+//! | `by_deployment` | `deployment_id` | LRU only | Pinned deployments (e.g. rollback) never expire |
+//!
+//! **Warm path** (both levels): 0 network calls, ~50 ns lookup.
+//! **Cold path**: control plane → S3 presigned URL or inline bundle → `insert_both`.
+//!
+//! ## TTL rationale (60 s)
+//!
+//! 60 s is long enough to skip the control plane for the lifetime of a traffic spike
+//! on a single function, but short enough to pick up new deployments within one minute
+//! of a `flux deploy`. The deployment-level cache has no TTL because deployment IDs are
+//! immutable — once a deployment is created its bundle never changes.
+//!
+//! ## Invalidation
+//!
+//! `invalidate_function` and `invalidate_deployment` are called by the API's deployment
+//! webhook handler when a new deployment is promoted to active.
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};

@@ -1,3 +1,28 @@
+//! Secrets client — fetches and caches project secrets.
+//!
+//! ## LRU + TTL cache (30 s)
+//!
+//! Secrets are fetched via `ApiDispatch::get_secrets` which in multi-process mode
+//! makes an HTTP call to the control-plane API. To avoid this ~5 ms RTT on every
+//! function invocation, results are cached in an in-process LRU (50 entries) with a
+//! 30 s TTL.
+//!
+//! 30 s was chosen to balance:
+//! - **Security**: a secret rotation is visible to all running workers within 30 s.
+//! - **Performance**: high-throughput functions pay the control-plane cost once per
+//!   30 s window, not once per invocation.
+//!
+//! ## Secret injection
+//!
+//! Secrets are injected into V8 via `OpState` before the function executes, and into
+//! WASM via `HostState` before the module is called. In both cases secrets are only
+//! in memory for the duration of the execution — they are not logged or serialised.
+//!
+//! ## DIP
+//!
+//! `SecretsClient` depends on `Arc<dyn ApiDispatch>`, not on any HTTP client directly.
+//! In server mode the in-process implementation reads secrets directly from the DB —
+//! zero network hop.
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};

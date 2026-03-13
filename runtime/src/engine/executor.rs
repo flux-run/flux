@@ -1,3 +1,26 @@
+//! Deno V8 execution engine — runs JavaScript functions in sandboxed `JsRuntime` isolates.
+//!
+//! ## Isolate architecture
+//!
+//! Each call to `IsolatePool::execute` routes to a warm isolate worker thread.
+//! The worker holds a `JsRuntime` that was created at thread startup (not per request).
+//! Per-request state is injected into `OpState` before execution and cleared after.
+//!
+//! ## LogLine
+//!
+//! `ctx.log(level, message, opts)` inside user JS emits a `LogLine` into a
+//! `__fluxbase_logs` array declared inside the IIFE wrapper. After the function
+//! returns, `execute_with_runtime` extracts the logs from V8 memory and returns them
+//! as `ExecutionResult::logs`. The caller (`ExecutionRunner`) ships them to
+//! `flux.platform_logs` via `TraceEmitter::emit_logs` (fire-and-forget).
+//!
+//! ## Security hardening
+//!
+//! - Deterministic random seeding (`Math.random` → seeded PRNG) for replay.
+//! - `globalThis.__fluxbase_logs` and `globalThis.__ctx` are re-declared as `const`
+//!   inside the IIFE on every call, so user code cannot persist state across
+//!   invocations via globals.
+//! - V8 heap and stack are not shared between workers (each thread owns its runtime).
 use deno_core::{JsRuntime, RuntimeOptions, OpState, Extension};
 use std::borrow::Cow;
 use std::cell::RefCell;
