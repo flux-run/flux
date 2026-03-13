@@ -48,6 +48,10 @@ hex = "0.4"
 aws-sdk-s3 = "1.125.0"
 aws-config = "1.8.15"
 
+# Dashboard auth — password hashing + JWT session tokens
+argon2        = "0.5"
+jsonwebtoken  = "9"
+
 # Agent crate — registry operations (deploy, list, get, delete)
 agent = { path = "../agent" }
 

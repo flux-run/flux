@@ -4,6 +4,7 @@
 //! against this crate instead of spawning a separate `api` process.
 
 pub mod app;
+pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;

@@ -14,6 +14,7 @@ use axum::http::{HeaderValue, Method, header};
 use tracing::info;
 use uuid::Uuid;
 
+use crate::auth;
 use crate::services;
 use crate::middleware;
 use crate::secrets;
@@ -181,8 +182,18 @@ pub fn create_app(state: AppState) -> Router {
             middleware::auth::require_auth,
         ));
 
+    // ── Auth: public routes (no require_auth guard) ───────────────────────
+    let auth = Router::new()
+        .route("/auth/setup",          post(auth::routes::setup))
+        .route("/auth/login",          post(auth::routes::login))
+        .route("/auth/logout",         post(auth::routes::logout))
+        .route("/auth/me",             get(auth::routes::me))
+        .route("/auth/users",          get(auth::routes::list_users).post(auth::routes::create_user))
+        .route("/auth/users/{id}",     delete(auth::routes::delete_user));
+
     Router::new()
         .merge(api)
+        .merge(auth)
         .nest("/internal", internal)
         // ── Execution-plane guard ──────────────────────────────────────────
         .route("/run",                         any(routes::system::execution_not_allowed))

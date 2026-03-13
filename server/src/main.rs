@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // /flux/      → Dashboard SPA  (static assets + SPA index.html fallback)
     // /{*path}    → Gateway function invocation (wildcard, lowest priority)
     let dashboard_dir = std::env::var("FLUX_DASHBOARD_DIR")
-        .unwrap_or_else(|_| "dashboard/dist".to_string());
+        .unwrap_or_else(|_| "dashboard/out".to_string());
     let dashboard_index = format!("{}/index.html", dashboard_dir);
     let app = axum::Router::new()
         .nest("/flux/api", api::create_app((*api_state).clone()))
