@@ -8,7 +8,7 @@ import {
   FolderOpen, Settings, LayoutDashboard,
   Code2, KeyRound, ShieldCheck, ScrollText, Globe,
   Database, HardDrive, Bell, GitBranch, Clock, Terminal, Share2, Puzzle,
-  Activity, Network, Brain, ChevronDown,
+  Activity, Network, Brain, ChevronDown, ListChecks, BarChart2, Search,
 } from 'lucide-react'
 import { FluxLogo } from '@/components/FluxLogo'
 import { TenantSwitcher } from '@/components/TenantSwitcher'
@@ -19,6 +19,7 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useStore } from '@/state/tenantStore'
+import { CommandPalette } from '@/components/CommandPalette'
 
 // ─── NavItem ──────────────────────────────────────────────────────────────────
 
@@ -112,8 +113,24 @@ export function Sidebar() {
         <FluxLogo iconSize={22} fontSize={12} gap={7} baseColor="rgba(255,255,255,0.9)" />
       </div>
 
-      {/* Tenant switcher */}
+      {/* CMD+K search trigger */}
       <div className="px-2 pt-3">
+        <CommandPalette />
+        <button
+          onClick={() => {
+            const e = new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })
+            window.dispatchEvent(e)
+          }}
+          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-muted/20 hover:text-foreground transition-colors border border-border/50 bg-muted/5"
+        >
+          <Search className="w-3.5 h-3.5 shrink-0" />
+          <span className="flex-1 text-left">Jump to…</span>
+          <kbd className="text-[10px] border border-border/60 rounded px-1 py-0.5 font-mono opacity-60">⌘K</kbd>
+        </button>
+      </div>
+
+      {/* Tenant switcher */}
+      <div className="px-2 pt-2">
         <TenantSwitcher />
       </div>
 
@@ -135,11 +152,12 @@ export function Sidebar() {
 
             {/* Runtime */}
             <NavGroup label="Runtime" accent="bg-emerald-400">
-              <NavItem href={p('functions')}  Icon={Code2}      label="Functions"  indent />
-              <NavItem href={p('routes')}     Icon={Globe}      label="Routes"     indent />
-              <NavItem href={p('events')}     Icon={Bell}       label="Events"     indent />
-              <NavItem href={p('workflows')}  Icon={GitBranch}  label="Workflows"  indent />
-              <NavItem href={p('cron')}       Icon={Clock}      label="Cron"       indent />
+              <NavItem href={p('functions')}  Icon={Code2}       label="Functions"  indent />
+              <NavItem href={p('routes')}     Icon={Globe}       label="Routes"     indent />
+              <NavItem href={p('events')}     Icon={Bell}        label="Events"     indent />
+              <NavItem href={p('workflows')}  Icon={GitBranch}   label="Workflows"  indent />
+              <NavItem href={p('cron')}       Icon={Clock}       label="Cron"       indent />
+              <NavItem href={p('queue')}      Icon={ListChecks}  label="Queues"     indent />
             </NavGroup>
 
             {/* Data */}
@@ -165,6 +183,7 @@ export function Sidebar() {
             <NavGroup label="Observability" accent="bg-[#a78bfa]">
               <NavItem href={p('logs')}     Icon={ScrollText} label="Logs"        indent />
               <NavItem href={p('traces')}   Icon={Activity}   label="Traces"      indent />
+              <NavItem href={p('monitor')}  Icon={BarChart2}  label="Monitor"     indent />
               <NavItem href={p('agents')}   Icon={Brain}      label="Agent Runs"  indent />
               <NavItem href={p('topology')} Icon={Network}    label="Topology"    indent />
             </NavGroup>
