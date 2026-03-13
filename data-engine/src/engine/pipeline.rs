@@ -29,7 +29,7 @@ use crate::{
         relational::{build_batched_plan, load_all_relationships, parse_selectors, ColumnSelector},
         CompilerOptions,
     },
-    engine::{auth_context::AuthContext, error::EngineError},
+    engine::{auth_context::AuthContext, error::EngineError, schema_rules::SchemaRuleEngine},
     events::EventEmitter,
     executor::{self, MutationContext},
     hooks::{HookEngine, HookEvent},
@@ -73,6 +73,7 @@ impl<'a> QueryPipeline<'a> {
     ///  3. Guard: complexity + nesting depth
     ///  4. Assert schema + table exist
     ///  5. Evaluate row-level policy (cached)
+    ///  5.5 Evaluate schema rules from flux db push (RuleExpr AST, mutations only)
     ///  6. Load schema metadata + relationships (L1 cache)
     ///  7. Compile SQL (L2 plan cache for SELECT)
     ///  8. Before-hook (mutations only, skipped on replay)
@@ -111,7 +112,27 @@ impl<'a> QueryPipeline<'a> {
         )
         .await?;
 
-        // ── Step 6: Schema metadata (L1 cache) ───────────────────────────────
+        // ── Step 5.5: Schema rules (RuleExpr from flux db push) ───────────────
+        // Evaluates compiled TypeScript rules stored in table_metadata.schema_rules.
+        // Skipped in replay mode (rules would re-deny replayed mutations).
+        if !auth.is_replay && req.operation != "select" {
+            let input = req.data.as_ref().unwrap_or(&serde_json::Value::Null);
+            let rid = headers
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("-");
+            SchemaRuleEngine::enforce(
+                &self.state.pool,
+                &auth,
+                &req.table,
+                &req.operation,
+                input,
+                &serde_json::Value::Null, // pre-read row not yet available at this stage
+                rid,
+            )
+            .await?;
+        }
+
         let sk =
             cache::schema_key(&schema, &req.table);
         let (col_meta, relationships) = match self.state.cache.schema_cache.get(&sk) {
