@@ -35,6 +35,57 @@ auth_headers() {
     "X-Fluxbase-Project: ${PROJECT_ID}"
 }
 
+http_header_value() {
+  local file="$1"
+  local name="$2"
+
+  awk -v header_name="$name" '
+    BEGIN { IGNORECASE = 1 }
+    index(tolower($0), tolower(header_name) ":") == 1 {
+      sub(/^[^:]+:[[:space:]]*/, "", $0)
+      gsub(/\r/, "", $0)
+      print
+      exit
+    }
+  ' "$file"
+}
+
+wait_for_json_match() {
+  local name="$1"
+  local url="$2"
+  local jq_expr="$3"
+  local out_file="$4"
+  local attempts="${5:-20}"
+  local sleep_secs="${6:-1}"
+  local status=""
+  local i
+
+  for ((i = 1; i <= attempts; i++)); do
+    status="$(curl -sS -o "$out_file" -w "%{http_code}" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "X-Fluxbase-Tenant: ${TENANT_ID}" \
+      -H "X-Fluxbase-Project: ${PROJECT_ID}" \
+      "$url" || true)"
+
+    if [[ "$status" == "200" ]] && jq -e "$jq_expr" "$out_file" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    sleep "$sleep_secs"
+  done
+
+  echo "[INFO] ${name} did not satisfy jq expression after ${attempts} attempts"
+  return 1
+}
+
+now_rfc3339() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+unique_suffix() {
+  date +%s%N
+}
+
 print_result() {
   local ok="$1"
   local name="$2"

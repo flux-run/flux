@@ -56,6 +56,9 @@ impl StorageConfig {
 pub struct StorageService {
     client:      Client,
     bucket_name: String,
+    /// When true (LOCAL_MODE / no S3 configured), skip all S3 operations.
+    /// Bundles are stored inline in the `deployments.bundle_code` column.
+    pub local_mode: bool,
 }
 
 impl StorageService {
@@ -77,6 +80,12 @@ impl StorageService {
             .or_else(|_| env::var("R2_BUCKET"))
             .unwrap_or_else(|_| "fluxbase-functions".to_string());
 
+        // In LOCAL_MODE (or when S3 is not explicitly configured) skip S3.
+        // Bundles are stored inline in deployments.bundle_code so the runtime
+        // can serve them without any object storage dependency.
+        let local_mode = env::var("LOCAL_MODE").map(|v| v == "true").unwrap_or(false)
+            || (env::var("S3_ENDPOINT").is_err() && env::var("R2_ENDPOINT").is_err());
+
         let region_provider = RegionProviderChain::first_try(Region::new("auto"));
         let credentials = Credentials::new(access_key, secret_key, None, None, "env");
 
@@ -93,12 +102,21 @@ impl StorageService {
         let s3_config = config_builder.build();
         let client = Client::from_conf(s3_config);
 
-        tracing::info!("StorageService initialised — functions bucket: {}", bucket_name);
+        if local_mode {
+            tracing::info!("StorageService — local mode (bundles stored inline in DB)");
+        } else {
+            tracing::info!("StorageService initialised — functions bucket: {}", bucket_name);
+        }
 
-        Self { client, bucket_name }
+        Self { client, bucket_name, local_mode }
     }
 
     pub async fn put_object(&self, key: &str, body: Vec<u8>, content_type: &str) -> std::result::Result<(), String> {
+        if self.local_mode {
+            // Bundle already persisted in deployments.bundle_code — skip S3.
+            return Ok(());
+        }
+
         let stream = ByteStream::from(body);
 
         self.client

@@ -467,3 +467,73 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
     println!();
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{diff_json, json_scalar};
+
+    #[test]
+    fn diff_json_ignores_timestamp_only_changes_until_needed() {
+        let before = json!({
+            "id": "usr_1",
+            "email": "before@example.com",
+            "updated_at": "2026-03-13T12:00:00Z",
+        });
+        let after = json!({
+            "id": "usr_1",
+            "email": "after@example.com",
+            "updated_at": "2026-03-13T12:01:00Z",
+        });
+
+        let diffs = diff_json(&before, &after);
+
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].0, "email");
+        assert_eq!(diffs[0].1, "before@example.com");
+        assert_eq!(diffs[0].2, "after@example.com");
+    }
+
+    #[test]
+    fn diff_json_falls_back_to_timestamps_when_nothing_else_changed() {
+        let before = json!({
+            "id": "usr_1",
+            "updated_at": "2026-03-13T12:00:00Z",
+        });
+        let after = json!({
+            "id": "usr_1",
+            "updated_at": "2026-03-13T12:01:00Z",
+        });
+
+        let diffs = diff_json(&before, &after);
+
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].0, "updated_at");
+    }
+
+    #[test]
+    fn diff_json_reports_removed_keys() {
+        let before = json!({
+            "id": "usr_1",
+            "plan": "pro",
+        });
+        let after = json!({
+            "id": "usr_1",
+        });
+
+        let diffs = diff_json(&before, &after);
+
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].0, "plan");
+        assert_eq!(diffs[0].1, "pro");
+        assert_eq!(diffs[0].2, "∅");
+    }
+
+    #[test]
+    fn json_scalar_formats_compound_values_compactly() {
+        assert_eq!(json_scalar(&json!(null)), "∅");
+        assert_eq!(json_scalar(&json!(["a", "b"])), "[2]");
+        assert_eq!(json_scalar(&json!({"nested": true})), "{…}");
+    }
+}

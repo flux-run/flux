@@ -291,7 +291,7 @@ async fn upload_function(
         }
     }
 
-    let url = format!("{}/api/functions/deploy", ctx.endpoint);
+    let url = format!("{}/flux/api/functions/deploy", ctx.endpoint);
     let mut req = client.post(&url).multipart(form);
     if !ctx.api_key.is_empty() {
         req = req.bearer_auth(&ctx.api_key);
@@ -315,7 +315,7 @@ async fn upload_function(
 
 async fn fetch_server_hashes(ctx: &ResolvedContext) -> anyhow::Result<HashMap<String, String>> {
     let client = reqwest::Client::new();
-    let url = format!("{}/api/deployments/hashes", ctx.endpoint);
+    let url = format!("{}/flux/api/deployments/hashes", ctx.endpoint);
     let mut req = client.get(&url);
     if !ctx.api_key.is_empty() {
         req = req.bearer_auth(&ctx.api_key);
@@ -385,7 +385,7 @@ async fn record_project_deployment(
     });
 
     let client = reqwest::Client::new();
-    let url = format!("{}/api/deployments/project", ctx.endpoint);
+    let url = format!("{}/flux/api/deployments/project", ctx.endpoint);
     let mut req = client.post(&url).json(&payload);
     if !ctx.api_key.is_empty() {
         req = req.bearer_auth(&ctx.api_key);
@@ -736,7 +736,7 @@ async fn sync_routes(
     });
 
     let client = reqwest::Client::new();
-    let url = format!("{}/api/routes/sync", ctx.endpoint);
+    let url = format!("{}/flux/api/routes/sync", ctx.endpoint);
     let mut req = client.post(&url).json(&payload);
     if !ctx.api_key.is_empty() {
         req = req.bearer_auth(&ctx.api_key);

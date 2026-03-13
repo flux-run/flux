@@ -321,6 +321,11 @@ pub async fn deploy_function_cli(
         .await
         .map_err(ApiError::from)?;
 
+    // In local mode bundles are served inline from bundle_code; set bundle_url NULL
+    // so the retrieval endpoint uses the inline path instead of generating a
+    // presigned S3 URL for an object that was never uploaded.
+    let stored_bundle_url: Option<&str> = if state.storage.local_mode { None } else { Some(&s3_key) };
+
     sqlx::query(
         "INSERT INTO deployments \
              (id, function_id, storage_key, bundle_code, bundle_url, version, status, is_active, bundle_hash, project_deployment_id) \
@@ -330,7 +335,7 @@ pub async fn deploy_function_cli(
     .bind(function_id)
     .bind(&s3_key)
     .bind(&bundle_code)
-    .bind(&s3_key)
+    .bind(stored_bundle_url)
     .bind(next_version)
     .bind(&bundle_hash)
     .bind(project_deployment_id)
@@ -408,9 +413,14 @@ pub async fn get_internal_bundle(
 
     match row {
         Some(r) => {
-            if let Some(s3_key) = r.bundle_url {
+            // In local mode always prefer inline bundle_code over a presigned URL
+            // (no object storage is running, bundle was never uploaded to S3).
+            let use_inline = state.storage.local_mode || r.bundle_url.is_none();
+
+            if !use_inline {
+                let s3_key = r.bundle_url.as_deref().unwrap();
                 let url = state.storage
-                    .presigned_get_object(&s3_key, std::time::Duration::from_secs(300))
+                    .presigned_get_object(s3_key, std::time::Duration::from_secs(300))
                     .await
                     .map_err(|e| ApiError::internal(format!("presign failed: {}", e)))?;
 

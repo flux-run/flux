@@ -17,7 +17,7 @@ use axum::{
 
 pub async fn require_service_token(req: Request, next: Next) -> Response {
     let expected = std::env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "fluxbase_secret_token".to_string());
+        .unwrap_or_else(|_| "dev-service-token".to_string());
 
     let provided = req
         .headers()

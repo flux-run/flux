@@ -134,6 +134,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime_dispatch = Arc::new(InProcessRuntimeDispatch {
         state: Arc::clone(&runtime_state),
     });
+    // Keep a ref for the dev invoke endpoint before moving into gateway_state.
+    let runtime_dispatch_ref: Arc<dyn job_contract::dispatch::RuntimeDispatch> =
+        Arc::clone(&runtime_dispatch) as Arc<dyn job_contract::dispatch::RuntimeDispatch>;
 
     // ── Agent state + in-process dispatch ────────────────────────────────
     let agent_state = Arc::new(agent::AgentState {
@@ -168,13 +171,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Router ────────────────────────────────────────────────────────────
     // /flux/api/* → API management (secrets, logs, deployments, …)
+    // /flux/dev/  → Dev-only shortcuts (invoke without route registration)
     // /flux/      → Dashboard SPA  (static assets + SPA index.html fallback)
     // /{*path}    → Gateway function invocation (wildcard, lowest priority)
     let dashboard_dir = std::env::var("FLUX_DASHBOARD_DIR")
         .unwrap_or_else(|_| "dashboard/out".to_string());
     let dashboard_index = format!("{}/index.html", dashboard_dir);
+
+    // Dev invoke state — runtime dispatch + project_id for unregistered calls.
+    let dev_invoke_state = Arc::new(DevInvokeState {
+        runtime:    Arc::clone(&runtime_dispatch_ref),
+        project_id: api_state.local_project_id,
+    });
+
+    let dev_invoke_router = axum::Router::new()
+        .route("/flux/dev/invoke/{name}", axum::routing::post(dev_invoke_handler))
+        .with_state(dev_invoke_state);
+
     let app = axum::Router::new()
         .nest("/flux/api", api::create_app((*api_state).clone()))
+        .merge(dev_invoke_router)
         .nest_service(
             "/flux",
             tower_http::services::ServeDir::new(&dashboard_dir)
@@ -211,4 +227,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+// ── Dev invoke endpoint ───────────────────────────────────────────────────────
+//
+// POST /flux/dev/invoke/:name
+//
+// Calls a function by name directly via the in-process runtime — no route
+// registration required.  Intended only for `flux invoke` in local dev.
+
+struct DevInvokeState {
+    runtime:    Arc<dyn job_contract::dispatch::RuntimeDispatch>,
+    project_id: uuid::Uuid,
+}
+
+async fn dev_invoke_handler(
+    axum::extract::State(state): axum::extract::State<Arc<DevInvokeState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> axum::response::Response {
+    use axum::{http::StatusCode, Json, response::IntoResponse};
+    use job_contract::dispatch::ExecuteRequest;
+
+    let req = ExecuteRequest {
+        function_id:    name.clone(),
+        project_id:     Some(state.project_id),
+        payload:        payload.clone(),
+        execution_seed: None,
+        request_id:     Some(uuid::Uuid::new_v4().to_string()),
+        parent_span_id: None,
+        runtime_hint:   None,
+        user_id:        None,
+        jwt_claims:     None,
+    };
+
+    match state.runtime.execute(req).await {
+        Ok(resp) => {
+            let status = StatusCode::from_u16(resp.status)
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (status, Json(resp.body)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "invoke_failed", "message": e })),
+        ).into_response(),
+    }
 }

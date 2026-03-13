@@ -287,6 +287,7 @@ fn build_wrapper(
             }};
         }})();
         Math.random = globalThis.__fluxbase_rand;
+        if (typeof crypto === "undefined") globalThis.crypto = {{}};
         crypto.randomUUID = () => {{
             const b = new Uint8Array(16);
             for (let i = 0; i < 16; i++) b[i] = Math.floor(globalThis.__fluxbase_rand() * 256);

@@ -1,4 +1,4 @@
-.PHONY: dev api dashboard build migrate install clean test-async-wiring test-platform deploy-with-migrate
+.PHONY: dev api dashboard build migrate install clean test-async-wiring test-platform test-product-loop deploy-with-migrate
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API + dashboard in parallel, printing labelled output.
@@ -76,3 +76,7 @@ test-async-wiring:
 
 test-platform:
 	./scripts/platform-tests/run_all.sh
+
+test-product-loop:
+	./scripts/platform-tests/execution_record_test.sh
+	./scripts/platform-tests/state_audit_test.sh

@@ -63,9 +63,14 @@ impl ApiDispatch for InProcessApiDispatch {
 
         match row {
             Some(r) => {
-                if let Some(s3_key) = r.bundle_url {
+                // In local mode always prefer inline bundle_code; presigned S3 URLs
+                // point to minio which isn't running during `flux dev`.
+                let use_inline = self.state.storage.local_mode || r.bundle_url.is_none();
+
+                if !use_inline {
+                    let s3_key = r.bundle_url.as_deref().unwrap();
                     let url = self.state.storage
-                        .presigned_get_object(&s3_key, std::time::Duration::from_secs(300))
+                        .presigned_get_object(s3_key, std::time::Duration::from_secs(300))
                         .await
                         .map_err(|e| format!("presign failed: {}", e))?;
                     Ok(serde_json::json!({
