@@ -14,7 +14,6 @@ flowbase/
 ├── dashboard/        # dashboard UI
 ├── data-engine/      # database execution and mutation recording
 ├── docs/             # product and architecture docs
-├── frontend/         # public site and public docs UI
 ├── gateway/          # ingress, routing, middleware, auth
 ├── queue/            # async jobs and retries
 ├── runtime/          # user code execution

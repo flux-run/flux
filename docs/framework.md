@@ -106,7 +106,7 @@ These are not arbitrary services. They are boundaries that support the execution
 
 ## Open Source Standard
 
-For Flux to work as an open-source project, the repo explains:
+For Flux to work as a source-available project, the repo explains:
 
 - what the product is
 - why the architecture looks the way it does

@@ -96,7 +96,7 @@ The product is one system because the record is shared. The internals are still 
 
 ## Open-Source Architecture Standard
 
-An open-source reader can answer these questions from the repo:
+A reader can answer these questions from the repo:
 
 - where do requests enter?
 - where does code execute?
