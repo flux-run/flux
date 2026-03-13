@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use data_engine::{api, cache, config, cron, db, events, state, telemetry, workflow};
+use data_engine::{api, cache, config, cron, db, events, retention, state, telemetry};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -37,20 +37,23 @@ async fn main() -> anyhow::Result<()> {
         events::worker::run(ev_pool, ev_http, ev_url).await;
     });
 
-    // Workflow step-advancement worker
-    let wf_pool = Arc::clone(&worker_pool);
-    let wf_http = Arc::clone(&worker_http);
-    let wf_url = worker_runtime_url.clone();
-    tokio::spawn(async move {
-        workflow::engine::run(wf_pool, wf_http, wf_url).await;
-    });
-
     // Cron scheduler worker
     let cron_pool = Arc::clone(&worker_pool);
     let cron_http = Arc::clone(&worker_http);
     let cron_url = worker_runtime_url.clone();
     tokio::spawn(async move {
         cron::worker::run(cron_pool, cron_http, cron_url).await;
+    });
+
+    // Retention job — daily hard-delete of old execution records
+    let ret_pool = Arc::clone(&worker_pool);
+    let ret_cfg = retention::RetentionConfig {
+        record_retention_days: cfg.record_retention_days,
+        error_retention_days:  cfg.error_retention_days,
+        job_hour_utc:          cfg.retention_job_hour,
+    };
+    tokio::spawn(async move {
+        retention::worker::run(ret_pool, ret_cfg).await;
     });
 
     let app = api::routes::build(app_state);

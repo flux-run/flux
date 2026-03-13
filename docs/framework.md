@@ -1184,71 +1184,41 @@ annotated on each span.
 
 ### Execution record retention
 
-Execution records grow with traffic. Retention policy:
+Execution records grow with traffic. Old records are **hard-deleted** on a
+schedule — Flux does not archive them to S3 or any external storage.
 
-- **Local dev:** records kept until `flux dev --clean`. No auto-cleanup.
-- **Self-hosted:** configure retention in `flux.toml`:
-  ```toml
-  [observability]
-  record_retention_days = 30    # delete records older than 30 days
-  error_retention_days  = 90    # errors kept 3x longer (default: 3x record_retention_days)
-  ```
-  A background job in the Data Engine prunes `execution_records`,
-  `execution_spans`, `execution_mutations`, and `execution_calls`
-  older than the configured threshold. Runs daily.
-
-Errors are retained 3x longer than successful requests by default
-because debugging value concentrates in failures.
-
-**Records are deleted, not archived.** Flux does not back up old records to S3
-or any external storage. This follows the same principle as §10 — Flux doesn't
-own storage infrastructure.
-
-If you need to archive records before deletion, export them first:
+**If you need archival before deletion, export first:**
 
 ```bash
-# Export records older than 30 days as JSONL
 flux records export --before 30d > records-2026-03.jsonl
-
-# Export only errors
+flux records export --before 30d | aws s3 cp - s3://my-bucket/flux/2026-03.jsonl
 flux records export --before 30d --errors-only > errors-2026-03.jsonl
-
-# Pipe directly to S3 (you handle storage)
-flux records export --before 30d | aws s3 cp - s3://my-bucket/flux-archive/2026-03.jsonl
 ```
 
-For automated archival, create a cron function that exports before the
-retention job runs:
+Then let the retention job clean up. Archival is a function + SDK, same as storage.
 
-```typescript
-// functions/archive_records/index.ts
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { execSync } from "child_process";
+#### Config
 
-export default defineFunction({
-  name: "archive_records",
-  cron: "0 1 * * *",  // 1am daily, before retention job at 3am
-  handler: async ({ ctx }) => {
-    const jsonl = execSync("flux records export --before 30d").toString();
-    if (!jsonl.trim()) return { archived: 0 };
-
-    const s3 = new S3Client({ region: ctx.secrets.get("AWS_REGION") });
-    const date = new Date().toISOString().split("T")[0];
-    await s3.send(new PutObjectCommand({
-      Bucket: ctx.secrets.get("ARCHIVE_BUCKET"),
-      Key: `flux-records/${date}.jsonl`,
-      Body: jsonl,
-    }));
-    return { archived: jsonl.split("\n").length };
-  },
-});
-```
-
-The retention job runs at 3am by default. Configure with:
 ```toml
+# flux.toml
 [observability]
-retention_job_hour = 3    # hour (UTC) to run daily cleanup
+record_retention_days = 30    # delete successful records older than 30 days
+error_retention_days  = 90    # errors kept 3x longer (default: 3 × record_retention_days)
+retention_job_hour    = 3     # hour UTC to run daily cleanup (default: 3am)
 ```
+
+- **Local dev:** records kept until `flux dev --clean`. No auto-cleanup.
+- **Self-hosted:** the Data Engine spawns a tokio background task at startup that
+  runs daily at `retention_job_hour`. It deletes from all four tables
+  (`execution_records`, `execution_spans`, `execution_mutations`,
+  `execution_calls`) in batches of 1 000 rows to avoid long locks. Cascade
+  `ON DELETE CASCADE` FKs mean deleting a root `execution_records` row also
+  removes all child spans, mutations, and calls. Successful records use
+  `record_retention_days`; error records use `error_retention_days`.
+  Logs: `"Retention: deleted 12,847 records older than 30 days"`.
+
+Errors are retained longer than successful requests by default because
+debugging value concentrates in failures.
 
 ---
 
@@ -1512,11 +1482,17 @@ All recording infrastructure exists in Rust (`trace_requests`, `platform_logs`,
 
 ### Records
 
+Export, count, and manually prune execution records. Use `export` before the
+automated retention job runs if you need an archive.
+
 | Command | Status | Description |
 |---------|--------|-------------|
-| `flux records export [--before] [--after] [--function] [--errors-only] [--format jsonl\|csv]` | 📋 | Export execution records as JSONL (default) or CSV |
-| `flux records count [--before] [--after] [--function]` | 📋 | Count records matching filters (preview what retention will delete) |
-| `flux records prune [--before] [--dry-run]` | 📋 | Manually delete old records (same as retention job, on demand) |
+| `flux records export [--before <age>] [--after <age>] [--function <name>] [--errors-only] [--format jsonl\|csv]` | 📋 | Stream records as JSONL (default) or CSV to stdout; cursor-paginated, never loads all into memory |
+| `flux records count [--before <age>] [--after <age>] [--function <name>] [--errors-only]` | 📋 | Count matching records — preview what retention will delete |
+| `flux records prune [--before <age>] [--dry-run]` | 📋 | Manually delete old records on demand; `--dry-run` is equivalent to `count` |
+
+**Age format:** `30d`, `7d`, `24h`, `1h`  
+**Export format:** One JSON object per line, each is a complete `ExecutionRecord` with nested spans, mutations, and calls (same shape as §3).
 
 ### Utilities
 

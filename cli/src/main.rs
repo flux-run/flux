@@ -28,6 +28,7 @@ mod monitor;
 mod open;
 mod projects;
 mod queue;
+mod records;
 mod schedule;
 mod sdk;
 mod secrets;
@@ -480,6 +481,11 @@ enum Commands {
         #[command(subcommand)]
         command: event::EventCommands,
     },
+    /// Execution record management (export, count, prune)
+    Records {
+        #[command(subcommand)]
+        command: records::RecordsCommands,
+    },
 
     // ── Environments ─────────────────────────────────────────────────────────
     /// Environment management (create, delete, clone)
@@ -698,6 +704,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Schedule { command } => schedule::execute(command).await?,
         Commands::Queue    { command } => queue::execute(command).await?,
         Commands::Event    { command } => event::execute(command).await?,
+        Commands::Records  { command } => records::execute(command).await?,
         Commands::Env      { command } => env_cmd::execute(command).await?,
 
         Commands::Db { command } => db::execute(command).await?,

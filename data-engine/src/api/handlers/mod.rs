@@ -12,4 +12,3 @@ pub mod relationships;
 pub mod schema;
 pub mod subscriptions;
 pub mod tables;
-pub mod workflows;

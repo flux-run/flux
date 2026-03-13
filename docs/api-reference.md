@@ -127,6 +127,18 @@ These paths are forwarded to the Data Engine module in-process.
 
 ---
 
+## Records
+
+Export, count, and manually prune execution records. The automated retention job (configured in `flux.toml` `[observability]`) deletes on a schedule; use `export` first if you need an archive before deletion.
+
+| Method | Path | Status | Notes |
+|--------|------|--------|-------|
+| `GET` | `/records/export` | 🟡 | Stream records as JSONL/CSV; params: `before`, `after`, `function`, `errors_only`, `format` |
+| `GET` | `/records/count` | 🟡 | Count matching records; same params as export |
+| `DELETE` | `/records/prune` | 🟡 | Batch-delete matching records; param: `before` |
+
+---
+
 ## API Keys
 
 | Method | Path | Status | Notes |

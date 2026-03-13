@@ -138,6 +138,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api-keys",              get(routes::stubs::api_keys_list).post(routes::stubs::api_key_create))
         .route("/api-keys/{id}",         delete(routes::stubs::api_key_delete))
         .route("/api-keys/{id}/rotate",  post(routes::stubs::api_key_rotate))
+        // ── Records ───────────────────────────────────────────────────────────
+        .route("/records/export",        get(routes::records::records_export))
+        .route("/records/count",         get(routes::records::records_count))
+        .route("/records/prune",         delete(routes::records::records_prune))
         // ── Monitor ───────────────────────────────────────────────────────────
         .route("/monitor/status",        get(routes::stubs::monitor_status))
         .route("/monitor/metrics",       get(routes::stubs::monitor_metrics))

@@ -249,7 +249,6 @@ pub async fn environment_delete(Path(_name): Path<String>) -> StatusCode {
 pub async fn environments_clone() -> (StatusCode, Json<Value>) {
     not_impl("Environment cloning")
 }
-
 // ── Gateway extras ────────────────────────────────────────────────────────────
 
 /// GET /gateway/routes/{id} — get a single route by ID.

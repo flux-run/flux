@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::{
     api::{
-        handlers::{cron, databases, debug, explain, files, history, hooks, mutations, policies, query, relationships, schema, subscriptions, tables, workflows},
+        handlers::{cron, databases, debug, explain, files, history, hooks, mutations, policies, query, relationships, schema, subscriptions, tables},
         middleware::service_auth::require_service_token,
     },
     state::AppState,
@@ -33,9 +33,6 @@ pub fn build(state: Arc<AppState>) -> Router {
         // ── Event subscriptions ─────────────────────────────────────────────
         .route("/db/subscriptions",     get(subscriptions::list).post(subscriptions::create))
         .route("/db/subscriptions/{id}", patch(subscriptions::update).delete(subscriptions::delete))        // ── Workflows ────────────────────────────────────────────────────────────
-        .route("/db/workflows",           get(workflows::list).post(workflows::create))
-        .route("/db/workflows/{id}",       delete(workflows::delete))
-        .route("/db/workflows/{id}/steps", post(workflows::add_step))
         // ── Cron jobs ──────────────────────────────────────────────────────────
         .route("/db/cron",             get(cron::list).post(cron::create))
         .route("/db/cron/{id}",         patch(cron::update).delete(cron::delete))

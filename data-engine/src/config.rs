@@ -35,6 +35,13 @@ pub struct Config {
     pub s3_region: String,
     /// Optional custom endpoint for MinIO / Localstack.
     pub s3_endpoint: Option<String>,
+    // ── Retention ────────────────────────────────────────────────────────────
+    /// Delete successful execution records older than this many days (default: 30).
+    pub record_retention_days: u32,
+    /// Delete error execution records older than this many days (default: 3× record_retention_days).
+    pub error_retention_days: u32,
+    /// UTC hour (0–23) to run the daily retention job (default: 3).
+    pub retention_job_hour: u32,
 }
 
 pub fn load() -> Config {
@@ -79,6 +86,18 @@ pub fn load() -> Config {
         s3_region: std::env::var("S3_REGION")
             .unwrap_or_else(|_| "us-east-1".to_string()),
         s3_endpoint: std::env::var("S3_ENDPOINT").ok(),
+        record_retention_days: std::env::var("RECORD_RETENTION_DAYS")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse()
+            .expect("RECORD_RETENTION_DAYS must be a positive integer"),
+        error_retention_days: std::env::var("ERROR_RETENTION_DAYS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0), // 0 = use 3× record_retention_days
+        retention_job_hour: std::env::var("RETENTION_JOB_HOUR")
+            .unwrap_or_else(|_| "3".to_string())
+            .parse()
+            .expect("RETENTION_JOB_HOUR must be 0–23"),
     }
 }
 
