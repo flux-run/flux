@@ -43,6 +43,9 @@ mod trace_diff;
 mod upgrade;
 mod version_cmd;
 mod whoami;
+mod context;
+mod db_push;
+mod new_function;
 mod why;
 mod generate;
 #[derive(Parser)]
@@ -142,9 +145,19 @@ enum Commands {
     /// In a function directory (has flux.json): deploys that single function.
     /// At the project root: discovers and deploys all function sub-directories.
     Deploy {
+        /// Override the active context (e.g. --context prod)
         #[arg(long)]
+        context: Option<String>,
+        /// Deploy only the named functions (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        only: Option<Vec<String>>,
+        /// Skip hash check and redeploy all functions
+        #[arg(long)]
+        force: bool,
+        // Kept for backward compatibility — not used in the new deploy flow.
+        #[arg(long, hide = true)]
         name: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         runtime: Option<String>,
     },
     /// Invoke a deployed function
@@ -501,6 +514,18 @@ enum Commands {
         #[command(subcommand)]
         command: db::DbCommands,
     },
+    /// Apply user SQL migrations from schemas/ to the connected Flux database.
+    ///
+    /// Migrations are tracked in flux.user_migrations and applied idempotently.
+    /// Works with any context: `flux db push --context prod`
+    DbPush {
+        /// Named context to connect to (default: active context)
+        #[arg(long, short, value_name = "NAME")]
+        context: Option<String>,
+        /// Migrations directory (default: schemas/ or flux.toml db.migrations_dir)
+        #[arg(long, short, value_name = "DIR")]
+        dir: Option<String>,
+    },
 
     // ── SDK ───────────────────────────────────────────────────────────────────
     /// Pull the TypeScript SDK for the current project
@@ -589,6 +614,36 @@ enum Commands {
         #[arg(long, value_name = "VERSION")]
         version: Option<String>,
     },
+
+    // ── Context (remote connections) ─────────────────────────────────────────
+    /// Add or update a named connection to a Flux server instance.
+    ///
+    /// Example: flux link prod https://myapp.com --key sk_live_xxx
+    Link {
+        /// Context name (e.g. "prod", "staging")
+        name: String,
+        /// Base URL of the Flux server (e.g. https://myapp.com)
+        endpoint: String,
+        /// API key for authenticating against the remote server
+        #[arg(long, short, value_name = "KEY")]
+        key: Option<String>,
+    },
+    /// Switch the active context (like kubectl use-context).
+    ///
+    /// Example: flux use prod
+    Use {
+        /// Context name to activate
+        name: String,
+    },
+    /// Show the current context and all configured contexts.
+    Context,
+    /// Remove a named context.
+    ///
+    /// Example: flux unlink staging
+    Unlink {
+        /// Context name to remove
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -646,7 +701,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Project { command } => projects::execute(command).await?,
 
         Commands::Function    { command } => functions::execute(command).await?,
-        Commands::Deploy      { name, runtime } => deploy::execute(name, runtime).await?,
+        Commands::Deploy { context, only, force, name: _, runtime: _ } =>
+            deploy::execute(context, only, force).await?,
         Commands::Invoke      { name, payload, gateway } => invoke::execute(&name, None, payload, gateway).await?,
         Commands::Version     { command } => version_cmd::execute(command).await?,
         Commands::Deployments { command } => deployments::execute_deployments(command).await?,
@@ -731,6 +787,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Env      { command } => env_cmd::execute(command).await?,
 
         Commands::Db { command } => db::execute(command).await?,
+        Commands::DbPush { context, dir } =>
+            db_push::execute_db_push(context, dir).await?,
 
         Commands::Pull   { output }           => sdk::execute_pull(output).await?,
         Commands::Watch  { output, interval } => sdk::execute_watch(output, interval).await?,
@@ -755,6 +813,11 @@ async fn main() -> anyhow::Result<()> {
             None      => open::execute_default().await?,
         },
         Commands::Upgrade { check, version } => upgrade::execute(version, check).await?,
+
+        Commands::Link    { name, endpoint, key } => context::execute_link(name, endpoint, key)?,
+        Commands::Use     { name }               => context::execute_use(name)?,
+        Commands::Context                        => context::execute_context(dev::find_project_root_pub().as_deref())?,
+        Commands::Unlink  { name }               => context::execute_unlink(name)?,
     }
 
     Ok(())

@@ -1,5 +1,6 @@
 pub mod functions;
 pub mod deployments;
+pub mod gateway_config;
 pub mod system;
 pub mod gateway_routes;
 pub mod data_engine;
@@ -12,3 +13,4 @@ pub mod stubs;
 pub mod records;
 pub mod agents;
 pub mod manifest;
+pub mod db_migrate;

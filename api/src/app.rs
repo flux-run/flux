@@ -93,9 +93,11 @@ pub fn create_app(state: AppState) -> Router {
         .route("/bundle",            get(routes::deployments::get_internal_bundle))
         .route("/introspect",        get(routes::introspect::get_project_introspect))
         .route("/introspect/manifest", get(routes::manifest::get_manifest))
+        .route("/db/migrate",        post(routes::db_migrate::apply_user_migration))
         .route("/logs",              post(logs::routes::create_log).get(logs::routes::list_logs))
         .route("/functions/resolve", get(routes::functions::resolve_function))
         .route("/cache/invalidate",  post(routes::system::cache_invalidate))
+        .route("/routes",            get(routes::gateway_config::get_routes_for_gateway))
         .layer(axum_middleware::from_fn(middleware::internal_auth::require_service_token));
 
     // ── API: optional FLUX_API_KEY guard ──────────────────────────────────
@@ -109,6 +111,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/deployments",               post(routes::deployments::create_deployment))
         .route("/deployments/list/{id}",     get(routes::deployments::list_deployments))
         .route("/deployments/{id}/activate/{version}", post(routes::deployments::activate_deployment))
+        .route("/deployments/hashes",        get(routes::deployments::get_deployment_hashes))
+        .route("/deployments/project",       get(routes::deployments::list_project_deployments)
+                                             .post(routes::deployments::create_project_deployment))
+        .route("/deployments/project/{id}/rollback", post(routes::deployments::rollback_project_deployment))
         // Secrets
         .route("/secrets",           get(secrets::routes::list_secrets).post(secrets::routes::create_secret))
         .route("/secrets/{key}",     put(secrets::routes::update_secret).delete(secrets::routes::delete_secret))
@@ -178,6 +184,9 @@ pub fn create_app(state: AppState) -> Router {
         .route("/environments",          get(routes::stubs::environments_list).post(routes::stubs::environment_create))
         .route("/environments/clone",    post(routes::stubs::environments_clone))
         .route("/environments/{name}",   delete(routes::stubs::environment_delete))
+        // ── Routes (gateway config) ───────────────────────────────────────────
+        .route("/routes",                get(routes::gateway_config::list_routes))
+        .route("/routes/sync",           post(routes::gateway_config::sync_routes))
         // Auth middleware injects RequestContext
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),

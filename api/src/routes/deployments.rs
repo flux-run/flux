@@ -195,16 +195,24 @@ pub async fn deploy_function_cli(
     let mut description:   Option<String> = None;
     let mut input_schema:  Option<String> = None;
     let mut output_schema: Option<String> = None;
+    let mut bundle_hash:   Option<String> = None;
+    let mut project_deployment_id: Option<Uuid> = None;
 
     while let Ok(Some(field)) = multipart.next_field().await {
         match field.name().unwrap_or("") {
-            "name"          => name         = field.text().await.unwrap_or_default(),
-            "runtime"       => runtime      = field.text().await.unwrap_or_default(),
-            "bundle"        => bundle_bytes = field.bytes().await.unwrap_or_default().to_vec(),
-            "description"   => description  = field.text().await.ok().filter(|s| !s.is_empty()),
-            "input_schema"  => input_schema  = field.text().await.ok().filter(|s| !s.is_empty()),
-            "output_schema" => output_schema = field.text().await.ok().filter(|s| !s.is_empty()),
-            _               => {}
+            "name"                   => name         = field.text().await.unwrap_or_default(),
+            "runtime"                => runtime      = field.text().await.unwrap_or_default(),
+            "bundle"                 => bundle_bytes = field.bytes().await.unwrap_or_default().to_vec(),
+            "description"            => description  = field.text().await.ok().filter(|s| !s.is_empty()),
+            "input_schema"           => input_schema  = field.text().await.ok().filter(|s| !s.is_empty()),
+            "output_schema"          => output_schema = field.text().await.ok().filter(|s| !s.is_empty()),
+            "bundle_hash"            => bundle_hash   = field.text().await.ok().filter(|s| !s.is_empty()),
+            "project_deployment_id"  => {
+                project_deployment_id = field.text().await.ok()
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| s.parse::<Uuid>().ok());
+            }
+            _                        => {}
         }
     }
 
@@ -315,15 +323,17 @@ pub async fn deploy_function_cli(
 
     sqlx::query(
         "INSERT INTO deployments \
-             (id, function_id, storage_key, bundle_code, bundle_url, version, status, is_active) \
-         VALUES ($1, $2, $3, $4, $5, $6, 'ready', true)",
+             (id, function_id, storage_key, bundle_code, bundle_url, version, status, is_active, bundle_hash, project_deployment_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'ready', true, $7, $8)",
     )
     .bind(deployment_id)
     .bind(function_id)
-    .bind(&s3_key)          // storage_key (legacy column)
-    .bind(&bundle_code)     // bundle_code  (inline fallback for runtime)
-    .bind(&s3_key)          // bundle_url   → presigned at fetch time
+    .bind(&s3_key)
+    .bind(&bundle_code)
+    .bind(&s3_key)
     .bind(next_version)
+    .bind(&bundle_hash)
+    .bind(project_deployment_id)
     .execute(&mut *tx)
     .await
     .map_err(ApiError::from)?;
@@ -342,6 +352,7 @@ pub async fn deploy_function_cli(
         "function_id":   function_id,
         "deployment_id": deployment_id,
         "version":       next_version,
+        "bundle_hash":   bundle_hash,
         "run_url":       run_url(&state.gateway_url, &name),
     })))
 }
@@ -424,4 +435,233 @@ pub async fn get_internal_bundle(
         }
         None => Err(ApiError::not_found("no active deployment found")),
     }
+}
+
+// ── New project-level deploy handlers ────────────────────────────────────────
+
+/// `GET /deployments/hashes` — return the active bundle_hash for every
+/// function in the project so the CLI can skip unchanged functions.
+pub async fn get_deployment_hashes(
+    State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
+) -> ApiResult<serde_json::Value> {
+    #[derive(sqlx::FromRow)]
+    struct HashRow {
+        name:        String,
+        bundle_hash: Option<String>,
+    }
+
+    let rows = sqlx::query_as::<_, HashRow>(
+        "SELECT f.name, d.bundle_hash \
+         FROM functions f \
+         JOIN deployments d ON d.function_id = f.id AND d.is_active = true \
+         WHERE f.project_id = $1",
+    )
+    .bind(context.project_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    let hashes: serde_json::Map<String, serde_json::Value> = rows
+        .into_iter()
+        .filter_map(|r| r.bundle_hash.map(|h| (r.name, serde_json::Value::String(h))))
+        .collect();
+
+    Ok(ApiResponse::new(serde_json::json!({ "hashes": hashes })))
+}
+
+// ── Payload ──────────────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub struct FunctionDeploySummaryEntry {
+    pub name:    String,
+    pub version: i64,
+    pub status:  String,  // "deployed" | "skipped" | "failed"
+}
+
+#[derive(serde::Deserialize)]
+pub struct DeploySummary {
+    pub total:     i64,
+    pub deployed:  i64,
+    pub skipped:   i64,
+    pub functions: Vec<FunctionDeploySummaryEntry>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct CreateProjectDeploymentPayload {
+    pub version:     i64,
+    pub summary:     DeploySummary,
+    pub deployed_by: Option<String>,
+}
+
+/// `POST /deployments/project` — record a project-level deployment after the
+/// CLI finishes uploading individual functions.
+pub async fn create_project_deployment(
+    State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
+    Json(payload): Json<CreateProjectDeploymentPayload>,
+) -> ApiResult<serde_json::Value> {
+    let id = Uuid::new_v4();
+    let deployed_by = payload.deployed_by.unwrap_or_else(|| "cli".into());
+    let summary_json = serde_json::to_value(&serde_json::json!({
+        "total":     payload.summary.total,
+        "deployed":  payload.summary.deployed,
+        "skipped":   payload.summary.skipped,
+        "functions": payload.summary.functions
+            .iter()
+            .map(|f| serde_json::json!({ "name": f.name, "version": f.version, "status": f.status }))
+            .collect::<Vec<_>>(),
+    }))
+    .unwrap_or_default();
+
+    #[derive(sqlx::FromRow)]
+    struct CreatedAt { created_at: chrono::DateTime<chrono::Utc> }
+
+    let row = sqlx::query_as::<_, CreatedAt>(
+        "INSERT INTO project_deployments (id, project_id, version, summary, deployed_by) \
+         VALUES ($1, $2, $3, $4, $5) \
+         RETURNING created_at",
+    )
+    .bind(id)
+    .bind(context.project_id)
+    .bind(payload.version as i32)
+    .bind(&summary_json)
+    .bind(&deployed_by)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(ApiResponse::created(serde_json::json!({
+        "id":         id,
+        "version":    payload.version,
+        "created_at": row.created_at.to_rfc3339(),
+    })))
+}
+
+/// `GET /deployments/project` — list the last 20 project deployments.
+pub async fn list_project_deployments(
+    State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
+) -> ApiResult<serde_json::Value> {
+    #[derive(sqlx::FromRow)]
+    struct ProjectDepRow {
+        id:          Uuid,
+        version:     i32,
+        summary:     serde_json::Value,
+        deployed_by: String,
+        created_at:  chrono::DateTime<chrono::Utc>,
+    }
+
+    let rows = sqlx::query_as::<_, ProjectDepRow>(
+        "SELECT id, version, summary, deployed_by, created_at \
+         FROM project_deployments \
+         WHERE project_id = $1 \
+         ORDER BY version DESC \
+         LIMIT 20",
+    )
+    .bind(context.project_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    let deployments: Vec<_> = rows
+        .into_iter()
+        .map(|r| serde_json::json!({
+            "id":          r.id,
+            "version":     r.version,
+            "summary":     r.summary,
+            "deployed_by": r.deployed_by,
+            "created_at":  r.created_at.to_rfc3339(),
+        }))
+        .collect();
+
+    Ok(ApiResponse::new(serde_json::json!({ "deployments": deployments })))
+}
+
+/// `POST /deployments/project/:id/rollback` — re-activate all function
+/// deployments from a previous project deployment.
+pub async fn rollback_project_deployment(
+    State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
+    axum::extract::Path(project_deployment_id): axum::extract::Path<Uuid>,
+) -> ApiResult<serde_json::Value> {
+    // Load the project deployment and verify ownership.
+    #[derive(sqlx::FromRow)]
+    struct ProjDepRow {
+        version: i32,
+        summary: serde_json::Value,
+    }
+
+    let proj = sqlx::query_as::<_, ProjDepRow>(
+        "SELECT version, summary \
+         FROM project_deployments \
+         WHERE id = $1 AND project_id = $2",
+    )
+    .bind(project_deployment_id)
+    .bind(context.project_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(ApiError::from)?
+    .ok_or_else(|| ApiError::not_found("project deployment not found"))?;
+
+    // Collect functions that were actually deployed (not skipped).
+    let functions: Vec<(String,)> = proj.summary
+        .get("functions")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter(|f| f.get("status").and_then(|s| s.as_str()) == Some("deployed"))
+                .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(|n| (n.to_owned(),)))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut functions_restored: i64 = 0;
+    let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
+
+    for (fn_name,) in &functions {
+        // Resolve the function_id.
+        #[derive(sqlx::FromRow)]
+        struct FnId { id: Uuid }
+
+        let fn_row = sqlx::query_as::<_, FnId>(
+            "SELECT id FROM functions WHERE name = $1 AND project_id = $2",
+        )
+        .bind(fn_name)
+        .bind(context.project_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
+        let Some(fn_row) = fn_row else { continue };
+
+        // Deactivate all deployments for this function.
+        sqlx::query("UPDATE deployments SET is_active = false WHERE function_id = $1")
+            .bind(fn_row.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(ApiError::from)?;
+
+        // Activate the deployment from this project deployment.
+        let updated = sqlx::query(
+            "UPDATE deployments SET is_active = true \
+             WHERE project_deployment_id = $1 AND function_id = $2",
+        )
+        .bind(project_deployment_id)
+        .bind(fn_row.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
+        if updated.rows_affected() > 0 {
+            functions_restored += 1;
+        }
+    }
+
+    tx.commit().await.map_err(ApiError::from)?;
+
+    Ok(ApiResponse::new(serde_json::json!({
+        "rolled_back_to":    proj.version,
+        "functions_restored": functions_restored,
+    })))
 }
