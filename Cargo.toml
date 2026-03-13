@@ -7,5 +7,6 @@ members = [
     "gateway",
     "queue",
     "shared/job_contract",
-    "data-engine"
+    "data-engine",
+    "server",
 ]

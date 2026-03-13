@@ -204,6 +204,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "atoi"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2097,6 +2108,7 @@ name = "gateway"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64",
  "bytes",
@@ -2762,6 +2774,7 @@ checksum = "8eaf4bc02d17cbdd7ff4c7438cafcdf7fb9a4613313ad11b4f8fefe7d3fa0130"
 name = "job_contract"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
  "uuid",
@@ -4033,11 +4046,13 @@ dependencies = [
 name = "runtime"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64",
  "chrono",
  "deno_core",
  "dotenvy",
+ "job_contract",
  "jsonschema 0.29.1",
  "lru",
  "reqwest",
@@ -4368,6 +4383,28 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.18",
  "v8",
+]
+
+[[package]]
+name = "server"
+version = "0.1.0"
+dependencies = [
+ "api",
+ "async-trait",
+ "axum",
+ "dotenvy",
+ "gateway",
+ "job_contract",
+ "reqwest",
+ "runtime",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

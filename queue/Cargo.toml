@@ -3,6 +3,14 @@ name = "fluxbase-queue"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "fluxbase_queue"
+path = "src/lib.rs"
+
+[[bin]]
+name = "queue"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { version = "1.50.0", features = ["full"] }
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "json"] }

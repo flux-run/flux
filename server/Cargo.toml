@@ -1,0 +1,48 @@
+[package]
+name          = "server"
+version       = "0.1.0"
+edition       = "2024"
+description   = "Monolithic single-binary — all Flux services in one process."
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[dependencies]
+# Internal service crates (library targets)
+api           = { path = "../api" }
+runtime       = { path = "../runtime" }
+gateway       = { path = "../gateway" }
+job_contract  = { path = "../shared/job_contract" }
+
+# Async runtime
+tokio         = { version = "1", features = ["full"] }
+
+# HTTP server
+axum          = { version = "0.8", features = ["macros"] }
+
+# DB
+sqlx          = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "uuid"] }
+
+# Serialization
+serde         = { version = "1", features = ["derive"] }
+serde_json    = "1"
+
+# UUID
+uuid          = { version = "1", features = ["v4", "serde"] }
+
+# Tracing
+tracing          = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Async trait
+async-trait   = "0.1"
+
+# HTTP client (for storage presign, etc.)
+reqwest       = { version = "0.13", features = ["json", "rustls"], default-features = false }
+
+# Static file serving (dashboard SPA)
+tower-http    = { version = "0.6", features = ["fs"] }
+
+# .env file loading
+dotenvy       = "0.15"

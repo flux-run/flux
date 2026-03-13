@@ -13,6 +13,7 @@ use axum::Json;
 use axum::response::{IntoResponse, Response};
 use serde_json::Value;
 
+use job_contract::dispatch::ApiDispatch;
 use crate::bundle::cache::BundleCache;
 use crate::schema::cache::{SchemaCache, FunctionSchema};
 use crate::engine::wasm_pool::WasmPool;
@@ -41,9 +42,10 @@ pub struct BundleResolver<'a> {
     pub bundle_cache:  &'a BundleCache,
     pub schema_cache:  &'a SchemaCache,
     pub wasm_pool:     &'a WasmPool,
+    /// Used for S3/R2 asset downloads only; API calls go through `api`.
     pub http_client:   &'a reqwest::Client,
-    pub api_url:       &'a str,
-    pub service_token: &'a str,
+    /// Control-plane dispatch — used for the bundle metadata fetch.
+    pub api:           &'a dyn ApiDispatch,
 }
 
 impl<'a> BundleResolver<'a> {
@@ -69,35 +71,22 @@ impl<'a> BundleResolver<'a> {
         function_id: &str,
         tracer:      &TraceEmitter,
     ) -> Result<ResolvedBundle, Response> {
-        let url = format!("{}/internal/bundle?function_id={}", self.api_url, function_id);
-
-        let resp = self.http_client
-            .get(&url)
-            .header("X-Service-Token", self.service_token)
-            .send()
-            .await
-            .map_err(|e| bad_gateway("BundleFetchError",
-                format!("Failed to reach API service: {}", e)))?;
-
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(not_found("no_bundle_found",
-                "No active deployment found for this function. Deploy it first."));
-        }
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body   = resp.text().await.unwrap_or_default();
-            return Err(internal("BundleFetchError",
-                format!("API service returned HTTP {}: {}", status, body)));
-        }
-
-        let json: Value = resp.json().await
-            .map_err(|e| internal("BundleParseError",
-                format!("Failed to parse bundle response: {}", e)))?;
+        // Fetch bundle metadata via the ApiDispatch trait (HTTP in multi-process
+        // mode, direct call in single-binary mode).  The dispatch impl already
+        // unwraps the outer `{ success, data }` envelope and returns the inner
+        // data object.
+        let data = self.api.get_bundle(function_id).await.map_err(|e| {
+            if e.contains("HTTP 404") {
+                not_found("no_bundle_found",
+                    "No active deployment found for this function. Deploy it first.")
+            } else {
+                bad_gateway("BundleFetchError",
+                    format!("Failed to reach API service: {}", e))
+            }
+        })?;
 
         // Cache schema if the control plane returned it alongside the bundle.
-        self.cache_schema(function_id, &json);
-
-        let data = json.get("data").cloned().unwrap_or(Value::Null);
+        self.cache_schema(function_id, &data);
 
         let bundle_runtime = data.get("runtime")
             .and_then(|r| r.as_str())
@@ -134,9 +123,10 @@ impl<'a> BundleResolver<'a> {
 
     // ── private helpers ───────────────────────────────────────────────────
 
-    fn cache_schema(&self, function_id: &str, json: &Value) {
-        let input  = json.get("data").and_then(|d| d.get("input_schema") ).cloned().filter(|v| !v.is_null());
-        let output = json.get("data").and_then(|d| d.get("output_schema")).cloned().filter(|v| !v.is_null());
+    /// `data` is the already-unwrapped inner data object from the bundle response.
+    fn cache_schema(&self, function_id: &str, data: &Value) {
+        let input  = data.get("input_schema" ).cloned().filter(|v| !v.is_null());
+        let output = data.get("output_schema").cloned().filter(|v| !v.is_null());
         if input.is_some() || output.is_some() {
             self.schema_cache.insert(function_id.to_string(), FunctionSchema { input, output });
         }

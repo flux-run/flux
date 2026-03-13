@@ -1,82 +1,67 @@
 //! Runtime forwarding.
 //!
-//! Sends a `POST /execute` to the Runtime service and streams the response
-//! back to the caller.  Adds tracing and auth-context headers so the runtime
-//! can identify the function and user without re-fetching metadata.
+//! Dispatches function-invocation requests to the Runtime service via the
+//! `RuntimeDispatch` trait — either HTTP (multi-process) or in-process
+//! (server crate).  Auth-context is threaded through as structured fields.
+
+pub mod http_impl;
+pub use http_impl::HttpRuntimeDispatch;
+
 use axum::{
     http::{HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use serde_json::Value;
+use job_contract::dispatch::ExecuteRequest;
 use crate::auth::AuthContext;
 use crate::snapshot::RouteRecord;
 use crate::state::SharedState;
 
-/// Forward a function-invocation request to the runtime.
+/// Forward a function-invocation request to the runtime via the dispatch trait.
 ///
 /// Returns the runtime's response verbatim, with `x-request-id` echoed back.
 pub async fn to_runtime(
-    state:      &SharedState,
-    route:      &RouteRecord,
-    payload:    Value,
-    request_id: &str,
+    state:       &SharedState,
+    route:       &RouteRecord,
+    payload:     Value,
+    request_id:  &str,
     parent_span: Option<&str>,
-    auth_ctx:   &AuthContext,
+    auth_ctx:    &AuthContext,
 ) -> Response {
-    let url = format!("{}/execute", state.runtime_url);
+    // ── Build dispatch request ────────────────────────────────────────────
+    let (user_id, jwt_claims) = match auth_ctx {
+        AuthContext::Jwt { user_id, claims } => (
+            user_id.clone().map(|s| s.to_string()),
+            claims.clone(),
+        ),
+        _ => (None, None),
+    };
 
-    let body = serde_json::json!({
-        "function_id": route.function_id.to_string(),
-        "project_id":  route.project_id.to_string(),
-        "payload":     payload,
-    });
+    let req = ExecuteRequest {
+        function_id:    route.function_id.to_string(),
+        project_id:     Some(route.project_id),
+        payload,
+        execution_seed: None,
+        request_id:     Some(request_id.to_string()),
+        parent_span_id: parent_span.map(|s| s.to_string()),
+        runtime_hint:   Some(route.runtime.clone()),
+        user_id,
+        jwt_claims,
+    };
 
-    let mut builder = state.http_client
-        .post(&url)
-        .header("X-Service-Token",    &state.internal_service_token)
-        .header("X-Function-Runtime", &route.runtime)
-        .header("x-request-id",       request_id)
-        .json(&body);
-
-    // Forward auth context so functions know who the caller is.
-    match auth_ctx {
-        AuthContext::Jwt { user_id, claims } => {
-            if let Some(uid) = user_id {
-                builder = builder.header("X-User-Id", uid.as_str());
-            }
-            if let Some(c) = claims {
-                if let Ok(json) = serde_json::to_string(c) {
-                    builder = builder.header("X-JWT-Claims", json);
-                }
-            }
-        }
-        _ => {}
-    }
-
-    if let Some(span) = parent_span {
-        builder = builder.header("x-parent-span-id", span);
-    }
-
-    let mut response = match builder.send().await {
-        Ok(resp) => {
-            let status = resp.status();
-            let raw    = resp.text().await.unwrap_or_default();
-            let body: Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
-                tracing::warn!(
-                    status = %status,
-                    preview = %&raw[..raw.len().min(200)],
-                    "Runtime returned non-JSON body"
-                );
-                serde_json::json!({ "error": "runtime_response_parse_error" })
-            });
-            (status, Json(body)).into_response()
+    // ── Dispatch ──────────────────────────────────────────────────────────
+    let mut response = match state.runtime.execute(req).await {
+        Ok(exec_resp) => {
+            let status = StatusCode::from_u16(exec_resp.status)
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (status, Json(exec_resp.body)).into_response()
         }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(serde_json::json!({
                 "error":   "runtime_unreachable",
-                "message": e.to_string(),
+                "message": e,
             })),
         ).into_response(),
     };
@@ -88,3 +73,4 @@ pub async fn to_runtime(
 
     response
 }
+

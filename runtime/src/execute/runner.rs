@@ -8,7 +8,6 @@
 use std::collections::HashMap;
 use std::time::Instant;
 use axum::http::StatusCode;
-use axum::Json;
 use axum::response::{IntoResponse, Response};
 use serde_json::Value;
 
@@ -36,9 +35,11 @@ pub struct ExecutionRunner<'a> {
 }
 
 impl<'a> ExecutionRunner<'a> {
-    /// Validate → execute → emit spans → return response.
+    /// Validate → execute → emit spans → return (status_code, json_body).
     ///
     /// `tracer` must already have `code_sha` set before this call.
+    /// The caller wraps this in `.into_response()` for HTTP handlers, or
+    /// converts to `ExecuteResponse` for in-process dispatch.
     pub async fn run(
         &self,
         bundle:  ResolvedBundle,
@@ -46,16 +47,16 @@ impl<'a> ExecutionRunner<'a> {
         ctx:     &InvocationCtx,
         tracer:  &TraceEmitter,
         start:   Instant,
-    ) -> Response {
+    ) -> (StatusCode, Value) {
         // ── JSON Schema validation ────────────────────────────────────────
         if let Some(schema) = self.schema_cache.get(&ctx.function_id) {
             if let Some(input_schema) = &schema.input {
                 if let Err(violations) = validator::validate_input(input_schema, &ctx.payload) {
-                    return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                    return (StatusCode::BAD_REQUEST, serde_json::json!({
                         "error":      "INPUT_VALIDATION_ERROR",
                         "message":    "Payload does not match the function's input schema",
                         "violations": violations,
-                    }))).into_response();
+                    }));
                 }
             }
         }
@@ -81,10 +82,23 @@ impl<'a> ExecutionRunner<'a> {
         // ── emit ctx.log() lines + execution_end span (fire-and-forget) ──
         tracer.emit_logs(execution.logs, duration_ms);
 
-        (StatusCode::OK, Json(serde_json::json!({
+        (StatusCode::OK, serde_json::json!({
             "result":      execution.output,
             "duration_ms": duration_ms,
-        }))).into_response()
+        }))
+    }
+
+    /// Convenience wrapper for axum HTTP handlers.
+    pub async fn run_response(
+        &self,
+        bundle:  ResolvedBundle,
+        secrets: HashMap<String, String>,
+        ctx:     &InvocationCtx,
+        tracer:  &TraceEmitter,
+        start:   Instant,
+    ) -> Response {
+        let (status, body) = self.run(bundle, secrets, ctx, tracer, start).await;
+        (status, axum::Json(body)).into_response()
     }
 
     // ── private ───────────────────────────────────────────────────────────
@@ -96,7 +110,7 @@ impl<'a> ExecutionRunner<'a> {
         ctx:     &InvocationCtx,
         tracer:  &TraceEmitter,
         start:   Instant,
-    ) -> (Result<ExecutionResult, Response>, u64) {
+    ) -> (Result<ExecutionResult, (StatusCode, Value)>, u64) {
         let queue_ctx = QueueContext {
             queue_url:     self.queue_url.to_string(),
             api_url:       self.api_url.to_string(),
@@ -129,7 +143,7 @@ impl<'a> ExecutionRunner<'a> {
         ctx:     &InvocationCtx,
         tracer:  &TraceEmitter,
         start:   Instant,
-    ) -> (Result<ExecutionResult, Response>, u64) {
+    ) -> (Result<ExecutionResult, (StatusCode, Value)>, u64) {
         let result = self.wasm_pool.execute(
             ctx.function_id.clone(),
             bytes,
@@ -150,7 +164,7 @@ impl<'a> ExecutionRunner<'a> {
         (Ok(execution), duration_ms)
     }
 
-    fn execution_error(&self, error: String, duration_ms: u64, tracer: &TraceEmitter) -> Response {
+    fn execution_error(&self, error: String, duration_ms: u64, tracer: &TraceEmitter) -> (StatusCode, Value) {
         let (err_code, message) = if let Ok(parsed) = serde_json::from_str::<Value>(&error) {
             let code = parsed.get("code")   .and_then(|c| c.as_str()).unwrap_or("FunctionExecutionError").to_string();
             let msg  = parsed.get("message").and_then(|m| m.as_str()).unwrap_or(&error).to_string();
@@ -171,7 +185,7 @@ impl<'a> ExecutionRunner<'a> {
         } else {
             StatusCode::INTERNAL_SERVER_ERROR
         };
-        (status, Json(serde_json::json!({ "error": err_code, "message": message }))).into_response()
+        (status, serde_json::json!({ "error": err_code, "message": message }))
     }
 }
 

@@ -13,6 +13,8 @@ pub const DEFAULT_GATEWAY_PORT:     u16 = 8081;
 pub const DEFAULT_RUNTIME_PORT:     u16 = 8083;
 pub const DEFAULT_DATA_ENGINE_PORT: u16 = 8082;
 pub const DEFAULT_QUEUE_PORT:       u16 = 8084;
+/// Monolithic server port — single binary serves all services on this port.
+pub const DEFAULT_SERVER_PORT:      u16 = 4000;
 /// Dev-only: Vite HMR port. In production the dashboard is served from the API
 /// binary at `/ui/*` — no separate process or port needed.
 pub const DEFAULT_DASHBOARD_PORT:   u16 = 5173;

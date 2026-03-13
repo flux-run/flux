@@ -5,15 +5,6 @@
 //!   2. Connect to database, warm the route snapshot
 //!   3. Wire shared state
 //!   4. Build the Axum router and start listening
-mod config;
-mod state;
-mod router;
-mod snapshot;
-mod auth;
-mod rate_limit;
-mod trace;
-mod forward;
-mod handlers;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -21,6 +12,11 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::info;
 use sqlx::postgres::PgPoolOptions;
+
+use gateway::config::Config;
+use gateway::state::GatewayState;
+use gateway::forward::HttpRuntimeDispatch;
+use gateway::{create_router, snapshot, auth};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -30,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
     // injected directly by the container runtime.
     dotenvy::dotenv().ok();
 
-    let config = config::Config::load();
+    let config = Config::load();
 
     // Database pool.
     let db_pool = PgPoolOptions::new()
@@ -63,11 +59,16 @@ async fn main() -> anyhow::Result<()> {
 
     let jwks_cache = auth::JwksCache::new(http_client.clone());
 
-    let state = Arc::new(state::GatewayState {
+    // Runtime dispatch — wraps the HTTP call to the runtime service.
+    let runtime_dispatch = Arc::new(HttpRuntimeDispatch {
+        client:        http_client.clone(),
+        runtime_url:   config.runtime_url,
+        service_token: config.internal_service_token,
+    });
+
+    let state = Arc::new(GatewayState {
         db_pool,
-        http_client,
-        runtime_url:            config.runtime_url,
-        internal_service_token: config.internal_service_token,
+        runtime: runtime_dispatch,
         snapshot,
         jwks_cache,
         max_request_size_bytes: config.max_request_size_bytes,
@@ -75,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
         local_mode:             config.local_mode,
     });
 
-    let app  = router::create_router(state);
+    let app  = create_router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!("Flux Gateway listening on {}", addr);
     let listener = TcpListener::bind(addr).await?;

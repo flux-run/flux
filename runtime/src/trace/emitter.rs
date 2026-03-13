@@ -1,21 +1,20 @@
-/// TraceEmitter — single-responsibility span/log emitter for the execution pipeline.
-///
-/// Constructed once per invocation with all fixed context (function_id, project_id,
-/// request_id, parent_span_id, code_sha).  Each method fires a tokio::spawn so
-/// callers are never blocked by log I/O.
-///
-/// Replaces the 13-parameter `post_span` / `post_trace_span` free-functions that
-/// were copy-pasted three times in the old routes.rs god file.
+//! TraceEmitter — single-responsibility span/log emitter for the execution pipeline.
+//!
+//! Constructed once per invocation with all fixed context (function_id, project_id,
+//! request_id, parent_span_id, code_sha).  Each method fires a tokio::spawn so
+//! callers are never blocked by log I/O.
+//!
+//! Delegates the actual log shipping to an `Arc<dyn ApiDispatch>` so it works
+//! in both multi-process (HTTP) and single-binary (in-process) modes.
 use std::sync::Arc;
 use uuid::Uuid;
 use serde_json::Value;
+use job_contract::dispatch::ApiDispatch;
 use crate::engine::executor::LogLine;
 
 #[derive(Clone)]
 pub struct TraceEmitter {
-    client:         reqwest::Client,
-    log_url:        Arc<String>,
-    service_token:  Arc<String>,
+    api:            Arc<dyn ApiDispatch>,
     function_id:    Arc<String>,
     project_id:     Option<Uuid>,
     request_id:     Arc<Option<String>>,
@@ -26,18 +25,14 @@ pub struct TraceEmitter {
 
 impl TraceEmitter {
     pub fn new(
-        client:        reqwest::Client,
-        log_url:       String,
-        service_token: String,
-        function_id:   String,
-        project_id:    Option<Uuid>,
-        request_id:    Option<String>,
+        api:            Arc<dyn ApiDispatch>,
+        function_id:    String,
+        project_id:     Option<Uuid>,
+        request_id:     Option<String>,
         parent_span_id: Option<String>,
     ) -> Self {
         Self {
-            client,
-            log_url:       Arc::new(log_url),
-            service_token: Arc::new(service_token),
+            api,
             function_id:   Arc::new(function_id),
             project_id,
             request_id:    Arc::new(request_id),
@@ -96,9 +91,7 @@ impl TraceEmitter {
     /// Fire-and-forget in a tokio::spawn. Whole batch sent after the response is
     /// already on the wire, so log I/O never adds to gateway-visible latency.
     pub fn emit_logs(&self, logs: Vec<LogLine>, duration_ms: u64) {
-        let client        = self.client.clone();
-        let log_url       = Arc::clone(&self.log_url);
-        let service_token = Arc::clone(&self.service_token);
+        let api           = Arc::clone(&self.api);
         let function_id   = Arc::clone(&self.function_id);
         let project_id    = self.project_id;
         let request_id    = Arc::clone(&self.request_id);
@@ -125,10 +118,7 @@ impl TraceEmitter {
                     "tool_name":        log.tool_name,
                     "execution_state":  log.execution_state,
                 });
-                let _ = client.post(log_url.as_str())
-                    .header("X-Service-Token", service_token.as_str())
-                    .json(&payload)
-                    .send().await;
+                let _ = api.write_log(payload).await;
             }
 
             // Final lifecycle span — marks the execution tree as complete.
@@ -146,24 +136,16 @@ impl TraceEmitter {
                 "execution_state":  "completed",
                 "duration_ms":      duration_ms,
             });
-            let _ = client.post(log_url.as_str())
-                .header("X-Service-Token", service_token.as_str())
-                .json(&end_payload)
-                .send().await;
+            let _ = api.write_log(end_payload).await;
         });
     }
 
     // ── private ───────────────────────────────────────────────────────────
 
     fn spawn_log(&self, payload: Value) {
-        let client        = self.client.clone();
-        let log_url       = Arc::clone(&self.log_url);
-        let service_token = Arc::clone(&self.service_token);
+        let api = Arc::clone(&self.api);
         tokio::spawn(async move {
-            let _ = client.post(log_url.as_str())
-                .header("X-Service-Token", service_token.as_str())
-                .json(&payload)
-                .send().await;
+            let _ = api.write_log(payload).await;
         });
     }
 }

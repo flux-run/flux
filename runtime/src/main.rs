@@ -1,39 +1,24 @@
-mod config;
-mod execute;
-mod trace;
-mod schema;
-mod bundle;
-mod secrets;
-mod engine;
-mod agent;
+//! Runtime entry point — thin startup wrapper.
+//!
+//! All module declarations live in lib.rs; this file only owns the
+//! tokio::main startup task.
 
 use std::sync::Arc;
 use axum::{routing::{get, post}, Router};
 use tokio::net::TcpListener;
 use tracing::info;
 
-use config::settings::Settings;
-use secrets::client::SecretsClient;
-use engine::pool::IsolatePool;
-use engine::wasm_pool::WasmPool;
-use bundle::cache::BundleCache;
-use schema::cache::SchemaCache;
-use execute::handler::execute_handler;
-use execute::invalidate::invalidate_cache_handler;
-
-// ── AppState ──────────────────────────────────────────────────────────────────
-
-pub struct AppState {
-    pub secrets_client: SecretsClient,
-    pub http_client:    reqwest::Client,
-    pub api_url:        String,
-    pub queue_url:      String,
-    pub service_token:  String,
-    pub bundle_cache:   BundleCache,
-    pub schema_cache:   SchemaCache,
-    pub isolate_pool:   IsolatePool,
-    pub wasm_pool:      WasmPool,
-}
+use runtime::config::settings::Settings;
+use runtime::secrets::client::SecretsClient;
+use runtime::dispatch::http_api::HttpApiDispatch;
+use runtime::engine::pool::IsolatePool;
+use runtime::engine::wasm_pool::WasmPool;
+use runtime::bundle::cache::BundleCache;
+use runtime::schema::cache::SchemaCache;
+use runtime::execute::handler::execute_handler;
+use runtime::execute::invalidate::invalidate_cache_handler;
+use runtime::AppState;
+use job_contract::dispatch::ApiDispatch;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -49,9 +34,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .expect("failed to build HTTP client");
 
+    let api_dispatch: Arc<dyn ApiDispatch> = Arc::new(HttpApiDispatch {
+        client:  http_client.clone(),
+        api_url: settings.api_url.clone(),
+        token:   settings.service_token.clone(),
+    });
+
     let state = Arc::new(AppState {
-        secrets_client: SecretsClient::new(settings.clone(), http_client.clone()),
+        secrets_client: SecretsClient::new(Arc::clone(&api_dispatch)),
         http_client:    http_client.clone(),
+        api:            api_dispatch,
         api_url:        settings.api_url.clone(),
         queue_url:      settings.queue_url.clone(),
         service_token:  settings.service_token.clone(),

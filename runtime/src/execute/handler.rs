@@ -54,11 +54,8 @@ pub async fn execute_handler(
         parent_span_id: parent_span_id.clone(),
     };
 
-    let log_url = format!("{}/internal/logs", state.api_url);
     let mut tracer = TraceEmitter::new(
-        state.http_client.clone(),
-        log_url,
-        state.service_token.clone(),
+        Arc::clone(&state.api),
         ctx.function_id.clone(),
         ctx.project_id,
         ctx.request_id.clone(),
@@ -67,12 +64,11 @@ pub async fn execute_handler(
 
     let start = Instant::now();
     let resolver = BundleResolver {
-        bundle_cache:  &state.bundle_cache,
-        schema_cache:  &state.schema_cache,
-        wasm_pool:     &state.wasm_pool,
-        http_client:   &state.http_client,
-        api_url:       &state.api_url,
-        service_token: &state.service_token,
+        bundle_cache: &state.bundle_cache,
+        schema_cache: &state.schema_cache,
+        wasm_pool:    &state.wasm_pool,
+        http_client:  &state.http_client,
+        api:          &*state.api,
     };
     let runner = ExecutionRunner {
         isolate_pool:    &state.isolate_pool,
@@ -91,7 +87,7 @@ pub async fn execute_handler(
             tracer.post_event("debug", "wasm bytes cache hit — skipping fetch".into());
             tracer.code_sha = Some(bundle_sha(&wasm_bytes));
             let secrets = match fetch_secrets(&state, ctx.project_id).await { Ok(s) => s, Err(r) => return r };
-            return runner.run(ResolvedBundle::Wasm { bytes: wasm_bytes.to_vec() }, secrets, &ctx, &tracer, start).await;
+            return runner.run_response(ResolvedBundle::Wasm { bytes: wasm_bytes.to_vec() }, secrets, &ctx, &tracer, start).await;
         }
     }
 
@@ -101,7 +97,7 @@ pub async fn execute_handler(
             tracer.post_event("debug", "bundle cache hit — skipping fetch".into());
             tracer.code_sha = Some(bundle_sha(cached_code.as_bytes()));
             let secrets = match fetch_secrets(&state, ctx.project_id).await { Ok(s) => s, Err(r) => return r };
-            return runner.run(ResolvedBundle::Deno { code: cached_code }, secrets, &ctx, &tracer, start).await;
+            return runner.run_response(ResolvedBundle::Deno { code: cached_code }, secrets, &ctx, &tracer, start).await;
         }
     }
 
@@ -120,7 +116,7 @@ pub async fn execute_handler(
         ResolvedBundle::Wasm { bytes }    => bundle_sha(bytes),
     });
 
-    runner.run(bundle, secrets, &ctx, &tracer, start).await
+    runner.run_response(bundle, secrets, &ctx, &tracer, start).await
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────

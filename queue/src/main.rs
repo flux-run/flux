@@ -1,16 +1,13 @@
-mod config;
-mod db;
-mod models;
-mod services;
-mod api;
-mod worker;
-mod queue;
-mod state;
+//! Queue entry point — thin startup wrapper.
+//!
+//! All module declarations live in lib.rs.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
+
+use fluxbase_queue::{api, config, db, state, worker};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

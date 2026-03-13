@@ -1,23 +1,10 @@
-mod api;
-mod cache;
-mod compiler;
-mod config;
-mod cron;
-mod db;
-mod engine;
-mod events;
-mod executor;
-mod file_engine;
-mod hooks;
-mod policy;
-mod query_guard;
-mod router;
-mod state;
-mod telemetry;
-mod transform;
-mod workflow;
+//! Data-engine entry point — thin startup wrapper.
+//!
+//! All module declarations live in lib.rs.
 
 use std::sync::Arc;
+
+use data_engine::{api, cache, config, cron, db, events, state, telemetry, workflow};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

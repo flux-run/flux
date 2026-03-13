@@ -1,11 +1,10 @@
-use reqwest::Client;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use lru::LruCache;
 use uuid::Uuid;
-use crate::config::settings::Settings;
+use job_contract::dispatch::ApiDispatch;
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
 
@@ -28,7 +27,7 @@ impl SecretsCache {
         Self { inner: Arc::new(Mutex::new(LruCache::new(cap))), ttl }
     }
 
-    fn cache_key(project_id: Option<Uuid>) -> String {
+    pub fn cache_key(project_id: Option<Uuid>) -> String {
         project_id.map(|p| p.to_string()).unwrap_or_else(|| "none".to_string())
     }
 
@@ -55,18 +54,20 @@ impl SecretsCache {
 
 // ── Client ────────────────────────────────────────────────────────────────────
 
+/// Secrets client with a built-in LRU+TTL cache.
+///
+/// Delegates actual network/in-process fetching to an `Arc<dyn ApiDispatch>`
+/// so it works in both multi-process mode (HTTP) and server mode (in-process).
 #[derive(Clone)]
 pub struct SecretsClient {
-    client:   Client,
-    settings: Settings,
-    cache:    SecretsCache,
+    api:   Arc<dyn ApiDispatch>,
+    cache: SecretsCache,
 }
 
 impl SecretsClient {
-    pub fn new(settings: Settings, client: Client) -> Self {
+    pub fn new(api: Arc<dyn ApiDispatch>) -> Self {
         Self {
-            client,
-            settings,
+            api,
             cache: SecretsCache::new(50, Duration::from_secs(30)),
         }
     }
@@ -87,32 +88,7 @@ impl SecretsClient {
             return Ok(cached);
         }
 
-        let mut url = format!("{}/internal/secrets", self.settings.api_url);
-        if let Some(pid) = project_id {
-            url.push_str(&format!("?project_id={}", pid));
-        }
-
-        let resp = self.client
-            .get(&url)
-            .header("X-Service-Token", &self.settings.service_token)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to fetch secrets: {}", e))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body   = resp.text().await.unwrap_or_default();
-            return Err(format!("API service error HTTP {}: {}", status, body));
-        }
-
-        // API returns ApiResponse<T>: { success: true, data: {...} }
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Failed parsing secrets JSON: {}", e))?;
-
-        let secrets_value = json.get("data").cloned().unwrap_or(json);
-        let secrets_map: HashMap<String, String> = serde_json::from_value(secrets_value)
-            .map_err(|e| format!("Failed deserializing secrets map: {}", e))?;
-
+        let secrets_map = self.api.get_secrets(project_id).await?;
         self.cache.insert(key, secrets_map.clone());
         Ok(secrets_map)
     }

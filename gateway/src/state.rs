@@ -7,17 +7,15 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use crate::auth::JwksCache;
 use crate::snapshot::GatewaySnapshot;
+use job_contract::dispatch::RuntimeDispatch;
 
 #[derive(Clone)]
 pub struct GatewayState {
     /// Database pool — API-key validation + trace root writes.
     pub db_pool: PgPool,
-    /// HTTP client — Runtime forwarding.
-    pub http_client: reqwest::Client,
-    /// Runtime execution service URL.
-    pub runtime_url: String,
-    /// Shared service secret — added to all Runtime calls.
-    pub internal_service_token: String,
+    /// Runtime dispatch — abstracts over HTTP (multi-process) or in-process
+    /// (server crate) execution of user functions.
+    pub runtime: Arc<dyn RuntimeDispatch>,
     /// In-memory route snapshot.
     pub snapshot: GatewaySnapshot,
     /// JWKS key cache for JWT verification.

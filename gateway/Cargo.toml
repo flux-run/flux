@@ -3,7 +3,16 @@ name = "gateway"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gateway"
+path = "src/main.rs"
+
 [dependencies]
+async-trait = "0.1"
 axum = { version = "0.8.8", features = ["macros"] }
 tokio = { version = "1.50.0", features = ["full"] }
 serde = { version = "1.0.228", features = ["derive"] }
