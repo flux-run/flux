@@ -1,0 +1,24 @@
+# Flux project configuration
+# Commit this file to version control.
+
+name    = "hello-rust"
+runtime = "nodejs20"
+
+[record]
+# 1.0 = record every execution. Values below 1.0 mean some executions
+# won't appear in `flux trace`. Only lower this above ~1k rps.
+sample_rate    = 1.0
+retention_days = 30
+
+[limits]
+# Default per-function limits. Override in defineFunction() or flux.json.
+timeout_ms = 5000
+memory_mb  = 256
+
+[dev]
+# Local port assignments used by `flux dev`. Adjust to avoid conflicts.
+gateway_port     = 4000
+runtime_port     = 8083
+api_port         = 8080
+data_engine_port = 8082
+queue_port       = 8084

@@ -1,0 +1,19 @@
+{
+  "name": "hello",
+  "runtime": "wasm",
+  "entry": "hello.wasm",
+  "description": "TODO: describe what hello does",
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": [],
+      "properties": {
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+      }
+    }
+  }
+}

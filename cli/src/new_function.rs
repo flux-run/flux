@@ -137,6 +137,11 @@ pub fn execute_new_function(name: String, language: Option<String>) -> anyhow::R
 
 fn write_file(dir: &Path, filename: &str, content: &str) -> anyhow::Result<()> {
     let path = dir.join(filename);
+    // Ensure any intermediate subdirectories exist (e.g. "src/" for Rust).
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    }
     std::fs::write(&path, content)
         .with_context(|| format!("Failed to write {}", path.display()))
 }

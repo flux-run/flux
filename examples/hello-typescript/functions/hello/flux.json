@@ -1,0 +1,19 @@
+{
+  "name": "hello",
+  "runtime": "deno",
+  "entry": "index.ts",
+  "description": "TODO: describe what hello does",
+  "schema": {
+    "input": {
+      "type": "object",
+      "required": [],
+      "properties": {
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+      }
+    }
+  }
+}
