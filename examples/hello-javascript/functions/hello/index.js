@@ -1,10 +1,11 @@
-export default {
-  __fluxbase: true,
+import { defineFunction } from "@fluxbase/functions";
 
-  /** @param {{payload: any, ctx: import("./.flux/ctx.js").FluxCtx}} args */
-  async execute({ payload, ctx }) {
+export default defineFunction({
+  name: "hello",
+  /** @param { input: any, ctx: import("@fluxbase/functions").FluxContext } args */
+  handler: async ({ input, ctx }) => {
     ctx.log("Running hello");
 
     return { ok: true };
   },
-};
+});

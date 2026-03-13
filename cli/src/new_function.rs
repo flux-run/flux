@@ -111,6 +111,12 @@ pub fn execute_new_function(name: String, language: Option<String>) -> anyhow::R
     write_file(&fn_dir, code_file, &code_content)?;
     write_file(&fn_dir, "flux.json", &flux_json)?;
 
+    // Write any language-specific extra files (package.json, tsconfig, Cargo.toml…)
+    let extras = scaffold_extra_files(lang, &name);
+    for (extra_file, extra_content) in &extras {
+        write_file(&fn_dir, extra_file, extra_content)?;
+    }
+
     // Print file list.
     println!(
         "  {} functions/{}/{}",
@@ -123,6 +129,14 @@ pub fn execute_new_function(name: String, language: Option<String>) -> anyhow::R
         "✔".green().bold(),
         name
     );
+    for (extra_file, _) in &extras {
+        println!(
+            "  {} functions/{}/{}",
+            "✔".green().bold(),
+            name,
+            extra_file
+        );
+    }
     println!();
     println!("  {}", "Next steps:".bold());
     println!(
@@ -220,6 +234,28 @@ fn scaffold_for_language(lang: &str, name: &str) -> (&'static str, String) {
     }
 }
 
+/// Returns extra files to write alongside the main code file.
+/// Used for languages that need a build manifest (package.json, tsconfig, Cargo.toml, etc.)
+fn scaffold_extra_files(lang: &str, name: &str) -> Vec<(&'static str, String)> {
+    match lang {
+        "typescript" => vec![
+            ("package.json",  scaffold_ts_package_json(name, false)),
+            ("tsconfig.json", scaffold_tsconfig()),
+        ],
+        "javascript" => vec![
+            ("package.json",  scaffold_ts_package_json(name, false)),
+        ],
+        "assemblyscript" => vec![
+            ("package.json",  scaffold_ts_package_json(name, true)),
+            ("tsconfig.json", scaffold_tsconfig()),
+        ],
+        "rust" => vec![
+            ("Cargo.toml", scaffold_rust_cargo(name)),
+        ],
+        _ => vec![],
+    }
+}
+
 fn pascal(name: &str) -> String {
     name.split(['_', '-'])
         .map(|w| {
@@ -240,12 +276,12 @@ fn scaffold_typescript(name: &str) -> String {
 
 export default defineFunction({{
   name: "{name}",
-  handler: async ({{ ctx, payload }}) => {{
+  handler: async ({{ input, ctx }}) => {{
     ctx.log("Running {name}");
 
     // ctx.db.<table>.find({{ where: ... }})   — query your database
-    // ctx.secrets.MY_SECRET                   — read a secret
-    // ctx.functions.<other>()                 — call another function
+    // ctx.secrets.get("MY_SECRET")            — read a secret
+    // ctx.functions.<other>(input)            — call another function
 
     return {{
       ok: true,
@@ -261,16 +297,87 @@ export default defineFunction({{
 
 fn scaffold_javascript(name: &str) -> String {
     format!(
-        r#"export default {{
-  __fluxbase: true,
+        r#"import {{ defineFunction }} from "@fluxbase/functions";
 
-  /** @param {{{{payload: any, ctx: import("./.flux/ctx.js").FluxCtx}}}} args */
-  async execute({{ payload, ctx }}) {{
+export default defineFunction({{
+  name: "{name}",
+  /** @param {{ input: any, ctx: import("@fluxbase/functions").FluxContext }} args */
+  handler: async ({{ input, ctx }}) => {{
     ctx.log("Running {name}");
 
     return {{ ok: true }};
   }},
-}};
+}});
+"#,
+        name = name
+    )
+}
+
+// ─── package.json (TypeScript / JavaScript / AssemblyScript) ─────────────────
+
+fn scaffold_ts_package_json(name: &str, assemblyscript: bool) -> String {
+    let as_extra = if assemblyscript {
+        r#",
+  "devDependencies": {
+    "assemblyscript": "^0.27"
+  },
+  "scripts": {
+    "build": "asc index.ts -o index.wasm --target release"
+  }"#
+    } else {
+        ""
+    };
+    format!(
+        r#"{{
+  "name": "{name}",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {{
+    "@fluxbase/functions": "^0.1.0"
+  }}{as_extra}
+}}
+"#,
+        name = name,
+        as_extra = as_extra,
+    )
+}
+
+fn scaffold_tsconfig() -> String {
+    r#"{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true
+  }
+}
+"#
+    .to_string()
+}
+
+fn scaffold_rust_cargo(name: &str) -> String {
+    format!(
+        r#"[package]
+name = "{name}"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "{name}"
+path = "src/lib.rs"
+
+[dependencies]
+serde       = {{ version = "1", features = ["derive"] }}
+serde_json  = "1"
+
+[profile.release]
+opt-level = "z"
+lto       = true
 "#,
         name = name
     )
