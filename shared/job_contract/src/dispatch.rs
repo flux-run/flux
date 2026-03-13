@@ -103,3 +103,25 @@ pub trait QueueDispatch: Send + Sync {
         idempotency_key: Option<String>,
     ) -> Result<(), String>;
 }
+
+// ── AgentDispatch ─────────────────────────────────────────────────────────────
+
+/// Caller → Agent boundary.
+///
+/// Used by:
+///   - The API handlers (`POST /agents/{name}/run`) to trigger an agent.
+///   - The `op_agent_run` Deno op, so user JS functions can call `ctx.agent.run()`.
+///
+/// The in-process implementation (`InProcessAgentDispatch` in server) calls
+/// `agent::run()` directly.
+#[async_trait]
+pub trait AgentDispatch: Send + Sync {
+    async fn run(
+        &self,
+        name:       &str,
+        input:      Value,
+        request_id: &str,
+        project_id: Uuid,
+        secrets:    HashMap<String, String>,
+    ) -> Result<Value, String>;
+}

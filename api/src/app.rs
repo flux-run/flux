@@ -167,10 +167,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/schedules/{name}/run",     post(routes::stubs::schedule_run_now))
         .route("/schedules/{name}/history", get(routes::stubs::schedule_history))
         // ── Agents ────────────────────────────────────────────────────────────
-        .route("/agents",                get(routes::stubs::agents_list).post(routes::stubs::agent_create))
-        .route("/agents/{name}",         get(routes::stubs::agent_get).delete(routes::stubs::agent_delete))
-        .route("/agents/{name}/run",     post(routes::stubs::agent_run))
-        .route("/agents/{name}/simulate",post(routes::stubs::agent_simulate))
+        .route("/agents",                get(routes::agents::agents_list).post(routes::agents::agent_deploy))
+        .route("/agents/{name}",         get(routes::agents::agent_get).delete(routes::agents::agent_delete))
+        .route("/agents/{name}/run",     post(routes::agents::agent_run))
+        .route("/agents/{name}/simulate",post(routes::agents::agent_simulate))
         // ── Environments ──────────────────────────────────────────────────────
         .route("/environments",          get(routes::stubs::environments_list).post(routes::stubs::environment_create))
         .route("/environments/clone",    post(routes::stubs::environments_clone))

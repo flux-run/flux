@@ -10,3 +10,4 @@ pub mod spec;
 pub mod introspect;
 pub mod stubs;
 pub mod records;
+pub mod agents;

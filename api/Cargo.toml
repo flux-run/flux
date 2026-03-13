@@ -47,3 +47,9 @@ hex = "0.4"
 # Object storage — function bundle upload/download (minio in dev, S3/R2 in prod)
 aws-sdk-s3 = "1.125.0"
 aws-config = "1.8.15"
+
+# Agent crate — registry operations (deploy, list, get, delete)
+agent = { path = "../agent" }
+
+# Job contract — AgentDispatch trait (used by run/simulate handlers)
+job_contract = { path = "../shared/job_contract" }

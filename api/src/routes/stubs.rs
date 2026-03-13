@@ -197,35 +197,6 @@ pub async fn schedule_history(Path(_name): Path<String>) -> Json<Value> {
     empty_list()
 }
 
-// ── Agents ────────────────────────────────────────────────────────────────────
-
-pub async fn agents_list() -> Json<Value> {
-    empty_list()
-}
-
-pub async fn agent_create() -> (StatusCode, Json<Value>) {
-    not_impl("Agents")
-}
-
-pub async fn agent_get(Path(_name): Path<String>) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({ "error": "not_found", "message": "Agent not found" })),
-    )
-}
-
-pub async fn agent_delete(Path(_name): Path<String>) -> StatusCode {
-    deleted()
-}
-
-pub async fn agent_run(Path(_name): Path<String>) -> (StatusCode, Json<Value>) {
-    not_impl("Agents")
-}
-
-pub async fn agent_simulate(Path(_name): Path<String>) -> (StatusCode, Json<Value>) {
-    not_impl("Agents")
-}
-
 // ── Environments ──────────────────────────────────────────────────────────────
 
 pub async fn environments_list() -> Json<Value> {

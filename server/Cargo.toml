@@ -13,6 +13,7 @@ path = "src/main.rs"
 api           = { path = "../api" }
 runtime       = { path = "../runtime" }
 gateway       = { path = "../gateway" }
+agent         = { path = "../agent" }
 job_contract  = { path = "../shared/job_contract" }
 
 # Async runtime
