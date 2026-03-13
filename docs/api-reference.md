@@ -116,17 +116,6 @@ Manage function routing rules. Changes take effect immediately via Postgres NOTI
 
 ---
 
-## Storage
-
-| Method | Path | Status | Notes |
-|--------|------|--------|-------|
-| `GET` | `/storage/provider` | ✅ | Get storage provider config |
-| `PUT` | `/storage/provider` | ✅ | Configure provider (S3, GCS, R2) |
-| `DELETE` | `/storage/provider` | ✅ | Remove provider |
-| `POST` | `/storage/presign` | ✅ | Generate presigned upload URL |
-
----
-
 ## Data Engine & Files (proxy)
 
 These paths are forwarded to the Data Engine module in-process.
@@ -249,10 +238,12 @@ These paths return `405 Method Not Allowed` on the API server — function execu
 
 | Status | Count | Section |
 |--------|-------|---------|
-| ✅ Implemented | 33 | Functions, Deployments, Secrets, Logs, Traces, Gateway CRUD, Schema/SDK, Storage, Data Engine proxy, Internal |
+| ✅ Implemented | 29 | Functions, Deployments, Secrets, Logs, Traces, Gateway CRUD, Schema/SDK, Data Engine proxy, Internal |
 | 🟡 Stub | 43 | Gateway extras, API Keys, Monitor, Events, Queues, Schedules, Agents, Environments |
 | 🔒 Internal-only | 7 | `/internal/*` — runtime and gateway use only |
 
 **Primitives in Flux:** Function · Database · Queue · Agent  
+**Storage:** Not a primitive — use an S3/GCS/R2 SDK inside a function. Flux records the call as an `ExternalCall` automatically.  
+**Multiple databases:** Not supported — one Postgres instance per Flux server. Connect to a second DB manually inside a function; the query appears in the execution trace.  
 **Removed primitives:** Workflow (use agent with ordered tool calls) · Tool (use a function that wraps the SDK)
 

@@ -7,6 +7,5 @@ pub mod openapi;
 pub mod schema;
 pub mod sdk;
 pub mod spec;
-pub mod storage;
 pub mod introspect;
 pub mod stubs;

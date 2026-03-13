@@ -113,6 +113,11 @@ Flux provides:
 
 Flux runs **entirely locally without any cloud services**.
 
+**Scope boundary:** Flux owns things it needs to record intelligently —
+functions, database, queue, agents. Everything else (storage, email, payments,
+third-party APIs) is a function that uses an SDK. The generic `ExternalCall`
+trace is enough for those — no special primitives needed.
+
 **Flux never owns your data.** Application databases belong to you. Flux only
 records execution metadata (inputs, outputs, spans, mutation diffs) for debugging
 and replay.
@@ -642,8 +647,8 @@ Gateway → Runtime → [middleware chain] → function handler
 
 ## 10. Database
 
-Flux manages your application database. Postgres only. No ORM — SQL schemas,
-typed access via `ctx.db`.
+Flux manages your application database. **One Postgres database per Flux
+instance.** No ORM — SQL schemas, typed access via `ctx.db`.
 
 ### Schema files
 
@@ -722,6 +727,63 @@ If you have an existing app, you cannot adopt Flux without moving writes to
 
 You don't need to rewrite your entire data layer on day one. But every write
 that bypasses `ctx.db` is invisible to `flux why`.
+
+### One database per instance
+
+One Flux instance = one Postgres database. Application tables and Flux's internal
+tables (`execution_records`, `execution_spans`, `execution_mutations`,
+`execution_calls`) share the same database, same connection pool, same
+`DATABASE_URL`.
+
+This matches the single-binary philosophy: one binary, one port, one database.
+Rails shipped with one database for 15 years — it's enough for 99% of apps.
+
+If you genuinely need a second database (analytics warehouse, legacy system),
+connect to it inside your function with a Postgres client. Flux doesn't manage
+it, but Flux records the call as an `ExternalCall`:
+
+```typescript
+// functions/sync_analytics/index.ts
+import pg from "pg";
+
+export default defineFunction({
+  name: "sync_analytics",
+  handler: async ({ ctx }) => {
+    const analytics = new pg.Pool({ connectionString: ctx.secrets.get("ANALYTICS_DB_URL") });
+    const rows = await ctx.db.orders.findMany({ where: { synced: false } });
+    await analytics.query("INSERT INTO order_events ...", rows);
+    return { synced: rows.length };
+  },
+});
+```
+
+### No built-in storage
+
+Flux does not provide a storage primitive (S3, file uploads, CDN). Storage is
+a solved problem — use the SDK for your provider inside a function:
+
+```typescript
+// functions/upload_avatar/index.ts
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+
+export default defineFunction({
+  name: "upload_avatar",
+  handler: async ({ input, ctx }) => {
+    const s3 = new S3Client({ region: ctx.secrets.get("AWS_REGION") });
+    await s3.send(new PutObjectCommand({
+      Bucket: ctx.secrets.get("S3_BUCKET"),
+      Key: `avatars/${input.userId}`,
+      Body: input.file,
+    }));
+    return { url: `https://${ctx.secrets.get("S3_BUCKET")}.s3.amazonaws.com/avatars/${input.userId}` };
+  },
+});
+```
+
+`flux trace` shows the S3 call, duration, and status — without Flux owning any
+storage infrastructure. The rule: if Flux doesn't need to intercept the call to
+provide debugging value beyond what `ExternalCall` already captures, it's not a
+primitive.
 
 ---
 

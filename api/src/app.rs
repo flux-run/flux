@@ -131,11 +131,6 @@ pub fn create_app(state: AppState) -> Router {
         .route("/sdk/typescript",    get(routes::sdk::typescript))
         .route("/openapi.json",      get(routes::openapi::spec))
         .route("/spec",              get(routes::spec::project_spec))
-        // Storage
-        .route("/storage/provider",  get(routes::storage::get_provider)
-                                    .put(routes::storage::upsert_provider)
-                                    .delete(routes::storage::delete_provider))
-        .route("/storage/presign",   post(routes::storage::presign))
         // Data Engine + Files proxy
         .route("/db/{*path}",        any(routes::data_engine::proxy_handler))
         .route("/files/{*path}",     any(routes::data_engine::proxy_handler))
