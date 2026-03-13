@@ -29,17 +29,16 @@
 11. [Secrets](#11-secrets)
 12. [Error Model](#12-error-model)
 13. [Type Generation](#13-type-generation)
-14. [Workflows](#14-workflows)
-15. [Queue](#15-queue)
-16. [Cron](#16-cron)
+14. [Queue](#14-queue)
+15. [Cron](#15-cron)
+16. [Agents](#16-agents)
 17. [Testing](#17-testing)
 18. [Observability & Debugging](#18-observability--debugging)
-19. [Tools & Integrations](#19-tools--integrations)
-20. [Auth](#20-auth)
-21. [Build & Deploy](#21-build--deploy)
-22. [Self-Hosted Deployment](#22-self-hosted-deployment)
-23. [CLI Reference](#23-cli-reference)
-24. [Implementation Phases](#24-implementation-phases)
+19. [Auth](#19-auth)
+20. [Build & Deploy](#20-build--deploy)
+21. [Self-Hosted Deployment](#21-self-hosted-deployment)
+22. [CLI Reference](#22-cli-reference)
+23. [Implementation Phases](#23-implementation-phases)
 
 ---
 
@@ -109,7 +108,7 @@ Flux provides:
 - **JS/TS functions** via Deno — secure, fast, no `node_modules`
 - **Execution recording** — every request traced, every mutation logged
 - **Deterministic replay** — reproduce any production request locally
-- **Database + queue + cron** — integrated, not bolted on
+- **Database + queue + cron + agents** — integrated, not bolted on
 - **An observability CLI** that replaces your APM — without setup
 
 Flux runs **entirely locally without any cloud services**.
@@ -177,7 +176,7 @@ interface ExecutionSpan {
   span_id:     string;
   parent_id:   string | null;
   service:     "gateway" | "runtime" | "data-engine" | "queue";
-  span_type:   "route_match" | "cache_hit" | "execution" | "db_query" | "tool_call" | "event";
+  span_type:   "route_match" | "cache_hit" | "execution" | "db_query" | "function_invoke" | "agent_step" | "event";
   message:     string;
   started_at:  string;
   duration_ms: number;
@@ -194,7 +193,7 @@ interface DbMutation {
 }
 
 interface ExternalCall {
-  kind:        "http" | "tool" | "queue_push" | "function_invoke";
+  kind:        "http" | "queue_push" | "function_invoke" | "agent_step";
   target:      string;
   input:       JsonValue;
   output:      JsonValue | null;
@@ -224,7 +223,7 @@ Four Postgres tables, all linked by `request_id`:
 | `execution_records` | Root row: function, input/output, error, timing, code_sha |
 | `execution_spans` | Distributed trace spans |
 | `execution_mutations` | DB mutations with before/after JSONB |
-| `execution_calls` | External HTTP calls, tool calls, queue pushes |
+| `execution_calls` | External HTTP calls, function invocations, queue pushes |
 
 ---
 
@@ -243,7 +242,7 @@ $ flux dev → http://localhost:4000  ← the only port
 
   One binary, five modules:
     Gateway      routing, rate limiting, CORS, auth
-    Runtime      Deno V8 execution, secrets, tool dispatch
+    Runtime      Deno V8 execution, secrets, agent dispatch
     API          function registry, logs, schema management
     Data Engine  DB queries, mutation recording, hooks, cron
     Queue        async jobs, retries, dead letter
@@ -320,8 +319,8 @@ my-app/
 ├── schemas/
 │   ├── users.sql
 │   └── orders.sql
-├── workflows/
-│   └── onboarding.ts
+├── agents/
+│   └── support.ts
 ├── tests/
 │   ├── create_user.test.ts
 │   └── fixtures/
@@ -516,24 +515,19 @@ interface FluxContext {
     }): Promise<void>;
   };
 
-  // Workflows
-  workflow: {
-    start(name: string, input: object): Promise<string>;  // returns workflow_id
-  };
-
   // Cross-function calls (traced, same request_id)
   function: {
     invoke(name: string, input: object): Promise<any>;
   };
 
+  // Agents — run an agent, which uses functions as tools
+  agent: {
+    run(name: string, input: object): Promise<any>;
+  };
+
   // Secrets — loaded from env, never logged
   secrets: {
     get(key: string): string | undefined;
-  };
-
-  // Tools — third-party integrations (Stripe, OpenAI, etc.)
-  tools: {
-    [name: string]: any;          // typed after flux generate
   };
 
   // Error helper — throws structured error, stops execution
@@ -846,62 +840,14 @@ export interface FluxFunctions {
 | DB tables | `information_schema.columns` via `GET /internal/introspect` |
 | Function contracts | `input_schema` + `output_schema` via `GET /internal/introspect` |
 | Secret keys | `secrets.key` via `GET /internal/introspect` |
-| Tool schemas | Composio action schemas via `GET /tools/connected` |
+| Agent definitions | Agent name, model, tool-functions via `GET /internal/introspect` |
 
 All sources exposed by existing endpoints. `flux generate` calls one endpoint
 and renders a `.d.ts` file.
 
 ---
 
-## 14. Workflows
-
-Workflows chain functions into durable, step-by-step executions with automatic
-retries and state tracking.
-
-```typescript
-// workflows/onboarding.ts
-import { defineWorkflow } from "@flux/functions";
-
-export default defineWorkflow({
-  name: "user_onboarding",
-  trigger: { type: "function", function: "create_user" },
-  steps: [
-    {
-      name: "send_welcome_email",
-      function: "send_email",
-      input: (ctx) => ({ to: ctx.trigger.output.email, subject: "Welcome!" }),
-    },
-    {
-      name: "create_stripe_customer",
-      function: "stripe_create_customer",
-      input: (ctx) => ({ email: ctx.trigger.output.email }),
-      retries: 3,
-    },
-    {
-      name: "update_user",
-      function: "update_user",
-      input: (ctx) => ({
-        id: ctx.trigger.output.id,
-        stripe_customer_id: ctx.steps.create_stripe_customer.output.customer_id,
-      }),
-    },
-  ],
-});
-```
-
-### Triggering from a function
-
-```typescript
-await ctx.workflow.start("user_onboarding", { user_id: newUser.id });
-```
-
-The Data Engine already implements the full workflow engine — step advancement,
-event triggering, state persistence. What's new is the `defineWorkflow()` SDK
-and the deploy path that uploads workflow definitions.
-
----
-
-## 15. Queue
+## 14. Queue
 
 ### Pushing jobs
 
@@ -935,7 +881,7 @@ Failed jobs create their own execution records, queryable with `flux why`.
 
 ---
 
-## 16. Cron
+## 15. Cron
 
 Attach a schedule directly to a function:
 
@@ -959,6 +905,81 @@ flux cron list    # list active cron jobs + next run times
 The `cron` field is parsed at deploy time. The Data Engine's cron worker fires
 jobs through the Queue, which dispatches to Runtime. Each cron invocation
 produces a normal execution record.
+
+---
+
+## 16. Agents
+
+Agents are LLM-driven orchestrators that use your functions as tools.
+Every function is automatically available as a tool — no separate registry.
+
+### Defining an agent
+
+```typescript
+// agents/support.ts
+import { defineAgent } from "@flux/functions";
+
+export default defineAgent({
+  name: "support_agent",
+  model: "gpt-4",
+  tools: ["lookup_user", "create_ticket", "send_email"],
+  system: "You are a customer support agent. Look up the user, assess their issue, create a ticket, and send a confirmation email.",
+});
+```
+
+`tools` is a list of function names. The agent calls them as tool invocations.
+Each call produces a traced execution record — same as any other function call.
+
+### Running an agent
+
+From code:
+```typescript
+const result = await ctx.agent.run("support_agent", {
+  message: "I can't log in to my account",
+  user_email: "alice@example.com",
+});
+```
+
+From CLI:
+```bash
+flux agent run support_agent --data '{"message": "I can't log in"}'
+```
+
+### How agents use functions
+
+The agent runtime translates each `defineFunction()` into an LLM tool schema
+automatically — `input` becomes the tool parameters, `output` becomes the
+return type. No manual schema writing.
+
+### Third-party integrations
+
+Stripe, OpenAI, Resend, etc. are just functions that wrap an SDK:
+
+```typescript
+// functions/stripe_create_customer/index.ts
+export default defineFunction({
+  name: "stripe_create_customer",
+  input: z.object({ email: z.string().email(), name: z.string() }),
+  output: z.object({ customer_id: z.string() }),
+  handler: async ({ input, ctx }) => {
+    const stripe = new Stripe(ctx.secrets.get("STRIPE_KEY")!);
+    const customer = await stripe.customers.create({ email: input.email, name: input.name });
+    return { customer_id: customer.id };
+  },
+});
+```
+
+Now an agent can use `stripe_create_customer` as a tool. The integration is
+just a function — traced, replayable, debuggable.
+
+### Agent execution records
+
+Every agent run produces an execution record with:
+- Each LLM call as a span (`agent_step`)
+- Each tool/function invocation as a child execution record
+- The full conversation (system prompt + messages + tool calls + responses)
+
+`flux trace` and `flux why` work on agent runs the same as any function.
 
 ---
 
@@ -1060,11 +1081,11 @@ gateway.route_match          +0ms
   runtime.execution_start    +4ms
     function.ctx.log(...)    +5ms
     db.query.users           +6ms  (8ms, before/after captured)
-    tool.stripe.charge       +20ms (145ms, input/output captured)
+    fn.stripe_create_customer +20ms (145ms, input/output captured)
   runtime.execution_end      +170ms
 
 db_mutations: [{ table: users, op: UPDATE, before: {...}, after: {...} }]
-external_calls: [{ kind: tool, target: stripe.charges.create, ... }]
+external_calls: [{ kind: function_invoke, target: stripe_create_customer, ... }]
 ```
 
 All spans linked by `x-request-id` + `x-parent-span-id`.
@@ -1078,7 +1099,7 @@ Side effects are suppressed for safety:
 |---|---|
 | DB reads | **Live** — reads current DB |
 | DB writes | **Suppressed** (pass `--write` to allow) |
-| HTTP / tool calls | **Mocked** — returns recorded response |
+| HTTP calls | **Mocked** — returns recorded response |
 | Queue pushes | **Suppressed** |
 | Cross-function calls | **Mocked** — returns recorded output |
 | `ctx.log()` / spans | **Live** — new record created with `replay: true` |
@@ -1117,34 +1138,7 @@ Errors are retained 3x longer than successful requests by default
 
 ---
 
-## 19. Tools & Integrations
-
-```bash
-flux add stripe       # register Stripe integration
-flux add openai       # register OpenAI integration
-flux add resend       # register Resend email
-```
-
-`flux add <name>`:
-1. Registers integration with control plane
-2. Prints required secrets to set
-3. Regenerates types (`flux generate`)
-
-### Usage in functions
-
-```typescript
-const customer = await ctx.tools.stripe.customers.create({
-  email: input.email,
-  name: input.name,
-});
-```
-
-All tool calls are traced automatically — input, output, and duration
-recorded in `external_calls`.
-
----
-
-## 20. Auth
+## 19. Auth
 
 Use middleware. This covers 95% of real apps.
 
@@ -1177,7 +1171,7 @@ more flexible, and debuggable with `flux why`.
 
 ---
 
-## 21. Build & Deploy
+## 20. Build & Deploy
 
 ### Build
 
@@ -1219,7 +1213,7 @@ flux deploy --target k8s           # generate Kubernetes manifests
 
 ---
 
-## 22. Self-Hosted Deployment
+## 21. Self-Hosted Deployment
 
 Flux runs entirely on your own infrastructure.
 
@@ -1275,7 +1269,7 @@ Everything in the framework:
 
 ---
 
-## 23. CLI Reference
+## 22. CLI Reference
 
 ✅ = implemented · 🔧 = rewrite in progress (wrong model, not missing) · 📋 = planned
 
@@ -1363,16 +1357,15 @@ All recording infrastructure exists in Rust (`trace_requests`, `platform_logs`,
 | `flux cron resume <name>` | 📋 | Resume a paused job |
 | `flux cron history <name> [--limit]` | 📋 | Recent invocations — each links to a `request-id` |
 
-### Workflows
+### Agents
 
 | Command | Status | Description |
 |---------|--------|-------------|
-| `flux workflow create <name>` | 🔧 | Scaffold `workflows/<name>.ts` |
-| `flux workflow list` | 🔧 | List definitions + deployment status |
-| `flux workflow deploy <name>` | 🔧 | Upload definition to local API |
-| `flux workflow run <name> [--data] [--file]` | 🔧 | Trigger and stream step output |
-| `flux workflow list-runs [--workflow] [--status] [--limit]` | 🔧 | List active/recent runs |
-| `flux workflow trace <run-id>` | 🔧 | Full execution trace for a workflow run |
+| `flux agent create <name>` | 📋 | Scaffold `agents/<name>.ts` with `defineAgent()` template |
+| `flux agent list` | 📋 | List agents + deployment status |
+| `flux agent deploy <name>` | 📋 | Upload agent definition |
+| `flux agent run <name> [--data] [--file]` | 📋 | Run an agent and stream output |
+| `flux agent simulate <name> [--data]` | 📋 | Dry-run — show tool calls without executing |
 
 ### Events
 
@@ -1395,15 +1388,6 @@ All recording infrastructure exists in Rust (`trace_requests`, `platform_logs`,
 |---------|--------|-------------|
 | `flux generate [--output] [--watch]` | 📋 | Emit `flux.d.ts` from live DB schema (typed `ctx.db`, `ctx.function.invoke`) |
 
-### Tools
-
-| Command | Status | Description |
-|---------|--------|-------------|
-| `flux tool list [--installed]` | ✅ | List available/connected integrations |
-| `flux tool connect <name>` | 🔧 | Walk through secrets, save to `.env.local`, re-run `flux generate` |
-| `flux tool disconnect <name>` | 🔧 | Remove secrets + update types |
-| `flux tool run <name> <action> [--data] [--file]` | ✅ | Run a tool action directly |
-
 ### Config
 
 | Command | Status | Description |
@@ -1421,7 +1405,7 @@ All recording infrastructure exists in Rust (`trace_requests`, `platform_logs`,
 
 ---
 
-## 24. Implementation Phases
+## 23. Implementation Phases
 
 ### Phase 0 — Prove the debugging magic (2-4 weeks)
 
@@ -1436,7 +1420,7 @@ flux trace    → show execution record for that invocation
 flux why      → root cause from execution record
 ```
 
-No workflows, no cron, no queue CLI, no middleware, no hot reload.
+No agents, no cron, no queue CLI, no middleware, no hot reload.
 Just: create project, start runtime, call a function, see the record, debug.
 
 **What this requires building:**
@@ -1482,16 +1466,16 @@ Estimated 2-4 weeks.
 ### Phase 3 — Production readiness
 
 9. **`flux test`** — test runner with local fixtures
-10. **`flux add <tool>`** — tool installer
-11. **Middleware system** — `defineMiddleware()` + flux.toml config
-12. **`flux worker`** — local queue worker command
+10. **Middleware system** — `defineMiddleware()` + flux.toml config
+11. **`flux worker`** — local queue worker command
 
 ---
 
-### Phase 4 — Polish
+### Phase 4 — Agents & polish
 
+12. **`flux agent`** — agent runtime, `defineAgent()`, function-as-tools
 13. **`flux cron list`** — cron management
-14. **Local trace viewer** — HTML waterfall at `localhost:4000/trace/<id>`
+14. **Local dashboard** — embedded SPA at `localhost:4000/flux/`
 15. **`flux new <template>`** — project templates (auth-api, ai-agent, stripe-payments)
 16. **Docker + K8s deploy targets** — `flux deploy --target docker|k8s`
 
@@ -1505,9 +1489,9 @@ Estimated 2-4 weeks.
 | **NestJS** | Structure + DI, no observability | Same structure + full execution history built in |
 | **Django / Rails** | Batteries-included, no replay | Same batteries + every request is a record |
 | **FastAPI** | Fast Python, manual tracing | Same speed principles + automatic tracing |
-| **Temporal** | Workflow engine, high ceremony | Lower friction — functions first, workflows when needed |
+| **Temporal** | Workflow engine, high ceremony | Lower friction — functions first, agents when needed |
 | **Inngest** | Background jobs | Full execution history across all code, not just jobs |
-| **Supabase** | Managed Postgres + Edge Functions | Execution recording, replay debugging, queue, workflows |
+| **Supabase** | Managed Postgres + Edge Functions | Execution recording, replay debugging, queue, agents |
 
 > **Flux is the Git of backend execution.**
 >
