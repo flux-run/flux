@@ -1,3 +1,4 @@
+// Runtime implementations (actual JS values)
 export {
   defineEnum,
   defineSchema,
@@ -6,8 +7,9 @@ export {
   foreignKey,
   ForbiddenError,
   ValidationError,
-} from "./types.js";
+} from "./runtime.js";
 
+// Type-only exports (erased at runtime)
 export type {
   FluxEnum,
   ColumnDescriptor,
