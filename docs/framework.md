@@ -325,7 +325,7 @@ my-app/
 │   ├── users.sql
 │   └── orders.sql
 ├── agents/
-│   └── support.ts
+│   └── support.yaml
 ├── tests/
 │   ├── create_user.test.ts
 │   └── fixtures/
@@ -973,24 +973,114 @@ produces a normal execution record.
 ## 16. Agents
 
 Agents are LLM-driven orchestrators that use your functions as tools.
-Every function is automatically available as a tool — no separate registry.
+Agents are **pure schema** — YAML files, no code. The runtime owns the
+execution loop. Every function is automatically available as a tool.
 
 ### Defining an agent
 
-```typescript
-// agents/support.ts
-import { defineAgent } from "@flux/functions";
+```yaml
+# agents/support.yaml
+name: support_agent
+model: gpt-4o
+system: |
+  You are a customer support agent. Look up the user, assess their
+  issue, create a ticket, and send a confirmation email.
+tools:
+  - lookup_user
+  - create_ticket
+  - send_email
 
-export default defineAgent({
-  name: "support_agent",
-  model: "gpt-4",
-  tools: ["lookup_user", "create_ticket", "send_email"],
-  system: "You are a customer support agent. Look up the user, assess their issue, create a ticket, and send a confirmation email.",
-});
+input:
+  message: string
+  user_email: string
+
+output:
+  resolution: string
+  ticket_id: string?
 ```
 
-`tools` is a list of function names. The agent calls them as tool invocations.
-Each call produces a traced execution record — same as any other function call.
+No handler. No imports. No code. The runtime reads this schema and
+executes the LLM loop: call model → parse tool_use → invoke function →
+feed result → repeat.
+
+### Why YAML, not TypeScript
+
+Functions are TypeScript because they have handlers — executable code.
+Agents have no code. 90% of agents are purely declarative: model + prompt
++ tools + constraints. The LLM loop is identical for every agent, so the
+runtime owns it.
+
+- **Multi-line system prompts** — YAML handles them natively. JSON and TS don't.
+- **PM-editable** — prompt engineers edit YAML. They can't edit TypeScript.
+- **No false complexity** — `defineAgent()` with imports and exports is ceremony
+  for a config file pretending to be code.
+
+### Agent YAML schema
+
+```yaml
+# Required
+name: string                    # unique identifier
+model: string                   # "gpt-4o" | "claude-3-sonnet" | any
+system: string                  # system prompt (multi-line)
+tools: string[]                 # function names from functions/
+
+# Optional — validation
+input:                          # JSON Schema for input validation
+  field_name: type
+output:                         # JSON Schema for output validation
+  field_name: type
+
+# Optional — constraints
+maxTurns: number                # default: 25
+timeout: string                 # default: "120s"
+temperature: number             # default: 0.7
+model_config:                   # pass-through to LLM provider
+  top_p: 0.9
+  max_tokens: 4096
+
+# Optional — guard rails
+rules:
+  - before: approve_request     # won't execute approve_request unless
+    require: check_policy       # check_policy was called first
+  - tool: send_email
+    max_calls: 3                # max times this tool can be called per run
+```
+
+### Source of truth: git, not database
+
+```
+agents/support.yaml     ← source of truth (git-versioned)
+        │
+   flux deploy          ← reads YAML, validates, writes to database
+        │
+   agents table (DB)    ← runtime cache for fast lookup
+        │
+   ctx.agent.run()      ← runtime reads from DB, runs the loop
+```
+
+Agent YAML files are git-versioned. `flux deploy` reads them, validates the
+schema, and writes to the `agents` table. The runtime reads from the database
+for fast lookup. Each agent record includes a `content_sha` (SHA256 of the
+YAML file), stored in every ExecutionRecord. This means `flux why` can tell
+you which version of the system prompt was running when something broke, and
+`flux bug bisect` works for prompt regressions.
+
+### Database table
+
+```sql
+CREATE TABLE agents (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name          TEXT NOT NULL UNIQUE,
+  model         TEXT NOT NULL,
+  system        TEXT NOT NULL,
+  tools         TEXT[] NOT NULL,
+  config        JSONB NOT NULL DEFAULT '{}',
+  input_schema  JSONB,
+  output_schema JSONB,
+  content_sha   TEXT NOT NULL,
+  deployed_at   TIMESTAMP NOT NULL DEFAULT NOW()
+);
+```
 
 ### Running an agent
 
@@ -1007,11 +1097,29 @@ From CLI:
 flux agent run support_agent --data '{"message": "I can't log in"}'
 ```
 
-### How agents use functions
+### How the runtime executes an agent
 
-The agent runtime translates each `defineFunction()` into an LLM tool schema
-automatically — `input` becomes the tool parameters, `output` becomes the
-return type. No manual schema writing.
+```
+ctx.agent.run("support_agent", input)
+
+Runtime:
+  1. Load agent schema from agents table
+  2. Validate input against input schema
+  3. Build tool schemas automatically:
+     - Read defineFunction() for each tool in tools[]
+     - Convert Zod input/output → JSON Schema → LLM tool_use format
+  4. Build messages:
+     [{ role: "system", content: agent.system },
+      { role: "user", content: JSON.stringify(input) }]
+  5. Loop:
+     a. Call LLM (model, messages, tool_schemas)
+     b. If tool_use → invoke function via runtime → record agent_step
+        span → append result to messages → go to (a)
+     c. If final answer → validate against output schema → return
+     d. If maxTurns exceeded → return error with full conversation
+  6. Check rules (e.g., require: check_policy before approve_request)
+  7. Record everything in ExecutionRecord
+```
 
 ### Third-party integrations
 
@@ -1037,11 +1145,23 @@ just a function — traced, replayable, debuggable.
 ### Agent execution records
 
 Every agent run produces an execution record with:
-- Each LLM call as a span (`agent_step`)
+- Each LLM call as a span (`agent_step`) with model, tokens, tool_choice
 - Each tool/function invocation as a child execution record
 - The full conversation (system prompt + messages + tool calls + responses)
+- `content_sha` of the agent YAML for version tracking
 
 `flux trace` and `flux why` work on agent runs the same as any function.
+
+### What agents do NOT include
+
+- **No conversation memory.** Agents are single-shot: input → loop → output.
+  For multi-turn chat, store conversation in the database and pass it as input.
+- **No built-in RAG.** That's a function that queries a vector DB.
+  The agent calls it as a tool.
+- **No agent-to-agent routing.** An agent can call another agent via
+  `ctx.agent.run()` inside a function — it's just a function invocation.
+- **No prompt management UI.** System prompts live in YAML, version-controlled
+  with git. Same as schemas.
 
 ---
 
@@ -1445,7 +1565,7 @@ All recording infrastructure exists in Rust (`trace_requests`, `platform_logs`,
 
 | Command | Status | Description |
 |---------|--------|-------------|
-| `flux agent create <name>` | 📋 | Scaffold `agents/<name>.ts` with `defineAgent()` template |
+| `flux agent create <name>` | 📋 | Scaffold `agents/<name>.yaml` with template |
 | `flux agent list` | 📋 | List agents + deployment status |
 | `flux agent deploy <name>` | 📋 | Upload agent definition |
 | `flux agent run <name> [--data] [--file]` | 📋 | Run an agent and stream output |
@@ -1571,7 +1691,7 @@ Estimated 2-4 weeks.
 
 ### Phase 4 — Agents & polish
 
-12. **`flux agent`** — agent runtime, `defineAgent()`, function-as-tools
+12. **`flux agent`** — agent runtime, YAML schema, function-as-tools
 13. **`flux cron list`** — cron management
 14. **Local dashboard** — embedded SPA at `localhost:4000/flux/`
 15. **`flux new <template>`** — project templates (auth-api, ai-agent, stripe-payments)
