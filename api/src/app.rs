@@ -92,6 +92,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/secrets",           get(secrets::routes::get_internal_runtime_secrets))
         .route("/bundle",            get(routes::deployments::get_internal_bundle))
         .route("/introspect",        get(routes::introspect::get_project_introspect))
+        .route("/introspect/manifest", get(routes::manifest::get_manifest))
         .route("/logs",              post(logs::routes::create_log).get(logs::routes::list_logs))
         .route("/functions/resolve", get(routes::functions::resolve_function))
         .route("/cache/invalidate",  post(routes::system::cache_invalidate))
@@ -130,6 +131,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/schema/graph",      get(routes::schema::graph))
         .route("/sdk/schema",        get(routes::sdk::schema))
         .route("/sdk/typescript",    get(routes::sdk::typescript))
+        .route("/sdk/manifest",      get(routes::manifest::get_manifest))
         .route("/openapi.json",      get(routes::openapi::spec))
         .route("/spec",              get(routes::spec::project_spec))
         // Data Engine + Files proxy

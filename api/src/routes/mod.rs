@@ -11,3 +11,4 @@ pub mod introspect;
 pub mod stubs;
 pub mod records;
 pub mod agents;
+pub mod manifest;

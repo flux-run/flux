@@ -44,6 +44,7 @@ mod upgrade;
 mod version_cmd;
 mod whoami;
 mod why;
+mod generate;
 #[derive(Parser)]
 #[command(name = "flux")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -519,6 +520,28 @@ enum Commands {
         #[arg(long, short, value_name = "FILE")]
         sdk: Option<String>,
     },
+    /// Generate typed ctx bindings for all languages from the live project schema.
+    ///
+    /// Writes .flux/manifest.json and generates:
+    ///   .flux/types.d.ts  (TypeScript)
+    ///   .flux/ctx.js      (JavaScript)
+    ///   .flux/ctx.rs      (Rust)
+    ///   .flux/ctx.go      (Go)
+    ///   .flux/ctx.pyi     (Python)
+    ///   .flux/ctx.h       (C)
+    ///   .flux/ctx.hpp     (C++)
+    ///   .flux/ctx.zig     (Zig)
+    ///   .flux/ctx.as.ts   (AssemblyScript)
+    ///   .flux/Ctx.cs      (C#)
+    ///   .flux/Ctx.swift   (Swift)
+    ///   .flux/Ctx.kt      (Kotlin)
+    ///   .flux/Ctx.java    (Java)
+    ///   .flux/ctx.rb      (Ruby)
+    Generate {
+        /// Output directory (default: .flux/)
+        #[arg(short, long, value_name = "DIR")]
+        output: Option<String>,
+    },
 
     // ── Local Server (native, no Docker) ────────────────────────────────────
     /// Start all Fluxbase services natively without Docker
@@ -712,6 +735,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Pull   { output }           => sdk::execute_pull(output).await?,
         Commands::Watch  { output, interval } => sdk::execute_watch(output, interval).await?,
         Commands::Status { sdk }              => sdk::execute_status(sdk).await?,
+        Commands::Generate { output }         => generate::execute_generate(output).await?,
 
         Commands::Server { port, only, release, no_color, database_url } =>
             server::execute(port, only, release, no_color, database_url).await?,
