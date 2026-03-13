@@ -1,112 +1,65 @@
-# WASM Runtime — Deferred
+# WASM Runtime
 
-> **Status: Deferred.** WASM support is designed but not in scope for
-> Phase 0–3. The framework currently supports Deno V8 (JavaScript/TypeScript)
-> only. This document preserves the design for future implementation.
+Flux is designed to support both JavaScript-first execution and a broader WebAssembly story.
 
----
+The WASM path matters because it opens the door to multi-language functions while preserving a consistent runtime model.
 
-## Motivation
+## Why WASM Matters
 
-| Concern | Deno V8 only | With WASM |
-|---|---|---|
-| Language choice | JavaScript / TypeScript | Any WASM-capable language |
-| Performance ceiling | JIT-compiled JS | AOT-compiled native code |
-| Use cases | APIs, scripts, workflows | CPU-bound compute, ML inference |
-| Existing code reuse | Rewrite required | Compile-and-deploy |
+WebAssembly gives Flux a path to:
 
-WASM does not replace Deno — it is a second execution target that sits
-alongside it. The Runtime selects the engine at dispatch time based on the
-`runtime` field in `flux.json`.
+- language diversity
+- portable function bundles
+- tighter runtime control
+- a more uniform deployment artifact for non-JavaScript languages
 
----
+That matters for the product because Flux wants one runtime, not a different execution model for every language.
 
-## Two-runtime model
+## Product Stance
 
-```
-POST /execute
-       │
-       ├─ runtime = "deno"  ──► IsolatePool (Deno V8, current)
-       │
-       └─ runtime = "wasm"  ──► WasmPool   (Wasmtime, future)
-```
+The JavaScript path can be the first-class default while WASM matures.
 
-Both paths share: bundle fetching, secrets injection, structured logging,
-request tracing, and resource limits.
+The goal is not immediate parity across every language. The goal is:
 
----
+- a coherent packaging model
+- predictable execution
+- visibility into spans, errors, and side effects
+- deployment metadata that still fits the same debugging story
 
-## Design overview
+## What Parity Means
 
-### WasmPool
+WASM support is successful when a non-JavaScript function still participates in:
 
-Mirrors `IsolatePool` but manages pre-instantiated Wasmtime `Store`s:
+- deployment versioning
+- trace generation
+- mutation attribution
+- queue and schedule execution
+- replay and diff, where practical
 
-```
-WasmPool {
-  workers: min(2 × CPU, 16)
-  cache:   compiled Module per function_id (AOT, Cranelift)
-}
-```
+Without that, WASM is just an alternate build target, not part of the product.
 
-### FluxContext ABI
+## Packaging Model
 
-WASM functions access Flux capabilities via host imports:
+The target model is:
 
-```
-flux.secret_get(key_ptr, key_len) → (val_ptr, val_len)
-flux.log(level, msg_ptr, msg_len)
-flux.http_fetch(req_ptr, req_len) → (resp_ptr, resp_len)
-flux.db_query(req_ptr, req_len) → (resp_ptr, resp_len)
-```
+- source language compiles to a WASM artifact
+- Flux stores that artifact as a function version
+- the runtime loads and executes it under the same execution record model
 
-Guest allocator: `flux_alloc(size) → ptr` / `flux_free(ptr, size)`.
+The packaging process may differ by language, but the operator experience stays consistent.
 
-### Language support
+## Constraints
 
-| Language | Toolchain | Status |
-|---|---|---|
-| Rust | `cargo build --target wasm32-wasip1` | Designed |
-| Go | `tinygo build -target wasm` | Designed |
-| C/C++ | `clang --target=wasm32-wasi` | Designed |
-| AssemblyScript | `asc` compiler | Designed |
-| Python | `componentize-py` | Experimental |
-| Zig | `zig build -target wasm32-wasi` | Designed |
+WASM support comes with realistic constraints:
 
-### flux.json for WASM functions
+- some language features may require adapters or tooling
+- I/O and host bindings need a stable contract
+- performance and startup characteristics may differ by language
 
-```json
-{
-  "runtime": "wasm",
-  "entry": "handler.wasm",
-  "build": "cargo build --target wasm32-wasip1 --release && cp target/wasm32-wasip1/release/my_fn.wasm handler.wasm",
-  "memory_mb": 64
-}
-```
+Those constraints are acceptable as long as the runtime story stays coherent.
 
----
+## Product Rule
 
-## Security model
+WASM is valuable when it strengthens the complete-system story.
 
-- Linear memory isolation per invocation
-- No filesystem access (pure WASI subset)
-- Fuel-based CPU metering (configurable per function)
-- Memory limit enforced at instantiation
-
----
-
-## Implementation plan
-
-This will be implemented after Phase 3 (production readiness). Priority:
-1. Rust WASM functions (most demand)
-2. Go WASM functions
-3. Other languages
-
-The Runtime already has extension points in `runtime/src/engine/` for a
-`WasmPool` module. See the source code for the existing `IsolatePool`
-pattern to follow.
-
----
-
-*For the current runtime (Deno V8), see [runtime.md](runtime.md).
-For the overall architecture, see [framework.md §4](framework.md#4-architecture).*
+It is not valuable if it adds language breadth while weakening the debugging and deployment model.

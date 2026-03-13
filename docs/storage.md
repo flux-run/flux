@@ -1,106 +1,74 @@
 # Storage
 
-Flux gives every project file columns backed by S3-compatible object storage.
-You configure your own S3-compatible bucket.
+Flux uses storage as part of the product model, not just as an implementation detail.
 
----
+The runtime needs durable data for execution records, deployment metadata, queue state, and debugging surfaces.
 
-## How files work
+## Primary Persistent Store
 
-1. Your function asks for a presigned URL for a specific table + column + row
-2. Flux generates a signed URL pointing at your bucket
-3. The client uploads/downloads directly to S3 (Flux never proxies binary data)
-4. The object key is stored on the row
+Postgres is the primary persistent store for Flux.
 
-```
-client  ──presign──▶  Data Engine  ──returns URL──▶  client
-client  ──PUT/GET──▶  S3 bucket  (direct, no Flux proxy)
-```
+It holds or anchors:
 
----
+- project and runtime metadata
+- execution records
+- traces and logs metadata
+- mutation history
+- queue and schedule state
+- deployment metadata
+- operator-facing configuration
 
-## Supported providers
+This is why Postgres sits so close to the center of the product story.
 
-| Provider | Config value | Notes |
-|---|---|---|
-| Amazon S3 | `aws_s3` | Region required |
-| Cloudflare R2 | `r2` | Endpoint required |
-| DigitalOcean Spaces | `do_spaces` | Endpoint required |
-| MinIO / self-hosted | `minio` | Endpoint required |
-| Google Cloud Storage | `gcs` | S3 interop endpoint |
+## Bundle Storage
 
-All providers use the AWS S3 SDK with `force_path_style: true`, so any
-S3-compatible storage works.
+Function bundles need durable storage so Flux can answer:
 
----
+- what code version ran?
+- can this execution be replayed?
+- what changed between deploys?
 
-## Configuration
+Bundle storage may live in Postgres, object storage, or a hybrid design depending on deployment mode, but the product requirement is stable bundle identity.
 
-### flux.toml
+## Secret Storage
 
-```toml
-[storage]
-provider   = "minio"
-bucket     = "my-app-files"
-endpoint   = "http://localhost:9000"
-region     = "us-east-1"
-base_path  = "uploads"
-```
+Secrets are managed as part of runtime configuration, with a clear separation between:
 
-### CLI
+- committed project config
+- local development secrets
+- production operator-managed secrets
 
-```bash
-flux storage set \
-  --provider aws_s3 \
-  --bucket my-files \
-  --region us-east-1 \
-  --access-key-id AKIA... \
-  --secret-access-key wJal...
+The important rule is that secret access remains attributable within the execution model.
 
-flux storage show    # view current config
-flux storage reset   # reset to default
-```
+## Cache Layers
 
-### Environment variables
+Flux can use caches for:
 
-| Env var | Description |
-|---|---|
-| `STORAGE_PROVIDER` | Provider type |
-| `STORAGE_BUCKET` | Bucket name |
-| `STORAGE_ENDPOINT` | S3 endpoint URL |
-| `STORAGE_REGION` | AWS region |
-| `STORAGE_ACCESS_KEY_ID` | IAM access key |
-| `STORAGE_SECRET_ACCESS_KEY` | IAM secret key |
-| `STORAGE_BASE_PATH` | Optional prefix inside bucket |
+- hot function bundles
+- secret lookups
+- route or deployment metadata
 
----
+Caches are useful for performance, but they do not break explainability. Operators can still understand which version and values were active for an execution.
 
-## Object key structure
+## Retention
 
-```
-{tenant_id}/{project_id}/{table}/{column}/{row_id}/{filename}
-```
+Storage policy is product policy in Flux.
 
-For self-hosted without multi-tenancy:
-```
-{project}/{table}/{column}/{row_id}/{filename}
-```
+Retention decisions affect:
 
----
+- how far back debugging can go
+- whether replay is possible
+- how much mutation history is available
+- how useful `why`, diff, and bisect remain
 
-## Presigned URLs
+Retention is documented and operator-visible, not buried in infrastructure defaults.
 
-- **Upload:** `PUT` presigned URL, expires in 15 minutes
-- **Download (public columns):** Direct URL
-- **Download (private columns):** `GET` presigned URL, expires in 15 minutes
+## Backup And Recovery
 
----
+As an open-source runtime, Flux documents backup expectations for:
 
-## Credential security
+- Postgres data
+- bundle artifacts
+- operator secrets
 
-Storage credentials are encrypted at rest using the same AES-256-GCM system
-as secrets. They are never exposed in API responses, logs, or execution records.
-
----
-
-*For the overall framework architecture, see [framework.md](framework.md).*
+The product promise depends on being able to preserve and inspect execution history reliably.

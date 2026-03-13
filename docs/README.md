@@ -1,8 +1,8 @@
 # Flux Documentation
 
-This directory explains the product Flux is intended to become: a complete backend runtime built around deterministic debugging.
+This directory is the public product and architecture guide for Flux.
 
-The rest of the docs describe the target 0.1 beta shape. When implementation still lags the product story, [implementation-status.md](implementation-status.md) is the place that should say so explicitly.
+Flux is a complete backend runtime built around deterministic debugging.
 
 ## Recommended Reading Order
 
@@ -15,12 +15,11 @@ The rest of the docs describe the target 0.1 beta shape. When implementation sti
 
 ## Product Docs
 
-- [framework.md](framework.md) - what Flux is, what it includes, and how it should feel
-- [SPEC.md](SPEC.md) - product goals, non-goals, user model, and 0.1 beta target
+- [framework.md](framework.md) - what Flux is, what it includes, and how it feels
+- [SPEC.md](SPEC.md) - product goals, principles, and user model
 - [quickstart.md](quickstart.md) - first-run developer workflow
 - [concepts.md](concepts.md) - core mental model and primitives
 - [cli.md](cli.md) - command-line workflows and command philosophy
-- [implementation-status.md](implementation-status.md) - target state versus current repo state
 
 ## Architecture Docs
 
@@ -33,7 +32,7 @@ The rest of the docs describe the target 0.1 beta shape. When implementation sti
 - [observability.md](observability.md) - execution record, spans, logs, and debugging surfaces
 - [storage.md](storage.md) - persisted state, bundles, caches, and retention
 - [database-schema.md](database-schema.md) - logical schema layout
-- [wasm-runtime.md](wasm-runtime.md) - target-state WebAssembly story
+- [wasm-runtime.md](wasm-runtime.md) - WebAssembly and multi-language execution
 
 ## Product Narrative And Debugging Docs
 
@@ -44,10 +43,9 @@ The rest of the docs describe the target 0.1 beta shape. When implementation sti
 
 ## Operational And Reference Docs
 
-- [api-reference.md](api-reference.md) - target-state route groups and API surface
+- [api-reference.md](api-reference.md) - route groups and API surface
 - [gateway-production-checklist.md](gateway-production-checklist.md) - production hardening checklist
 - [FOLDER_STRUCTURE.md](FOLDER_STRUCTURE.md) - repo layout and generated project layout
-- [cli-rewrite-plan.md](cli-rewrite-plan.md) - CLI design roadmap for keeping the product loop simple
 
 ## Examples
 

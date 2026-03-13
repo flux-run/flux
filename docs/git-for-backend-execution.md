@@ -1,156 +1,54 @@
-# Git for Backend Execution
+# Git For Backend Execution
 
-*Why production debugging is still primitive — and what it looks like when it isn't.*
+Flux can be understood through a version-control analogy.
 
----
+This analogy is useful because the product is trying to make backend behavior inspectable in the same way Git makes code history inspectable.
 
-## The insight
+## The Analogy
 
-Git changed software development by making every code change permanent and
-inspectable. Before Git, "what changed?" was a hard question. After Git,
-it's trivial.
+- source code commits explain how code changed
+- execution records explain how the backend behaved
+- deployments link code history to runtime behavior
+- mutation history links executions to state changes
+- replay and diff let operators compare outcomes
 
-The same shift is possible for backend execution.
+Flux is not literally Git for production systems, but it makes backend history feel similarly navigable.
 
-**Every request should leave behind a complete forensic record** — execution
-spans, data mutations, and request metadata — all tied to a single
-`request_id`. Once you have that, production debugging becomes deterministic.
+## Why The Analogy Works
 
----
+When engineers use Git, they expect to answer:
 
-## Before Flux
+- what changed?
+- when did it change?
+- who changed it?
+- what did it look like before?
 
-```
-Error in production. Spend 2 hours:
-1. Check logs (thousands of lines)
-2. Spin up local environment (30 min setup)
-3. Try to recreate issue (can't without production data)
-4. Dig through git blame (who changed what)
-5. Deploy fix (wait for deploy)
-6. Hope it works
-```
+Flux helps answer parallel questions for backend behavior:
 
-## After Flux
+- what happened?
+- when did it happen?
+- which version caused it?
+- what state changed?
+- how does this run differ from the last good run?
 
-```
-Error in production. 10 seconds:
-$ flux why <request-id>
+## Product Implication
 
-Root cause + code_sha + state changes + fix suggestion.
-Test with: $ flux incident replay <request-id>
-Deploy with confidence.
-```
+This analogy helps explain why Flux includes:
 
----
+- deployment metadata
+- trace and state history
+- replay
+- diff
+- blame
 
-## What makes it work
+The product is trying to make runtime history inspectable, not just observable.
 
-Three records, one join key:
+## Boundaries Of The Analogy
 
-### 1. Execution spans
+The analogy is helpful, but it is not overused:
 
-Every layer of the stack emits timing:
+- production executions are messier than commits
+- replay is not the same as checking out a revision
+- state changes may be irreversible or time-sensitive
 
-| Layer | What it captures |
-|---|---|
-| Gateway | Auth, rate limit, routing, latency |
-| Runtime | Bundle fetch, execution, tool calls, errors |
-| Data Engine | SQL query, table, row count, duration |
-| Queue | Enqueue, wait time, worker execution |
-
-### 2. Database mutations
-
-Every INSERT, UPDATE, DELETE captured with before/after state:
-
-```typescript
-interface DbMutation {
-  table:     string;
-  operation: "INSERT" | "UPDATE" | "DELETE";
-  row_id:    string;
-  before:    JsonValue | null;   // null for INSERT
-  after:     JsonValue | null;   // null for DELETE
-}
-```
-
-Append-only. Every mutation is permanent.
-
-### 3. Request envelope
-
-Full HTTP context: method, path, function, input, output, error, timing,
-`code_sha` (which git commit was deployed).
-
-All three share the same `request_id`. This is the join key that makes
-everything work.
-
----
-
-## The debugging surface
-
-| Git command | Flux command | What it does |
-|---|---|---|
-| `git show` | `flux why <id>` | Full execution context + root cause |
-| `git log` | `flux state history <table>` | Version history of a database row |
-| `git blame` | `flux state blame <table>` | Last writer per row |
-| `git diff` | `flux trace diff <a> <b>` | Compare two executions |
-| `git bisect` | `flux bug bisect` | Find the commit that broke it |
-| `git revert` | `flux incident replay <id>` | Reproduce with mocked side effects |
-| `git log -f` | `flux tail` | Stream live requests |
-
-All commands operate on real production data. They are read-only except
-`flux incident replay`, which re-runs with side effects suppressed.
-
----
-
-## The architecture that makes it possible
-
-```
-HTTP client
-     │
-     ▼
-Gateway    — auth, rate limit, trace root, request envelope
-     │  request_id propagated in every span
-     ▼
-Runtime    — Deno V8 isolate, ctx object, tool calls
-     │  mutations intercepted before reaching Postgres
-     ▼
-Data Engine — schema validation, policies, mutation log
-     │  atomic: mutation + log entry in same transaction
-     ▼
-PostgreSQL — you own it, Flux never touches it directly
-```
-
-The Data Engine sits between function code and Postgres. It records every
-mutation in the same transaction as the write itself. Three properties make
-this reliable:
-
-1. **Atomic writes** — the mutation log commits in the same transaction as
-   the data change. Rollback the write → rollback the log.
-
-2. **Span IDs on mutations** — every mutation carries the `span_id` that
-   caused it. Trace any database change back to the exact function code.
-
-3. **Immutable history** — `execution_mutations` is append-only. No UPDATE
-   or DELETE on audit records.
-
----
-
-## Why existing tools can't do this
-
-| Signal | Records | Missing |
-|---|---|---|
-| Logs | Messages | Causal chain, state context |
-| Metrics | Counters, percentiles | Individual request detail |
-| Traces | Timing per span | What data changed |
-
-None tell you *what state the system was in* when the failure happened.
-Flux records execution + state transitions. That combination is what makes
-replay, bisect, and blame work.
-
----
-
-## The positioning
-
-> Flux is Git for backend execution.
->
-> Git made every code change inspectable, diffable, and revertable.
-> Flux makes every backend execution inspectable, diffable, and replayable.
+The point is not perfect symmetry. The point is to make backend behavior more understandable and navigable.

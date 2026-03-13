@@ -1,8 +1,6 @@
 # Quickstart
 
-This quickstart describes the intended first-run experience for Flux.
-
-> Flux is still in development. Treat this document as the target 0.1 beta workflow and the product contract the codebase is moving toward.
+This quickstart shows what happens when you start building with Flux.
 
 ## 1. Build The CLI
 
@@ -21,7 +19,7 @@ target/debug/flux init my-app
 cd my-app
 ```
 
-The scaffold should give you a complete starting point:
+The scaffold gives you a complete starting point:
 
 - `flux.toml`
 - `functions/`
@@ -38,7 +36,7 @@ The scaffold should give you a complete starting point:
 target/debug/flux dev
 ```
 
-The target local experience is:
+`flux dev` gives you:
 
 - one command starts the stack
 - Postgres is bootstrapped or connected automatically
@@ -52,7 +50,7 @@ The target local experience is:
 target/debug/flux function create create_user
 ```
 
-Flux should scaffold a function that is ready to edit immediately.
+Flux scaffolds a function that is ready to edit immediately.
 
 ## 5. Invoke The System
 
@@ -75,7 +73,7 @@ target/debug/flux trace <request_id>
 target/debug/flux why <request_id>
 ```
 
-After one request, the system should already feel different from a logs-first stack:
+After one request, the system already feels different from a logs-first stack:
 
 - you have one request record
 - you can inspect spans without stitching systems together manually
@@ -98,7 +96,7 @@ Flux is meant to treat the database as part of the execution model, not as a sep
 target/debug/flux deploy
 ```
 
-The intended deployment loop is:
+The deployment loop is:
 
 - detect what changed
 - bundle and upload code
@@ -119,7 +117,7 @@ target/debug/flux trace diff <original_id> <replay_id>
 
 ## What Quickstart Must Prove
 
-Flux is ready for serious beta testing when a new developer can:
+Flux delivers its strongest first impression when a new developer can:
 
 1. start a project without reading internal docs
 2. create and invoke one function without port confusion

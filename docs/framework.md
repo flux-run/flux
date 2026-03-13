@@ -10,16 +10,16 @@ Most backend tools optimize for writing and deploying code. Very few optimize fo
 
 Flux is built on a different thesis:
 
-- backend execution should leave behind a durable, queryable record
-- the database should be part of that record, not a separate blind spot
-- async work should preserve causality instead of breaking it
-- operators should be able to move from alert to explanation in a few commands
+- backend execution leaves behind a durable, queryable record
+- the database is part of that record, not a separate blind spot
+- async work preserves causality instead of breaking it
+- operators move from alert to explanation in a few commands
 
-The result should feel less like "serverless functions plus add-ons" and more like a coherent backend runtime.
+The result feels less like "serverless functions plus add-ons" and more like a coherent backend runtime.
 
 ## What Flux Is
 
-Flux is intended to be:
+Flux is:
 
 - a function runtime
 - an HTTP gateway
@@ -46,13 +46,13 @@ The core value is deterministic backend debugging. Everything else exists to rei
 
 ### 1. Complete System, Focused Message
 
-The runtime can include functions, database access, queues, schedules, and agents, but the message should stay focused:
+The runtime includes functions, database access, queues, schedules, and agents, but the message stays focused:
 
 - Flux is the backend runtime for deterministic production debugging.
 
 ### 2. Local-First
 
-Developers should be able to start the system locally, understand it from the repo, and debug it without needing a hosted control plane.
+Developers start the system locally, understand it from the repo, and debug it without needing a hosted control plane.
 
 ### 3. Own The Execution Path
 
@@ -60,11 +60,11 @@ The more of the backend path Flux owns, the more trustworthy replay, diff, mutat
 
 ### 4. Human-Usable Operations
 
-The CLI and dashboard should be useful under pressure. `trace`, `why`, replay, diff, and history should be more important than endless configuration surfaces.
+The CLI and dashboard are useful under pressure. `trace`, `why`, replay, diff, and history matter more than endless configuration surfaces.
 
 ### 5. Architectural Clarity
 
-The codebase should preserve clean subsystem boundaries even when the deployment target is one binary.
+The codebase preserves clean subsystem boundaries even when the deployment target is one binary.
 
 ## Intended User
 
@@ -106,11 +106,9 @@ These are not arbitrary services. They are boundaries that support the execution
 
 ## Open Source Standard
 
-For Flux to work as an open-source project, the repo should explain:
+For Flux to work as an open-source project, the repo explains:
 
 - what the product is
 - why the architecture looks the way it does
 - what a complete user journey looks like
-- which parts are target state versus current state
-
-The documentation should make the product legible even before the code is fully finished.
+- the product shape and architecture clearly enough that users immediately understand what Flux does

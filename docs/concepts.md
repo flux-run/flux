@@ -62,7 +62,7 @@ The data engine is what prevents the database from becoming a debugging blind sp
 
 The queue is how Flux handles async work without losing causal context.
 
-The queue should preserve:
+The queue preserves:
 
 - parent-child links between executions
 - retry history
@@ -87,12 +87,12 @@ Cron exists in Flux so that scheduled work uses the same:
 
 Agents are another execution surface, not a separate product category.
 
-In Flux, an agent should still be debuggable as a backend execution:
+In Flux, an agent is debuggable as a backend execution:
 
-- prompts and tool calls should be inspectable
-- external calls should be traced
-- state changes should be attributable
-- follow-up work should stay linked
+- prompts and tool calls are inspectable
+- external calls are traced
+- state changes are attributable
+- follow-up work stays linked
 
 ## Deployment
 
@@ -123,13 +123,13 @@ Replay only becomes credible when the runtime owns enough of the execution path.
 
 `flux why` is the product thesis in one command.
 
-It should answer:
+It answers:
 
 - what failed?
 - where did the failure start?
 - what changed?
 - what state did it mutate?
-- what should the operator do next?
+- what does the operator do next?
 
 If `flux why` becomes a command people reach for before logs, Flux has a strong center of gravity.
 
@@ -137,7 +137,7 @@ If `flux why` becomes a command people reach for before logs, Flux has a strong 
 
 Flux includes functions, gateway, database execution, queue, schedules, agents, secrets, and deployment because the execution record has to span the whole backend.
 
-But the product message should stay narrow:
+But the product message stays narrow:
 
 - Flux is the backend runtime for deterministic production debugging.
 - The complete system exists to make that statement true.

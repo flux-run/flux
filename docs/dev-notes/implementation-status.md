@@ -1,8 +1,8 @@
 # Implementation Status
 
-This page keeps the rest of the docs honest.
+This is an internal status note for the repository.
 
-Most of the documentation in this repo describes the intended 0.1 beta product shape. This document explains where the codebase is still converging toward that shape.
+It is not part of the public product docs set.
 
 ## Status Levels
 
@@ -16,7 +16,7 @@ Most of the documentation in this repo describes the intended 0.1 beta product s
 | Area | Status | Notes |
 | --- | --- | --- |
 | Product narrative | Active | The strongest product direction is clear: complete runtime, debug-first story. |
-| Documentation | Active | The docs now describe the intended product shape and should be the canonical narrative. |
+| Documentation | Active | The docs now present a coherent public product narrative. |
 | Single-binary direction | Active | The `server` crate is the right architectural direction even though individual crates still exist and are still used during development. |
 | CLI core loop | Shaping | The right commands exist, but command naming, config resolution, and contract cleanup still need work. |
 | Local dev story | Active | `flux dev` is the right idea and one of the most important product surfaces. |
@@ -29,9 +29,9 @@ Most of the documentation in this repo describes the intended 0.1 beta product s
 | WASM and multi-language parity | Experimental | Ambitious and worth keeping, but not yet a dependable flagship capability. |
 | Auth and service hardening | Needs hardening | Safe defaults and service isolation need more work before broad beta testing. |
 
-## What Must Feel Excellent Before 0.1 Beta
+## Internal Bar
 
-These are the gates that matter most:
+These are the implementation gates that matter most:
 
 1. `flux init -> flux dev -> flux invoke -> flux trace -> flux why` feels clean
 2. project and config resolution are easy to understand
@@ -39,17 +39,3 @@ These are the gates that matter most:
 4. one replay-plus-diff flow is believable enough to trust
 5. async work preserves the same debugging model
 6. defaults are safe enough for real beta users
-
-## How To Use The Docs
-
-Use the rest of the docs for:
-
-- product intent
-- architecture
-- desired workflows
-
-Use this page for:
-
-- implementation caveats
-- maturity expectations
-- deciding which areas are ready for hard external testing

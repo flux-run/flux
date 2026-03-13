@@ -1,78 +1,29 @@
-# Fluxbase Documentation
+# Archived Documentation
 
-Fluxbase is a developer platform for serverless backends: functions, database,
-secrets, and built-in observability — managed for you, deployed in seconds.
+This folder contains historical documentation from earlier product directions.
 
----
+It is kept for reference only.
 
-## Guides
+## Important
 
-| Guide | Description |
-|---|---|
-| [Quickstart](quickstart.md) | Deploy your first function in 5 minutes |
-| [Core Concepts](concepts.md) | Functions, database, secrets, gateway |
-| [Observability](observability.md) | Tracing, N+1 detection, index suggestions |
-| [CLI Reference](cli.md) | Every `flux` command explained |
+These files are **not** the current product docs for Flux.
 
-## Examples
+They may contain older assumptions such as:
 
-| Example | Description |
-|---|---|
-| [Todo API](examples/todo-api.md) | Full CRUD API backed by the managed DB |
-| [Webhook Worker](examples/webhook-worker.md) | Receive, verify, and process webhooks |
-| [AI Backend](examples/ai-backend.md) | OpenAI integration with result caching |
+- hosted-control-plane language
+- tenant and project models that no longer match the current product
+- outdated command names
+- implementation details that have since changed direction
 
----
+## Canonical Docs
 
-## Platform at a glance
+Use the main docs set instead:
 
-```
-Your code                  Fluxbase platform
-─────────────              ─────────────────────────────────────────
-index.ts                   Gateway  ──▶  Runtime (Deno isolate pool)
-   flux deploy ──▶               │              │
-                                 │        Bundle cache
-                                 │          (R2/local)
-                                 │
-                                 ▼
-                           Data Engine
-                           ├── Query compiler (plan cache)
-                           ├── Complexity guard
-                           ├── Edge query cache (gateway layer)
-                           └── Postgres (Neon)
+- [../../README.md](../../README.md)
+- [../README.md](../README.md)
+- [../quickstart.md](../quickstart.md)
+- [../framework.md](../framework.md)
+- [../single-binary-architecture.md](../single-binary-architecture.md)
+- [../implementation-status.md](../implementation-status.md)
 
-Every request:  x-request-id ──▶ spans ──▶ platform_logs
-                                           │
-                                           └── flux trace <id>
-                                               ├── Slow span detection (>500ms)
-                                               ├── N+1 query detection (≥3 same table)
-                                               ├── Slow DB detection (>50ms)
-                                               └── Missing index suggestions
-```
-
----
-
-## Quick reference
-
-```bash
-# Authenticate
-flux auth login
-
-# Create a project
-mkdir my-api && cd my-api && flux init
-
-# Deploy a function
-flux deploy .
-
-# Invoke it
-flux invoke my_function --data '{"key": "value"}'
-
-# Trace a request end-to-end
-flux trace <request-id>
-
-# Tail logs
-flux logs my_function --follow
-
-# Manage secrets
-flux secrets set MY_KEY my_value
-```
+If a historical doc conflicts with the main docs, the main docs win.

@@ -1,6 +1,6 @@
 # Flux Product Spec
 
-This document defines the intended 0.1 beta shape of Flux as a product and open-source project.
+This document defines the product shape of Flux as a backend runtime and open-source project.
 
 ## Product Summary
 
@@ -16,7 +16,7 @@ Flux includes:
 - deployments, secrets, and configuration
 - an execution record with trace, replay, diff, mutation history, and `flux why`
 
-The message should stay narrower than the feature list:
+The message stays narrower than the feature list:
 
 - Flux is the backend runtime for deterministic production debugging.
 
@@ -50,23 +50,23 @@ It is solved by owning enough of the execution path that the runtime can record:
 
 ### 1. Make `flux why` Worth Reaching For
 
-`flux why` should become the command people use first when something breaks.
+`flux why` becomes the command people use first when something breaks.
 
 ### 2. Make Replay And Diff Credible
 
-Replay and diff should help teams answer whether a failure is code-dependent, data-dependent, or deployment-dependent.
+Replay and diff help teams answer whether a failure is code-dependent, data-dependent, or deployment-dependent.
 
 ### 3. Make The Database Part Of Debugging
 
-Flux should treat mutations, row history, and state blame as first-class debugging surfaces.
+Flux treats mutations, row history, and state blame as first-class debugging surfaces.
 
 ### 4. Ship A Complete System
 
-Functions, gateway, database execution, async work, and agent/tool orchestration should feel like one runtime rather than several loosely connected services.
+Functions, gateway, database execution, async work, and agent/tool orchestration feel like one runtime rather than several loosely connected services.
 
 ### 5. Keep Local And Production Legible
 
-The local workflow should teach the same mental model the production system uses.
+The local workflow teaches the same mental model the production system uses.
 
 ## Non-Goals
 
@@ -83,19 +83,19 @@ Those things can matter, but they are not the center of the 0.1 story.
 
 ### Execution Record First
 
-Every meaningful unit of work should leave behind an inspectable record.
+Every meaningful unit of work leaves behind an inspectable record.
 
 ### Database-Aware Runtime
 
-The database should participate in the runtime contract so Flux can explain state changes, not just request paths.
+The database participates in the runtime contract so Flux can explain state changes, not just request paths.
 
 ### Complete Backend Path
 
-The runtime should own enough of ingress, execution, state changes, and async work to preserve causality.
+The runtime owns enough of ingress, execution, state changes, and async work to preserve causality.
 
 ### Operator-Native UX
 
-The CLI and dashboard should be optimized for investigation and incident response, not just admin forms.
+The CLI and dashboard are optimized for investigation and incident response, not just admin forms.
 
 ## Intended User
 
@@ -125,7 +125,7 @@ If this loop feels exceptional, the rest of the system becomes easier to justify
 
 ## System Scope
 
-Flux should feel complete enough to run a real product backend:
+Flux feels complete enough to run a real product backend:
 
 - functions and HTTP routes
 - database schema and guarded execution
@@ -138,9 +138,9 @@ Flux should feel complete enough to run a real product backend:
 
 Completeness is important. Equal marketing weight for every subsystem is not.
 
-## 0.1 Beta Criteria
+## Product Bar
 
-Flux 0.1 beta is successful when:
+Flux succeeds when:
 
 1. a developer can start the full system locally without ceremony
 2. a function can be created, invoked, traced, and explained immediately
