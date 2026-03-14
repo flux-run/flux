@@ -156,8 +156,11 @@ across process restarts (unlike `DefaultHasher` which uses a random seed per pro
 | Java (TeaVM)   | ✅ Keep       | 1 ms     | 5 ms            | 1.4 s          |
 | Go (wasip1)    | ⚠️ Limited    | 19 ms    | 57 ms           | 27 s           |
 | PHP (php-8.2)  | ⚠️ Limited    | 83 ms    | 256 ms          | 90 s           |
+| **C# (.NET)**  | 🚧 Coming soon | ~20–50 ms (est.) | — | — |
 | Python         | ❌ Not viable | 191 ms   | 480 ms          | 40 s           |
 | Ruby           | ❌ Not viable | —        | —               | > 200 s        |
+
+**C# (.NET WASI) — coming soon:** .NET 10 targets WASI via the `wasi-experimental` workload, outputting a WASIP2 **component** (not a core WASM module). The Flux executor requires component-model support (`wasmtime::component::Component` + `wasmtime_wasi` bindings) to run it — this is being added. The managed-runtime approach bundles the .NET runtime + IL into a 12 MB binary, so warm latency is expected in the 20–50 ms range (similar to Go). Not production-ready: the `wasi-experimental` workload and WASI Preview 2 spec are still evolving. Will be benchmarked and promoted once the executor component path lands.
 
 ---
 

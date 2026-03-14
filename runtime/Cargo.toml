@@ -37,7 +37,9 @@ deno_core = "0.354.0"
 lru = "0.16.3"
 
 # Wasmtime for WASM module execution (language-independent functions)
-wasmtime = { version = "28", default-features = false, features = ["cranelift", "runtime", "async"] }
+wasmtime = { version = "28", default-features = false, features = ["cranelift", "runtime", "async", "component-model"] }
+# WASI p2 APIs for WASIP2 Component Model execution (e.g. C# .NET 10 via wasi-wasm)
+wasmtime-wasi = { version = "28", default-features = false, features = ["async"] }
 # Base64 for decoding inline WASM bundles (binary stored as base64 in bundle_code)
 base64 = "0.22"
 # JSON Schema validation — validate function input payloads in Rust before execution
