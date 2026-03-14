@@ -595,22 +595,24 @@ enum Commands {
     },
 
     // ── Local Server (native, no Docker) ────────────────────────────────────
-    /// Start all Fluxbase services natively without Docker (alias: serve)
+    /// Start the Flux server (gateway + runtime + api + queue embedded in one process)
+    ///
+    /// Examples:
+    ///   flux serve                        # start on port 8080
+    ///   flux serve --port 3000            # custom port
+    ///   flux serve --release              # use release binary
     #[command(alias = "serve")]
     Server {
-        /// Base port — api=<port>, gateway=<port+1>, data-engine=<port+2>, runtime=<port+3>, queue=<port+4>
+        /// Port to listen on
         #[arg(long, default_value = "8080", value_name = "PORT")]
         port: u16,
-        /// Only start a comma-separated subset of services (e.g. api,gateway)
-        #[arg(long, value_name = "SERVICES", value_delimiter = ',')]
-        only: Option<Vec<String>>,
-        /// Use release binaries instead of debug
+        /// Use release binary instead of debug
         #[arg(long)]
         release: bool,
         /// Disable coloured output
         #[arg(long)]
         no_color: bool,
-        /// Override the DATABASE_URL from the environment
+        /// Override DATABASE_URL from the environment
         #[arg(long, value_name = "URL", env = "DATABASE_URL")]
         database_url: Option<String>,
     },
@@ -826,8 +828,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status { sdk }              => sdk::execute_status(sdk).await?,
         Commands::Generate { output }         => generate::execute_generate(output).await?,
 
-        Commands::Server { port, only, release, no_color, database_url } =>
-            server::execute(port, only, release, no_color, database_url).await?,
+        Commands::Server { port, release, no_color, database_url } =>
+            server::execute(port, release, no_color, database_url).await?,
 
         Commands::Stack { command } => match command {
             StackCommand::Up    { build, foreground } => stack::execute_up(build, !foreground).await?,
