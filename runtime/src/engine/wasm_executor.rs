@@ -55,7 +55,7 @@
 //! panicking the host process.
 use std::collections::HashMap;
 use wasmtime::{
-    Caller, Config, Engine, Linker, Module, OptLevel, Store,
+    Caller, Config, Engine, Linker, Module, OptLevel, Store, Val,
 };
 use tokio::time::{timeout, Duration};
 
@@ -860,10 +860,22 @@ async fn execute_wasm_async(
         |_: Caller<HostState>, _fd: i32, _addr: i32, _port: i32| -> i32 { 52 }
     ).map_err(|e| e.to_string())?;
 
-    // sock_accept(fd: i32, addr_out: i32) -> i32 — ENOSYS
-    linker.func_wrap("wasi_snapshot_preview1", "sock_accept",
-        |_: Caller<HostState>, _fd: i32, _addr_out: i32| -> i32 { 52 }
-    ).map_err(|e| e.to_string())?;
+    // sock_accept — signature varies by WASM runtime:
+    //   PHP (WasmEdge): (fd: i32, addr_out: i32) -> i32           [2 params]
+    //   Python / standard WASI: (fd: i32, flags: i32, result_fd: i32) -> i32  [3 params]
+    // Detect which variant this module imports and register the right ENOSYS stub.
+    if let Some(import) = module.imports()
+        .find(|i| i.module() == "wasi_snapshot_preview1" && i.name() == "sock_accept")
+    {
+        if let wasmtime::ExternType::Func(ft) = import.ty() {
+            linker.func_new("wasi_snapshot_preview1", "sock_accept", ft,
+                |_caller, _params, results| {
+                    results[0] = Val::I32(52); // ENOSYS
+                    Ok(())
+                }
+            ).map_err(|e| e.to_string())?;
+        }
+    }
 
     // sock_recv(fd: i32, ri_data: i32, ri_data_len: i32, ri_flags: i32, ro_datalen: i32, ro_flags: i32) -> i32 — ENOSYS
     linker.func_wrap("wasi_snapshot_preview1", "sock_recv",
