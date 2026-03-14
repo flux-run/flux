@@ -51,6 +51,9 @@ pub fn encrypt_secret(value: &str) -> Result<String, EncryptionError> {
     Ok(format!("{}:{}", b64_nonce, b64_ciphertext))
 }
 
+/// # Errors
+/// Returns `EncryptionError` when the encrypted string has wrong format,
+/// bad base64, wrong nonce length, or the AEAD tag verification fails.
 pub fn decrypt_secret(encrypted_str: &str) -> Result<String, EncryptionError> {
     let cipher = get_cipher()?;
     
@@ -79,4 +82,116 @@ pub fn decrypt_secret(encrypted_str: &str) -> Result<String, EncryptionError> {
     
     String::from_utf8(plaintext_bytes)
         .map_err(|_| EncryptionError("Invalid UTF-8 in decrypted secret".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    fn set_key(key: &str) {
+        unsafe { env::set_var("FLUXBASE_SECRET_KEY", key) };
+    }
+
+    fn valid_32_byte_key() -> &'static str {
+        "01234567890123456789012345678901"
+    }
+
+    // ── encrypt/decrypt roundtrip ─────────────────────────────────────────
+
+    #[test]
+    fn encrypt_decrypt_roundtrip() {
+        set_key(valid_32_byte_key());
+        let plain = "super-secret-value";
+        let encrypted = encrypt_secret(plain).expect("encrypt failed");
+        let decrypted = decrypt_secret(&encrypted).expect("decrypt failed");
+        assert_eq!(plain, decrypted);
+    }
+
+    #[test]
+    fn encrypt_produces_unique_ciphertexts() {
+        set_key(valid_32_byte_key());
+        let a = encrypt_secret("hello").unwrap();
+        let b = encrypt_secret("hello").unwrap();
+        // Each call uses a fresh random nonce, so ciphertexts must differ.
+        assert_ne!(a, b, "two encryptions of the same plaintext should differ");
+    }
+
+    #[test]
+    fn roundtrip_empty_string() {
+        set_key(valid_32_byte_key());
+        let enc = encrypt_secret("").unwrap();
+        let dec = decrypt_secret(&enc).unwrap();
+        assert_eq!(dec, "");
+    }
+
+    #[test]
+    fn roundtrip_unicode() {
+        set_key(valid_32_byte_key());
+        let plain = "🔑 café αβγ";
+        let dec = decrypt_secret(&encrypt_secret(plain).unwrap()).unwrap();
+        assert_eq!(dec, plain);
+    }
+
+    #[test]
+    fn roundtrip_long_value() {
+        set_key(valid_32_byte_key());
+        let plain = "x".repeat(4096);
+        let dec = decrypt_secret(&encrypt_secret(&plain).unwrap()).unwrap();
+        assert_eq!(dec, plain);
+    }
+
+    #[test]
+    fn encrypted_format_has_two_parts() {
+        set_key(valid_32_byte_key());
+        let enc = encrypt_secret("test").unwrap();
+        let parts: Vec<&str> = enc.split(':').collect();
+        assert_eq!(parts.len(), 2, "format must be base64_nonce:base64_ciphertext");
+    }
+
+    // ── decrypt error paths ────────────────────────────────────────────────
+
+    #[test]
+    fn decrypt_rejects_missing_colon() {
+        set_key(valid_32_byte_key());
+        assert!(decrypt_secret("nocolonhere").is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_bad_nonce_base64() {
+        set_key(valid_32_byte_key());
+        assert!(decrypt_secret("!!!not_b64:validciphertext").is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_wrong_nonce_length() {
+        set_key(valid_32_byte_key());
+        // base64 of 6 bytes (need 12)
+        use base64::{Engine, engine::general_purpose::STANDARD as b64};
+        let short_nonce = b64.encode(&[0u8; 6]);
+        let fake_ct = b64.encode(&[1u8; 32]);
+        assert!(decrypt_secret(&format!("{}:{}", short_nonce, fake_ct)).is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_tampered_ciphertext() {
+        set_key(valid_32_byte_key());
+        let enc = encrypt_secret("sensitive").unwrap();
+        let parts: Vec<&str> = enc.splitn(2, ':').collect();
+        // Flip last byte of ciphertext → AEAD tag verification fails.
+        use base64::{Engine, engine::general_purpose::STANDARD as b64};
+        let mut ct_bytes = b64.decode(parts[1]).unwrap();
+        let last = ct_bytes.len() - 1;
+        ct_bytes[last] ^= 0xFF;
+        let bad_enc = format!("{}:{}", parts[0], b64.encode(&ct_bytes));
+        assert!(decrypt_secret(&bad_enc).is_err());
+    }
+
+    #[test]
+    fn wrong_key_length_returns_error() {
+        unsafe { env::set_var("FLUXBASE_SECRET_KEY", "tooshort") };
+        assert!(encrypt_secret("value").is_err());
+        // Restore valid key for other tests.
+        set_key(valid_32_byte_key());
+    }
 }

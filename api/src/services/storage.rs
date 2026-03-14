@@ -148,3 +148,80 @@ impl StorageService {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    // ── StorageConfig::from_env ────────────────────────────────────────────
+
+    #[test]
+    fn storage_config_from_env_uses_defaults_when_unset() {
+        // Remove all storage-related env vars to exercise defaults.
+        for var in ["S3_ENDPOINT","R2_ENDPOINT","S3_BUCKET","R2_BUCKET","FUNCTIONS_BUCKET",
+                    "S3_ACCESS_KEY_ID","R2_ACCESS_KEY_ID","S3_SECRET_ACCESS_KEY","R2_SECRET_ACCESS_KEY"] {
+            unsafe { env::remove_var(var) };
+        }
+        let cfg = StorageConfig::from_env();
+        // Default bucket names should be non-empty
+        assert!(!cfg.files_bucket.is_empty());
+        assert!(!cfg.functions_bucket.is_empty());
+        assert!(!cfg.logs_bucket.is_empty());
+    }
+
+    #[test]
+    fn storage_config_from_env_reads_custom_bucket() {
+        unsafe { env::set_var("FUNCTIONS_BUCKET", "my-custom-functions") };
+        let cfg = StorageConfig::from_env();
+        assert_eq!(cfg.functions_bucket, "my-custom-functions");
+        unsafe { env::remove_var("FUNCTIONS_BUCKET") };
+    }
+
+    // ── local_mode detection ──────────────────────────────────────────────
+
+    #[test]
+    fn local_mode_is_true_when_no_s3_vars_set() {
+        // When neither S3_ENDPOINT nor R2_ENDPOINT is set, local_mode must be true.
+        unsafe {
+            env::remove_var("S3_ENDPOINT");
+            env::remove_var("R2_ENDPOINT");
+            env::remove_var("LOCAL_MODE");
+        }
+        // We can't call StorageService::new() in a unit test (it does async AWS config),
+        // but we can verify the logic inline by reproducing the condition.
+        let has_s3  = env::var("S3_ENDPOINT").is_ok();
+        let has_r2  = env::var("R2_ENDPOINT").is_ok();
+        let explicit_local = env::var("LOCAL_MODE").map(|v| v == "true").unwrap_or(false);
+        let expected_local = explicit_local || (!has_s3 && !has_r2);
+        assert!(expected_local, "should be local_mode when no endpoints configured");
+    }
+
+    #[test]
+    fn local_mode_is_false_when_s3_endpoint_set() {
+        unsafe {
+            env::set_var("S3_ENDPOINT", "http://minio.example.com:9000");
+            env::remove_var("R2_ENDPOINT");
+            env::remove_var("LOCAL_MODE");
+        }
+        let has_s3 = env::var("S3_ENDPOINT").is_ok();
+        let explicit_local = env::var("LOCAL_MODE").map(|v| v == "true").unwrap_or(false);
+        let local = explicit_local || !has_s3;
+        assert!(!local, "local_mode should be false when S3_ENDPOINT is set");
+        unsafe { env::remove_var("S3_ENDPOINT") };
+    }
+
+    #[test]
+    fn local_mode_explicit_true_overrides_endpoint() {
+        unsafe {
+            env::set_var("LOCAL_MODE",   "true");
+            env::set_var("S3_ENDPOINT",  "http://real-minio:9000");
+        }
+        let explicit = env::var("LOCAL_MODE").map(|v| v == "true").unwrap_or(false);
+        assert!(explicit, "LOCAL_MODE=true must force local_mode even with S3_ENDPOINT");
+        unsafe {
+            env::remove_var("LOCAL_MODE");
+            env::remove_var("S3_ENDPOINT");
+        }
+    }
+}

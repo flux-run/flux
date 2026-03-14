@@ -453,3 +453,177 @@ fn execute_wasm_sync(
     let logs = store.into_data().logs;
     Ok(ExecutionResult { output, logs })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Minimal WAT module satisfying the fluxbase WASM ABI.
+    ///
+    /// Memory layout at result pointer 4:
+    ///   bytes 4-7  : u32 LE = 15  (length of JSON below)
+    ///   bytes 8-22 : `{"output":"ok"}`
+    ///
+    /// handle() returns 4 (non-zero) so the executor can read the header.
+    /// __flux_alloc() returns 65536 (page boundary) as the payload write buffer.
+    const MINIMAL_WAT: &str = r#"(module
+        (import "fluxbase" "log"         (func (param i32 i32 i32)))
+        (import "fluxbase" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
+        (import "fluxbase" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
+        (memory (export "memory") 2)
+        (data (i32.const 4) "\0f\00\00\00{\"output\":\"ok\"}")
+        (func (export "__flux_alloc") (param i32) (result i32) i32.const 65536)
+        (func (export "handle") (param i32 i32) (result i32) i32.const 4)
+    )"#;
+
+    /// WAT module that returns an error in the result JSON.
+    const ERROR_WAT: &str = r#"(module
+        (import "fluxbase" "log"         (func (param i32 i32 i32)))
+        (import "fluxbase" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
+        (import "fluxbase" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
+        (memory (export "memory") 2)
+        (data (i32.const 4) "\16\00\00\00{\"error\":\"test_error\"}")
+        (func (export "__flux_alloc") (param i32) (result i32) i32.const 65536)
+        (func (export "handle") (param i32 i32) (result i32) i32.const 4)
+    )"#;
+
+    /// WAT module missing the `handle` export — should fail instantiation.
+    const MISSING_HANDLE_WAT: &str = r#"(module
+        (import "fluxbase" "log"         (func (param i32 i32 i32)))
+        (import "fluxbase" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
+        (import "fluxbase" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
+        (memory (export "memory") 2)
+        (func (export "__flux_alloc") (param i32) (result i32) i32.const 65536)
+    )"#;
+
+    fn wasm_bytes(wat: &str) -> Vec<u8> {
+        wat::parse_str(wat).expect("WAT compilation failed")
+    }
+
+    fn default_params() -> WasmExecutionParams {
+        WasmExecutionParams {
+            payload: serde_json::json!({"msg": "test"}),
+            ..Default::default()
+        }
+    }
+
+    // ── build_engine ──────────────────────────────────────────────────────
+
+    #[test]
+    fn build_engine_does_not_panic() {
+        let _engine = build_engine();
+    }
+
+    #[test]
+    fn two_engines_are_independent() {
+        let _e1 = build_engine();
+        let _e2 = build_engine();
+    }
+
+    // ── compile_module ────────────────────────────────────────────────────
+
+    #[test]
+    fn compile_valid_module_succeeds() {
+        let engine = build_engine();
+        let bytes  = wasm_bytes(MINIMAL_WAT);
+        assert!(compile_module(&engine, &bytes).is_ok());
+    }
+
+    #[test]
+    fn compile_invalid_bytes_returns_err() {
+        let engine = build_engine();
+        let result = compile_module(&engine, b"not wasm bytes at all");
+        assert!(result.is_err(), "expected Err for invalid wasm bytes");
+    }
+
+    #[test]
+    fn compile_empty_bytes_returns_err() {
+        let engine = build_engine();
+        assert!(compile_module(&engine, b"").is_err());
+    }
+
+    #[test]
+    fn compile_error_message_contains_context() {
+        let engine = build_engine();
+        let err = compile_module(&engine, b"garbage").unwrap_err();
+        assert!(!err.is_empty(), "error message should not be empty");
+    }
+
+    // ── execute_wasm ──────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn execute_wasm_returns_ok_output() {
+        let engine = build_engine();
+        let bytes  = wasm_bytes(MINIMAL_WAT);
+        let module = compile_module(&engine, &bytes).unwrap();
+
+        let result = execute_wasm(&engine, &module, default_params())
+            .await
+            .expect("execute_wasm failed");
+
+        assert_eq!(result.output, serde_json::json!("ok"));
+        assert!(result.logs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn execute_wasm_error_module_returns_err() {
+        let engine = build_engine();
+        let bytes  = wasm_bytes(ERROR_WAT);
+        let module = compile_module(&engine, &bytes).unwrap();
+
+        let result = execute_wasm(&engine, &module, default_params()).await;
+        assert!(result.is_err(), "expected Err from error module");
+        let msg = result.unwrap_err();
+        assert!(msg.contains("test_error"), "error message should contain 'test_error', got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn execute_wasm_missing_handle_returns_err() {
+        let engine = build_engine();
+        let bytes  = wasm_bytes(MISSING_HANDLE_WAT);
+        let module = compile_module(&engine, &bytes).unwrap();
+
+        let result = execute_wasm(&engine, &module, default_params()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn execute_wasm_passes_secrets_to_host_state() {
+        let engine = build_engine();
+        let bytes  = wasm_bytes(MINIMAL_WAT);
+        let module = compile_module(&engine, &bytes).unwrap();
+
+        let mut secrets = HashMap::new();
+        secrets.insert("API_KEY".to_string(), "secret123".to_string());
+
+        let params = WasmExecutionParams {
+            secrets,
+            payload: serde_json::json!({}),
+            ..Default::default()
+        };
+        // The minimal module doesn't call secrets_get, but execution should succeed.
+        let result = execute_wasm(&engine, &module, params).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn execute_wasm_default_fuel_limit_is_nonzero() {
+        let params = WasmExecutionParams::default();
+        assert!(params.fuel_limit > 0);
+    }
+
+    // ── WasmExecutionParams default ───────────────────────────────────────
+
+    #[test]
+    fn wasm_params_default_payload_is_null() {
+        let p = WasmExecutionParams::default();
+        assert!(p.payload.is_null());
+    }
+
+    #[test]
+    fn wasm_params_default_allowed_hosts_is_empty() {
+        let p = WasmExecutionParams::default();
+        assert!(p.allowed_http_hosts.is_empty());
+    }
+}

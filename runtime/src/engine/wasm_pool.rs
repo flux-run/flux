@@ -157,3 +157,116 @@ impl WasmPool {
         tracing::debug!(%function_id, "wasm module + bytes evicted from cache");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    const MINIMAL_WAT: &str = r#"(module
+        (import "fluxbase" "log"         (func (param i32 i32 i32)))
+        (import "fluxbase" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
+        (import "fluxbase" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
+        (memory (export "memory") 2)
+        (data (i32.const 4) "\0f\00\00\00{\"output\":\"ok\"}")
+        (func (export "__flux_alloc") (param i32) (result i32) i32.const 65536)
+        (func (export "handle") (param i32 i32) (result i32) i32.const 4)
+    )"#;
+
+    fn wasm_bytes() -> Vec<u8> {
+        wat::parse_str(MINIMAL_WAT).expect("WAT parse failed")
+    }
+
+    // ── pool construction ─────────────────────────────────────────────────
+
+    #[test]
+    fn new_pool_reports_correct_worker_count() {
+        let pool = WasmPool::new(3);
+        assert_eq!(pool.workers(), 3);
+    }
+
+    #[test]
+    fn new_pool_minimum_one_worker() {
+        let pool = WasmPool::new(0);
+        assert_eq!(pool.workers(), 1);
+    }
+
+    #[test]
+    fn default_sized_pool_has_at_least_two_workers() {
+        let pool = WasmPool::default_sized();
+        assert!(pool.workers() >= 2);
+    }
+
+    // ── raw bytes cache ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn bytes_cache_miss_returns_none() {
+        let pool = WasmPool::new(2);
+        let result = pool.get_cached_bytes("nonexistent_fn").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn bytes_cache_hit_after_insert() {
+        let pool  = WasmPool::new(2);
+        let bytes = Arc::new(vec![0u8, 1, 2, 3]);
+        pool.cache_bytes("my_fn".to_string(), bytes.clone()).await;
+        let cached = pool.get_cached_bytes("my_fn").await;
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().as_ref(), bytes.as_ref());
+    }
+
+    #[tokio::test]
+    async fn bytes_cache_different_functions_independent() {
+        let pool = WasmPool::new(2);
+        pool.cache_bytes("fn1".to_string(), Arc::new(vec![1])).await;
+        pool.cache_bytes("fn2".to_string(), Arc::new(vec![2])).await;
+        let r1 = pool.get_cached_bytes("fn1").await.unwrap();
+        let r2 = pool.get_cached_bytes("fn2").await.unwrap();
+        assert_eq!(r1.as_ref(), &[1u8]);
+        assert_eq!(r2.as_ref(), &[2u8]);
+    }
+
+    // ── module eviction ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn evict_removes_bytes_from_cache() {
+        let pool = WasmPool::new(2);
+        pool.cache_bytes("evict_me".to_string(), Arc::new(vec![9])).await;
+        pool.evict("evict_me").await;
+        assert!(pool.get_cached_bytes("evict_me").await.is_none());
+    }
+
+    // ── execute ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn execute_minimal_module_returns_ok() {
+        let pool   = WasmPool::new(2);
+        let bytes  = wasm_bytes();
+        let result = pool.execute(
+            "test_fn".to_string(),
+            bytes,
+            Default::default(),
+            serde_json::json!({"x": 1}),
+            None,
+            vec![],
+            reqwest::Client::new(),
+        ).await;
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+        assert_eq!(result.unwrap().output, serde_json::json!("ok"));
+    }
+
+    #[tokio::test]
+    async fn execute_caches_compiled_module_on_second_call() {
+        let pool  = WasmPool::new(2);
+        let bytes = wasm_bytes();
+        // First call: compiles + executes.
+        let r1 = pool.execute("cached_fn".to_string(), bytes.clone(), Default::default(),
+            serde_json::json!({}), None, vec![], reqwest::Client::new()).await;
+        // Second call: should hit module cache.
+        let r2 = pool.execute("cached_fn".to_string(), bytes, Default::default(),
+            serde_json::json!({}), None, vec![], reqwest::Client::new()).await;
+        assert!(r1.is_ok());
+        assert!(r2.is_ok());
+    }
+}

@@ -86,4 +86,43 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
     }
+
+    #[tokio::test]
+    async fn health_route_wrong_method() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Expect 405 Method Not Allowed for POST /health
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn version_route_returns_ok() {
+        std::env::set_var("GIT_SHA", "testhash123");
+        std::env::set_var("BUILD_TIME", "1970");
+
+        let response = app()
+            .oneshot(Request::builder().uri("/version").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["service"], "queue");
+        assert_eq!(json["commit"], "testhash123");
+        assert_eq!(json["build_time"], "1970");
+
+        // Clean up
+        std::env::remove_var("GIT_SHA");
+        std::env::remove_var("BUILD_TIME");
+    }
 }

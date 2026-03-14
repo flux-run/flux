@@ -211,3 +211,40 @@ fn internal(code: &str, message: String) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR,
      Json(serde_json::json!({ "error": code, "message": message }))).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── bundle_sha ────────────────────────────────────────────────────────
+
+    #[test]
+    fn bundle_sha_is_16_hex_chars() {
+        let sha = bundle_sha(b"hello world");
+        assert_eq!(sha.len(), 16, "sha must be 16 hex chars, got: {sha}");
+        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()), "sha must be hex: {sha}");
+    }
+
+    #[test]
+    fn bundle_sha_same_input_same_output() {
+        assert_eq!(bundle_sha(b"stable"), bundle_sha(b"stable"));
+    }
+
+    #[test]
+    fn bundle_sha_different_inputs_different_outputs() {
+        assert_ne!(bundle_sha(b"aaa"), bundle_sha(b"bbb"));
+    }
+
+    #[test]
+    fn bundle_sha_empty_input_does_not_panic() {
+        let sha = bundle_sha(b"");
+        assert_eq!(sha.len(), 16);
+    }
+
+    #[test]
+    fn bundle_sha_large_input() {
+        let big = vec![0xABu8; 1_000_000];
+        let sha = bundle_sha(&big);
+        assert_eq!(sha.len(), 16);
+    }
+}

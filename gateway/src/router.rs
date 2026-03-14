@@ -80,4 +80,49 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
     }
+
+    #[tokio::test]
+    async fn health_route_wrong_method() {
+        let response = create_router(state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Axum routes matched by exact paths prioritize methods. Since only GET is registered for /health,
+        // it returns a 405 Method Not Allowed instead of falling back to `/{*path}`
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn cors_headers_on_health_checks() {
+        // Test that OPTIONS request handles cors headers properly.
+        let response = create_router(state())
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/health")
+                    .header("Origin", "https://example.com")
+                    .header("Access-Control-Request-Method", "GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // 200 OK because tower-http cors intercepts OPTIONS requests to any mapped route.
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("access-control-allow-origin").unwrap(),
+            "*"
+        );
+        let methods = response.headers().get("access-control-allow-methods").unwrap();
+        // Since Any allows all methods, it replies with access-control-allow-methods: *
+        assert_eq!(methods, "*");
+    }
 }

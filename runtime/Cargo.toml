@@ -37,3 +37,7 @@ wasmtime = { version = "28", default-features = false, features = ["cranelift", 
 base64 = "0.22"
 # JSON Schema validation — validate function input payloads in Rust before execution
 jsonschema = { version = "0.29", default-features = false }
+
+[dev-dependencies]
+wat     = "1"
+futures = "0.3"

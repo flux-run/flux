@@ -657,3 +657,345 @@ pub async fn execute_with_runtime(
         Err(_)     => Err("Function execution timed out after 30 seconds".to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn no_op_queue_ctx() -> QueueContext {
+        QueueContext {
+            queue_url:     "http://127.0.0.1:0".to_string(),
+            api_url:       "http://127.0.0.1:0".to_string(),
+            service_token: "test-token".to_string(),
+            project_id:    None,
+            client:        reqwest::Client::new(),
+        }
+    }
+
+    /// Execute `code` in a fresh JsRuntime and return the result.
+    /// Uses current_thread flavor so JsRuntime (!Send) stays on one thread.
+    async fn run_js(code: &str, payload: serde_json::Value) -> Result<ExecutionResult, String> {
+        let mut rt = create_js_runtime();
+        execute_with_runtime(
+            &mut rt,
+            code.to_string(),
+            HashMap::new(),
+            payload,
+            0,
+            no_op_queue_ctx(),
+        ).await
+    }
+
+    async fn run_js_with_secrets(
+        code: &str,
+        secrets: HashMap<String, String>,
+    ) -> Result<ExecutionResult, String> {
+        let mut rt = create_js_runtime();
+        execute_with_runtime(
+            &mut rt,
+            code.to_string(),
+            secrets,
+            serde_json::Value::Null,
+            0,
+            no_op_queue_ctx(),
+        ).await
+    }
+
+    // ── create_js_runtime ─────────────────────────────────────────────────
+
+    #[test]
+    fn create_js_runtime_does_not_panic() {
+        let _rt = create_js_runtime();
+    }
+
+    #[test]
+    fn multiple_runtimes_are_independent() {
+        let _r1 = create_js_runtime();
+        let _r2 = create_js_runtime();
+    }
+
+    // ── basic execution ───────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn returns_simple_value() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => 42;
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!(42));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn returns_object() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => ({ hello: "world" });
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!({"hello": "world"}));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn returns_null_result() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => null;
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert!(res.output.is_null());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn payload_available_in_ctx() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => ctx.payload.name;
+        "#;
+        let res = run_js(code, serde_json::json!({"name": "alice"})).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("alice"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn nested_payload_fields() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => ctx.payload.a.b.c;
+        "#;
+        let res = run_js(code, serde_json::json!({"a":{"b":{"c":99}}})).await.unwrap();
+        assert_eq!(res.output, serde_json::json!(99));
+    }
+
+    // ── secrets / env ─────────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn secrets_accessible_via_ctx_env() {
+        let mut secrets = HashMap::new();
+        secrets.insert("MY_KEY".to_string(), "super-secret".to_string());
+        let code = r#"
+            __fluxbase_fn = async (ctx) => ctx.env.MY_KEY;
+        "#;
+        let res = run_js_with_secrets(code, secrets).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("super-secret"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn missing_secret_is_undefined() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => (ctx.env.NONEXISTENT ?? "fallback");
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("fallback"));
+    }
+
+    // ── logging ───────────────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ctx_log_emits_log_lines() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                ctx.log("hello from function", "info");
+                return { result: "ok" };
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert!(!res.logs.is_empty(), "expected at least one log line");
+        assert_eq!(res.logs[0].message, "hello from function");
+        assert_eq!(res.logs[0].level,   "info");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn multiple_log_levels_captured() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                ctx.log("info msg",  "info");
+                ctx.log("warn msg",  "warn");
+                ctx.log("error msg", "error");
+                return { result: true };
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.logs.len(), 3);
+        let levels: Vec<&str> = res.logs.iter().map(|l| l.level.as_str()).collect();
+        assert!(levels.contains(&"info"));
+        assert!(levels.contains(&"warn"));
+        assert!(levels.contains(&"error"));
+    }
+
+    // ── polyfills ─────────────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn crypto_random_uuid_returns_uuid_shaped_string() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                const id = crypto.randomUUID();
+                return id;
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        let uuid_str = res.output.as_str().unwrap_or("");
+        // UUID format: 8-4-4-4-12 hex chars with dashes
+        assert_eq!(uuid_str.len(), 36, "expected UUID length 36, got: {uuid_str}");
+        assert_eq!(uuid_str.chars().filter(|&c| c == '-').count(), 4);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn math_random_returns_number_in_range() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                const r = Math.random();
+                return (r >= 0 && r < 1);
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!(true));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn deterministic_seed_produces_same_uuid() {
+        // Same seed → same UUID on both calls
+        let code = r#"
+            __fluxbase_fn = async (ctx) => crypto.randomUUID();
+        "#;
+        let seed = 42i64;
+
+        let mut rt1 = create_js_runtime();
+        let r1 = execute_with_runtime(&mut rt1, code.to_string(), HashMap::new(),
+            serde_json::Value::Null, seed, no_op_queue_ctx()).await.unwrap();
+
+        let mut rt2 = create_js_runtime();
+        let r2 = execute_with_runtime(&mut rt2, code.to_string(), HashMap::new(),
+            serde_json::Value::Null, seed, no_op_queue_ctx()).await.unwrap();
+
+        assert_eq!(r1.output, r2.output, "same seed must produce same UUID");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn different_seeds_produce_different_uuids() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => crypto.randomUUID();
+        "#;
+        let mut rt1 = create_js_runtime();
+        let r1 = execute_with_runtime(&mut rt1, code.to_string(), HashMap::new(),
+            serde_json::Value::Null, 1, no_op_queue_ctx()).await.unwrap();
+
+        let mut rt2 = create_js_runtime();
+        let r2 = execute_with_runtime(&mut rt2, code.to_string(), HashMap::new(),
+            serde_json::Value::Null, 2, no_op_queue_ctx()).await.unwrap();
+
+        assert_ne!(r1.output, r2.output);
+    }
+
+    // ── error handling ────────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn syntax_error_returns_err() {
+        let code = "this is not valid javascript }{{{";
+        let res = run_js(code, serde_json::Value::Null).await;
+        assert!(res.is_err(), "expected Err for syntax error");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn runtime_throw_returns_err() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => { throw new Error("exploded"); };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await;
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("exploded"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn undefined_variable_reference_returns_err() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => undeclaredVar;
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await;
+        assert!(res.is_err());
+    }
+
+    // ── isolation ─────────────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn globals_are_cleaned_between_invocations() {
+        // First invocation sets a local IIFE-scoped fn and runs cleanly.
+        let code1 = r#"
+            __fluxbase_fn = async (ctx) => "first";
+        "#;
+        // Second invocation on the SAME runtime must still work correctly
+        // (even if some globals leak between calls, execution must not fail).
+        let code2 = r#"
+            __fluxbase_fn = async (ctx) => "second";
+        "#;
+        let mut rt = create_js_runtime();
+        let r1 = execute_with_runtime(&mut rt, code1.to_string(), HashMap::new(),
+            serde_json::Value::Null, 0, no_op_queue_ctx()).await.unwrap();
+        let r2 = execute_with_runtime(&mut rt, code2.to_string(), HashMap::new(),
+            serde_json::Value::Null, 0, no_op_queue_ctx()).await.unwrap();
+        assert_eq!(r1.output, serde_json::json!("first"));
+        assert_eq!(r2.output, serde_json::json!("second"),
+            "reused runtime must produce correct output on second invocation");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn prototype_freeze_prevents_poisoning() {
+        // Object.freeze prevents modification — in sloppy mode the assignment
+        // silently fails (no throw); the property retains its original value.
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                const orig = Array.prototype.map;
+                Array.prototype.map = () => "poisoned";
+                // If frozen, the assignment is a no-op and map is unchanged.
+                return Array.prototype.map === orig ? "frozen" : "not frozen";
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("frozen"),
+            "Array.prototype must be frozen — assignment must be a no-op");
+    }
+
+    // ── async JS ──────────────────────────────────────────────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn awaited_promise_resolves() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                const val = await Promise.resolve(99);
+                return val;
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!(99));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn setTimeout_is_not_required_for_basic_execution() {
+        // Functions don't need setTimeout — just test it doesn't error.
+        let code = r#"
+            __fluxbase_fn = async (ctx) => "no timers needed";
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("no timers needed"));
+    }
+
+    // ── LogLine struct ────────────────────────────────────────────────────
+
+    #[test]
+    fn log_line_serde_roundtrip() {
+        // LogLine derives Deserialize (not Serialize) — parse from raw JSON
+        let json = r#"{"level":"info","message":"test message","span_type":"event","source":"function"}"#;
+        let line: LogLine = serde_json::from_str(json).unwrap();
+        assert_eq!(line.level,   "info");
+        assert_eq!(line.message, "test message");
+        assert_eq!(line.span_type.as_deref(), Some("event"));
+        assert!(line.span_id.is_none());
+    }
+
+    // ── ExecutionResult struct ────────────────────────────────────────────
+
+    #[test]
+    fn execution_result_with_empty_logs() {
+        let r = ExecutionResult {
+            output: serde_json::json!({"k": "v"}),
+            logs:   vec![],
+        };
+        assert!(r.logs.is_empty());
+        assert_eq!(r.output["k"], "v");
+    }
+}

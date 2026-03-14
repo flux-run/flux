@@ -90,4 +90,85 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ok"], true);
     }
+
+    #[tokio::test]
+    async fn rejects_empty_service_token() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/ok")
+                    .header("x-service-token", "")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn rejects_whitespace_padded_service_token() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/ok")
+                    .header("x-service-token", " dev-service-token ")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn rejects_incorrect_casing_service_token() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/ok")
+                    .header("x-service-token", "Dev-Service-Token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn accepts_uppercase_header_name() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/ok")
+                    .header("X-Service-Token", "dev-service-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn rejects_extremely_long_malicious_token() {
+        let long_token = "a".repeat(10_000);
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/ok")
+                    .header("x-service-token", long_token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }

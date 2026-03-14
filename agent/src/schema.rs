@@ -107,5 +107,172 @@ tools: []
         assert_eq!(agent.max_turns, 25);
         assert_eq!(agent.temperature, 0.7);
         assert!(agent.tools.is_empty());
+        assert!(agent.rules.is_empty());
+    }
+
+    #[test]
+    fn parse_fails_on_missing_required_fields() {
+        // Missing "name"
+        let yaml = r#"
+model: gpt-4o-mini
+system: You are a smoke test.
+tools: []
+"#;
+        assert!(parse(yaml).is_err());
+
+        // Missing "model"
+        let yaml = r#"
+name: smoke-agent
+system: You are a smoke test.
+tools: []
+"#;
+        assert!(parse(yaml).is_err());
+
+        // Missing "system"
+        let yaml = r#"
+name: smoke-agent
+model: gpt-4o-mini
+tools: []
+"#;
+        assert!(parse(yaml).is_err());
+    }
+
+    #[test]
+    fn parse_fails_on_invalid_types() {
+        let yaml = r#"
+name: smoke-agent
+model: gpt-4o-mini
+system: You are a smoke test.
+tools: []
+max_turns: "this should be a number, not a string"
+"#;
+        assert!(parse(yaml).is_err());
+
+        let yaml = r#"
+name: smoke-agent
+model: gpt-4o-mini
+system: You are a smoke test.
+tools: "this should be an array"
+"#;
+        assert!(parse(yaml).is_err());
+    }
+
+    #[test]
+    fn parse_fails_on_malformed_yaml() {
+        let yaml = r#"
+name: smoke-agent
+model: gpt-4o-mini
+system: [unclosed array
+"#;
+        assert!(parse(yaml).is_err());
+    }
+
+    #[test]
+    fn parse_handles_unknown_fields_gracefully() {
+        let agent = parse(
+            r#"
+name: smoke-agent
+model: gpt-4o-mini
+system: You are a smoke test.
+tools: []
+some_unknown_field: true
+nested_unknown_field:
+  - 1
+  - 2
+"#,
+        )
+        .expect("yaml should parse ignoring unknown fields");
+
+        assert_eq!(agent.name, "smoke-agent");
+    }
+
+    #[test]
+    fn parse_rules_variants() {
+        let agent = parse(
+            r#"
+name: smoke-agent
+model: gpt-4o-mini
+system: You are a smoke test.
+tools: []
+rules:
+  - { before: notify_slack, require: create_github_issue }
+  - { tool: notify_slack, max_calls: 1 }
+"#,
+        )
+        .expect("yaml with rules should parse");
+
+        assert_eq!(agent.rules.len(), 2);
+        
+        match &agent.rules[0] {
+            super::Rule::Require { before, require } => {
+                assert_eq!(before, "notify_slack");
+                assert_eq!(require, "create_github_issue");
+            }
+            _ => panic!("Expected Require rule"),
+        }
+
+        match &agent.rules[1] {
+            super::Rule::MaxCalls { tool, max_calls } => {
+                assert_eq!(tool, "notify_slack");
+                assert_eq!(*max_calls, 1);
+            }
+            _ => panic!("Expected MaxCalls rule"),
+        }
+    }
+
+    #[test]
+    fn parse_invalid_rules() {
+        let yaml = r#"
+name: smoke-agent
+model: gpt-4o-mini
+system: You are a smoke test.
+tools: []
+rules:
+  - { invalid_rule_key: true }
+"#;
+        // The enum is untagged, and both variants have required fields.
+        // It should fail to parse an unrecognized format.
+        assert!(parse(yaml).is_err());
+    }
+
+    #[test]
+    fn parse_full_specification() {
+        let yaml = r#"
+name: full-agent
+model: custom-model
+system: You are a full agent.
+tools: ["tool1", "tool2"]
+llm_url: https://api.custom.com/v1/chat/completions
+llm_secret: CUSTOM_KEY
+max_turns: 50
+temperature: 0.1
+config:
+  top_p: 0.9
+  max_tokens: 1000
+input_schema:
+  type: object
+  properties:
+    text: { type: string }
+output_schema:
+  type: array
+  items: { type: string }
+"#;
+        let agent = parse(yaml).expect("full spec should parse");
+
+        assert_eq!(agent.name, "full-agent");
+        assert_eq!(agent.model, "custom-model");
+        assert_eq!(agent.system, "You are a full agent.");
+        assert_eq!(agent.tools, vec!["tool1", "tool2"]);
+        assert_eq!(agent.llm_url, "https://api.custom.com/v1/chat/completions");
+        assert_eq!(agent.llm_secret, "CUSTOM_KEY");
+        assert_eq!(agent.max_turns, 50);
+        assert_eq!(agent.temperature, 0.1);
+        
+        let config = agent.config.unwrap();
+        assert_eq!(config.top_p, Some(0.9));
+        assert_eq!(config.max_tokens, Some(1000));
+        
+        assert!(agent.input_schema.is_some());
+        assert!(agent.output_schema.is_some());
     }
 }

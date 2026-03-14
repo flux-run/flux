@@ -118,4 +118,104 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn version_is_exempt_from_service_auth() {
+        // Even if not explicitly mapped in `app()`, the middleware should process it.
+        // We add it to `app()` to test middleware logic bypass.
+        let router = Router::new()
+            .route("/version", get(|| async { Json(serde_json::json!({ "ver": "1" })) }))
+            .layer(from_fn(require_service_token));
+
+        let response = router
+            .oneshot(Request::builder().uri("/version").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn health_with_invalid_token_is_still_exempt() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("x-service-token", "totally_wrong_token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn health_case_sensitivity_is_enforced() {
+        // App must have a wildcard or something to catch /HEALTH if it bypasses middleware.
+        // If middleware bypasses, router might 404. If middleware catches it, it 401s.
+        let router = Router::new()
+            .route("/HEALTH", get(|| async { Json(serde_json::json!({ "ok": true })) }))
+            .layer(from_fn(require_service_token));
+
+        let response = router
+            .oneshot(Request::builder().uri("/HEALTH").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        // Middleware expects exact "/health", so "/HEALTH" falls through to token check and 401s
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn health_with_query_params_is_exempt() {
+        let router = Router::new()
+            .route("/health", get(|| async { Json(serde_json::json!({ "ok": true })) }))
+            .layer(from_fn(require_service_token));
+
+        let response = router
+            .oneshot(Request::builder().uri("/health?foo=bar").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        // URI path strips query params, so it should match "/health"
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn protected_path_rejects_empty_and_whitespace_tokens() {
+        for token in ["", " fluxbase_secret_token ", "fluxbase_secret_token "] {
+            let response = app()
+                .oneshot(
+                    Request::builder()
+                        .uri("/db/query")
+                        .header("x-service-token", token)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "Failed for token: '{}'", token);
+        }
+    }
+
+    #[tokio::test]
+    async fn parses_request_id_successfully() {
+        // Ensure that providing x-request-id doesn't break things and tracing works.
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/db/query")
+                    .header("x-service-token", "fluxbase_secret_token")
+                    .header("x-request-id", "req-12345")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }
