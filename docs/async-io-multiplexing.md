@@ -1,6 +1,12 @@
 # Async I/O Multiplexing
 
-Flux uses a cooperative I/O model where external calls (database, HTTP, queue) are handled by Rust while user code yields the CPU. This allows each worker to handle many concurrent I/O-bound requests instead of blocking on one at a time.
+Flux uses a cooperative I/O model where external calls (database, HTTP, queue, timers, filesystem) are handled by Rust while user code yields the CPU. Each worker handles many concurrent I/O-bound requests instead of blocking on one at a time.
+
+Two runtime paths:
+- **V8/Deno** for JavaScript/TypeScript — async ops via `deno_core`
+- **WASM/Wasmtime** for all other languages — async fibers via WASI host imports
+
+Both paths share the same Flux I/O layer: all effects go through Rust, all effects are observed, all effects are recorded.
 
 ## The Problem
 
@@ -14,11 +20,11 @@ Worker 1:
 8 workers = max 8 concurrent requests, regardless of I/O wait
 ```
 
-A single Node.js or Deno process juggle thousands of concurrent I/O-bound requests on one thread. A naive isolate-per-request model cannot.
+A single Node.js or Deno process can juggle thousands of concurrent I/O-bound requests on one thread. A naive isolate-per-request model cannot.
 
 ## The Insight
 
-All external I/O in Flux already routes through Rust:
+All external I/O in Flux routes through Rust:
 
 | User code | Rust handler |
 |-----------|-------------|
@@ -26,7 +32,8 @@ All external I/O in Flux already routes through Rust:
 | `ctx.http.fetch()` | reqwest async HTTP |
 | `ctx.queue.push()` | Postgres INSERT |
 | `ctx.secrets.get()` | LRU cache + AES decrypt |
-| `ctx.function.invoke()` | Internal dispatch |
+| `ctx.function.invoke()` | Internal recursive dispatch |
+| `setTimeout()` / `sleep()` | `tokio::time::sleep` |
 
 The user function never touches a socket or file descriptor directly. Rust owns all I/O. This means Rust can suspend the user function during I/O and resume it when the response arrives — while using the freed CPU for other requests.
 
@@ -55,12 +62,14 @@ The user function never touches a socket or file descriptor directly. Rust owns 
 
 When a suspended request's I/O completes, the event loop picks it up on the next tick and resumes execution.
 
+---
+
 ## V8 (JavaScript/TypeScript) — Async Ops
 
-Deno's `deno_core` has native support for async ops. External calls are registered as Rust async ops. When JavaScript `await`s them, V8 yields to the event loop.
+Deno's `deno_core` has native support for async ops. Flux-owned effects are registered as Rust async ops. When JavaScript `await`s them, V8 yields to the event loop.
 
 ```
-Worker thread (1 JsRuntime, N concurrent requests):
+Worker thread (1 JsRuntime, N concurrent requests for same function/version):
 
   tick 1: req1 starts → hits await ctx.db.query()
           → Rust async op starts Postgres Future
@@ -72,211 +81,457 @@ Worker thread (1 JsRuntime, N concurrent requests):
   tick 5: req3's HTTP Future resolves → V8 resumes req3
 ```
 
-### Implementation: Registering Async Ops
+### V8 Isolation Model
+
+V8 workers use a **shared-heap-per-function** model, like a normal server runtime:
+
+| Property | Behavior |
+|----------|----------|
+| Same function, same version | Requests share the V8 heap on one worker. Module-level state (caches, counters, connection pools) persists across requests — same as Node.js or Deno would behave. |
+| Different function or version | Separate runtime. Worker recreates its `JsRuntime` when the bundle key changes. No heap sharing across function boundaries. |
+| Cross-request `ctx` isolation | Each request gets its own `ctx` object with its own `request_id`, secrets, logs, and completion channel. `ctx` is scoped per-request; the heap is shared per-function. |
+
+This is intentional. Shared module state is how every server runtime works. If a user writes `let cache = new Map()` at module level, it persists across requests on the same worker — exactly like `express` or `fastify` would behave. Flux does not fight this; it is the expected JS execution model.
+
+### V8 Flux Op Surface
 
 Each `ctx.*` method maps to a `deno_core` async op:
 
+| JS code | Rust async op | What it does |
+|---------|--------------|-------------|
+| `ctx.db.query(sql, params)` | `op_db_query` | SQLx async query via data-engine |
+| `ctx.db.<table>.find/insert/update/delete` | `op_db_query` | Typed helpers compile to `op_db_query` |
+| `ctx.http.fetch(url, opts)` | `op_http_fetch` | reqwest + SSRF check + trace span |
+| `ctx.queue.push(fn, payload, opts)` | `op_queue_push` | Resolve function → POST to queue service |
+| `ctx.function.invoke(name, input)` | `op_function_invoke` | Recursive runtime dispatch with parent lineage |
+| `ctx.secrets.get(key)` | Synchronous | LRU cache + AES decrypt (no async needed) |
+| `ctx.log.info/warn/error(msg)` | Synchronous | Append to per-request log buffer |
+| `setTimeout(fn, ms)` | `op_sleep` | `tokio::time::sleep().await` — V8 yields |
+
 ```rust
-// ctx.db.query() → Rust async op
 #[op2(async)]
 async fn op_db_query(
     state: Rc<RefCell<OpState>>,
-    #[string] sql: String,
-    #[serde] params: Vec<serde_json::Value>,
+    #[string] request_id: String,
+    #[serde] query: QueryRequest,
 ) -> Result<serde_json::Value, AnyError> {
-    let pool = {
+    let (pool, span_tx) = {
         let s = state.borrow();
-        s.borrow::<DbPool>().clone()
+        let registry = s.borrow::<RequestRegistry>();
+        let ctx = registry.get(&request_id)?;
+        (ctx.db_pool.clone(), ctx.span_tx.clone())
     };
-    // This is a real async Postgres query.
-    // While it awaits, V8 can run other requests.
-    let rows = sqlx::query(&sql)
+    let start = Instant::now();
+    let rows = sqlx::query(&query.sql)
         .fetch_all(&pool)
         .await?;
+    span_tx.send(Span::db(query.sql, start.elapsed()));
     Ok(rows_to_json(rows))
 }
 
-// ctx.http.fetch() → Rust async op
 #[op2(async)]
 async fn op_http_fetch(
     state: Rc<RefCell<OpState>>,
-    #[string] url: String,
+    #[string] request_id: String,
     #[serde] options: FetchOptions,
 ) -> Result<serde_json::Value, AnyError> {
-    let client = {
+    let (client, span_tx) = {
         let s = state.borrow();
-        s.borrow::<reqwest::Client>().clone()
+        let registry = s.borrow::<RequestRegistry>();
+        let ctx = registry.get(&request_id)?;
+        (ctx.http_client.clone(), ctx.span_tx.clone())
     };
-    // Real async HTTP call. V8 yields here.
-    let resp = client.request(options.method, &url)
+    validate_ssrf(&options.url)?;
+    let start = Instant::now();
+    let resp = client.request(options.method, &options.url)
         .headers(options.headers)
         .body(options.body)
         .send()
         .await?;
+    span_tx.send(Span::http(options.url, resp.status(), start.elapsed()));
     Ok(response_to_json(resp).await?)
 }
 ```
 
-### Implementation: Multi-Request Event Loop
+### V8 Multi-Request Event Loop
 
-The worker loop changes from "one request at a time" to "inject tasks, run event loop":
+The worker loop injects tasks and continuously drives the event loop:
 
 ```rust
-// Before: serial execution
-loop {
-    let task = receiver.recv().await;
-    let result = execute_with_runtime(&mut runtime, task).await;
-    task.response_tx.send(result);
-}
-
-// After: concurrent execution
 loop {
     tokio::select! {
-        // Accept new tasks when available
         Some(task) = receiver.recv() => {
-            inject_async_task(&mut runtime, task);
+            if task.bundle_key != current_bundle_key {
+                // Different function/version — recreate runtime
+                drain_and_fail_inflight(&mut inflight);
+                js_rt = create_js_runtime();
+                current_bundle_key = task.bundle_key.clone();
+            }
+            if inflight.len() >= max_concurrent {
+                task.reply.send(Err(backpressure_error()));
+                continue;
+            }
+            inject_async_task(&mut js_rt, &mut inflight, task);
         }
-        // Drive the event loop (resolves pending I/O, runs callbacks)
-        _ = runtime.run_event_loop(PollEventLoopOptions::default()) => {
-            // Completed tasks send results via their response channels
+        _ = js_rt.run_event_loop(PollEventLoopOptions::default()) => {
+            // Completed tasks resolve via their oneshot channels
+            inflight.retain(|t| !t.is_complete());
         }
     }
 }
 ```
 
-### Per-Request Isolation Within Shared Event Loop
+### V8 Per-Request State
 
-Each request runs in its own async scope with its own context. Requests on the same event loop cannot access each other's state:
+Each request is tracked in a `RequestRegistry` inside `OpState`, keyed by `request_id`:
 
-- Each request gets a unique `request_id` threaded through its ops
-- `OpState` uses the `request_id` to route to the correct per-request context (secrets, logs, DB pool)
-- The `globalThis` sweep between requests is no longer needed during concurrent execution — each request's scope is an isolated async closure
-- On completion, the request's context is cleaned up and its result is sent via oneshot channel
+```rust
+struct RequestContext {
+    request_id:   String,
+    secrets:      HashMap<String, String>,
+    logs:         Vec<LogLine>,
+    span_tx:      mpsc::Sender<Span>,
+    reply:        oneshot::Sender<Result<ExecutionResult, String>>,
+    started_at:   Instant,
+    timeout:      Duration,
+    // Per-request seeded PRNG for deterministic replay
+    prng_state:   u32,
+}
+
+struct RequestRegistry {
+    requests: HashMap<String, RequestContext>,
+}
+```
+
+Every async op receives the `request_id` explicitly from the JS `ctx` closure. The op uses the registry to resolve the correct per-request context. This ensures:
+- Logs go to the right request
+- Spans link to the right trace
+- Secrets are scoped per request
+- PRNG state is per-request (not shared across concurrent requests)
+
+### V8 Worker Dispatch
+
+Workers are not a generic FIFO. The dispatcher:
+
+1. **Prefers** the least-loaded worker already running the same bundle key
+2. **Falls back** to an idle worker (which recreates its runtime for the new bundle)
+3. **Rejects** with 503 if no worker has capacity
+
+This ensures maximum isolate reuse for high-repeat workloads while maintaining strict cross-function isolation.
+
+---
 
 ## WASM — Async Fibers (Wasmtime)
 
-Wasmtime supports async host calls via `async_support`. When a WASM module calls a host import (like `http_fetch`), the WASM fiber is suspended and the worker can execute other WASM instances.
+Wasmtime supports async host calls via `async_support`. When a WASM module calls a host import, the WASM fiber is suspended and the tokio runtime can execute other work.
 
-### Implementation: Async Engine Config
+### WASM Isolation Model
+
+WASM has **full per-request isolation**:
+
+| Property | Behavior |
+|----------|----------|
+| Memory | Each request gets its own `Store` with its own linear memory. Zero shared state. |
+| Host state | Each `Store` owns a `HostState` with request-specific secrets, logs, spans. |
+| Compiled module | Shared (cached). Compilation happens once; instantiation is per-request. |
+| Concurrency | Bounded by semaphore (`MAX_CONCURRENT_PER_WORKER`). Each request yields during host I/O via async fibers. |
+
+This is strictly stronger isolation than V8. No request can observe another request's memory, even for the same function.
+
+### WASM Flux Host Imports
+
+| Import | Signature | Behavior |
+|--------|-----------|----------|
+| `fluxbase.db_query` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — SQLx query via data-engine + span |
+| `fluxbase.http_fetch` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — reqwest + SSRF check + span |
+| `fluxbase.queue_push` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — resolve function → POST to queue |
+| `fluxbase.function_invoke` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — recursive dispatch with lineage |
+| `fluxbase.sleep` | `(ms: i64)` | Async — `tokio::time::sleep().await` (fiber suspends) |
+| `fluxbase.secrets_get` | `(key_ptr, key_len, out_ptr, out_max) → i32` | Sync — LRU cache + AES decrypt |
+| `fluxbase.log` | `(level, msg_ptr, msg_len)` | Sync — append to `HostState::logs` |
+
+All async host imports use `func_wrap_async` so the fiber suspends and frees the thread:
 
 ```rust
 let mut config = Config::new();
-config.async_support(true);   // Enable fiber-based async
-config.consume_fuel(true);    // Keep CPU limits
-```
+config.async_support(true);
+config.consume_fuel(true);
 
-### Implementation: Async Host Imports
-
-```rust
-// Before: synchronous (blocks the thread)
-linker.func_wrap("fluxbase", "http_fetch",
-    |mut caller: Caller<HostState>, req_ptr: u32, req_len: u32, out_ptr: u32, out_max: u32| -> u32 {
-        let response = blocking_http_call(url);  // Thread blocked!
-        write_to_memory(&mut caller, out_ptr, &response);
-        response.len() as u32
-    }
-)?;
-
-// After: async (fiber suspends, worker freed)
+// Async host import — fiber suspends during I/O
 linker.func_wrap_async("fluxbase", "http_fetch",
-    |mut caller: Caller<HostState>, req_ptr: u32, req_len: u32, out_ptr: u32, out_max: u32| {
+    |mut caller: Caller<HostState>, req_ptr: i32, req_len: i32, out_ptr: i32, out_max: i32| {
         Box::new(async move {
-            let response = reqwest::get(url).await;  // Fiber suspended!
-            write_to_memory(&mut caller, out_ptr, &response);
-            Ok(response.len() as u32)
+            let request = read_from_memory(&caller, req_ptr, req_len)?;
+            validate_ssrf(&request.url)?;
+            let start = Instant::now();
+            let resp = caller.data().http_client.request(...)
+                .send().await?;  // Fiber suspended — other requests run
+            caller.data_mut().spans.push(Span::http(request.url, resp.status(), start.elapsed()));
+            let body = response_to_json(resp).await?;
+            write_to_memory(&mut caller, out_ptr, out_max, &body)?;
+            Ok(body.len() as i32)
         })
     }
 )?;
 
-// Execution uses call_async instead of call
-let handle = instance.get_typed_func::<(u32, u32), u32>(&mut store, "handle")?;
-let result = handle.call_async(&mut store, (ptr, len)).await?;  // Yields during host calls
+// Execution uses call_async — yields during host calls
+let handle = instance.get_typed_func::<(i32, i32), i32>(&mut store, "handle")?;
+let result = handle.call_async(&mut store, (ptr, len)).await?;
 ```
 
-### Implementation: Concurrent WASM Execution
+### WASM Concurrent Execution
 
-With async support, multiple WASM instances can share a tokio task without dedicated threads:
+With async support, WASM execution uses `tokio::spawn` instead of `spawn_blocking`:
 
 ```rust
-// Before: spawn_blocking (1 OS thread per request)
-tokio::task::spawn_blocking(move || {
-    execute_wasm_sync(engine, module, input)  // Blocks thread
-})
-
-// After: async execution (yields during host I/O)
+// Async — yields during host I/O, thread freed for other requests
 tokio::spawn(async move {
-    execute_wasm_async(engine, module, input).await  // Yields on I/O
+    execute_wasm_async(engine, module, params).await
 })
 ```
 
-The `spawn_blocking` pool is still available as a fallback for WASM modules that do pure CPU work, but I/O-heavy modules benefit from async execution.
+The semaphore continues to bound total in-flight WASM executions. Each request gets its own `Store` and `HostState`. No shared memory, no coordination needed.
+
+---
+
+## Flux Op Surface (Both Runtimes)
+
+Both V8 and WASM expose the same logical ops. The user-facing API is identical regardless of runtime:
+
+| Effect | JS (V8) | WASM | Async | Traced | Replayable |
+|--------|---------|------|-------|--------|------------|
+| DB query | `ctx.db.query()` / `ctx.db.<table>.*` | `fluxbase.db_query` | Yes | Yes | Yes |
+| HTTP fetch | `ctx.http.fetch()` | `fluxbase.http_fetch` | Yes | Yes | Yes |
+| Queue push | `ctx.queue.push()` | `fluxbase.queue_push` | Yes | Yes | Yes |
+| Function invoke | `ctx.function.invoke()` | `fluxbase.function_invoke` | Yes | Yes | Yes |
+| Sleep / timer | `setTimeout()` | `fluxbase.sleep` / `poll_oneoff` | Yes | Yes | Yes |
+| Secrets | `ctx.secrets.get()` | `fluxbase.secrets_get` | No | No | N/A |
+| Logging | `ctx.log.*()` | `fluxbase.log` | No | Yes | N/A |
+
+Every async op:
+1. Resolves per-request context via `request_id`
+2. Executes the I/O through Rust (tokio)
+3. Emits a trace span with timing, target, and metadata
+4. Records the I/O request/response for replay
+5. Returns the result to user code
+
+---
 
 ## Concurrency Characteristics
 
-### Before (Current)
-
 | Metric | V8 | WASM |
 |--------|-----|------|
-| Requests per worker | 1 | 1 |
-| 8 workers, 100 I/O requests | 8 concurrent, 92 queued | 8 concurrent, 92 queued |
-| Worker idle during I/O | Yes | Yes |
-
-### After (Async I/O Multiplexing)
-
-| Metric | V8 | WASM |
-|--------|-----|------|
-| Requests per worker (I/O-bound) | ~100+ | ~100+ |
+| Requests per worker (I/O-bound) | ~100+ (event loop) | ~100+ (async fibers) |
 | 8 workers, 100 I/O requests | ~100 concurrent | ~100 concurrent |
 | Worker idle during I/O | No — runs other requests | No — runs other fibers |
-| CPU-bound limit | 8 concurrent (unchanged) | 8 concurrent (unchanged) |
+| CPU-bound limit | 8 concurrent (1 per worker) | 8 concurrent (1 per fiber active) |
+| Request isolation (memory) | Shared heap per function/version | Full — own Store per request |
+| Request isolation (ctx/state) | Per-request via `RequestRegistry` | Per-request via `HostState` |
 
 I/O-bound concurrency scales with available memory (pending request contexts), not CPU cores.
 
-## Request Lifecycle (After)
+## Request Lifecycle
 
 ```
 1. Gateway receives HTTP request
 2. Gateway routes to Runtime (in-process call in monolith)
-3. Runtime picks a worker with capacity
-4. Worker injects request as async task into event loop (V8) or spawns async fiber (WASM)
-5. User function executes:
+3. Runtime dispatcher selects a worker:
+   - V8: prefer worker already running same bundle key, or idle worker
+   - WASM: any worker with semaphore capacity
+4. Worker executes:
+   - V8: inject request as async task into shared event loop
+   - WASM: spawn async fiber with own Store
+5. User function runs:
    a. CPU work → runs on worker thread
-   b. ctx.db.query() → Rust async op, user code SUSPENDED
-   c. ctx.http.fetch() → Rust async op, user code SUSPENDED
-   d. While suspended, worker picks up other requests
+   b. ctx.db.query() → Rust async op/host import → user code SUSPENDED
+   c. ctx.http.fetch() → Rust async op/host import → user code SUSPENDED
+   d. While suspended, worker runs other requests
    e. I/O completes → Rust Future resolves → user code RESUMES
 6. Function returns → execution record written → response sent
 ```
 
-## Safety Guarantees
+---
+
+## Safety & Security
+
+### Isolation
+
+| Concern | V8 | WASM |
+|---------|-----|------|
+| Cross-request memory | Shared heap per function/version (like Node.js). Module-level state persists. | Full isolation — own `Store` per request. Zero shared memory. |
+| Cross-**function** memory | Strict. Worker recreates `JsRuntime` on bundle key change. | Strict. Own `Store` per request by default. |
+| `ctx` data (secrets, logs, spans) | Per-request. Keyed by `request_id` in `RequestRegistry`. Cleaned up on completion. | Per-request. Owned by `HostState` in `Store`. Dropped with `Store`. |
+| PRNG state | Per-request seeded PRNG in `RequestContext`. Not shared across concurrent requests. | Per-request. Seeded in `HostState` or deterministic via `random_get` override. |
+| Prototype pollution | Built-in prototypes frozen at worker startup. User code cannot poison `Object.prototype` etc. | N/A — WASM has no prototype chain. |
+
+### CPU Limits
+
+| Concern | V8 | WASM |
+|---------|-----|------|
+| Infinite loop / CPU hog | Per-request wall-clock timeout. V8 interrupt terminates the offending execution. | Fuel-based limit. Wasmtime traps with `OutOfFuel` when budget exhausted. |
+| Timeout/fuel exhaustion effect | **Worker-wide reset.** The `JsRuntime` is recreated. All in-flight requests on that worker fail. This is the cost of shared-heap. | **Request-only.** The `Store` is dropped. Other in-flight fibers are unaffected. |
+
+V8 worker-wide reset is the correct trade-off: a `while(true)` in JS monopolizes the event loop — there is no way to preempt synchronous JS execution without killing the runtime. This is inherent to V8, not a Flux limitation. The mitigation is:
+- Keep `MAX_CONCURRENT_PER_WORKER` bounded (default 64) so a reset affects at most 64 requests
+- Scale workers horizontally so a single reset does not take down the container
+- Recreate the runtime immediately — the next request gets a clean isolate
+
+### Concurrency Limits
 
 | Concern | How it is handled |
 |---------|-------------------|
-| Cross-request data leakage | Each request has isolated OpState / HostState keyed by request_id |
-| CPU starvation (one request hogs CPU) | Fuel limits (WASM) and timeout (V8) still enforced per request |
-| Runaway concurrency | Per-worker request cap (configurable, e.g., max 64 concurrent per worker) |
-| Memory exhaustion | Pending request count bounded; backpressure via 503 when limit reached |
-| Prototype pollution (V8) | Prototypes frozen at startup; each request runs in async closure, not shared global scope |
-| `while(true)` in user code | Timeout kills the request, not the worker. Other concurrent requests on same worker are unaffected (V8 event loop preemption for async ticks) |
+| Runaway concurrency | Per-worker cap: `MAX_CONCURRENT_PER_WORKER` (default 64). Excess requests get 503. |
+| Memory exhaustion | Pending request count is bounded by the concurrency cap. Backpressure propagates via 503 to the gateway. |
+| Queue depth | Channel capacity is `workers × 4`. Callers block naturally when all workers are at capacity. |
 
-## Configuration
+### Network Security
 
-| Env Variable | Default | Purpose |
-|-------------|---------|---------|
-| `ISOLATE_WORKERS` | `2 × CPU cores` (clamped [2, 16]) | Number of worker threads |
-| `MAX_CONCURRENT_PER_WORKER` | `64` | Max simultaneous I/O-bound requests per worker |
-| `REQUEST_TIMEOUT_SECONDS` | `30` | Per-request wall clock timeout |
-| `WASM_FUEL_LIMIT` | `1_000_000_000` | CPU fuel units per WASM invocation |
+| Concern | How it is handled |
+|---------|-------------------|
+| SSRF | Every outbound connection (V8 `op_http_fetch`, WASM `fluxbase.http_fetch`, raw socket connect) is validated against SSRF rules: deny private IPs (10.x, 172.16.x, 192.168.x, 169.254.x, localhost, [::1]), deny internal service URLs, configurable allow-list. |
+| DNS rebinding | DNS resolution goes through Flux. Resolved IP is checked against SSRF deny-list before connecting. |
+| TLS verification | Default `reqwest::Client` enforces TLS certificate verification. No `danger_accept_invalid_certs`. |
+
+### Sandbox
+
+| Category | Denied | Why |
+|----------|--------|-----|
+| **Listen/Accept** | `sock_listen`, `sock_accept`, `Deno.listen()` | Functions are request handlers, not servers |
+| **Subprocess** | `proc_raise`, `Deno.Command()`, `exec`, `system`, `fork` | Sandbox escape risk |
+| **Symlinks** | `path_symlink` | Path traversal risk |
+| **Host filesystem** | Paths outside `/tmp/{request_id}/` | Isolation — no access to host or other requests |
+| **Signals** | `proc_raise`, `Deno.kill()` | Cannot kill processes |
+| **FFI / native libs** | `Deno.dlopen()` | No native library loading |
+| **Environment variables** | `Deno.env.get()` / `environ_get` | Returns only injected secrets, not host env |
+| **Process exit** | `Deno.exit()` / `proc_exit` | Terminates the **request**, not the worker |
+
+### Filesystem Sandbox
+
+Functions get a per-request virtual temp directory (`/tmp/{request_id}/`). All filesystem operations are path-validated:
+
+- Paths are canonicalized and checked against the sandbox root
+- No `..` traversal out of the sandbox
+- No symlink creation (prevents escape)
+- Files are cleaned up after execution completes
+- No access to host filesystem, other requests' files, or system paths
+
+### Secrets
+
+- Encrypted at rest with AES-256-GCM
+- Injected into the runtime via LRU cache (30s TTL)
+- Never appear in execution records, logs, spans, or error messages
+- Per-request scoped — each request sees only its project's secrets
+- Synchronous access — no async needed, no suspension
+
+---
+
+## Observability
+
+Because Flux handles all I/O, every operation automatically generates trace data without any user instrumentation.
+
+### Trace Spans
+
+Every Flux-owned effect emits a span:
+
+| Effect | Span data captured |
+|--------|--------------------|
+| `ctx.db.query()` | SQL text, params hash, row count, duration, error if any |
+| `ctx.http.fetch()` | Method, URL, status code, response size, duration |
+| `ctx.queue.push()` | Function name, job ID, delay, duration |
+| `ctx.function.invoke()` | Target function, nested request_id, duration |
+| `setTimeout()` / `sleep()` | Requested duration, actual duration |
+| Secrets access | Key name (not value), cache hit/miss |
+
+This means `flux trace <id>` shows:
+
+```
+├─ function:create_user                     125ms
+│  ├─ db:query     INSERT INTO users...      18ms  (1 row)
+│  ├─ http:fetch   POST api.stripe.com       95ms  (200)
+│  ├─ queue:push   send_welcome_email         2ms  (job_id=abc)
+│  └─ sleep        10ms                      10ms
+```
+
+### Request Identity Threading
+
+Every effect carries the full request lineage:
+
+| Header / Field | Purpose |
+|---------------|---------|
+| `x-request-id` | UUID propagated from gateway through all Flux-owned effects |
+| `parent_span_id` | Links child spans to parent for trace reconstruction |
+| `project_id` | Tenant isolation — ensures spans are scoped to the correct project |
+| `code_sha` | Deployed code version — links trace to exact source |
+
+### Execution Records
+
+Every function invocation produces an execution record:
+
+```json
+{
+  "request_id": "uuid",
+  "function_name": "create_user",
+  "code_sha": "abc123",
+  "input": { "email": "..." },
+  "output": { "id": 1 },
+  "error": null,
+  "duration_ms": 125,
+  "spans": [...],
+  "created_at": "2026-03-14T..."
+}
+```
+
+Spans, input/output, and error state are all captured atomically so `flux why <id>` can reconstruct the full execution.
+
+---
+
+## Replay
+
+For `flux incident replay <id>`, Flux records all I/O at the op boundary:
+
+```
+Recording (during live execution):
+  op_db_query("INSERT INTO users...", [...])  → { rows: 1 }        (18ms)
+  op_http_fetch("POST api.stripe.com", ...)   → { status: 200, ... } (95ms)
+  op_queue_push("send_welcome_email", ...)    → { job_id: "abc" }    (2ms)
+  op_sleep(10)                                → ()                   (10ms)
+
+Replay (during incident replay):
+  op_db_query(...)    → return recorded { rows: 1 }       (no real DB call)
+  op_http_fetch(...)  → return recorded { status: 200 }   (no real HTTP call)
+  op_queue_push(...)  → return recorded { job_id: "abc" } (no real queue call)
+  op_sleep(10)        → return immediately                 (no real sleep)
+```
+
+The function executes with the exact same I/O responses it saw in production. No mocking needed — the Flux op boundary IS the mock boundary.
+
+### Replay guarantees
+
+| What | Guaranteed |
+|------|-----------|
+| Flux-owned effects (db, http, queue, invoke, sleep) | Yes — recorded and replayed exactly |
+| Deterministic randomness (`Math.random`, `crypto.randomUUID`) | Yes — seeded per-request via `execution_seed` |
+| Module-level state in V8 (caches, counters) | Best-effort — replay starts with clean module state. If the function depends on accumulated state from prior requests, replay may diverge. |
+| Wall-clock time | Best-effort — `Date.now()` returns real time during replay. `clock_time_get` is not mocked. Replay is timing-approximate, not timing-exact. |
+
+### What replay does NOT cover
+
+- Raw Deno ops (`Deno.connect`, `fetch` directly) if user bypasses `ctx.*` — these are not recorded
+- Side effects in module-level V8 state from prior requests
+- Non-deterministic iteration order of JS `Map`/`Set` (V8-dependent)
+- Time-dependent branching based on `Date.now()`
+
+These are inherent limitations of replaying a shared-heap runtime. WASM replay is stricter because each request starts with clean memory.
+
+---
 
 ## Complete I/O Surface
 
-Flux intercepts **all** I/O — not just network calls. Every syscall that touches the outside world, blocks, or waits must go through Rust so user code can be suspended and resumed transparently.
-
-The principle: **if it would block a thread in a normal program, Flux makes it async.**
+Flux intercepts all I/O at two layers depending on runtime:
 
 ### WASM — WASI Syscall Surface
 
-WASM modules cannot do I/O directly. Every I/O operation in every language compiles down to WASI syscalls. Flux implements all of them as async host imports:
+WASM modules cannot do I/O directly. Every I/O operation compiles down to WASI syscalls. Flux implements them as async host imports:
 
 #### Network I/O
 
@@ -292,7 +547,7 @@ WASM modules cannot do I/O directly. Every I/O operation in every language compi
 | `sock_close` | Destroy socket | Drop stream + close span |
 | `sock_listen` | Bind + listen | **Denied** — functions are not servers |
 | `sock_accept` | Accept connection | **Denied** |
-| `sock_getaddrinfo` | DNS resolution | `tokio::net::lookup_host().await` |
+| `sock_getaddrinfo` | DNS resolution | `tokio::net::lookup_host().await` + SSRF check |
 
 Every language's standard networking (HTTP clients, Redis drivers, gRPC stubs, database drivers, MQTT, SMTP, Kafka) compiles to these syscalls. Zero driver-specific code needed in Flux.
 
@@ -302,7 +557,7 @@ Every language's standard networking (HTTP clients, Redis drivers, gRPC stubs, d
 |-------------|-------------|-------------------|
 | `fd_read` | Read from file descriptor | `tokio::fs::File::read().await` (sandboxed) |
 | `fd_write` | Write to file descriptor | `tokio::fs::File::write_all().await` (sandboxed) |
-| `fd_seek` | Seek in file | Sync (in-memory position, no I/O) |
+| `fd_seek` | Seek in file | Sync (in-memory position) |
 | `fd_close` | Close file descriptor | Drop handle |
 | `fd_sync` / `fd_datasync` | Flush to disk | `file.sync_all().await` |
 | `fd_readdir` | List directory | `tokio::fs::read_dir().await` (sandboxed) |
@@ -316,64 +571,27 @@ Every language's standard networking (HTTP clients, Redis drivers, gRPC stubs, d
 | `path_symlink` | Create symlink | **Denied** — security risk |
 | `path_filestat_get` | Stat file | `tokio::fs::metadata().await` |
 
-**Filesystem sandbox:** Functions only see a per-request virtual temp directory (`/tmp/{request_id}/`). No access to host filesystem, other requests' files, or system paths. Files are cleaned up after execution.
+#### Clocks, Timers, Environment
 
-#### Clocks and Timers
+| WASI Syscall | Flux handler |
+|-------------|-------------|
+| `clock_time_get` (realtime) | Sync — `SystemTime::now()` |
+| `clock_time_get` (monotonic) | Sync — `Instant::now()` |
+| `clock_res_get` | Sync — nanosecond precision |
+| `poll_oneoff` (clock subscription) | **Async** — `tokio::time::sleep().await` (fiber suspends) |
+| `poll_oneoff` (I/O subscriptions) | **Async** — converts to tokio Futures, `select!`, resumes on completion |
+| `random_get` | Sync — `getrandom::getrandom()` (seedable for replay) |
+| `args_get` / `args_sizes_get` | Sync — function metadata |
+| `environ_get` / `environ_sizes_get` | Sync — injected secrets/config only |
+| `proc_exit` | Terminates the **request**, not the worker |
+| `proc_raise` | **Denied** |
+| `sched_yield` | Yields fiber — other requests run |
 
-| WASI Syscall | What it does | Flux handler |
-|-------------|-------------|-------------|
-| `clock_time_get` (realtime) | Current wall clock time | Sync — returns `SystemTime::now()` |
-| `clock_time_get` (monotonic) | Monotonic timer | Sync — returns `Instant::now()` |
-| `clock_res_get` | Clock resolution | Sync — returns nanosecond precision |
-| `poll_oneoff` (clock subscription) | `sleep()` / `setTimeout()` | **Async** — `tokio::time::sleep().await` (fiber suspends) |
-
-`sleep()` in any language compiles to `poll_oneoff` with a clock subscription. Flux implements it as `tokio::time::sleep().await` — the fiber suspends, other requests run, and it resumes when the timer fires.
-
-```
-User writes:            What happens:
-
-time.Sleep(5*time.Second)  → WASI poll_oneoff(clock, 5s)
-                             → tokio::time::sleep(Duration::from_secs(5)).await
-                             → fiber SUSPENDED — CPU runs other requests for 5 seconds
-                             → timer fires → fiber RESUMES
-```
-
-#### Randomness
-
-| WASI Syscall | What it does | Flux handler |
-|-------------|-------------|-------------|
-| `random_get` | Fill buffer with random bytes | Sync — `getrandom::getrandom()` (no I/O, kernel entropy) |
-
-Randomness is synchronous and safe — no suspension needed. Optionally, Flux can seed deterministically for `flux incident replay`.
-
-#### Process and Environment
-
-| WASI Syscall | What it does | Flux handler |
-|-------------|-------------|-------------|
-| `args_get` / `args_sizes_get` | Command-line args | Sync — returns function metadata |
-| `environ_get` / `environ_sizes_get` | Environment variables | Sync — returns injected secrets/config |
-| `proc_exit` | Terminate process | Terminates the **request**, not the worker |
-| `proc_raise` | Send signal | **Denied** |
-| `sched_yield` | Yield CPU | Yields fiber — other requests can run |
-
-#### Poll (The Async Primitive)
-
-| WASI Syscall | What it does | Flux handler |
-|-------------|-------------|-------------|
-| `poll_oneoff` | Wait for multiple I/O events | **The core multiplexing syscall** |
-
-`poll_oneoff` is WASI's equivalent of `epoll`/`kqueue`. When a WASM module calls `poll_oneoff` with a list of subscriptions (sockets ready to read, timers to fire, files ready to write), Flux:
-
-1. Converts each subscription to a tokio `Future`
-2. Suspends the WASM fiber
-3. Runs `tokio::select!` on all Futures
-4. When any complete, resumes the fiber with the results
-
-This single syscall is what makes `select()`, `poll()`, async I/O multiplexing, `Promise.all()`, and event loops work inside WASM. Every language's async runtime eventually calls this.
+`poll_oneoff` is WASI's equivalent of `epoll`/`kqueue`. It is the core multiplexing syscall — every language's async runtime eventually calls it. Flux converts each subscription to a tokio Future, suspends the fiber, and resumes when any complete.
 
 ### V8 (JavaScript/TypeScript) — Deno Op Surface
 
-For the JS/TS path, Deno already provides non-blocking I/O through its op system. Flux wraps or replaces these ops:
+For the JS/TS path, Flux registers custom Deno ops. Standard Deno networking and filesystem ops are also available, sandboxed:
 
 #### Network
 
@@ -388,7 +606,7 @@ For the JS/TS path, Deno already provides non-blocking I/O through its op system
 | `Deno.resolveDns(name)` | `op_dns_resolve` | Async — DNS lookup |
 | `Deno.listen({port})` | `op_net_listen` | **Denied** — functions are not servers |
 
-This means npm packages like `ioredis`, `pg`, `mysql2`, `kafkajs`, `amqplib`, `mqtt` all work natively — their network calls go through Deno's ops which are already async.
+npm packages like `ioredis`, `pg`, `mysql2`, `kafkajs`, `amqplib` work natively — their network calls go through Deno's ops which are already async.
 
 #### Filesystem
 
@@ -410,9 +628,7 @@ This means npm packages like `ioredis`, `pg`, `mysql2`, `kafkajs`, `amqplib`, `m
 | `setTimeout(fn, ms)` | `op_sleep` | Async — `tokio::time::sleep().await`, V8 yields |
 | `setInterval(fn, ms)` | `op_sleep` (repeated) | Async — yields between intervals |
 | `queueMicrotask(fn)` | V8 microtask queue | Sync — runs before next event loop tick |
-| `Promise.resolve()` | V8 microtask queue | Sync |
 | `Promise.all([...])` | V8 + multiple async ops | Async — all pending ops polled concurrently |
-| `requestAnimationFrame` | **Denied** — no browser context | |
 
 #### Subprocess and System
 
@@ -424,110 +640,68 @@ This means npm packages like `ioredis`, `pg`, `mysql2`, `kafkajs`, `amqplib`, `m
 | `crypto.getRandomValues(buf)` | `op_crypto_random` | Sync — kernel entropy |
 | `crypto.subtle.digest()` | `op_crypto_*` | Sync — CPU-bound crypto |
 
-### What Gets Denied
+---
 
-Not all I/O is allowed. Functions are sandboxed:
+## Configuration
 
-| Category | Denied | Why |
-|----------|--------|-----|
-| **Listen/Accept** | `sock_listen`, `sock_accept`, `Deno.listen()` | Functions are request handlers, not servers |
-| **Subprocess** | `proc_raise`, `Deno.Command()` | No shell access from user code |
-| **Raw exec** | `exec`, `system`, fork | Sandbox escape risk |
-| **Symlinks** | `path_symlink` | Path traversal risk |
-| **Host filesystem** | Paths outside `/tmp/{request_id}/` | Isolation — no access to host or other requests |
-| **Signals** | `proc_raise`, `Deno.kill()` | Cannot kill processes |
-| **FFI** | `Deno.dlopen()` | No native library loading |
+| Env Variable | Default | Purpose |
+|-------------|---------|---------|
+| `ISOLATE_WORKERS` | `2 × CPU cores` (clamped [2, 16]) | Number of V8 worker threads |
+| `MAX_CONCURRENT_PER_WORKER` | `64` | Max simultaneous I/O-bound requests per worker |
+| `REQUEST_TIMEOUT_SECONDS` | `30` | Per-request wall clock timeout |
+| `WASM_FUEL_LIMIT` | `1_000_000_000` | CPU fuel units per WASM invocation |
+| `WASM_HTTP_ALLOWED_HOSTS` | (empty = deny all) | Comma-separated hosts WASM may fetch. `*` = allow all. |
 
-### Observability From I/O Interception
+---
 
-Because Flux handles all I/O, every operation automatically generates trace data:
-
-| I/O Type | Span data captured |
-|----------|--------------------|
-| Network connect | Remote host, port, protocol, connect duration |
-| Network send/recv | Bytes transferred, latency per read/write |
-| DNS resolution | Hostname, resolved IPs, lookup duration |
-| File read/write | Path, bytes, duration |
-| Sleep/timer | Requested duration, actual duration |
-| Socket close | Total connection duration, total bytes in/out |
-
-This means `flux trace <id>` can show:
-
-```
-├─ function:create_user                     125ms
-│  ├─ net:connect  postgres:5432              2ms
-│  ├─ net:send     INSERT INTO users...       0.1ms
-│  ├─ net:recv     1 row                     18ms
-│  ├─ net:connect  redis:6379                 1ms
-│  ├─ net:send     SET user:123 ...           0.1ms
-│  ├─ net:recv     OK                         0.5ms
-│  ├─ net:connect  api.stripe.com:443         5ms  (TLS)
-│  ├─ net:send     POST /v1/customers         0.1ms
-│  ├─ net:recv     200 OK                    95ms
-│  └─ sleep        10ms                      10ms
-```
-
-Without any user instrumentation. Flux sees it all because it IS the I/O layer.
-
-### Replay From I/O Recording
-
-For `flux incident replay <id>`, Flux can record all I/O at the syscall level:
-
-```
-Recording (during live execution):
-  sock_connect(postgres:5432) → fd=3
-  sock_send(fd=3, "INSERT INTO users...") → 45 bytes
-  sock_recv(fd=3) → "1 row affected" (18ms)
-  sock_connect(redis:6379) → fd=4
-  ...
-
-Replay (during incident replay):
-  sock_connect(postgres:5432) → return recorded fd=3
-  sock_send(fd=3, ...) → recorded 45 bytes
-  sock_recv(fd=3) → return recorded "1 row affected" (no real network call)
-  ...
-```
-
-The function executes with the exact same I/O responses it saw in production. No mocking needed — the syscall layer IS the mock boundary.
-
-### Architecture Diagram
+## Architecture Diagram
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│  User Function (any language, any driver, any library)         │
-│  redis.get() / http.get() / fs.readFile() / sleep(5)          │
+│  User Function (JS/TS or any WASM language)                    │
+│  ctx.db.query() / ctx.http.fetch() / ctx.queue.push()          │
 ├───────────────────────────────────────────────────────────────┤
-│  Language Standard Library                                     │
-│  (net, http, tls, fs, time, crypto, os)                        │
+│  Flux SDK / ctx object                                         │
+│  Typed DB helpers, HTTP wrapper, queue wrapper, logging         │
 ├───────────────────────────────────────────────────────────────┤
-│  WASI Syscalls (WASM) │ Deno Ops (V8)                          │
-│  sock_* fd_* poll_*   │ op_fetch op_net_* op_sleep op_fs_*     │
-├───────────────────────┴───────────────────────────────────────┤
+│  Deno Async Ops (V8)        │ WASI Host Imports (WASM)         │
+│  op_db_query                │ fluxbase.db_query                │
+│  op_http_fetch              │ fluxbase.http_fetch              │
+│  op_queue_push              │ fluxbase.queue_push              │
+│  op_function_invoke         │ fluxbase.function_invoke         │
+│  op_sleep                   │ fluxbase.sleep / poll_oneoff     │
+├─────────────────────────────┴─────────────────────────────────┤
 │  Flux I/O Layer (Rust, async)                                  │
 │                                                                │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────────┐ │
 │  │ Security │ │ Observe  │ │ Record   │ │ Sandbox           │ │
 │  │ SSRF     │ │ Spans    │ │ I/O for  │ │ Path validation   │ │
-│  │ ACLs     │ │ Bytes    │ │ replay   │ │ Deny list         │ │
-│  │ Limits   │ │ Timing   │ │ mock     │ │ Filesystem jail   │ │
+│  │ ACLs     │ │ Timing   │ │ replay   │ │ Deny list         │ │
+│  │ Limits   │ │ Bytes    │ │          │ │ Filesystem jail   │ │
 │  └──────────┘ └──────────┘ └──────────┘ └───────────────────┘ │
 │                                                                │
 ├────────────────────────────────────────────────────────────────┤
 │  Tokio Async Runtime                                           │
-│  TcpStream · UdpSocket · TLS · DNS · File · Timer              │
+│  SQLx · reqwest · TcpStream · UdpSocket · TLS · DNS · Timer    │
 └────────────────────────────────────────────────────────────────┘
 ```
+
+---
 
 ## Why This Matters
 
 This design means Flux achieves Node.js-level I/O concurrency while maintaining:
 
-- **Per-request isolation** — no shared mutable state between requests
-- **Full observability** — every I/O operation is a span, automatically, in every language
+- **Full observability** — every Flux-owned effect is a span, automatically, in every language
 - **Rust-level I/O performance** — all I/O uses tokio + native async drivers
 - **Multi-tenant safety** — one user's slow API call does not block another user's function
-- **Language transparency** — users write normal code with normal libraries. Flux is invisible.
-- **Deterministic replay** — every I/O call is recorded and can be replayed for debugging
-- **Universal protocol support** — any protocol that uses sockets works (HTTP, Redis, Postgres, gRPC, Kafka, MQTT, etc.) with zero driver-specific code
+- **Language transparency** — users write normal code with normal libraries; Flux is the I/O layer
+- **Deterministic replay** — Flux-owned effects are recorded and replayed for debugging
+- **Per-request isolation** — WASM: full memory isolation; V8: shared heap per function (like Node.js) with per-request `ctx` isolation
+
+The isolation model is honest:
+- WASM gives you full per-request memory isolation
+- V8 gives you shared module state (caches, pools) with per-request `ctx` scoping — exactly like a normal JS server
+- Both give you per-request trace, per-request spans, and per-request replay of Flux-owned effects
 
 The user writes normal code in their language. Flux handles the rest.
