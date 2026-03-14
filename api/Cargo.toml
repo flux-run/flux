@@ -18,7 +18,6 @@ path = "src/main.rs"
 #   firebase-auth   — replaced by optional FLUX_API_KEY env var
 #   jsonwebtoken    — was firebase dependency
 #   tokio-stream    — was SSE events broadcast (removed in Phase 0)
-#   flate2          — was S3 log archiver gzip compression (removed)
 # ──────────────────────────────────────────────────────────────────────────────
 [dependencies]
 axum = { version = "0.8.8", features = ["multipart"] }
@@ -30,6 +29,9 @@ serde_json = "1.0.149"
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "uuid", "chrono", "macros", "tls-rustls"] }
 tokio = { version = "1.50.0", features = ["full"] }
 futures-util = "0.3"
+futures = "0.3"
+async-stream = "0.3"
+bytes = "1"
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.6.8", features = ["trace", "cors", "fs"] }
 tracing = "0.1.44"
@@ -44,10 +46,6 @@ base64 = "0.22"
 # Schema hashing — SHA-256 for schema_versions content-based cache key
 sha2 = "0.10"
 hex = "0.4"
-
-# Object storage — function bundle upload/download (minio in dev, S3/R2 in prod)
-aws-sdk-s3 = "1.125.0"
-aws-config = "1.8.15"
 
 # Dashboard auth — password hashing + JWT session tokens
 argon2        = "0.5"

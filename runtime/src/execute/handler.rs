@@ -16,7 +16,7 @@
 //! │      → yes: skip fetch, run immediately
 //! ├── warm Deno? (BundleCache has code for function_id, and runtime_hint ≠ "wasm")
 //! │      → yes: skip fetch, run immediately
-//! └── cold: fetch bundle from API (control plane → S3/inline), populate both caches
+//! └── cold: fetch bundle from API (control plane → inline from DB), populate both caches
 //! ```
 //!
 //! `X-Function-Runtime` lets the gateway force a specific engine (useful when a function

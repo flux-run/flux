@@ -32,7 +32,7 @@ pub struct WasmPool {
     /// LRU cache: function_id → compiled Wasmtime Module (Arc for cheap clone/share)
     modules:   Arc<Mutex<LruCache<String, Arc<Module>>>>,
     /// Raw bytes cache: function_id → (Arc<Vec<u8>>, inserted_at)
-    /// Warm-path equivalent of BundleCache — avoids re-downloading from S3.
+    /// Warm-path equivalent of BundleCache — avoids re-fetching bundles.
     raw_bytes: Arc<Mutex<LruCache<String, (Arc<Vec<u8>>, Instant)>>>,
     bytes_ttl: Duration,
     semaphore: Arc<Semaphore>,
@@ -70,7 +70,7 @@ impl WasmPool {
 
     pub fn workers(&self) -> usize { self.workers }
 
-    // ── Raw bytes cache (warm execution path, avoids re-fetching from S3) ──
+    // ── Raw bytes cache (warm execution path, avoids re-fetching bundles) ──
 
     /// Return cached bytes for `function_id` if within TTL.
     pub async fn get_cached_bytes(&self, function_id: &str) -> Option<Arc<Vec<u8>>> {
@@ -99,7 +99,7 @@ impl WasmPool {
     /// Execute a WASM function bundle.
     ///
     /// - `function_id` is the cache key; same value as used in `IsolatePool`
-    /// - `bytes` is the raw `.wasm` binary (fetched from BundleCache / S3)
+    /// - `bytes` is the raw `.wasm` binary (fetched from BundleCache / control plane)
     /// - `allowed_http_hosts`: per-function HTTP allow-list for `fluxbase.http_fetch`
     ///
     /// Returns an `ExecutionResult` with `output` (JSON) and `logs`.

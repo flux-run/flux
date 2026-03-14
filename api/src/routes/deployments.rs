@@ -1,19 +1,19 @@
 //! Deployment routes — function bundle upload, deployment management, and
 //! the internal bundle-fetch endpoint used by the runtime.
 //!
-//! ## Deploy flow (CLI → API → Storage → DB → Runtime)
+//! ## Deploy flow (CLI → API → DB → Runtime)
 //! ```text
 //! flux deploy
 //!   └─ POST /functions/deploy  (multipart: name, runtime, bundle)
 //!        ├─ Upsert function record in DB
-//!        ├─ Upload bundle to object storage
+//!        ├─ Store bundle code inline in deployments table
 //!        ├─ Insert deployment row (version++)
 //!        └─ Deactivate old deployments, activate new one
 //! ```
 //!
 //! ## SOLID note (Single Responsibility)
-//! HTTP parsing lives here.  Storage interaction lives in `AppState::storage`.
-//! DB queries are inline (simple enough not to warrant a separate service.rs).
+//! HTTP parsing lives here.  DB queries are inline (simple enough not to
+//! warrant a separate service.rs).
 
 use axum::{
     extract::{Extension, Path, Query, State},
@@ -287,17 +287,10 @@ pub async fn deploy_function_cli(
     // ── Bundle storage ────────────────────────────────────────────────────
 
     let deployment_id = Uuid::new_v4();
-    let s3_key = format!("bundles/{}/{}/{}.js",
-        context.project_id, function_id, deployment_id);
+    let storage_key = format!("deployments/{}/{}.js", function_id, deployment_id);
 
     let bundle_code = String::from_utf8(bundle_bytes.clone())
-        .map_err(|_| ApiError::bad_request("bundle must be valid UTF-8"))?;
-
-    // Upload to object storage (minio in dev, S3/R2 in prod)
-    state.storage
-        .put_object(&s3_key, bundle_bytes, "application/javascript")
-        .await
-        .map_err(|e| ApiError::internal(format!("storage upload failed: {}", e)))?;
+        .map_err(|_ | ApiError::bad_request("bundle must be valid UTF-8"))?;
 
     // ── Deployment record ─────────────────────────────────────────────────
 
@@ -321,21 +314,15 @@ pub async fn deploy_function_cli(
         .await
         .map_err(ApiError::from)?;
 
-    // In local mode bundles are served inline from bundle_code; set bundle_url NULL
-    // so the retrieval endpoint uses the inline path instead of generating a
-    // presigned S3 URL for an object that was never uploaded.
-    let stored_bundle_url: Option<&str> = if state.storage.local_mode { None } else { Some(&s3_key) };
-
     sqlx::query(
         "INSERT INTO deployments \
-             (id, function_id, storage_key, bundle_code, bundle_url, version, status, is_active, bundle_hash, project_deployment_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, 'ready', true, $7, $8)",
+             (id, function_id, storage_key, bundle_code, version, status, is_active, bundle_hash, project_deployment_id) \
+         VALUES ($1, $2, $3, $4, $5, 'ready', true, $6, $7)",
     )
     .bind(deployment_id)
     .bind(function_id)
-    .bind(&s3_key)
+    .bind(&storage_key)
     .bind(&bundle_code)
-    .bind(stored_bundle_url)
     .bind(next_version)
     .bind(&bundle_hash)
     .bind(project_deployment_id)
@@ -377,7 +364,6 @@ pub async fn get_internal_bundle(
     struct BundleRow {
         id:           Uuid,
         bundle_code:  Option<String>,
-        bundle_url:   Option<String>,
         runtime:      String,
         input_schema: Option<serde_json::Value>,
         output_schema: Option<serde_json::Value>,
@@ -385,7 +371,7 @@ pub async fn get_internal_bundle(
 
     let row = if let Ok(fid) = params.function_id.parse::<Uuid>() {
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime, \
+            "SELECT d.id, d.bundle_code, f.runtime, \
                     f.input_schema, f.output_schema \
              FROM deployments d \
              JOIN functions f ON f.id = d.function_id \
@@ -398,7 +384,7 @@ pub async fn get_internal_bundle(
         .map_err(ApiError::from)?
     } else {
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime, \
+            "SELECT d.id, d.bundle_code, f.runtime, \
                     f.input_schema, f.output_schema \
              FROM deployments d \
              JOIN functions f ON f.id = d.function_id \
@@ -413,25 +399,7 @@ pub async fn get_internal_bundle(
 
     match row {
         Some(r) => {
-            // In local mode always prefer inline bundle_code over a presigned URL
-            // (no object storage is running, bundle was never uploaded to S3).
-            let use_inline = state.storage.local_mode || r.bundle_url.is_none();
-
-            if !use_inline {
-                let s3_key = r.bundle_url.as_deref().unwrap();
-                let url = state.storage
-                    .presigned_get_object(s3_key, std::time::Duration::from_secs(300))
-                    .await
-                    .map_err(|e| ApiError::internal(format!("presign failed: {}", e)))?;
-
-                Ok(ApiResponse::new(serde_json::json!({
-                    "deployment_id": r.id,
-                    "runtime":       r.runtime,
-                    "url":           url,
-                    "input_schema":  r.input_schema,
-                    "output_schema": r.output_schema,
-                })))
-            } else if let Some(code) = r.bundle_code {
+            if let Some(code) = r.bundle_code {
                 Ok(ApiResponse::new(serde_json::json!({
                     "deployment_id": r.id,
                     "runtime":       r.runtime,

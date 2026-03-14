@@ -72,9 +72,8 @@ pub trait RuntimeDispatch: Send + Sync {
 pub trait ApiDispatch: Send + Sync {
     /// Fetch the active deployment bundle for `function_id`.
     ///
-    /// Returns the raw JSON object the API endpoint returns — either
-    /// `{ url, runtime, ... }` (presigned S3/Minio path) or
-    /// `{ code, runtime, ... }` (inline bundle fallback).
+    /// Returns the raw JSON object the API endpoint returns:
+    /// `{ code, runtime, deployment_id, input_schema, output_schema }`.
     async fn get_bundle(&self, function_id: &str) -> Result<Value, String>;
 
     /// Ship a structured log/trace entry to the API's log ingestion endpoint.

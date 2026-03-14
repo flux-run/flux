@@ -1,4 +1,4 @@
-//! Bundle cache — prevents redundant S3/HTTP downloads.
+//! Bundle cache — prevents redundant control-plane fetches.
 //!
 //! ## Two-level strategy
 //!
@@ -8,7 +8,7 @@
 //! | `by_deployment` | `deployment_id` | LRU only | Pinned deployments (e.g. rollback) never expire |
 //!
 //! **Warm path** (both levels): 0 network calls, ~50 ns lookup.
-//! **Cold path**: control plane → S3 presigned URL or inline bundle → `insert_both`.
+//! **Cold path**: control plane → inline bundle from DB → `insert_both`.
 //!
 //! ## TTL rationale (60 s)
 //!
@@ -26,7 +26,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Caches function bundles to prevent redundant S3/HTTP downloads.
+/// Caches function bundles to prevent redundant control-plane fetches.
 ///
 /// Two-level cache:
 /// - `by_deployment`: deployment_id → code  (LRU capacity, no TTL)
@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 ///                    entirely on warm invocations)
 ///
 /// Warm path (cache hit): 0 network calls.
-/// Cold path: control plane → S3/inline → `insert_both` → execute.
+/// Cold path: control plane → inline bundle → `insert_both` → execute.
 #[derive(Clone)]
 pub struct BundleCache {
     by_deployment: Arc<Mutex<LruCache<String, String>>>,

@@ -634,3 +634,231 @@ fn resolve_columns(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::CompilerOptions;
+
+    fn opts() -> CompilerOptions { CompilerOptions::with_limits(100, 5000) }
+
+    fn req(op: &str, table: &str) -> QueryRequest {
+        QueryRequest {
+            operation: op.into(),
+            table: table.into(),
+            database: "testdb".into(),
+            columns: None,
+            filters: None,
+            data: None,
+            limit: None,
+            offset: None,
+        }
+    }
+
+    fn policy() -> PolicyResult { PolicyResult::default() }
+
+    // ── SELECT ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn select_star_produces_valid_sql() {
+        let r = req("select", "users");
+        let result = QueryCompiler::compile(&r, &policy(), "public", &opts()).unwrap();
+        let sql = match result {
+            CompileResult::Single(q) => q.sql,
+            CompileResult::Batched { root, .. } => root.sql,
+        };
+        // SQL uses quoted identifiers: "public"."users"
+        assert!(sql.contains("\"public\".\"users\""), "SQL must reference schema.table: {sql}");
+        assert!(sql.to_uppercase().contains("SELECT"), "must be a SELECT: {sql}");
+    }
+
+    #[test]
+    fn select_with_columns_projects_them() {
+        let mut r = req("select", "users");
+        r.columns = Some(vec!["id".into(), "email".into()]);
+        let result = QueryCompiler::compile(&r, &policy(), "t_acme_main", &opts()).unwrap();
+        let sql = match result {
+            CompileResult::Single(q) => q.sql,
+            CompileResult::Batched { root, .. } => root.sql,
+        };
+        assert!(sql.contains("\"id\"") || sql.contains("id"), "id column expected: {sql}");
+        assert!(sql.contains("\"email\"") || sql.contains("email"), "email column expected: {sql}");
+    }
+
+    #[test]
+    fn select_with_filter_produces_where_clause() {
+        let mut r = req("select", "orders");
+        r.filters = Some(vec![Filter {
+            column: "status".into(),
+            op: "eq".into(),
+            value: serde_json::json!("pending"),
+        }]);
+        let result = QueryCompiler::compile(&r, &policy(), "public", &opts()).unwrap();
+        let sql = match result {
+            CompileResult::Single(q) => q.sql,
+            CompileResult::Batched { root, .. } => root.sql,
+        };
+        assert!(sql.to_uppercase().contains("WHERE"), "filter must produce WHERE: {sql}");
+        assert!(sql.contains("$1"), "filter must produce $1 param: {sql}");
+    }
+
+    #[test]
+    fn select_with_limit_and_offset_requires_explicit_limit() {
+        let mut r = req("select", "users");
+        r.offset = Some(10);
+        // No limit → should error
+        let err = QueryCompiler::compile(&r, &policy(), "public", &opts());
+        assert!(err.is_err(), "offset without limit must fail");
+    }
+
+    #[test]
+    fn select_with_limit_and_offset_ok() {
+        let mut r = req("select", "users");
+        r.limit = Some(10);
+        r.offset = Some(5);
+        let result = QueryCompiler::compile(&r, &policy(), "public", &opts());
+        assert!(result.is_ok());
+        let sql = match result.unwrap() {
+            CompileResult::Single(q) => q.sql,
+            CompileResult::Batched { root, .. } => root.sql,
+        };
+        assert!(sql.to_uppercase().contains("LIMIT"), "LIMIT expected: {sql}");
+        assert!(sql.to_uppercase().contains("OFFSET"), "OFFSET expected: {sql}");
+    }
+
+    // ── INSERT ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn insert_produces_insert_sql() {
+        let mut r = req("insert", "users");
+        r.columns = Some(vec!["email".into(), "name".into()]);
+        r.data = Some(serde_json::json!({ "email": "a@b.com", "name": "Alice" }));
+        let result = QueryCompiler::compile(&r, &policy(), "public", &opts()).unwrap();
+        let sql = match result {
+            CompileResult::Single(q) => q.sql,
+            _ => panic!("insert must be Single"),
+        };
+        assert!(sql.to_uppercase().contains("INSERT INTO"), "must be INSERT: {sql}");
+        // quoted schema.table: "public"."users"
+        assert!(sql.contains("\"public\".\"users\""), "must target schema.table: {sql}");
+    }
+
+    #[test]
+    fn insert_without_data_returns_error() {
+        let r = req("insert", "users");
+        let err = QueryCompiler::compile(&r, &policy(), "public", &opts());
+        assert!(err.is_err(), "insert without data must fail");
+    }
+
+    // ── UPDATE ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn update_produces_update_sql_and_pre_read() {
+        let mut r = req("update", "users");
+        r.columns = Some(vec!["name".into()]);
+        r.data = Some(serde_json::json!({ "name": "Bob" }));
+        r.filters = Some(vec![Filter {
+            column: "id".into(),
+            op: "eq".into(),
+            value: serde_json::json!("some-uuid"),
+        }]);
+        let result = QueryCompiler::compile(&r, &policy(), "public", &opts()).unwrap();
+        let q = match result {
+            CompileResult::Single(q) => q,
+            _ => panic!("update must be Single"),
+        };
+        assert!(q.sql.to_uppercase().contains("UPDATE"), "must be UPDATE: {}", q.sql);
+        assert!(
+            q.pre_read_sql.is_some(),
+            "UPDATE must emit pre_read_sql for mutation recording"
+        );
+    }
+
+    // ── DELETE ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn delete_produces_delete_sql() {
+        let mut r = req("delete", "users");
+        r.filters = Some(vec![Filter {
+            column: "id".into(),
+            op: "eq".into(),
+            value: serde_json::json!("some-uuid"),
+        }]);
+        let result = QueryCompiler::compile(&r, &policy(), "public", &opts()).unwrap();
+        let sql = match result {
+            CompileResult::Single(q) => q.sql,
+            _ => panic!("delete must be Single"),
+        };
+        assert!(sql.to_uppercase().contains("DELETE"), "must be DELETE: {sql}");
+    }
+
+    // ── Unknown operation ─────────────────────────────────────────────────────
+
+    #[test]
+    fn unknown_operation_returns_error() {
+        let r = req("upsert", "users");
+        let err = QueryCompiler::compile(&r, &policy(), "public", &opts());
+        assert!(err.is_err(), "unknown op must fail");
+    }
+
+    // ── Identifier validation ─────────────────────────────────────────────────
+
+    #[test]
+    fn sql_injection_in_table_name_rejected() {
+        let r = req("select", "users; DROP TABLE users; --");
+        let err = QueryCompiler::compile(&r, &policy(), "public", &opts());
+        assert!(err.is_err(), "injection in table name must fail");
+    }
+
+    #[test]
+    fn sql_injection_in_schema_name_rejected() {
+        let r = req("select", "users");
+        let err = QueryCompiler::compile(&r, &policy(), "public; DROP TABLE users; --", &opts());
+        assert!(err.is_err(), "injection in schema name must fail");
+    }
+
+    #[test]
+    fn valid_schema_and_table_accepted() {
+        let r = req("select", "users");
+        let result = QueryCompiler::compile(&r, &policy(), "t_acme_main", &opts());
+        assert!(result.is_ok());
+    }
+
+    // ── PolicyResult ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn policy_result_default_allows_all() {
+        let p = PolicyResult::default();
+        assert!(p.allowed_columns.is_empty(), "default allows all columns");
+        assert!(p.row_condition_sql.is_none(), "default has no row restriction");
+        assert!(p.row_condition_params.is_empty());
+    }
+
+    // ── Multi-tenant schema isolation ─────────────────────────────────────────
+    // Two tenants with the same table name but different schemas must produce
+    // SQL targeting their own schema, never each other's.
+
+    #[test]
+    fn tenant_a_query_targets_tenant_a_schema() {
+        let r = req("select", "orders");
+        let result = QueryCompiler::compile(&r, &policy(), "t_tenant_a", &opts()).unwrap();
+        let sql = match result {
+            CompileResult::Single(q) => q.sql,
+            CompileResult::Batched { root, .. } => root.sql,
+        };
+        assert!(sql.contains("\"t_tenant_a\".\"orders\""), "must reference tenant A schema: {sql}");
+        assert!(!sql.contains("t_tenant_b"), "must not reference tenant B: {sql}");
+    }
+
+    #[test]
+    fn tenant_b_query_targets_tenant_b_schema() {
+        let r = req("select", "orders");
+        let result = QueryCompiler::compile(&r, &policy(), "t_tenant_b", &opts()).unwrap();
+        let sql = match result {
+            CompileResult::Single(q) => q.sql,
+            CompileResult::Batched { root, .. } => root.sql,
+        };
+        assert!(sql.contains("\"t_tenant_b\".\"orders\""), "must reference tenant B schema: {sql}");
+        assert!(!sql.contains("t_tenant_a"), "must not reference tenant A: {sql}");
+    }
+}

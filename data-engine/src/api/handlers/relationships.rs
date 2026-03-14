@@ -106,7 +106,7 @@ pub async fn create(
     .map_err(EngineError::Db)?;
 
     let id: Uuid = row.get("id");
-    state.cache.invalidate_all();
+    state.cache.invalidate_schema(&req.schema_name);
     Ok(Json(json!({ "id": id })))
 }
 
@@ -118,6 +118,17 @@ pub async fn delete(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
     let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
+
+    // Fetch schema_name first so we can do a targeted invalidation after delete.
+    use sqlx::Row as _;
+    let schema_name: Option<String> = sqlx::query(
+        "SELECT schema_name FROM fluxbase_internal.relationships WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(EngineError::Db)?
+    .map(|r| r.get("schema_name"));
 
     let result = sqlx::query(
         "DELETE FROM fluxbase_internal.relationships \
@@ -132,6 +143,9 @@ pub async fn delete(
         return Err(EngineError::DatabaseNotFound(format!("relationship {}", id)));
     }
 
-    state.cache.invalidate_all();
+    match schema_name.as_deref() {
+        Some(s) => state.cache.invalidate_schema(s),
+        None    => state.cache.invalidate_all(),
+    }
     Ok(Json(json!({ "deleted": true })))
 }

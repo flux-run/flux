@@ -169,7 +169,6 @@ Automatic detections: slow spans (>500ms), N+1 queries (same table ≥3 times), 
 | `LOCAL_MODE` / `FLUX_LOCAL` | Various | Dev mode — disables JWT, tenant routing |
 | `PORT` | All services | Service listen port |
 | `WORKER_POLL_INTERVAL_MS` | Queue | Job polling interval (default 200ms) |
-| `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION` | API, Runtime | Object storage for function bundles |
 
 ## Implementation Status
 

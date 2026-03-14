@@ -1,34 +1,30 @@
 # Storage
 
-Flux uses storage as part of the product model, not just as an implementation detail.
-
-The runtime needs durable data for execution records, deployment metadata, queue state, and debugging surfaces.
+All Flux state lives in PostgreSQL. No Redis, no S3, no external object stores.
 
 ## Primary Persistent Store
 
-Postgres is the primary persistent store for Flux.
-
-It holds or anchors:
+Postgres holds:
 
 - project and runtime metadata
 - execution records
 - traces and logs metadata
 - mutation history
 - queue and schedule state
-- deployment metadata
+- deployment metadata and inline bundle code
 - operator-facing configuration
-
-This is why Postgres sits so close to the center of the product story.
 
 ## Bundle Storage
 
-Function bundles need durable storage so Flux can answer:
+Function bundles are stored inline in the `deployments.bundle_code` column. Bundles are built at deploy time from source code and stored directly in Postgres.
 
-- what code version ran?
-- can this execution be replayed?
-- what changed between deploys?
+This enables:
 
-Bundle storage lives in Postgres or object storage depending on deployment mode. The requirement is stable bundle identity.
+- what code version ran? (`bundle_hash` column)
+- can this execution be replayed? (yes — code is in the DB alongside the execution record)
+- what changed between deploys? (diff two `bundle_code` values)
+
+No external object storage is required.
 
 ## Secret Storage
 
@@ -38,21 +34,19 @@ Secrets are managed as part of runtime configuration, with a clear separation be
 - local development secrets
 - production operator-managed secrets
 
-The important rule is that secret access remains attributable within the execution model.
+Secret access is attributable within the execution model.
 
 ## Cache Layers
 
 Flux uses caches for:
 
-- hot function bundles
-- secret lookups
-- route or deployment metadata
+- hot function bundles (LRU with 60s TTL)
+- secret lookups (LRU with 30s TTL)
+- route and deployment metadata
 
-Caches are useful for performance, but they do not break explainability. Operators understand which version and values were active for an execution.
+Caches improve performance but do not break explainability.
 
 ## Retention
-
-Storage policy is product policy in Flux.
 
 Retention decisions affect:
 
@@ -61,14 +55,8 @@ Retention decisions affect:
 - how much mutation history is available
 - how useful `why`, diff, and bisect remain
 
-Retention is documented and operator-visible, not buried in infrastructure defaults.
+Retention is documented and operator-visible.
 
-## Backup And Recovery
+## Backup and Recovery
 
-As an open-source runtime, Flux documents backup expectations for:
-
-- Postgres data
-- bundle artifacts
-- operator secrets
-
-The product promise depends on being able to preserve and inspect execution history reliably.
+For backup, operators run standard PostgreSQL backup tools (`pg_dump`, WAL archiving, or managed DB snapshots). Functions live in source code — the DB holds the built bundles, but the source of truth is the code repository.

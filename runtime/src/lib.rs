@@ -17,7 +17,7 @@
 //! POST /execute (HTTP)
 //!        ↓
 //! execute_handler
-//!  ├─ BundleResolver (warm WASM → warm Deno → cold fetch → S3/inline)
+//!  ├─ BundleResolver (warm WASM → warm Deno → cold fetch → inline from DB)
 //!  ├─ SecretsClient (LRU cache, 30 s TTL)
 //!  └─ ExecutionRunner::run()
 //!       ├─ schema validation (input JSON Schema, if configured)

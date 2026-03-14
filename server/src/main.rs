@@ -110,15 +110,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (local_tenant_id, local_project_id) =
         api::app::init_local_mode(&pool).await?;
 
-    let storage = api::services::storage::StorageService::new().await;
-
     let api_state = Arc::new(api::AppState {
         pool:            pool.clone(),
         http_client:     http_client.clone(),
         data_engine_url: std::env::var("DATA_ENGINE_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
         gateway_url: format!("http://localhost:{}", port),
-        storage,
         local_tenant_id,
         local_project_id,
     });

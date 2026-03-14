@@ -48,3 +48,89 @@ pub struct Job {
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }
+
+impl Job {
+    /// Returns `true` when the job has exhausted its retry budget.
+    pub fn is_exhausted(&self) -> bool {
+        self.attempts >= self.max_attempts
+    }
+
+    /// Returns `true` when the job is in a terminal state.
+    pub fn is_terminal(&self) -> bool {
+        self.status == "completed" || self.status == "dead_letter"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn make_job(status: &str, attempts: i32, max_attempts: i32) -> Job {
+        let now = Utc::now().naive_utc();
+        Job {
+            id:                  Uuid::new_v4(),
+            tenant_id:           Uuid::new_v4(),
+            project_id:          Uuid::new_v4(),
+            function_id:         Uuid::new_v4(),
+            payload:             serde_json::json!({}),
+            status:              status.into(),
+            attempts,
+            max_attempts,
+            max_runtime_seconds: 30,
+            run_at:              now,
+            locked_at:           None,
+            started_at:          None,
+            request_id:          None,
+            idempotency_key:     None,
+            created_at:          now,
+            updated_at:          now,
+        }
+    }
+
+    #[test]
+    fn job_not_exhausted_below_max() {
+        let j = make_job("running", 2, 5);
+        assert!(!j.is_exhausted());
+    }
+
+    #[test]
+    fn job_exhausted_at_max() {
+        let j = make_job("running", 5, 5);
+        assert!(j.is_exhausted());
+    }
+
+    #[test]
+    fn job_exhausted_above_max() {
+        let j = make_job("running", 6, 5);
+        assert!(j.is_exhausted());
+    }
+
+    #[test]
+    fn completed_job_is_terminal() {
+        assert!(make_job("completed", 1, 5).is_terminal());
+    }
+
+    #[test]
+    fn dead_letter_job_is_terminal() {
+        assert!(make_job("dead_letter", 5, 5).is_terminal());
+    }
+
+    #[test]
+    fn pending_job_is_not_terminal() {
+        assert!(!make_job("pending", 0, 5).is_terminal());
+    }
+
+    #[test]
+    fn running_job_is_not_terminal() {
+        assert!(!make_job("running", 1, 5).is_terminal());
+    }
+
+    #[test]
+    fn job_serialises_to_json() {
+        let j = make_job("pending", 0, 3);
+        let s = serde_json::to_string(&j).unwrap();
+        assert!(s.contains("\"status\":\"pending\""));
+        assert!(s.contains("\"attempts\":0"));
+    }
+}

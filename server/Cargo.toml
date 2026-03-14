@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Async trait
 async-trait   = "0.1"
 
-# HTTP client (for storage presign, etc.)
+# HTTP client (for inter-service calls)
 reqwest       = { version = "0.13", features = ["json", "rustls"], default-features = false }
 
 # Static file serving (dashboard SPA)

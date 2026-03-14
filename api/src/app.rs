@@ -15,7 +15,6 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::auth;
-use crate::services;
 use crate::middleware;
 use crate::secrets;
 use crate::logs;
@@ -29,7 +28,6 @@ pub struct AppState {
     pub http_client:      reqwest::Client,
     pub data_engine_url:  String,
     pub gateway_url:      String,
-    pub storage:          services::storage::StorageService,
     /// Fixed tenant UUID used in local / single-tenant mode.
     pub local_tenant_id:  Uuid,
     /// Default project UUID; can be overridden by FLUX_PROJECT_ID env var.

@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import {
   FolderOpen, Settings, LayoutDashboard,
   Code2, KeyRound, ShieldCheck, ScrollText, Globe,
-  Database, HardDrive, Bell, GitBranch, Clock, Terminal, Share2, Puzzle,
+  Database, Bell, GitBranch, Clock, Terminal, Share2, Puzzle,
   Activity, Network, Brain, ChevronDown, ListChecks, BarChart2, Search,
 } from 'lucide-react'
 import { FluxLogo } from '@/components/FluxLogo'
@@ -163,7 +163,6 @@ export function Sidebar() {
             {/* Data */}
             <NavGroup label="Data" accent="bg-blue-400">
               <NavItem href={p('data')}    Icon={Database}  label="Tables"          indent />
-              <NavItem href={p('storage')} Icon={HardDrive} label="Storage"         indent />
               <NavItem href={p('query')}   Icon={Terminal}  label="Query Explorer"  indent />
               <NavItem href={p('schema')}  Icon={Share2}    label="Schema Graph"    indent />
             </NavGroup>

@@ -6,7 +6,7 @@ import { Command } from 'cmdk'
 import { Dialog } from '@radix-ui/react-dialog'
 import { useStore } from '@/state/tenantStore'
 import {
-  Code2, Globe, Bell, GitBranch, Clock, Database, HardDrive,
+  Code2, Globe, Bell, GitBranch, Clock, Database,
   Terminal, Share2, ShieldCheck, KeyRound, ScrollText, Activity,
   Network, Settings, ListChecks, BarChart2, Puzzle, LayoutDashboard,
   Search,
@@ -55,7 +55,6 @@ export function CommandPalette() {
     { id: 'queues',       label: 'Queues',         group: 'Runtime',       icon: ListChecks,   action: () => router.push(p('queue')) },
     // Data
     { id: 'data',         label: 'Tables',         group: 'Data',          icon: Database,     action: () => router.push(p('data')) },
-    { id: 'storage',      label: 'Storage',        group: 'Data',          icon: HardDrive,    action: () => router.push(p('storage')) },
     { id: 'query',        label: 'Query Explorer', group: 'Data',          icon: Terminal,     action: () => router.push(p('query')) },
     { id: 'schema',       label: 'Schema Graph',   group: 'Data',          icon: Share2,       action: () => router.push(p('schema')) },
     // Security

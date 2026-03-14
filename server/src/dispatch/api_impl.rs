@@ -1,7 +1,7 @@
 //! In-process implementation of [`ApiDispatch`].
 //!
-//! Calls the API service functions directly using the shared DB pool and
-//! storage backend — no HTTP round-trips, no serialization overhead.
+//! Calls the API service functions directly using the shared DB pool \u2014
+//! no HTTP round-trips, no serialization overhead.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,7 +25,6 @@ impl ApiDispatch for InProcessApiDispatch {
         struct BundleRow {
             id:            Uuid,
             bundle_code:   Option<String>,
-            bundle_url:    Option<String>,
             runtime:       String,
             input_schema:  Option<Value>,
             output_schema: Option<Value>,
@@ -35,7 +34,7 @@ impl ApiDispatch for InProcessApiDispatch {
 
         let row: Option<BundleRow> = if let Ok(fid) = function_id.parse::<Uuid>() {
             sqlx::query_as::<_, BundleRow>(
-                "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime, \
+                "SELECT d.id, d.bundle_code, f.runtime, \
                         f.input_schema, f.output_schema \
                  FROM deployments d \
                  JOIN functions f ON f.id = d.function_id \
@@ -48,7 +47,7 @@ impl ApiDispatch for InProcessApiDispatch {
             .map_err(|e| format!("bundle DB query failed: {}", e))?
         } else {
             sqlx::query_as::<_, BundleRow>(
-                "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime, \
+                "SELECT d.id, d.bundle_code, f.runtime, \
                         f.input_schema, f.output_schema \
                  FROM deployments d \
                  JOIN functions f ON f.id = d.function_id \
@@ -63,24 +62,7 @@ impl ApiDispatch for InProcessApiDispatch {
 
         match row {
             Some(r) => {
-                // In local mode always prefer inline bundle_code; presigned S3 URLs
-                // point to minio which isn't running during `flux dev`.
-                let use_inline = self.state.storage.local_mode || r.bundle_url.is_none();
-
-                if !use_inline {
-                    let s3_key = r.bundle_url.as_deref().unwrap();
-                    let url = self.state.storage
-                        .presigned_get_object(s3_key, std::time::Duration::from_secs(300))
-                        .await
-                        .map_err(|e| format!("presign failed: {}", e))?;
-                    Ok(serde_json::json!({
-                        "deployment_id": r.id,
-                        "runtime":       r.runtime,
-                        "url":           url,
-                        "input_schema":  r.input_schema,
-                        "output_schema": r.output_schema,
-                    }))
-                } else if let Some(code) = r.bundle_code {
+                if let Some(code) = r.bundle_code {
                     Ok(serde_json::json!({
                         "deployment_id": r.id,
                         "runtime":       r.runtime,

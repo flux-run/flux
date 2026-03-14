@@ -7,7 +7,6 @@ Creates:
   - Project "Demo Project"  under that tenant
   - Function "create_user"  (deno runtime)  under that project
   - Active deployment with the code from test_functions/create_user.js
-  - Uploads bundle to R2 so the runtime can fetch it
 
 Then patches api/env.yaml with the generated DEMO_TENANT_SLUG.
 
@@ -36,10 +35,6 @@ def load_env_yaml(path):
 
 API_ENV   = load_env_yaml(os.path.join(REPO_ROOT, "api", "env.yaml"))
 DB_URL    = API_ENV["DATABASE_URL"]
-S3_EP     = API_ENV["S3_ENDPOINT"]
-S3_KEY    = API_ENV["S3_ACCESS_KEY_ID"]
-S3_SECRET = API_ENV["S3_SECRET_ACCESS_KEY"]
-S3_BUCKET = API_ENV.get("FUNCTIONS_BUCKET", "fluxbase-functions")
 
 FUNCTION_CODE = open(
     os.path.join(REPO_ROOT, "test_functions", "create_user.js"), "rb"
@@ -126,34 +121,9 @@ else:
        function_id, tenant_id, project_id, "create_user")
     print(f"[create] Function: create_user  id={function_id}")
 
-# 4. Upload bundle to R2
+# 4. Deployment
 deployment_id = uuid.uuid4()
-s3_key        = f"bundles/{tenant_id}/{project_id}/{deployment_id}.js"
 storage_key   = f"deployments/{function_id}_{deployment_id}.js"
-
-try:
-    import boto3
-    from botocore.config import Config
-    s3 = boto3.client(
-        "s3",
-        endpoint_url        = S3_EP,
-        aws_access_key_id   = S3_KEY,
-        aws_secret_access_key = S3_SECRET,
-        config = Config(signature_version="s3v4"),
-    )
-    s3.put_object(
-        Bucket      = S3_BUCKET,
-        Key         = s3_key,
-        Body        = FUNCTION_CODE,
-        ContentType = "application/javascript",
-    )
-    print(f"[upload] Bundle → s3://{S3_BUCKET}/{s3_key}")
-    upload_ok = True
-except Exception as e:
-    print(f"[warn] R2 upload skipped ({e}) — using inline bundle_code fallback")
-    upload_ok = False
-
-# 5. Deployment
 # Deactivate any existing
 pg("UPDATE deployments SET is_active = false WHERE function_id = %s", function_id)
 
@@ -162,11 +132,10 @@ next_version = (row["v"] if row else 0) + 1
 
 bundle_code_str = FUNCTION_CODE.decode("utf-8")
 pg("""INSERT INTO deployments
-       (id, function_id, storage_key, bundle_code, bundle_url, version, status, is_active)
-     VALUES (%s, %s, %s, %s, %s, %s, 'ready', true)""",
+       (id, function_id, storage_key, bundle_code, version, status, is_active)
+     VALUES (%s, %s, %s, %s, %s, 'ready', true)""",
    deployment_id, function_id, storage_key,
    bundle_code_str,
-   s3_key if upload_ok else "",
    next_version)
 print(f"[deploy] Deployment v{next_version}: {deployment_id}  active=true")
 

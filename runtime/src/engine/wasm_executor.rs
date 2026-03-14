@@ -223,19 +223,48 @@ fn execute_wasm_sync(
         // ── Allow-list check ─────────────────────────────────────────────────
         let allowed = {
             let hosts = &caller.data().allowed_http_hosts;
+            let parsed = match url.parse::<reqwest::Url>() {
+                Ok(p)  => p,
+                Err(_) => {
+                    caller.data_mut().logs.push(LogLine {
+                        level:           "warn".to_string(),
+                        message:         format!("http_fetch blocked: invalid URL: {}", url),
+                        span_type:       None,
+                        source:          Some("function".to_string()),
+                        span_id:         None,
+                        duration_ms:     None,
+                        execution_state: None,
+                        tool_name:       None,
+                    });
+                    return -1;
+                }
+            };
+
+            // Always block private / link-local / loopback addresses regardless of
+            // what the allow-list says.  This prevents SSRF via cloud metadata
+            // endpoints (169.254.169.254), internal services, and loopback.
+            if is_private_host(&parsed) {
+                caller.data_mut().logs.push(LogLine {
+                    level:           "warn".to_string(),
+                    message:         format!("http_fetch blocked: private/internal address not permitted: {}", url),
+                    span_type:       None,
+                    source:          Some("function".to_string()),
+                    span_id:         None,
+                    duration_ms:     None,
+                    execution_state: None,
+                    tool_name:       None,
+                });
+                return -1;
+            }
+
             if hosts.iter().any(|h| h == "*") {
                 true
             } else {
                 // Only compare the parsed host — never use url.starts_with(h) because
                 // credential-stuffed URLs like https://allowed.com@evil.com would bypass
                 // the check (the URL starts with the allowed prefix but resolves to evil.com).
-                match url.parse::<reqwest::Url>() {
-                    Ok(parsed) => {
-                        let host_str = parsed.host_str().unwrap_or("");
-                        hosts.iter().any(|h| h == host_str)
-                    }
-                    Err(_) => false,
-                }
+                let host_str = parsed.host_str().unwrap_or("");
+                hosts.iter().any(|h| h == host_str)
             }
         };
         if !allowed {
@@ -454,6 +483,70 @@ fn execute_wasm_sync(
 
     let logs = store.into_data().logs;
     Ok(ExecutionResult { output, logs })
+}
+
+/// Returns `true` if the URL's host resolves to a private, loopback, or
+/// link-local address that must never be reachable from user functions.
+///
+/// Blocked ranges:
+/// - 127.x.x.x          loopback
+/// - 10.x.x.x           RFC 1918 private
+/// - 172.16-31.x.x      RFC 1918 private
+/// - 192.168.x.x        RFC 1918 private
+/// - 169.254.x.x        link-local / cloud metadata (AWS/GCP/Azure IMDS)
+/// - ::1                 IPv6 loopback
+/// - fc00::/7           IPv6 unique-local
+fn is_private_host(url: &reqwest::Url) -> bool {
+    use std::net::IpAddr;
+
+    let host = match url.host() {
+        Some(h) => h,
+        None    => return true, // no host = block
+    };
+
+    match host {
+        url::Host::Ipv4(ip) => {
+            let o = ip.octets();
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || o[0] == 169 && o[1] == 254   // cloud metadata (link-local)
+                || ip.is_unspecified()
+        }
+        url::Host::Ipv6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || {
+                    let segs = ip.segments();
+                    // fc00::/7  (unique-local)
+                    (segs[0] & 0xfe00) == 0xfc00
+                    // fe80::/10 (link-local)
+                    || (segs[0] & 0xffc0) == 0xfe80
+                }
+        }
+        url::Host::Domain(d) => {
+            let d = d.to_lowercase();
+            d == "localhost"
+                || d.ends_with(".localhost")
+                || d.ends_with(".local")
+                || d.ends_with(".internal")
+                || d.ends_with(".corp")
+                // Try parsing as IP (e.g. "127.0.0.1" given as domain)
+                || d.parse::<IpAddr>().map(|ip| match ip {
+                    IpAddr::V4(v4) => {
+                        let o = v4.octets();
+                        v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                            || (o[0] == 169 && o[1] == 254)
+                    }
+                    IpAddr::V6(v6) => {
+                        let segs = v6.segments();
+                        v6.is_loopback()
+                            || (segs[0] & 0xfe00) == 0xfc00
+                            || (segs[0] & 0xffc0) == 0xfe80
+                    }
+                }).unwrap_or(false)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -675,5 +768,64 @@ mod tests {
         let allowed_hosts = vec!["safe.example.com".to_string()];
         let passes = allowed_hosts.iter().any(|h| h == host.as_deref().unwrap_or(""));
         assert!(!passes);
+    }
+
+    // ── SSRF private-IP blocking tests ────────────────────────────────────────
+
+    fn parse(url: &str) -> reqwest::Url { url.parse().unwrap() }
+
+    #[test]
+    fn ssrf_loopback_ipv4_blocked() {
+        assert!(is_private_host(&parse("http://127.0.0.1/secret")));
+    }
+
+    #[test]
+    fn ssrf_localhost_domain_blocked() {
+        assert!(is_private_host(&parse("http://localhost:8080/secret")));
+    }
+
+    #[test]
+    fn ssrf_rfc1918_10_blocked() {
+        assert!(is_private_host(&parse("http://10.0.0.1/secret")));
+    }
+
+    #[test]
+    fn ssrf_rfc1918_172_16_blocked() {
+        assert!(is_private_host(&parse("http://172.16.0.1/secret")));
+    }
+
+    #[test]
+    fn ssrf_rfc1918_192_168_blocked() {
+        assert!(is_private_host(&parse("http://192.168.1.1/secret")));
+    }
+
+    #[test]
+    fn ssrf_cloud_metadata_imds_blocked() {
+        assert!(is_private_host(&parse("http://169.254.169.254/latest/meta-data/")));
+    }
+
+    #[test]
+    fn ssrf_dot_local_domain_blocked() {
+        assert!(is_private_host(&parse("http://postgres.local/query")));
+    }
+
+    #[test]
+    fn ssrf_dot_internal_domain_blocked() {
+        assert!(is_private_host(&parse("http://api.internal/admin")));
+    }
+
+    #[test]
+    fn ssrf_ipv6_loopback_blocked() {
+        assert!(is_private_host(&parse("http://[::1]/secret")));
+    }
+
+    #[test]
+    fn ssrf_public_ip_allowed() {
+        assert!(!is_private_host(&parse("https://8.8.8.8/dns")));
+    }
+
+    #[test]
+    fn ssrf_public_domain_allowed() {
+        assert!(!is_private_host(&parse("https://api.example.com/v1/data")));
     }
 }
