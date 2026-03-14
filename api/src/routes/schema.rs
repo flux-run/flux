@@ -192,7 +192,7 @@ pub async fn push_schema(
     .execute(&state.pool)
     .await
     .map_err(|e| {
-        eprintln!("push_schema migrate error: {:?}", e);
+        tracing::error!(error = ?e, "push_schema migrate error");
         ApiError::internal("migrate_error")
     })?;
 
@@ -210,7 +210,7 @@ pub async fn push_schema(
     .execute(&state.pool)
     .await
     .map_err(|e| {
-        eprintln!("push_schema upsert error: {:?}", e);
+        tracing::error!(error = ?e, "push_schema upsert error");
         ApiError::internal("upsert_error")
     })?;
 
@@ -239,7 +239,7 @@ pub async fn push_schema(
                                 .execute(&state.pool)
                                 .await
                                 .map_err(|e| {
-                                    eprintln!("push_schema function hook upsert error: {:?}", e);
+                                    tracing::error!(error = ?e, "push_schema function hook upsert error");
                                     ApiError::internal("hook_upsert_error")
                                 })?;
                             }
@@ -259,7 +259,7 @@ pub async fn push_schema(
                             .execute(&state.pool)
                             .await
                             .map_err(|e| {
-                                eprintln!("push_schema transform hook upsert error: {:?}", e);
+                                tracing::error!(error = ?e, "push_schema transform hook upsert error");
                                 ApiError::internal("hook_upsert_error")
                             })?;
                         }
@@ -293,7 +293,7 @@ pub async fn push_schema(
                 .execute(&state.pool)
                 .await
                 .map_err(|e| {
-                    eprintln!("push_schema subscription upsert error: {:?}", e);
+                    tracing::error!(error = ?e, "push_schema subscription upsert error");
                     ApiError::internal("subscription_upsert_error")
                 })?;
             }
