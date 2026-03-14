@@ -49,8 +49,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         service_token:  settings.service_token.clone(),
         bundle_cache:   BundleCache::new(100),
         schema_cache:   SchemaCache::new(200),
-        isolate_pool:   IsolatePool::new(settings.isolate_workers),
-        wasm_pool:      WasmPool::default_sized(),
+        isolate_pool:   IsolatePool::new(settings.isolate_workers, settings.request_timeout_secs),
+        wasm_pool:      WasmPool::new(
+            std::thread::available_parallelism().map(|n| (n.get() * 2).clamp(2, 16)).unwrap_or(4),
+            settings.wasm_fuel_limit,
+            settings.request_timeout_secs,
+        ),
     });
 
     let workers = settings.isolate_workers;

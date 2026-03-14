@@ -28,30 +28,30 @@ use super::wasm_executor::{build_engine, compile_module, execute_wasm, WasmExecu
 /// compiled-module caching.
 #[derive(Clone)]
 pub struct WasmPool {
-    engine:    Arc<Engine>,
+    engine:           Arc<Engine>,
     /// LRU cache: function_id → compiled Wasmtime Module (Arc for cheap clone/share)
-    modules:   Arc<Mutex<LruCache<String, Arc<Module>>>>,
+    modules:          Arc<Mutex<LruCache<String, Arc<Module>>>>,
     /// Raw bytes cache: function_id → (Arc<Vec<u8>>, inserted_at)
-    /// Warm-path equivalent of BundleCache — avoids re-fetching bundles.
-    raw_bytes: Arc<Mutex<LruCache<String, (Arc<Vec<u8>>, Instant)>>>,
-    bytes_ttl: Duration,
-    semaphore: Arc<Semaphore>,
-    workers:   usize,
+    raw_bytes:        Arc<Mutex<LruCache<String, (Arc<Vec<u8>>, Instant)>>>,
+    bytes_ttl:        Duration,
+    semaphore:        Arc<Semaphore>,
+    workers:          usize,
+    fuel_limit:       u64,
+    timeout_secs:     u64,
 }
 
 impl WasmPool {
     /// Create a pool sized to `2 × logical CPUs` (min 2, max 16).
-    /// Module cache holds up to 256 compiled modules.
     pub fn default_sized() -> Self {
         let cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(2);
         let workers = (cpus * 2).clamp(2, 16);
         tracing::info!(workers, "wasm pool started");
-        Self::new(workers)
+        Self::new(workers, 1_000_000_000, 30)
     }
 
-    pub fn new(workers: usize) -> Self {
+    pub fn new(workers: usize, fuel_limit: u64, timeout_secs: u64) -> Self {
         let workers = workers.max(1);
         let engine  = Arc::new(build_engine());
         let cap     = NonZeroUsize::new(256).expect("256 is a valid non-zero usize");
@@ -65,6 +65,8 @@ impl WasmPool {
             bytes_ttl: Duration::from_secs(60),
             semaphore,
             workers,
+            fuel_limit,
+            timeout_secs,
         }
     }
 
@@ -140,9 +142,10 @@ impl WasmPool {
         let params = WasmExecutionParams {
             secrets,
             payload,
-            fuel_limit:          fuel_limit.unwrap_or(1_000_000_000),
+            fuel_limit:          fuel_limit.unwrap_or(self.fuel_limit),
             allowed_http_hosts,
             http_client:         Some(http_client),
+            timeout_secs:        self.timeout_secs,
         };
 
         execute_wasm(self.engine.as_ref(), module.as_ref(), params).await
@@ -181,13 +184,13 @@ mod tests {
 
     #[test]
     fn new_pool_reports_correct_worker_count() {
-        let pool = WasmPool::new(3);
+        let pool = WasmPool::new(3, 1_000_000_000, 30);
         assert_eq!(pool.workers(), 3);
     }
 
     #[test]
     fn new_pool_minimum_one_worker() {
-        let pool = WasmPool::new(0);
+        let pool = WasmPool::new(0, 1_000_000_000, 30);
         assert_eq!(pool.workers(), 1);
     }
 
@@ -201,14 +204,14 @@ mod tests {
 
     #[tokio::test]
     async fn bytes_cache_miss_returns_none() {
-        let pool = WasmPool::new(2);
+        let pool = WasmPool::new(2, 1_000_000_000, 30);
         let result = pool.get_cached_bytes("nonexistent_fn").await;
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn bytes_cache_hit_after_insert() {
-        let pool  = WasmPool::new(2);
+        let pool  = WasmPool::new(2, 1_000_000_000, 30);
         let bytes = Arc::new(vec![0u8, 1, 2, 3]);
         pool.cache_bytes("my_fn".to_string(), bytes.clone()).await;
         let cached = pool.get_cached_bytes("my_fn").await;
@@ -218,7 +221,7 @@ mod tests {
 
     #[tokio::test]
     async fn bytes_cache_different_functions_independent() {
-        let pool = WasmPool::new(2);
+        let pool = WasmPool::new(2, 1_000_000_000, 30);
         pool.cache_bytes("fn1".to_string(), Arc::new(vec![1])).await;
         pool.cache_bytes("fn2".to_string(), Arc::new(vec![2])).await;
         let r1 = pool.get_cached_bytes("fn1").await.unwrap();
@@ -231,7 +234,7 @@ mod tests {
 
     #[tokio::test]
     async fn evict_removes_bytes_from_cache() {
-        let pool = WasmPool::new(2);
+        let pool = WasmPool::new(2, 1_000_000_000, 30);
         pool.cache_bytes("evict_me".to_string(), Arc::new(vec![9])).await;
         pool.evict("evict_me").await;
         assert!(pool.get_cached_bytes("evict_me").await.is_none());
@@ -241,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_minimal_module_returns_ok() {
-        let pool   = WasmPool::new(2);
+        let pool   = WasmPool::new(2, 1_000_000_000, 30);
         let bytes  = wasm_bytes();
         let result = pool.execute(
             "test_fn".to_string(),
@@ -258,7 +261,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_caches_compiled_module_on_second_call() {
-        let pool  = WasmPool::new(2);
+        let pool  = WasmPool::new(2, 1_000_000_000, 30);
         let bytes = wasm_bytes();
         // First call: compiles + executes.
         let r1 = pool.execute("cached_fn".to_string(), bytes.clone(), Default::default(),

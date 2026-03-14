@@ -85,16 +85,19 @@ pub struct WasmExecutionParams {
     pub allowed_http_hosts: Vec<String>,
     /// Shared HTTP client passed through for outbound calls.
     pub http_client: Option<reqwest::Client>,
+    /// Per-request wall-clock timeout in seconds.
+    pub timeout_secs: u64,
 }
 
 impl Default for WasmExecutionParams {
     fn default() -> Self {
         Self {
-            secrets:           HashMap::new(),
-            payload:           serde_json::Value::Null,
-            fuel_limit:        1_000_000_000,
+            secrets:            HashMap::new(),
+            payload:            serde_json::Value::Null,
+            fuel_limit:         1_000_000_000,
             allowed_http_hosts: Vec::new(),
-            http_client:       None,
+            http_client:        None,
+            timeout_secs:       30,
         }
     }
 }
@@ -127,15 +130,18 @@ pub async fn execute_wasm(
     let engine = engine.clone();
     let module = module.clone();
 
+    // Extract timeout before params is moved into spawn_blocking.
+    let timeout_secs = params.timeout_secs;
+
     let handle = tokio::task::spawn_blocking(move || {
         execute_wasm_sync(&engine, &module, params)
     });
 
     // Wall-clock backstop in case fuel is exhausted slowly or Wasmtime hangs.
-    match timeout(Duration::from_secs(35), handle).await {
+    match timeout(Duration::from_secs(timeout_secs + 5), handle).await {
         Ok(Ok(result)) => result,
         Ok(Err(join_err)) => Err(format!("wasm worker panicked: {}", join_err)),
-        Err(_) => Err("wasm execution timed out after 35 seconds".to_string()),
+        Err(_) => Err(format!("wasm execution timed out after {} seconds", timeout_secs)),
     }
 }
 

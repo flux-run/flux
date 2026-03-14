@@ -508,6 +508,7 @@ pub async fn execute_with_runtime(
     payload:        serde_json::Value,
     execution_seed: i64,
     queue_ctx:      QueueContext,
+    timeout_secs:   u64,
 ) -> Result<ExecutionResult, String> {
     // ── Per-request OpState injection ─────────────────────────────────────────
     // Use try_take + put to handle both the first call and subsequent reuse.
@@ -534,7 +535,7 @@ pub async fn execute_with_runtime(
         &secrets_json, &payload_json, &transformed_code, execution_seed,
     );
 
-    let res = timeout(Duration::from_secs(30), async {
+    let res = timeout(Duration::from_secs(timeout_secs), async {
         let res = rt.execute_script("<anon>", wrapper)
             .map_err(|e| format!("Execution error: {}", e))?;
 
@@ -560,7 +561,7 @@ pub async fn execute_with_runtime(
             Ok(ExecutionResult { output, logs })
         }
         Ok(Err(e)) => Err(e),
-        Err(_)     => Err("Function execution timed out after 30 seconds".to_string()),
+        Err(_)     => Err(format!("Function execution timed out after {} seconds", timeout_secs)),
     }
 }
 
@@ -590,6 +591,7 @@ mod tests {
             payload,
             0,
             no_op_queue_ctx(),
+            30,
         ).await
     }
 
@@ -605,6 +607,7 @@ mod tests {
             serde_json::Value::Null,
             0,
             no_op_queue_ctx(),
+            30,
         ).await
     }
 
@@ -763,11 +766,11 @@ mod tests {
 
         let mut rt1 = create_js_runtime();
         let r1 = execute_with_runtime(&mut rt1, code.to_string(), HashMap::new(),
-            serde_json::Value::Null, seed, no_op_queue_ctx()).await.unwrap();
+            serde_json::Value::Null, seed, no_op_queue_ctx(), 30).await.unwrap();
 
         let mut rt2 = create_js_runtime();
         let r2 = execute_with_runtime(&mut rt2, code.to_string(), HashMap::new(),
-            serde_json::Value::Null, seed, no_op_queue_ctx()).await.unwrap();
+            serde_json::Value::Null, seed, no_op_queue_ctx(), 30).await.unwrap();
 
         assert_eq!(r1.output, r2.output, "same seed must produce same UUID");
     }
@@ -779,11 +782,11 @@ mod tests {
         "#;
         let mut rt1 = create_js_runtime();
         let r1 = execute_with_runtime(&mut rt1, code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 1, no_op_queue_ctx()).await.unwrap();
+            serde_json::Value::Null, 1, no_op_queue_ctx(), 30).await.unwrap();
 
         let mut rt2 = create_js_runtime();
         let r2 = execute_with_runtime(&mut rt2, code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 2, no_op_queue_ctx()).await.unwrap();
+            serde_json::Value::Null, 2, no_op_queue_ctx(), 30).await.unwrap();
 
         assert_ne!(r1.output, r2.output);
     }
@@ -831,9 +834,9 @@ mod tests {
         "#;
         let mut rt = create_js_runtime();
         let r1 = execute_with_runtime(&mut rt, code1.to_string(), HashMap::new(),
-            serde_json::Value::Null, 0, no_op_queue_ctx()).await.unwrap();
+            serde_json::Value::Null, 0, no_op_queue_ctx(), 30).await.unwrap();
         let r2 = execute_with_runtime(&mut rt, code2.to_string(), HashMap::new(),
-            serde_json::Value::Null, 0, no_op_queue_ctx()).await.unwrap();
+            serde_json::Value::Null, 0, no_op_queue_ctx(), 30).await.unwrap();
         assert_eq!(r1.output, serde_json::json!("first"));
         assert_eq!(r2.output, serde_json::json!("second"),
             "reused runtime must produce correct output on second invocation");

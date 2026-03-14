@@ -42,6 +42,7 @@ struct ExecutionTask {
     payload:        serde_json::Value,
     execution_seed: i64,
     queue_ctx:      QueueContext,
+    timeout_secs:   u64,
     reply:          oneshot::Sender<Result<ExecutionResult, String>>,
 }
 
@@ -86,13 +87,14 @@ struct ExecutionTask {
 /// and enables maximum isolate reuse for high-repeat workloads.
 #[derive(Clone)]
 pub struct IsolatePool {
-    sender:  mpsc::Sender<ExecutionTask>,
-    workers: usize,
+    sender:          mpsc::Sender<ExecutionTask>,
+    workers:         usize,
+    timeout_secs:    u64,
 }
 
 impl IsolatePool {
     /// Spawn `workers` OS threads and return a pool ready to accept executions.
-    pub fn new(workers: usize) -> Self {
+    pub fn new(workers: usize, timeout_secs: u64) -> Self {
         let workers = workers.max(1);
         let (tx, rx) = mpsc::channel::<ExecutionTask>(workers * 4);
 
@@ -146,6 +148,7 @@ impl IsolatePool {
                                 &mut js_rt,
                                 t.code, t.secrets, t.payload,
                                 t.execution_seed, t.queue_ctx,
+                                t.timeout_secs,
                             ).await;
 
                             // If execution timed out the V8 event loop may be stuck.
@@ -164,7 +167,7 @@ impl IsolatePool {
                 .expect("failed to spawn isolate worker thread");
         }
 
-        Self { sender: tx, workers }
+        Self { sender: tx, workers, timeout_secs }
     }
 
     /// Spawn a pool sized to 2× logical CPUs (min 2, max 16).
@@ -174,7 +177,7 @@ impl IsolatePool {
             .unwrap_or(2);
         let workers = (cpus * 2).clamp(2, 16);
         tracing::info!(workers, "isolate pool started (warm isolates)");
-        Self::new(workers)
+        Self::new(workers, 30)
     }
 
     pub fn workers(&self) -> usize { self.workers }
@@ -192,13 +195,16 @@ impl IsolatePool {
 
         let task = ExecutionTask {
             code, secrets, payload, execution_seed, queue_ctx,
+            timeout_secs: self.timeout_secs,
             reply: reply_tx,
         };
 
         self.sender.send(task).await
             .map_err(|_| "isolate pool is shut down".to_string())?;
 
-        timeout(Duration::from_secs(11), reply_rx)
+        // Allow 5s of headroom above the per-request timeout for overhead.
+        let pool_timeout = self.timeout_secs + 5;
+        timeout(Duration::from_secs(pool_timeout), reply_rx)
             .await
             .map_err(|_| "isolate pool: invocation timed out waiting for worker".to_string())?
             .map_err(|_| "isolate pool: worker dropped reply channel".to_string())?
@@ -225,13 +231,13 @@ mod tests {
 
     #[test]
     fn new_pool_reports_worker_count() {
-        let pool = IsolatePool::new(2);
+        let pool = IsolatePool::new(2, 30);
         assert_eq!(pool.workers(), 2);
     }
 
     #[test]
     fn minimum_one_worker_when_zero_given() {
-        let pool = IsolatePool::new(0);
+        let pool = IsolatePool::new(0, 30);
         assert_eq!(pool.workers(), 1);
     }
 
@@ -245,7 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_simple_js_returns_value() {
-        let pool = IsolatePool::new(1);
+        let pool = IsolatePool::new(1, 30);
         let code = r#"__fluxbase_fn = async (ctx) => "hello";"#;
 
         let res = pool.execute(
@@ -262,7 +268,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_passes_payload() {
-        let pool = IsolatePool::new(1);
+        let pool = IsolatePool::new(1, 30);
         let code = r#"__fluxbase_fn = async (ctx) => ctx.payload.x * 2;"#;
 
         let res = pool.execute(
@@ -278,7 +284,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_captures_logs() {
-        let pool = IsolatePool::new(1);
+        let pool = IsolatePool::new(1, 30);
         let code = r#"
             __fluxbase_fn = async (ctx) => {
                 ctx.log("pool log test", "warn");
@@ -300,7 +306,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_js_error_returns_err() {
-        let pool = IsolatePool::new(1);
+        let pool = IsolatePool::new(1, 30);
         let code = r#"__fluxbase_fn = async (ctx) => { throw new Error("pool err"); };"#;
 
         let res = pool.execute(
@@ -319,7 +325,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_multiple_concurrent_tasks() {
-        let pool = IsolatePool::new(2);
+        let pool = IsolatePool::new(2, 30);
         let code = r#"__fluxbase_fn = async (ctx) => ctx.payload.n;"#;
 
         let mut handles = vec![];
@@ -347,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn pool_is_clone_and_send() {
-        let pool = IsolatePool::new(1);
+        let pool = IsolatePool::new(1, 30);
         let clone = pool.clone();
         // Both should be able to execute
         let code = r#"__fluxbase_fn = async (ctx) => 1;"#;
@@ -359,7 +365,7 @@ mod tests {
 
     #[tokio::test]
     async fn same_seed_produces_same_output() {
-        let pool = IsolatePool::new(1);
+        let pool = IsolatePool::new(1, 30);
         let code = r#"__fluxbase_fn = async (ctx) => crypto.randomUUID();"#;
 
         let r1 = pool.execute(code.to_string(), HashMap::new(),
