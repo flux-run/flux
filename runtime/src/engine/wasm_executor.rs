@@ -18,8 +18,8 @@
 //! | `handle` | `(payload_ptr: i32, payload_len: i32) → result_ptr: i32` | Main entry point |
 //!
 //! ### Result layout (at `result_ptr`):
-//! ```
-//! [ u32 LE length ][ `length` bytes of UTF-8 JSON ]
+//! ```text
+//! [ u32 LE length ][ <length> bytes of UTF-8 JSON ]
 //! ```
 //! The JSON must have either `"output"` or `"error"` keys at the top level.
 //! Logs are emitted via `fluxbase.log` during execution, not in the result.
@@ -60,7 +60,6 @@ use wasmtime::{
 use tokio::time::{timeout, Duration};
 
 use crate::engine::executor::{ExecutionResult, LogLine};
-
 // ─── HostState ─────────────────────────────────────────────────────────────
 
 /// Data owned by the Wasmtime `Store` — accessible from host import callbacks.
@@ -104,10 +103,16 @@ impl Default for WasmExecutionParams {
 
 // ─── Engine factory ────────────────────────────────────────────────────────
 
-/// Build a shared Wasmtime `Engine` with Cranelift AOT + fuel interruption.
+/// Build a shared Wasmtime `Engine` with Cranelift AOT + fuel interruption + async support.
+///
+/// `async_support(true)` enables fiber-based suspension of WASM execution during
+/// host I/O calls. When a WASM module calls `fluxbase.http_fetch`, the fiber is
+/// suspended and tokio can drive other pending Futures (DB queries, HTTP calls from
+/// other concurrent WASM executions) until the response arrives.
 pub fn build_engine() -> Engine {
     let mut cfg = Config::new();
     cfg.consume_fuel(true);
+    cfg.async_support(true);
     Engine::new(&cfg).expect("failed to build Wasmtime engine")
 }
 
@@ -120,24 +125,27 @@ pub fn compile_module(engine: &Engine, bytes: &[u8]) -> Result<Module, String> {
         .map_err(|e| format!("wasm compilation failed: {}", e))
 }
 
-/// Execute a pre-compiled `Module`.  Runs CPU-bound work on a blocking thread.
+/// Execute a pre-compiled `Module` asynchronously.
+///
+/// With `async_support(true)` in the engine, WASM fibers are suspended during
+/// host I/O calls (`http_fetch`) allowing tokio to drive other pending Futures.
+/// CPU-intensive WASM still runs on a tokio worker thread; the async model only
+/// yields during I/O-bound host imports.
 pub async fn execute_wasm(
     engine: &Engine,
     module: &Module,
     params: WasmExecutionParams,
 ) -> Result<ExecutionResult, String> {
-    // Clone what we need to move into spawn_blocking
     let engine = engine.clone();
     let module = module.clone();
-
-    // Extract timeout before params is moved into spawn_blocking.
     let timeout_secs = params.timeout_secs;
 
-    let handle = tokio::task::spawn_blocking(move || {
-        execute_wasm_sync(&engine, &module, params)
+    // tokio::spawn instead of spawn_blocking — async_support means the fiber
+    // yields during host I/O so this does not block a thread for the full duration.
+    let handle = tokio::spawn(async move {
+        execute_wasm_async(&engine, &module, params).await
     });
 
-    // Wall-clock backstop in case fuel is exhausted slowly or Wasmtime hangs.
     match timeout(Duration::from_secs(timeout_secs + 5), handle).await {
         Ok(Ok(result)) => result,
         Ok(Err(join_err)) => Err(format!("wasm worker panicked: {}", join_err)),
@@ -145,9 +153,9 @@ pub async fn execute_wasm(
     }
 }
 
-// ─── Synchronous kernel (runs on a dedicated blocking thread) ────────────────
+// ─── Async kernel (tokio task; fibers yield during host I/O) ─────────────────
 
-fn execute_wasm_sync(
+async fn execute_wasm_async(
     engine: &Engine,
     module: &Module,
     params: WasmExecutionParams,
@@ -198,32 +206,31 @@ fn execute_wasm_sync(
 
     // fluxbase.http_fetch(req_ptr, req_len, out_ptr, out_max) → actual_resp_len or -1
     //
-    // The WASM module writes a JSON request object at `req_ptr`:
-    //   { "method": "GET", "url": "https://...", "headers": {...}, "body": "<base64>" }
-    // The host validates the URL against `allowed_http_hosts`, performs the
-    // outbound HTTP request, and writes a JSON response object at `out_ptr`:
-    //   { "status": 200, "headers": {...}, "body": "<base64>" }
-    // Returns the number of bytes written, or -1 on error / denied.
-    linker.func_wrap("fluxbase", "http_fetch", |mut caller: Caller<HostState>, req_ptr: i32, req_len: i32, out_ptr: i32, out_max: i32| -> i32 {
+    // Uses func_wrap_async so the WASM fiber is suspended during the HTTP call,
+    // freeing the tokio thread to drive other concurrent WASM executions.
+    // Previously used block_on() which blocked the OS thread for the full HTTP duration.
+    linker.func_wrap_async("fluxbase", "http_fetch", |mut caller: Caller<HostState>, args: (i32, i32, i32, i32)| {
+        let (req_ptr, req_len, out_ptr, out_max) = args;
+        Box::new(async move {
         let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
             Some(m) => m,
-            None => return -1,
+            None => return Ok::<i32, wasmtime::Error>(-1),
         };
 
         // Read request JSON from WASM memory.
         let req_json = {
             let data = memory.data(&caller);
             let end  = (req_ptr as usize).saturating_add(req_len as usize);
-            if end > data.len() { return -1; }
+            if end > data.len() { return Ok(-1); }
             match serde_json::from_slice::<serde_json::Value>(&data[req_ptr as usize..end]) {
                 Ok(v)  => v,
-                Err(_) => return -1,
+                Err(_) => return Ok(-1),
             }
         };
 
         let url = match req_json.get("url").and_then(|u| u.as_str()) {
             Some(u) => u.to_string(),
-            None    => return -1,
+            None    => return Ok(-1),
         };
 
         // ── Allow-list check ─────────────────────────────────────────────────
@@ -242,13 +249,10 @@ fn execute_wasm_sync(
                         execution_state: None,
                         tool_name:       None,
                     });
-                    return -1;
+                    return Ok(-1);
                 }
             };
 
-            // Always block private / link-local / loopback addresses regardless of
-            // what the allow-list says.  This prevents SSRF via cloud metadata
-            // endpoints (169.254.169.254), internal services, and loopback.
             if is_private_host(&parsed) {
                 caller.data_mut().logs.push(LogLine {
                     level:           "warn".to_string(),
@@ -260,15 +264,12 @@ fn execute_wasm_sync(
                     execution_state: None,
                     tool_name:       None,
                 });
-                return -1;
+                return Ok(-1);
             }
 
             if hosts.iter().any(|h| h == "*") {
                 true
             } else {
-                // Only compare the parsed host — never use url.starts_with(h) because
-                // credential-stuffed URLs like https://allowed.com@evil.com would bypass
-                // the check (the URL starts with the allowed prefix but resolves to evil.com).
                 let host_str = parsed.host_str().unwrap_or("");
                 hosts.iter().any(|h| h == host_str)
             }
@@ -284,17 +285,16 @@ fn execute_wasm_sync(
                 execution_state: None,
                 tool_name:       None,
             });
-            return -1;
+            return Ok(-1);
         }
 
         let method_str = req_json.get("method").and_then(|m| m.as_str()).unwrap_or("GET").to_uppercase();
         let body_b64   = req_json.get("body").and_then(|b| b.as_str()).unwrap_or("").to_string();
         let headers    = req_json.get("headers").and_then(|h| h.as_object()).cloned();
 
-        // ── Make the HTTP request (blocking on the tokio runtime) ─────────────
+        // ── Make the async HTTP request — fiber suspends here ─────────────────
         let client = caller.data().http_client.clone();
-        let rt_handle = tokio::runtime::Handle::current();
-        let resp_json = rt_handle.block_on(async move {
+        let resp_json = {
             use base64::Engine as _;
 
             let method = reqwest::Method::from_bytes(method_str.as_bytes())
@@ -328,21 +328,22 @@ fn execute_wasm_sync(
                 }
                 Err(e) => serde_json::json!({ "status": 0, "error": e.to_string() }),
             }
-        });
+        };
 
         // ── Write response JSON to WASM memory ────────────────────────────────
         let resp_bytes = match serde_json::to_vec(&resp_json) {
             Ok(b)  => b,
-            Err(_) => return -1,
+            Err(_) => return Ok(-1),
         };
-        if resp_bytes.len() > out_max as usize { return -1; }
+        if resp_bytes.len() > out_max as usize { return Ok(-1); }
 
         let data = memory.data_mut(&mut caller);
         let out_start = out_ptr as usize;
         let out_end   = out_start + resp_bytes.len();
-        if out_end > data.len() { return -1; }
+        if out_end > data.len() { return Ok(-1); }
         data[out_start..out_end].copy_from_slice(&resp_bytes);
-        resp_bytes.len() as i32
+        Ok(resp_bytes.len() as i32)
+        })
     }).map_err(|e| e.to_string())?;
 
     // fluxbase.secrets_get(key_ptr, key_len, out_ptr, out_max) → actual_len or -1
@@ -378,9 +379,9 @@ fn execute_wasm_sync(
         write_len as i32
     }).map_err(|e| e.to_string())?;
 
-    // ── Instantiate ────────────────────────────────────────────────────────
+    // ── Instantiate (async with async_support engine) ──────────────────────
 
-    let instance = linker.instantiate(&mut store, module)
+    let instance = linker.instantiate_async(&mut store, module).await
         .map_err(|e| format!("wasm instantiation failed: {}", e))?;
 
     // ── Fetch required exports ─────────────────────────────────────────────
@@ -404,7 +405,7 @@ fn execute_wasm_sync(
     let payload_bytes = payload_json.as_bytes();
     let payload_len   = payload_bytes.len() as i32;
 
-    let payload_ptr = alloc_fn.call(&mut store, payload_len)
+    let payload_ptr = alloc_fn.call_async(&mut store, payload_len).await
         .map_err(|e| format!("__flux_alloc failed: {}", e))?;
 
     if payload_ptr <= 0 {
@@ -424,10 +425,10 @@ fn execute_wasm_sync(
         data[start..end].copy_from_slice(payload_bytes);
     }
 
-    // ── Call handle ────────────────────────────────────────────────────────
+    // ── Call handle (async — suspends fiber during host I/O) ───────────────
 
     let result_ptr = handle_fn
-        .call(&mut store, (payload_ptr, payload_len))
+        .call_async(&mut store, (payload_ptr, payload_len)).await
         .map_err(|e| {
             let msg = e.to_string();
             if msg.contains("fuel") || msg.contains("trap: out of fuel") {
