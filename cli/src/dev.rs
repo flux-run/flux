@@ -71,15 +71,28 @@ pub async fn execute() -> anyhow::Result<()> {
     let project_root = find_project_root()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    // 2. Resolve DATABASE_URL — check env var, then .env file, then embed Postgres.
+    // 2. Load all vars from .env file (skipping DATABASE_URL which is handled below).
+    //    These are injected into the dev server process so they become available
+    //    in ctx.secrets / ctx.env without needing a real secrets backend.
+    let dot_env_vars = load_dot_env(&project_root);
+    if !dot_env_vars.is_empty() {
+        println!(
+            "  {} .env            {} var{}",
+            "✔".green().bold(),
+            dot_env_vars.len().to_string().cyan(),
+            if dot_env_vars.len() == 1 { "" } else { "s" }
+        );
+    }
+
+    // 3. Resolve DATABASE_URL — check env var, then .env file, then embed Postgres.
     //
     //    Priority:
     //      a) DATABASE_URL shell env var  (already set)
-    //      b) DATABASE_URL in .env file   (at project root)
+    //      b) DATABASE_URL in .env file   (dot_env_vars above)
     //      c) Embedded Postgres           (zero-config default)
     let (database_url, _pg) = resolve_database(&project_root).await?;
 
-    // 3. Run all migrations
+    // 4. Run all migrations
     let migration_count = run_migrations(&database_url, &project_root).await?;
     println!(
         "  {} migrations     {} applied",
@@ -87,16 +100,16 @@ pub async fn execute() -> anyhow::Result<()> {
         migration_count.to_string().cyan(),
     );
 
-    // 4. Start Flux server
-    let mut server = start_server(DEFAULT_SERVER_PORT, &database_url).await?;
+    // 5. Start Flux server
+    let mut server = start_server(DEFAULT_SERVER_PORT, &database_url, &dot_env_vars).await?;
 
-    // 5. First-run: if no admin account exists, prompt to create one.
+    // 6. First-run: if no admin account exists, prompt to create one.
     prompt_admin_setup_if_needed(DEFAULT_SERVER_PORT).await;
 
-    // 6. Print banner
+    // 7. Print banner
     print_banner(DEFAULT_SERVER_PORT);
 
-    // 6. Wait for Ctrl+C or server exit
+    // 8. Wait for Ctrl+C or server exit
     tokio::select! {
         result = server.wait() => {
             let status = result?;
@@ -121,6 +134,26 @@ pub async fn execute() -> anyhow::Result<()> {
     println!("{}", "✔  Stopped.".green());
 
     Ok(())
+}
+
+/// Load all key-value pairs from the `.env` file at `project_root`.
+///
+/// - Skips `DATABASE_URL` (handled separately by `resolve_database`).
+/// - Skips lines that fail to parse (malformed entries don't abort startup).
+/// - Returns an empty vec if the file doesn't exist.
+///
+/// Uses `dotenvy` for correct handling of quotes, escapes, and comments.
+fn load_dot_env(project_root: &Path) -> Vec<(String, String)> {
+    let path = project_root.join(".env");
+    if !path.exists() {
+        return vec![];
+    }
+    let Ok(iter) = dotenvy::from_path_iter(&path) else {
+        return vec![];
+    };
+    iter.flatten()
+        .filter(|(k, _)| k != "DATABASE_URL")
+        .collect()
 }
 
 // ── PostgreSQL ────────────────────────────────────────────────────────────────
@@ -376,7 +409,7 @@ async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Res
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
-async fn start_server(port: u16, database_url: &str) -> anyhow::Result<tokio::process::Child> {
+async fn start_server(port: u16, database_url: &str, extra_env: &[(String, String)]) -> anyhow::Result<tokio::process::Child> {
     let binary = find_server_binary()
         .ok_or_else(|| anyhow::anyhow!(
             "Flux server binary not found.\n  Run `cargo build` first, or install Flux."
@@ -386,12 +419,20 @@ async fn start_server(port: u16, database_url: &str) -> anyhow::Result<tokio::pr
     use std::io::Write;
     let _ = std::io::stdout().flush();
 
-    let child = Command::new(&binary)
-        .env("PORT", port.to_string())
+    let mut cmd = Command::new(&binary);
+    cmd.env("PORT", port.to_string())
         .env("DATABASE_URL", database_url)
         .env("FLUX_LOCAL", "true")
         .env("LOCAL_MODE", "true")
-        .env("RUST_LOG", "warn")
+        .env("RUST_LOG", "warn");
+
+    // Inject all .env vars so they are available in ctx.secrets / ctx.env
+    // inside functions without needing a real secrets backend.
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+
+    let child = cmd
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .spawn()

@@ -2,6 +2,7 @@
 
 # Fluxbase Deploy Script
 # Usage: ./scripts/deploy.sh --env <staging|production> [--service <name>] [--tag <tag>] [--project <id>] [--region <region>] [--dry-run]
+# Usage: ./scripts/deploy.sh --rollback [--service <name>] [--project <id>] [--region <region>] [--dry-run]
 
 set -e
 
@@ -14,12 +15,14 @@ REGISTRY=""
 SERVICE_NAME="all"
 TAG="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
 PLATFORM="linux/amd64"
+ROLLBACK=false
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --env) ENV="$2"; shift ;;
         --dry-run) DRY_RUN=true ;;
+        --rollback) ROLLBACK=true ;;
         --project) PROJECT_ID="$2"; shift ;;
         --region) REGION="$2"; shift ;;
         --service) SERVICE_NAME="$2"; shift ;;
@@ -30,14 +33,19 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-if [ -z "$ENV" ]; then
-    echo "Error: --env parameter is required (staging|production)"
+if [ "$ROLLBACK" = false ] && [ -z "$ENV" ]; then
+    echo "Error: --env parameter is required for deploy (staging|production)"
+    echo "       Use --rollback to roll back the last deployment without --env"
     exit 1
 fi
 
 REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/fluxbase"
 
-echo "Deploying to $ENV environment (GCP Project: $PROJECT_ID, Region: $REGION, Tag: $TAG, Platform: $PLATFORM)..."
+if [ "$ROLLBACK" = true ]; then
+    echo "Rolling back services (GCP Project: $PROJECT_ID, Region: $REGION)..."
+else
+    echo "Deploying to $ENV environment (GCP Project: $PROJECT_ID, Region: $REGION, Tag: $TAG, Platform: $PLATFORM)..."
+fi
 
 package_name_for_service() {
     local service=$1
@@ -129,17 +137,76 @@ deploy_cloud_run() {
 
 SERVICES=("api" "gateway" "runtime" "queue" "data-engine")
 
-if [ "$SERVICE_NAME" == "all" ]; then
-    for service in "${SERVICES[@]}"; do
-        deploy_cloud_run "$service"
-    done
-else
-    if [[ " ${SERVICES[@]} " =~ " ${SERVICE_NAME} " ]]; then
-        deploy_cloud_run "$SERVICE_NAME"
-    else
-        echo "Error: Unknown service $SERVICE_NAME"
-        exit 1
-    fi
-fi
+# ── Rollback ──────────────────────────────────────────────────────────────────
+#
+# Rolls back a Cloud Run service to its previously active revision by setting
+# 100% of traffic to the PREVIOUS revision tag.
+#
+# Cloud Run keeps the last N revisions around; PREVIOUS is always the one that
+# was serving traffic before the most recent deploy.
 
-echo "Deployment to $ENV complete!"
+rollback_cloud_run() {
+    local service=$1
+    local deploy_name="fluxbase-${service}"
+
+    echo "Rolling back $deploy_name…"
+
+    # Fetch the two most-recent ready revisions (newest first).
+    local revisions
+    revisions=$(gcloud run revisions list \
+        --service "$deploy_name" \
+        --region "$REGION" \
+        --project "$PROJECT_ID" \
+        --format="value(metadata.name)" \
+        --sort-by="~metadata.creationTimestamp" \
+        --limit=2 2>/dev/null)
+
+    local current_rev
+    local previous_rev
+    current_rev=$(echo "$revisions"  | sed -n '1p')
+    previous_rev=$(echo "$revisions" | sed -n '2p')
+
+    if [ -z "$previous_rev" ]; then
+        echo "⚠️  No previous revision found for $deploy_name — skipping."
+        return 0
+    fi
+
+    echo "  current:  $current_rev"
+    echo "  previous: $previous_rev"
+
+    if [ "$DRY_RUN" = true ]; then
+        echo "[DRY-RUN] Would run: gcloud run services update-traffic $deploy_name --to-revisions=$previous_rev=100 --region $REGION --project $PROJECT_ID"
+    else
+        gcloud run services update-traffic "$deploy_name" \
+            --to-revisions="${previous_rev}=100" \
+            --region "$REGION" \
+            --project "$PROJECT_ID"
+        echo "✅ $deploy_name rolled back to $previous_rev"
+    fi
+}
+
+# ── Dispatch ──────────────────────────────────────────────────────────────────
+
+run_for_services() {
+    local fn=$1
+    if [ "$SERVICE_NAME" == "all" ]; then
+        for service in "${SERVICES[@]}"; do
+            $fn "$service"
+        done
+    else
+        if [[ " ${SERVICES[*]} " =~ " ${SERVICE_NAME} " ]]; then
+            $fn "$SERVICE_NAME"
+        else
+            echo "Error: Unknown service '$SERVICE_NAME'. Valid: ${SERVICES[*]}"
+            exit 1
+        fi
+    fi
+}
+
+if [ "$ROLLBACK" = true ]; then
+    run_for_services rollback_cloud_run
+    echo "Rollback complete!"
+else
+    run_for_services deploy_cloud_run
+    echo "Deployment to $ENV complete!"
+fi
