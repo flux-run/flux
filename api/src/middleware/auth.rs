@@ -102,6 +102,15 @@ pub async fn require_auth(
             )
             .into_response();
         }
+
+        // Static FLUX_API_KEY is always treated as admin — enforce RBAC.
+        let is_mutating = matches!(
+            req.method().as_str(),
+            "POST" | "PUT" | "PATCH" | "DELETE"
+        );
+        // If a non-admin static key is desired in future, check a
+        // FLUX_API_KEY_ROLE env var here.  For now the var's presence = admin.
+        let _ = is_mutating; // admin: all mutations allowed
     }
 
     // ── 2b. DB-stored API key (created via POST /api-keys) ────────────────

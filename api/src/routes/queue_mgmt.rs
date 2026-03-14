@@ -122,6 +122,23 @@ pub async fn publish_message(
     Path(_name): Path<String>,
     Json(payload): Json<PublishMessagePayload>,
 ) -> ApiResult<serde_json::Value> {
+    // Validate that the referenced function actually exists.
+    let fn_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM functions WHERE id = $1)",
+    )
+    .bind(payload.function_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(db_err)?;
+
+    if !fn_exists {
+        return Err(ApiError::new(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "INVALID_FUNCTION_ID",
+            "No function with that id exists",
+        ));
+    }
+
     let run_at = payload
         .delay_seconds
         .map(|secs| chrono::Utc::now() + chrono::Duration::seconds(secs))
@@ -173,12 +190,16 @@ pub async fn purge_queue(
     State(state): State<AppState>,
     Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    let result =
-        sqlx::query("DELETE FROM jobs WHERE status = 'pending' AND queue_name = $1")
-            .bind(&name)
-            .execute(&state.pool)
-            .await
-            .map_err(db_err)?;
+    // Include NULL queue_name rows for backward compatibility with jobs that
+    // pre-date the 0011_add_queue_name migration.
+    let result = sqlx::query(
+        "DELETE FROM jobs WHERE status = 'pending' \
+         AND (queue_name = $1 OR queue_name IS NULL)",
+    )
+    .bind(&name)
+    .execute(&state.pool)
+    .await
+    .map_err(db_err)?;
 
     Ok(ApiResponse::new(serde_json::json!({
         "status": "purged",
@@ -196,7 +217,7 @@ pub async fn list_dlq(
     let rows = sqlx::query_as::<_, DeadLetterJobRow>(
         "SELECT id, function_id, payload, error, failed_at \
          FROM dead_letter_jobs \
-         WHERE queue_name = $1 \
+         WHERE queue_name = $1 OR queue_name IS NULL \
          ORDER BY failed_at DESC LIMIT $2 OFFSET $3",
     )
     .bind(&name)

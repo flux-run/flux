@@ -566,17 +566,12 @@ pub async fn rollback_project_deployment(
     Extension(_ctx): Extension<RequestContext>,
     axum::extract::Path(project_deployment_id): axum::extract::Path<Uuid>,
 ) -> ApiResult<serde_json::Value> {
-    // Load the project deployment and verify ownership.
+    // Verify the project deployment exists and fetch the version for the response.
     #[derive(sqlx::FromRow)]
-    struct ProjDepRow {
-        version: i32,
-        summary: serde_json::Value,
-    }
+    struct ProjDepRow { version: i32 }
 
     let proj = sqlx::query_as::<_, ProjDepRow>(
-        "SELECT version, summary \
-         FROM project_deployments \
-         WHERE id = $1",
+        "SELECT version FROM project_deployments WHERE id = $1",
     )
     .bind(project_deployment_id)
     .fetch_optional(&state.pool)
@@ -584,58 +579,39 @@ pub async fn rollback_project_deployment(
     .map_err(ApiError::from)?
     .ok_or_else(|| ApiError::not_found("project deployment not found"))?;
 
-    // Collect functions that were actually deployed (not skipped).
-    let functions: Vec<(String,)> = proj.summary
-        .get("functions")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter(|f| f.get("status").and_then(|s| s.as_str()) == Some("deployed"))
-                .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(|n| (n.to_owned(),)))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut functions_restored: i64 = 0;
+    // Bulk rollback in a single pair of UPDATE statements — no per-function loop.
+    //
+    // Step 1: deactivate ALL deployments whose function_id appears in any
+    //         deployment row linked to this project deployment.
+    // Step 2: activate exactly the deployment rows linked to this project
+    //         deployment (i.e. the snapshot being restored).
     let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
 
-    for (fn_name,) in &functions {
-        // Resolve the function_id.
-        #[derive(sqlx::FromRow)]
-        struct FnId { id: Uuid }
+    // Step 1 — deactivate current active deployments for every function that
+    //           had a deployment recorded under this project deployment.
+    sqlx::query(
+        "UPDATE deployments SET is_active = false \
+         WHERE function_id IN (\
+             SELECT function_id FROM deployments \
+             WHERE project_deployment_id = $1\
+         )",
+    )
+    .bind(project_deployment_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
 
-        let fn_row = sqlx::query_as::<_, FnId>(
-            "SELECT id FROM functions WHERE name = $1",
-        )
-        .bind(fn_name)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(ApiError::from)?;
+    // Step 2 — activate the snapshot rows.
+    let result = sqlx::query(
+        "UPDATE deployments SET is_active = true \
+         WHERE project_deployment_id = $1",
+    )
+    .bind(project_deployment_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
 
-        let Some(fn_row) = fn_row else { continue };
-
-        // Deactivate all deployments for this function.
-        sqlx::query("UPDATE deployments SET is_active = false WHERE function_id = $1")
-            .bind(fn_row.id)
-            .execute(&mut *tx)
-            .await
-            .map_err(ApiError::from)?;
-
-        // Activate the deployment from this project deployment.
-        let updated = sqlx::query(
-            "UPDATE deployments SET is_active = true \
-             WHERE project_deployment_id = $1 AND function_id = $2",
-        )
-        .bind(project_deployment_id)
-        .bind(fn_row.id)
-        .execute(&mut *tx)
-        .await
-        .map_err(ApiError::from)?;
-
-        if updated.rows_affected() > 0 {
-            functions_restored += 1;
-        }
-    }
+    let functions_restored = result.rows_affected() as i64;
 
     tx.commit().await.map_err(ApiError::from)?;
 

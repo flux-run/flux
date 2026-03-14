@@ -156,8 +156,8 @@ pub fn create_app(state: AppState) -> Router {
         // ── Monitor ───────────────────────────────────────────────────────────
         .route("/monitor/status",        get(routes::monitor::monitor_status))
         .route("/monitor/metrics",       get(routes::monitor::monitor_metrics))
-        .route("/monitor/alerts",        get(routes::stubs::monitor_alerts_list).post(routes::stubs::monitor_alert_create))
-        .route("/monitor/alerts/{id}",   delete(routes::stubs::monitor_alert_delete))
+        .route("/monitor/alerts",        get(routes::monitor::monitor_alerts_list).post(routes::monitor::monitor_alert_create))
+        .route("/monitor/alerts/{id}",   delete(routes::monitor::monitor_alert_delete))
         // ── Events ────────────────────────────────────────────────────────────
         .route("/events",                post(routes::events::publish_event))
         .route("/events/subscriptions",  get(routes::events::list_subscriptions).post(routes::events::create_subscription))
