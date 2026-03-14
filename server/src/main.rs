@@ -322,6 +322,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         data_engine::retention::worker::run(ret_pool, ret_cfg).await;
     });
 
+    // Monitor alert evaluator — checks alert thresholds every 60s.
+    tokio::spawn(api::routes::monitor::run_alert_evaluator(pool.clone()));
+    info!("Monitor alert evaluator started");
+
     // ── Router ────────────────────────────────────────────────────────────
     let dashboard_dir = std::env::var("FLUX_DASHBOARD_DIR")
         .unwrap_or_else(|_| "dashboard/out".to_string());

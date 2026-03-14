@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = api::db::connection::init_pool().await?;
 
     let state = api::AppState {
-        pool,
+        pool: pool.clone(),
         http_client: reqwest::Client::new(),
         data_engine_url: std::env::var("DATA_ENGINE_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
@@ -28,6 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let app = api::create_app(state);
+
+    // ── Background workers ────────────────────────────────────────────────
+    tokio::spawn(api::routes::monitor::run_alert_evaluator(pool.clone()));
 
     let port = std::env::var("PORT")
         .unwrap_or_else(|_| "8080".to_string())

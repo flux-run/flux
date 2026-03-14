@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::Row;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::{
@@ -209,4 +209,171 @@ pub async fn monitor_alert_delete(
         .map_err(db_err)?;
 
     Ok(ApiResponse::new(json!({ "deleted": true })))
+}
+
+// ── Background alert evaluator ────────────────────────────────────────────────
+
+/// Periodically evaluate all enabled monitor alerts and update their
+/// `triggered_at` / `resolved_at` timestamps.
+///
+/// Call once at startup — it loops indefinitely:
+/// ```rust
+/// tokio::spawn(routes::monitor::run_alert_evaluator(pool.clone()));
+/// ```
+pub async fn run_alert_evaluator(pool: PgPool) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        interval.tick().await;
+        if let Err(e) = evaluate_alerts(&pool).await {
+            tracing::error!(error = %e, "alert evaluation failed");
+        }
+    }
+}
+
+async fn evaluate_alerts(pool: &PgPool) -> Result<(), sqlx::Error> {
+    #[derive(sqlx::FromRow)]
+    struct AlertRecord {
+        id:           Uuid,
+        metric:       String,
+        threshold:    f64,
+        condition:    String,
+        window_secs:  i32,
+        triggered_at: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
+    let alerts = sqlx::query_as::<_, AlertRecord>(
+        "SELECT id, metric, threshold, condition, window_secs, triggered_at \
+         FROM flux.monitor_alerts WHERE enabled = true",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for alert in alerts {
+        let current = match measure_metric(pool, &alert.metric, alert.window_secs).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    error  = %e,
+                    metric = %alert.metric,
+                    "could not measure metric for alert evaluation",
+                );
+                continue;
+            }
+        };
+
+        let fires = match alert.condition.as_str() {
+            "above" => current > alert.threshold,
+            "below" => current < alert.threshold,
+            _       => false,
+        };
+
+        if fires && alert.triggered_at.is_none() {
+            // Transition: ok → triggered
+            sqlx::query(
+                "UPDATE flux.monitor_alerts \
+                 SET triggered_at = now(), resolved_at = NULL \
+                 WHERE id = $1",
+            )
+            .bind(alert.id)
+            .execute(pool)
+            .await?;
+
+            tracing::warn!(
+                alert_id  = %alert.id,
+                metric    = %alert.metric,
+                current,
+                threshold = alert.threshold,
+                condition = %alert.condition,
+                "monitor alert triggered",
+            );
+        } else if !fires && alert.triggered_at.is_some() {
+            // Transition: triggered → resolved
+            sqlx::query(
+                "UPDATE flux.monitor_alerts \
+                 SET resolved_at = now() \
+                 WHERE id = $1 AND resolved_at IS NULL",
+            )
+            .bind(alert.id)
+            .execute(pool)
+            .await?;
+
+            tracing::info!(
+                alert_id = %alert.id,
+                metric   = %alert.metric,
+                "monitor alert resolved",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Compute the current value of a named metric over the given window.
+async fn measure_metric(pool: &PgPool, metric: &str, window_secs: i32) -> Result<f64, sqlx::Error> {
+    match metric {
+        "error_rate" => {
+            let row = sqlx::query(
+                "SELECT \
+                   COUNT(*)::float8 FILTER (WHERE status >= 500) AS errors, \
+                   NULLIF(COUNT(*)::float8, 0) AS total \
+                 FROM flux.gateway_metrics \
+                 WHERE created_at > now() - ($1 || ' seconds')::interval",
+            )
+            .bind(window_secs)
+            .fetch_one(pool)
+            .await?;
+            let errors: f64 = row.try_get::<f64, _>("errors").unwrap_or(0.0);
+            let total:  f64 = row.try_get::<f64, _>("total").unwrap_or(1.0);
+            Ok(errors / total)
+        }
+        "latency_p95" => {
+            let v: f64 = sqlx::query_scalar(
+                "SELECT COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms), 0) \
+                 FROM flux.gateway_metrics \
+                 WHERE created_at > now() - ($1 || ' seconds')::interval",
+            )
+            .bind(window_secs)
+            .fetch_one(pool)
+            .await?;
+            Ok(v)
+        }
+        "latency_p99" => {
+            let v: f64 = sqlx::query_scalar(
+                "SELECT COALESCE(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY latency_ms), 0) \
+                 FROM flux.gateway_metrics \
+                 WHERE created_at > now() - ($1 || ' seconds')::interval",
+            )
+            .bind(window_secs)
+            .fetch_one(pool)
+            .await?;
+            Ok(v)
+        }
+        "queue_dlq" => {
+            let c: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dead_letter_jobs")
+                .fetch_one(pool)
+                .await?;
+            Ok(c as f64)
+        }
+        "queue_failed" => {
+            let c: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM jobs WHERE status = 'failed' \
+                 AND created_at > now() - ($1 || ' seconds')::interval",
+            )
+            .bind(window_secs)
+            .fetch_one(pool)
+            .await?;
+            Ok(c as f64)
+        }
+        "queue_pending" => {
+            let c: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM jobs WHERE status = 'pending'",
+            )
+            .fetch_one(pool)
+            .await?;
+            Ok(c as f64)
+        }
+        _ => Ok(0.0),
+    }
 }

@@ -130,7 +130,50 @@ pub async fn run_schedule_now(
 }
 
 pub async fn schedule_history(
-    Path(_name): Path<String>,
+    Path(name): Path<String>,
+    State(state): State<AppState>,
+    Extension(_ctx): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<serde_json::Value> {
-    Ok(ApiResponse::new(serde_json::json!({ "data": [], "count": 0 })))
+    let (limit, offset) = page.clamped();
+
+    #[derive(sqlx::FromRow)]
+    struct RunRow {
+        id:           uuid::Uuid,
+        job_name:     String,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        started_at:   chrono::DateTime<chrono::Utc>,
+        finished_at:  Option<chrono::DateTime<chrono::Utc>>,
+        status:       String,
+        error:        Option<String>,
+        request_id:   Option<uuid::Uuid>,
+    }
+
+    let rows = sqlx::query_as::<_, RunRow>(
+        "SELECT id, job_name, scheduled_at, started_at, finished_at, \
+         status, error, request_id \
+         FROM fluxbase_internal.cron_job_runs \
+         WHERE job_name = $1 \
+         ORDER BY created_at DESC \
+         LIMIT $2 OFFSET $3",
+    )
+    .bind(&name)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(db_err)?;
+
+    let data: Vec<serde_json::Value> = rows.into_iter().map(|r| serde_json::json!({
+        "id":           r.id,
+        "job_name":     r.job_name,
+        "scheduled_at": r.scheduled_at,
+        "started_at":   r.started_at,
+        "finished_at":  r.finished_at,
+        "status":       r.status,
+        "error":        r.error,
+        "request_id":   r.request_id,
+    })).collect();
+    let count = data.len();
+    Ok(ApiResponse::new(serde_json::json!({ "data": data, "count": count })))
 }

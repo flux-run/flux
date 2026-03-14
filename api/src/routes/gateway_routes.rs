@@ -15,7 +15,7 @@ use api_contract::gateway::{
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
 fn db_err(e: sqlx::Error) -> ApiError {
-    eprintln!("Database error: {:?}", e);
+    tracing::error!(error = %e, "database error in gateway_routes");
     ApiError::internal("database_error")
 }
 
