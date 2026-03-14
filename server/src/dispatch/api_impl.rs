@@ -101,23 +101,13 @@ impl ApiDispatch for InProcessApiDispatch {
         let span_type  = entry.get("span_type") .and_then(|v| v.as_str()).map(|s| s.to_string());
         let metadata   = entry.get("metadata").cloned();
 
-        let tenant_id = entry.get("tenant_id")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<Uuid>().ok())
-            .unwrap_or_else(Uuid::nil);
-
-        let project_id = entry.get("project_id")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<Uuid>().ok());
-
+        // Note: tenant_id and project_id were removed from platform_logs by
+        // migration 20260314000042_drop_tenant_project.sql — do not include them.
         sqlx::query(
-            "INSERT INTO platform_logs \
-             (tenant_id, project_id, source, resource_id, level, message, \
-              request_id, metadata, span_type) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            "INSERT INTO flux.platform_logs \
+             (source, resource_id, level, message, request_id, metadata, span_type) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
-        .bind(tenant_id)
-        .bind(project_id)
         .bind(source)
         .bind(resource)
         .bind(level)

@@ -6,7 +6,11 @@ async function __flux_run_task(task) {
     var __fluxbase_logs = [];
 
     // Per-task seeded PRNG (same algorithm as build_wrapper in executor.rs)
-    var __t = (task.execution_seed ^ 0xDEADBEEF) >>> 0;
+    // Defensive BigInt guard: serde_v8 may return i64s > Number.MAX_SAFE_INTEGER as BigInt.
+    var __seed = typeof task.execution_seed === 'bigint'
+        ? Number(task.execution_seed & BigInt(0xFFFFFFFF))
+        : task.execution_seed;
+    var __t = (__seed ^ 0xDEADBEEF) >>> 0;
     if (__t === 0) __t = 0x1;
     var __task_rand = function() {
         __t += 0x6D2B79F5;

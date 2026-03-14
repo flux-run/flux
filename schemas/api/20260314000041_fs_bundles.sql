@@ -10,5 +10,5 @@
 -- Removing these blob columns keeps Postgres small and fast — only operational
 -- data (executions, mutations, queue jobs, secrets) lives in the DB.
 
-ALTER TABLE deployments DROP COLUMN IF EXISTS bundle_code;
-ALTER TABLE deployments DROP COLUMN IF EXISTS bundle_url;
+ALTER TABLE flux.deployments DROP COLUMN IF EXISTS bundle_code;
+ALTER TABLE flux.deployments DROP COLUMN IF EXISTS bundle_url;

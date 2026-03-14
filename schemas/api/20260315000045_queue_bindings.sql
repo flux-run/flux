@@ -9,7 +9,7 @@
 CREATE TABLE IF NOT EXISTS flux.queue_bindings (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     queue_name   TEXT        NOT NULL,
-    function_id  UUID        NOT NULL REFERENCES functions(id) ON DELETE CASCADE,
+    function_id  UUID        NOT NULL REFERENCES flux.functions(id) ON DELETE CASCADE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     UNIQUE (queue_name, function_id)

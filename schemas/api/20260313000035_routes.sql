@@ -59,3 +59,10 @@ CREATE INDEX idx_routes_project_active
 CREATE UNIQUE INDEX idx_routes_project_method_path_active
     ON flux.routes (project_id, method, path)
     WHERE is_active = TRUE;
+
+-- Re-attach the LISTEN/NOTIFY trigger (dropped with the old table above).
+-- The notify_route_change() function was created in migration 20260312000029.
+DROP TRIGGER IF EXISTS route_change_notify ON flux.routes;
+CREATE TRIGGER route_change_notify
+AFTER INSERT OR UPDATE OR DELETE ON flux.routes
+FOR EACH ROW EXECUTE FUNCTION notify_route_change();

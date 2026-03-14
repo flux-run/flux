@@ -368,7 +368,7 @@ async fn bootstrap_dev_db(port: u16) -> anyhow::Result<()> {
 // ── Migrations ────────────────────────────────────────────────────────────────
 
 // Flux system migrations embedded at compile-time — always available regardless
-// of where the CLI is installed. The two migration sets share the same
+// of where the CLI is installed. The three migration sets share the same
 // _sqlx_migrations tracking table; `set_ignore_missing(true)` prevents each
 // migrator from rejecting migrations it doesn't own.
 static API_MIGRATIONS: sqlx::migrate::Migrator =
@@ -376,6 +376,9 @@ static API_MIGRATIONS: sqlx::migrate::Migrator =
 
 static DE_MIGRATIONS: sqlx::migrate::Migrator =
     sqlx::migrate!("../schemas/data-engine");
+
+static QUEUE_MIGRATIONS: sqlx::migrate::Migrator =
+    sqlx::migrate!("../schemas/queue");
 
 async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Result<usize> {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -430,8 +433,17 @@ async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Res
     de_m.run(&pool).await
         .context("Failed to apply Flux data-engine migrations")?;
 
+    let queue_m = sqlx::migrate::Migrator {
+        migrations:      std::borrow::Cow::Borrowed(QUEUE_MIGRATIONS.migrations.as_ref()),
+        ignore_missing:  true,
+        locking:         true,
+        no_tx:           false,
+    };
+    queue_m.run(&pool).await
+        .context("Failed to apply Flux queue migrations")?;
+
     pool.close().await;
-    Ok(API_MIGRATIONS.migrations.len() + DE_MIGRATIONS.migrations.len())
+    Ok(API_MIGRATIONS.migrations.len() + DE_MIGRATIONS.migrations.len() + QUEUE_MIGRATIONS.migrations.len())
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────

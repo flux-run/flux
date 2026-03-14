@@ -211,7 +211,9 @@ impl IsolatePool {
             "code":             code,
             "secrets":          secrets,
             "payload":          payload,
-            "execution_seed":   execution_seed,
+            // Cast to i32 so serde_v8 always produces a JS Number, not a BigInt.
+            // The PRNG in bootstrap.js only needs 32 bits (>>> 0 truncates anyway).
+            "execution_seed":   execution_seed as i32,
             "database":         db_ctx.database,
         });
 
