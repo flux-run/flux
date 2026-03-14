@@ -84,6 +84,52 @@ pub fn validate_route_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ── Secret validation ─────────────────────────────────────────────────────────
+
+/// Maximum byte length for a secret value (64 KiB).
+pub const SECRET_VALUE_MAX_BYTES: usize = 65_536;
+
+/// Validate a secret key name.
+///
+/// Rules:
+/// - 1–256 characters
+/// - Only ASCII letters, digits, `-`, `_` (suitable for env-var injection)
+/// - No whitespace or control characters
+pub fn validate_secret_key(key: &str) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("secret key must not be empty".to_string());
+    }
+    if key.len() > 256 {
+        return Err(format!(
+            "secret key must not exceed 256 characters (got {})",
+            key.len()
+        ));
+    }
+    for ch in key.chars() {
+        if !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_' {
+            return Err(format!(
+                "secret key contains invalid character: {:?}. Only ASCII alphanumeric, '-', and '_' are allowed.",
+                ch
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate a secret value.
+///
+/// Only enforces the upper bound; values can contain any bytes.
+pub fn validate_secret_value(value: &str) -> Result<(), String> {
+    if value.len() > SECRET_VALUE_MAX_BYTES {
+        return Err(format!(
+            "secret value must not exceed {} bytes (got {})",
+            SECRET_VALUE_MAX_BYTES,
+            value.len()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

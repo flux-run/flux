@@ -516,10 +516,11 @@ pub async fn create_project_deployment(
     })))
 }
 
-/// `GET /deployments/project` — list the last 20 project deployments.
+/// `GET /deployments/project` — list recent project deployments (paginated).
 pub async fn list_project_deployments(
     State(state): State<AppState>,
     Extension(_ctx): Extension<RequestContext>,
+    Query(page): Query<crate::validation::PaginationQuery>,
 ) -> ApiResult<serde_json::Value> {
     #[derive(sqlx::FromRow)]
     struct ProjectDepRow {
@@ -530,12 +531,16 @@ pub async fn list_project_deployments(
         created_at:  chrono::DateTime<chrono::Utc>,
     }
 
+    let (limit, offset) = page.clamped();
+
     let rows = sqlx::query_as::<_, ProjectDepRow>(
         "SELECT id, version, summary, deployed_by, created_at \
          FROM project_deployments \
          ORDER BY version DESC \
-         LIMIT 20",
+         LIMIT $1 OFFSET $2",
     )
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await
     .map_err(ApiError::from)?;

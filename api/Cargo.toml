@@ -56,3 +56,8 @@ jsonwebtoken  = "9"
 job_contract  = { path = "../shared/job_contract" }
 # API contract — shared request/response types (server feature adds sqlx::FromRow)
 api_contract  = { path = "../shared/api_contract", features = ["server"] }
+
+# URL validation (jwks_url, etc.)
+url = "2"
+# In-memory rate-limit map (login brute-force protection)
+dashmap = "6"

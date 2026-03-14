@@ -82,10 +82,13 @@ pub async fn get_queue(
     .map_err(db_err)?
     .ok_or_else(|| ApiError::not_found("queue_not_found"))?;
 
-    let count_row = sqlx::query("SELECT COUNT(*) as count FROM jobs WHERE status = 'pending'")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(db_err)?;
+    let count_row = sqlx::query(
+        "SELECT COUNT(*) as count FROM jobs WHERE status = 'pending' AND queue_name = $1",
+    )
+    .bind(&name)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(db_err)?;
     let pending: i64 = count_row.get("count");
 
     Ok(ApiResponse::new(serde_json::json!({
@@ -127,12 +130,13 @@ pub async fn publish_message(
     let run_at_naive = run_at.naive_utc();
 
     let row = sqlx::query(
-        "INSERT INTO jobs (function_id, payload, run_at) \
-         VALUES ($1, $2, $3) RETURNING id",
+        "INSERT INTO jobs (function_id, payload, run_at, queue_name) \
+         VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(payload.function_id)
     .bind(payload.payload.unwrap_or(Value::Object(Default::default())))
     .bind(run_at_naive)
+    .bind(&_name)
     .fetch_one(&state.pool)
     .await
     .map_err(db_err)?;
@@ -147,24 +151,34 @@ pub async fn list_bindings(
     Extension(_ctx): Extension<RequestContext>,
     Query(_page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<Value>> {
-    Ok(ApiResponse::new(vec![]))
+    Err(ApiError::new(
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "NOT_IMPLEMENTED",
+        "Queue bindings are not yet supported on this server",
+    ))
 }
 
 pub async fn create_binding(
     Path(_name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    Ok(ApiResponse::new(serde_json::json!({ "status": "ok" })))
+    Err(ApiError::new(
+        axum::http::StatusCode::NOT_IMPLEMENTED,
+        "NOT_IMPLEMENTED",
+        "Queue bindings are not yet supported on this server",
+    ))
 }
 
 pub async fn purge_queue(
-    Path(_name): Path<String>,
+    Path(name): Path<String>,
     State(state): State<AppState>,
     Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    let result = sqlx::query("DELETE FROM jobs WHERE status = 'pending'")
-        .execute(&state.pool)
-        .await
-        .map_err(db_err)?;
+    let result =
+        sqlx::query("DELETE FROM jobs WHERE status = 'pending' AND queue_name = $1")
+            .bind(&name)
+            .execute(&state.pool)
+            .await
+            .map_err(db_err)?;
 
     Ok(ApiResponse::new(serde_json::json!({
         "status": "purged",
@@ -173,7 +187,7 @@ pub async fn purge_queue(
 }
 
 pub async fn list_dlq(
-    Path(_name): Path<String>,
+    Path(name): Path<String>,
     State(state): State<AppState>,
     Extension(_ctx): Extension<RequestContext>,
     Query(page): Query<PaginationQuery>,
@@ -182,8 +196,10 @@ pub async fn list_dlq(
     let rows = sqlx::query_as::<_, DeadLetterJobRow>(
         "SELECT id, function_id, payload, error, failed_at \
          FROM dead_letter_jobs \
-         ORDER BY failed_at DESC LIMIT $1 OFFSET $2",
+         WHERE queue_name = $1 \
+         ORDER BY failed_at DESC LIMIT $2 OFFSET $3",
     )
+    .bind(&name)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
@@ -194,22 +210,43 @@ pub async fn list_dlq(
 }
 
 pub async fn replay_dlq(
-    Path(_name): Path<String>,
+    Path(name): Path<String>,
     State(state): State<AppState>,
     Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    sqlx::query(
-        "INSERT INTO jobs (function_id, payload) \
-         SELECT function_id, payload FROM dead_letter_jobs",
+    // Atomically move up to 500 DLQ entries back into the jobs table using a
+    // DELETE...RETURNING CTE so no row is lost if the INSERT fails.
+    let result = sqlx::query(
+        "WITH batch AS ( \
+             DELETE FROM dead_letter_jobs \
+             WHERE id IN ( \
+                 SELECT id FROM dead_letter_jobs \
+                 WHERE queue_name = $1 \
+                 ORDER BY failed_at \
+                 LIMIT 500 \
+             ) \
+             RETURNING function_id, payload, queue_name \
+         ) \
+         INSERT INTO jobs (function_id, payload, queue_name) \
+         SELECT function_id, payload, queue_name FROM batch",
     )
+    .bind(&name)
     .execute(&state.pool)
     .await
     .map_err(db_err)?;
 
-    sqlx::query("DELETE FROM dead_letter_jobs")
-        .execute(&state.pool)
-        .await
-        .map_err(db_err)?;
+    let replayed = result.rows_affected();
 
-    Ok(ApiResponse::new(serde_json::json!({ "status": "replayed" })))
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM dead_letter_jobs WHERE queue_name = $1",
+    )
+    .bind(&name)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(ApiResponse::new(serde_json::json!({
+        "replayed":  replayed,
+        "remaining": remaining,
+    })))
 }

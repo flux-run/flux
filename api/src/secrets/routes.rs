@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -8,6 +8,9 @@ use sqlx::PgPool;
 
 use crate::types::context::RequestContext;
 use crate::types::response::{ApiResponse, ApiError};
+use crate::validation::{
+    validate_secret_key, validate_secret_value, PaginationQuery,
+};
 
 use super::{
     dto::{CreateSecretRequest, UpdateSecretRequest},
@@ -39,6 +42,9 @@ pub async fn create_secret(
     Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<CreateSecretRequest>,
 ) -> ApiResult<Value> {
+    validate_secret_key(&payload.key).map_err(|e| ApiError::bad_request(e))?;
+    validate_secret_value(&payload.value).map_err(|e| ApiError::bad_request(e))?;
+
     let (secret_id, version) = svc_create(&pool, payload).await.map_err(map_err)?;
 
     Ok(ApiResponse::new(serde_json::json!({ "secret_id": secret_id, "version": version })))
@@ -50,6 +56,8 @@ pub async fn update_secret(
     Path(key): Path<String>,
     Json(payload): Json<UpdateSecretRequest>,
 ) -> ApiResult<Value> {
+    validate_secret_value(&payload.value).map_err(|e| ApiError::bad_request(e))?;
+
     let version = svc_update(&pool, &key, payload).await.map_err(map_err)?;
 
     Ok(ApiResponse::new(serde_json::json!({ "version": version })))
@@ -68,8 +76,10 @@ pub async fn delete_secret(
 pub async fn list_secrets(
     State(pool): State<PgPool>,
     Extension(_ctx): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Value> {
-    let secrets = svc_list(&pool).await.map_err(map_err)?;
+    let (limit, offset) = page.clamped();
+    let secrets = svc_list(&pool, limit, offset).await.map_err(map_err)?;
 
     Ok(ApiResponse::new(serde_json::json!({ "secrets": secrets })))
 }

@@ -107,6 +107,8 @@ pub async fn delete_secret(
 
 pub async fn list_secrets(
     pool: &PgPool,
+    limit: i64,
+    offset: i64,
 ) -> Result<Vec<SecretResponse>, ServiceError> {
     #[derive(sqlx::FromRow)]
     struct SecretMetadataRow {
@@ -116,8 +118,10 @@ pub async fn list_secrets(
     }
 
     let records = sqlx::query_as::<_, SecretMetadataRow>(
-        "SELECT key, version, created_at FROM secrets ORDER BY key ASC",
+        "SELECT key, version, created_at FROM secrets ORDER BY key ASC LIMIT $1 OFFSET $2",
     )
+    .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
     .await
     .map_err(|e| ServiceError::Database(e.to_string()))?;

@@ -4,6 +4,7 @@ use axum::{
 };
 use crate::error::{ApiResponse, ApiError};
 use sqlx::{PgPool, Row};
+use url::Url;
 use uuid::Uuid;
 use crate::types::context::RequestContext;
 use api_contract::gateway::{
@@ -235,6 +236,24 @@ pub async fn create_middleware(
         let jwks_url = payload.config.get("jwks_url").and_then(|v| v.as_str()).map(String::from);
         let audience = payload.config.get("audience").and_then(|v| v.as_str()).map(String::from);
         let issuer = payload.config.get("issuer").and_then(|v| v.as_str()).map(String::from);
+
+        // Validate the JWKS URL before persisting it. A malformed or
+        // non-HTTP(S) URL would break JWT verification at request time.
+        if let Some(ref raw) = jwks_url {
+            match Url::parse(raw) {
+                Ok(u) if u.scheme() == "https" || u.scheme() == "http" => {}
+                Ok(_) => {
+                    return Err(ApiError::bad_request(
+                        "jwks_url must use the https (or http) scheme",
+                    ))
+                }
+                Err(_) => {
+                    return Err(ApiError::bad_request(
+                        "jwks_url is not a valid URL",
+                    ))
+                }
+            }
+        }
 
         sqlx::query(
             "UPDATE routes SET jwks_url = $1, jwt_audience = $2, jwt_issuer = $3 \

@@ -149,6 +149,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "dashmap",
  "dotenvy",
  "futures",
  "futures-util",
@@ -167,6 +168,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

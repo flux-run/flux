@@ -122,14 +122,31 @@ pub async fn require_auth(
     if let Some(ref key) = raw_key {
         if key.starts_with("flux_") && std::env::var("FLUX_API_KEY").is_err() {
             let hash = format!("{:x}", Sha256::digest(key.as_bytes()));
-            match sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM flux.api_keys WHERE key_hash = $1 AND revoked_at IS NULL)",
+            match sqlx::query_scalar::<_, Option<String>>(
+                "SELECT role FROM flux.api_keys WHERE key_hash = $1 AND revoked_at IS NULL LIMIT 1",
             )
             .bind(&hash)
             .fetch_one(&state.pool)
             .await
             {
-                Ok(true) => {
+                Ok(Some(role)) => {
+                    // Apply the same RBAC as JWT: non-admin keys may not mutate state.
+                    let is_mutating = matches!(
+                        req.method().as_str(),
+                        "POST" | "PUT" | "PATCH" | "DELETE"
+                    );
+                    if is_mutating && role != "admin" {
+                        return (
+                            StatusCode::FORBIDDEN,
+                            Json(serde_json::json!({
+                                "error":   "FORBIDDEN",
+                                "message": "Write access requires an admin API key",
+                                "code":    403,
+                            })),
+                        )
+                        .into_response();
+                    }
+
                     // Valid key — fire-and-forget last_used_at update.
                     let pool = state.pool.clone();
                     let h = hash.clone();
@@ -145,7 +162,7 @@ pub async fn require_auth(
                     req.extensions_mut().insert(RequestContext);
                     return next.run(req).await;
                 }
-                Ok(false) => {
+                Ok(None) => {
                     return (
                         StatusCode::UNAUTHORIZED,
                         Json(serde_json::json!({
