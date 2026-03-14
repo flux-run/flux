@@ -181,6 +181,78 @@ loop {
 }
 ```
 
+### V8 Task Injection Mechanism
+
+`inject_async_task` is the critical piece. `deno_core`'s `JsRuntime` has no direct API
+for "inject a new concurrent task into a running event loop." The mechanism is an
+**op-fed JS bootstrap loop** that runs once per worker and polls for new tasks:
+
+```js
+// Injected once at worker startup (before any user code runs).
+// Runs as a background async loop inside the same V8 event loop.
+(async () => {
+  while (true) {
+    const task = await Deno.core.ops.op_next_task();
+    if (task === null) break; // worker shutting down
+
+    // Fire-and-forget: don't await here. This drops the task's promise
+    // into the V8 microtask queue and immediately loops back to poll
+    // for the next task. The event loop drives all in-flight promises
+    // concurrently without this loop blocking on any of them.
+    __flux_run_task(task).catch(err => {
+      Deno.core.ops.op_task_error(task.request_id, String(err));
+    });
+  }
+})();
+```
+
+`op_next_task` is a Rust async op backed by an `mpsc::Receiver`. When Rust calls
+`inject_async_task`, it pushes to the sender side. The JS loop picks up the task on
+the next event loop tick without blocking anything already in flight.
+
+```rust
+// Rust side — op_next_task suspends the JS loop until a task arrives.
+// This is identical to how Deno's own worker thread bootstrapping works.
+#[op2(async)]
+async fn op_next_task(
+    state: Rc<RefCell<OpState>>,
+) -> Result<Option<serde_json::Value>, AnyError> {
+    let mut rx = {
+        let s = state.borrow();
+        s.borrow::<TaskReceiver>().clone()
+    };
+    Ok(rx.recv().await)  // suspends V8 loop; tokio can drive other Futures
+}
+
+// inject_async_task just pushes to the channel.
+// The JS bootstrap loop picks it up on the next tick.
+fn inject_async_task(
+    task_tx: &mpsc::Sender<serde_json::Value>,
+    inflight: &mut InFlightMap,
+    task: WorkerTask,
+) {
+    inflight.insert(task.request_id.clone(), task.reply);
+    let _ = task_tx.send(task.into_json());
+}
+```
+
+**Why this works without blocking:**
+
+`op_next_task` suspends the bootstrap loop's `await` point, which parks that
+particular async branch as a Rust `Future`. The tokio runtime is free to drive all
+other in-flight Postgres/HTTP/sleep Futures while waiting. When a new task arrives,
+tokio wakes the `op_next_task` Future, V8 resumes the bootstrap loop, fires the task
+into the microtask queue, and immediately suspends again — all in one event loop tick.
+
+**Failure isolation caveat:**
+
+If user code executes a synchronous infinite loop (`while(true) {}`) it blocks the
+V8 thread entirely. No other tasks on that worker can make progress until the timeout
+fires and the worker is restarted. All in-flight requests on the worker are failed
+with a 503 at that point. This is an inherent V8 limitation — JavaScript has no
+preemptive scheduling. WASM does not have this problem because Wasmtime enforces fuel
+limits per-invocation independently of other fibers.
+
 ### V8 Per-Request State
 
 Each request is tracked in a `RequestRegistry` inside `OpState`, keyed by `request_id`:
