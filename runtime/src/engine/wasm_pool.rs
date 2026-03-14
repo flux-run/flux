@@ -9,9 +9,29 @@
 //! - An LRU cache of compiled `Module`s keyed by `function_id`
 //!   (compilation is the expensive step; instantiation is cheap)
 //! - A `Semaphore` bounding concurrent WASM executions to `max(2×CPU, 16)`
+//!
+//! ## AOT disk cache
+//!
+//! WASM → machine code compilation (Cranelift) is expensive for large interpreter
+//! runtimes: PHP 13 MB ≈ 88 s, Python 30 MB ≈ several minutes on a debug build.
+//! To avoid re-paying this cost on every process restart, compiled modules are
+//! persisted to disk as Wasmtime "precompiled" artifacts (`.cwasm` files).
+//!
+//! Flow:
+//!   1. Cold start, no disk cache → compile WASM → `Module::serialize()` → write
+//!      `~/.flux/wasm-cache/<fingerprint>-<engine>.cwasm`
+//!   2. Same WASM is seen again (process restart, new deployment of unchanged code)
+//!      → `Module::deserialize()` from the `.cwasm` file → sub-100 ms load
+//!   3. New deployment (different bytes → different fingerprint) → compile again,
+//!      old `.cwasm` is left on disk until `flux wasm-cache prune` cleans it up
+//!
+//! The `.cwasm` format is platform-specific (ARM64 vs x86-64) and Wasmtime-version-
+//! specific.  Files from a different machine or a Wasmtime upgrade will fail to
+//! deserialize; the pool detects this and falls back to recompilation automatically.
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,20 +40,93 @@ use tokio::sync::{Mutex, Semaphore};
 use wasmtime::{Engine, Module};
 
 use super::executor::{ExecutionResult, PoolDispatchers};
-use super::wasm_executor::{build_engine, compile_module, execute_wasm, WasmExecutionParams};
+use super::wasm_executor::{build_engine, build_engine_fast, compile_module, execute_wasm, parse_wasi_args, WasmExecutionParams};
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/// Compute a fast non-cryptographic fingerprint of a byte slice.
-/// Used to detect whether newly-arrived bytes differ from the bytes used to
-/// compile the cached Wasmtime `Module`, without storing the full byte slice
-/// twice.  Collisions are vanishingly rare for function bundles.
+/// Compute a deterministic (seed-independent) fingerprint of a byte slice.
+///
+/// Uses FNV-1a 64-bit, which is:
+/// - Deterministic across process restarts (unlike Rust's `DefaultHasher` which
+///   randomises its seed per process for DoS protection — that would break the
+///   disk AOT cache whose filenames are keyed by fingerprint).
+/// - Fast: single-pass, no allocations, O(n).
+/// - Collision-resistant enough for identifying unique WASM bundles.
 fn bytes_fingerprint(bytes: &[u8]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    use std::collections::hash_map::DefaultHasher;
-    let mut h = DefaultHasher::new();
-    bytes.hash(&mut h);
-    h.finish()
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    const FNV_PRIME:  u64 = 1099511628211;
+    let mut h = FNV_OFFSET;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h
+}
+
+/// Binaries larger than this threshold are compiled with `OptLevel::None` to avoid
+/// Cranelift spending minutes on huge interpreter dispatch functions (PHP, Python, Ruby).
+const LARGE_WASM_THRESHOLD: usize = 5 * 1024 * 1024; // 5 MB
+
+/// Return the AOT disk-cache directory, creating it if needed.
+/// Path: `~/.flux/wasm-cache/`  (or `$FLUX_WASM_CACHE_DIR` if set).
+fn cache_dir() -> Option<PathBuf> {
+    let dir = std::env::var("FLUX_WASM_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            PathBuf::from(home).join(".flux").join("wasm-cache")
+        });
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// Path for a precompiled `.cwasm` artifact.
+/// The filename encodes the content fingerprint and which engine variant was used
+/// so that a new deployment or an engine change both produce a cache miss.
+fn cwasm_path(fingerprint: u64, is_fast_engine: bool) -> Option<PathBuf> {
+    let engine_tag = if is_fast_engine { "fast" } else { "speed" };
+    Some(cache_dir()?.join(format!("{:016x}-{}.cwasm", fingerprint, engine_tag)))
+}
+
+/// Try to load a precompiled module from the disk cache.
+/// Returns `None` on any error (missing file, wrong Wasmtime version, wrong arch).
+fn load_from_disk(engine: &Engine, fingerprint: u64, is_fast: bool) -> Option<Module> {
+    let path = cwasm_path(fingerprint, is_fast)?;
+    match unsafe { Module::deserialize_file(engine, &path) } {
+        Ok(m) => {
+            tracing::info!(?path, "wasm AOT disk cache hit");
+            Some(m)
+        }
+        Err(e) => {
+            // Stale / incompatible artifact — remove it so it doesn't consume disk
+            tracing::warn!(?path, err = %e, "wasm AOT disk cache miss (stale/incompatible), recompiling");
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+    }
+}
+
+/// Serialize a compiled module to disk for future process restarts.
+/// Errors are logged and silently ignored — the disk cache is best-effort.
+fn save_to_disk(module: &Module, fingerprint: u64, is_fast: bool) {
+    let Some(path) = cwasm_path(fingerprint, is_fast) else { return };
+    match module.serialize() {
+        Ok(bytes) => {
+            // Write to a temp file first, then rename for atomicity.
+            let tmp = path.with_extension("cwasm.tmp");
+            if let Err(e) = std::fs::write(&tmp, &bytes) {
+                tracing::warn!(?tmp, err = %e, "failed to write AOT cache (tmp)");
+                return;
+            }
+            if let Err(e) = std::fs::rename(&tmp, &path) {
+                tracing::warn!(?path, err = %e, "failed to rename AOT cache file");
+                let _ = std::fs::remove_file(&tmp);
+            } else {
+                tracing::info!(?path, bytes = bytes.len(), "wasm AOT compiled and cached");
+            }
+        }
+        Err(e) => tracing::warn!(err = %e, "failed to serialize compiled WASM module"),
+    }
 }
 
 // ─── WasmPool ───────────────────────────────────────────────────────────────
@@ -43,9 +136,13 @@ fn bytes_fingerprint(bytes: &[u8]) -> u64 {
 #[derive(Clone)]
 pub struct WasmPool {
     engine:           Arc<Engine>,
-    /// LRU cache: function_id → (compiled Module, bytes fingerprint).
+    /// `OptLevel::None` engine for interpreter WASM (PHP, Python, Ruby).
+    /// Shared via `Arc` so the pool is cheap to clone.
+    fast_engine:      Arc<Engine>,
+    /// LRU cache: function_id → (compiled Module, bytes fingerprint, engine Arc).
+    /// `engine` is stored so that execution uses the same engine the module was compiled with.
     /// The fingerprint detects new deployments — different bytes = cache miss = recompile.
-    modules:          Arc<Mutex<LruCache<String, (Arc<Module>, u64)>>>,
+    modules:          Arc<Mutex<LruCache<String, (Arc<Module>, u64, Arc<Engine>)>>>,
     /// Raw bytes cache: function_id → (Arc<Vec<u8>>, inserted_at)
     raw_bytes:        Arc<Mutex<LruCache<String, (Arc<Vec<u8>>, Instant)>>>,
     bytes_ttl:        Duration,
@@ -70,14 +167,16 @@ impl WasmPool {
     }
 
     pub fn new(workers: usize, fuel_limit: u64, timeout_secs: u64) -> Self {
-        let workers = workers.max(1);
-        let engine  = Arc::new(build_engine());
-        let cap     = NonZeroUsize::new(256).expect("256 is a valid non-zero usize");
+        let workers   = workers.max(1);
+        let engine    = Arc::new(build_engine());
+        let fast_engine = Arc::new(build_engine_fast());
+        let cap       = NonZeroUsize::new(256).expect("256 is a valid non-zero usize");
         let modules   = Arc::new(Mutex::new(LruCache::new(cap)));
         let raw_bytes = Arc::new(Mutex::new(LruCache::new(cap)));
         let semaphore = Arc::new(Semaphore::new(workers));
         Self {
             engine,
+            fast_engine,
             modules,
             raw_bytes,
             bytes_ttl: Duration::from_secs(60),
@@ -148,51 +247,91 @@ impl WasmPool {
         // for the full Cranelift JIT compilation duration (up to several minutes).
         // The cache lock is held only for the fast lookup and insert — not during
         // the compile itself.
+        //
+        // Three-level cache (fastest → slowest):
+        //   1. In-memory LRU  — Arc<Module>, instant
+        //   2. Disk AOT cache — ~/.flux/wasm-cache/<fp>-<engine>.cwasm, ~50 ms
+        //   3. Cranelift JIT  — compile from WASM bytecode, seconds–minutes
         let fingerprint = bytes_fingerprint(&bytes);
-        let module: Arc<Module> = {
-            // Fast path: check cache under lock (microseconds).
+        let is_large    = bytes.len() > LARGE_WASM_THRESHOLD;
+
+        let (module, exec_engine): (Arc<Module>, Arc<Engine>) = {
+            // Level 1: in-memory LRU (microseconds).
             let cached = {
                 let mut cache = self.modules.lock().await;
                 match cache.get(&function_id) {
-                    Some((m, fp)) if *fp == fingerprint => {
-                        tracing::debug!(%function_id, "wasm module cache hit");
-                        Some(m.clone())
+                    Some((m, fp, eng)) if *fp == fingerprint => {
+                        tracing::debug!(%function_id, "wasm module cache hit (memory)");
+                        Some((m.clone(), eng.clone()))
                     }
                     _ => None,
                 }
             };
 
-            if let Some(m) = cached {
-                m
+            if let Some(pair) = cached {
+                pair
             } else {
-                // Slow path: compile off a tokio worker thread.
-                tracing::debug!(%function_id, "wasm module cache miss — compiling on blocking thread");
-                let engine_arc = self.engine.clone();
-                let bytes_clone = bytes.clone();
-                let compiled = tokio::task::spawn_blocking(move || {
-                    compile_module(engine_arc.as_ref(), &bytes_clone)
-                })
-                .await
-                .map_err(|e| format!("compile task panicked: {}", e))?
-                .map_err(|e| e)?;
+                // Choose engine based on binary size — large interpreter runtimes
+                // (PHP, Python, Ruby) use OptLevel::None to avoid minutes-long
+                // Cranelift compilations caused by their huge dispatch functions.
+                let engine_arc = if is_large {
+                    tracing::info!(%function_id, bytes = bytes.len(), "using fast engine (OptLevel::None) for large WASM");
+                    self.fast_engine.clone()
+                } else {
+                    self.engine.clone()
+                };
+
+                // Level 2: disk AOT cache (~50 ms load vs seconds of Cranelift).
+                let disk_module = {
+                    let eng = engine_arc.clone();
+                    tokio::task::spawn_blocking(move || {
+                        load_from_disk(eng.as_ref(), fingerprint, is_large)
+                    }).await.unwrap_or(None)
+                };
+
+                let compiled = if let Some(m) = disk_module {
+                    m
+                } else {
+                    // Level 3: Cranelift JIT — compile from WASM bytecode.
+                    tracing::info!(%function_id, bytes = bytes.len(), "wasm module cache miss — compiling (Cranelift)");
+                    let bytes_clone = bytes.clone();
+                    let eng2 = engine_arc.clone();
+                    let fp   = fingerprint;
+                    let fast = is_large;
+                    tokio::task::spawn_blocking(move || {
+                        let m = compile_module(eng2.as_ref(), &bytes_clone)?;
+                        // Persist to disk so future restarts skip recompilation.
+                        save_to_disk(&m, fp, fast);
+                        Ok::<Module, String>(m)
+                    })
+                    .await
+                    .map_err(|e| format!("compile task panicked: {}", e))??
+                };
 
                 let arc = Arc::new(compiled);
                 // Re-acquire lock to insert — another request may have compiled
                 // concurrently; prefer whichever finished first.
                 let mut cache = self.modules.lock().await;
                 match cache.get(&function_id) {
-                    Some((m, fp)) if *fp == fingerprint => m.clone(),
+                    Some((m, fp, eng)) if *fp == fingerprint => (m.clone(), eng.clone()),
                     _ => {
-                        cache.put(function_id.clone(), (arc.clone(), fingerprint));
-                        arc
+                        cache.put(function_id.clone(), (arc.clone(), fingerprint, engine_arc.clone()));
+                        (arc, engine_arc)
                     }
                 }
             }
         };
 
         // ── Execute on a blocking thread ──────────────────────────────────
+        // Parse the `flux.wasi-args` custom section from the module bytes.
+        // For interpreter WASM (PHP: ["php", "-r", "<code>"]) this provides the
+        // argv needed by the interpreter to know which script to run.
+        // For self-contained binaries (Go, Rust, AssemblyScript) returns empty vec.
+        let wasi_argv = parse_wasi_args(&bytes);
+
         let params = WasmExecutionParams {
             secrets,
+            wasi_argv,
             payload,
             fuel_limit:          fuel_limit.unwrap_or(self.fuel_limit),
             allowed_http_hosts,
@@ -202,7 +341,7 @@ impl WasmPool {
             dispatchers,
         };
 
-        execute_wasm(self.engine.as_ref(), module.as_ref(), params).await
+        execute_wasm(exec_engine.as_ref(), module.as_ref(), params).await
 
         // _permit is dropped here — slot released
     }

@@ -55,7 +55,7 @@
 //! panicking the host process.
 use std::collections::HashMap;
 use wasmtime::{
-    Caller, Config, Engine, Linker, Module, Store,
+    Caller, Config, Engine, Linker, Module, OptLevel, Store,
 };
 use tokio::time::{timeout, Duration};
 
@@ -82,12 +82,21 @@ pub struct HostState {
     pub stdout_buf:         Vec<u8>,
     /// WASI stderr capture — populated by fd_write(fd=2) calls (e.g. Go panic messages).
     pub stderr_buf:         Vec<u8>,
+    /// WASI argv — command-line arguments returned by args_get/args_sizes_get.
+    /// Empty = no arguments (default for self-contained WASM like Go, Rust, AssemblyScript).
+    /// For interpreter WASM (PHP: ["php", "-r", "<code>"]) these are set from
+    /// the `flux.wasi-args` custom section embedded in the binary at deploy time.
+    pub wasi_argv:          Vec<String>,
 }
 
 // ─── Params ────────────────────────────────────────────────────────────────
 
 pub struct WasmExecutionParams {
     pub secrets:      HashMap<String, String>,
+    /// Optional WASI command-line arguments for interpreter-style WASM modules.
+    /// Parsed from the `flux.wasi-args` custom section of the WASM binary.
+    /// Empty = no args (default; all self-contained WASM functions like Go/Rust/AS).
+    pub wasi_argv:    Vec<String>,
     pub payload:      serde_json::Value,
     /// Maximum WASM CPU fuel (instructions).  1 billion ≈ a few hundred ms.
     pub fuel_limit:   u64,
@@ -113,6 +122,7 @@ impl WasmExecutionParams {
             secrets:            HashMap::new(),
             payload:            serde_json::Value::Null,
             fuel_limit:         1_000_000_000,
+            wasi_argv:          Vec::new(),
             allowed_http_hosts: Vec::new(),
             http_client:        None,
             timeout_secs:       30,
@@ -137,6 +147,24 @@ pub fn build_engine() -> Engine {
     Engine::new(&cfg).expect("failed to build Wasmtime engine")
 }
 
+/// Build a Wasmtime `Engine` with `OptLevel::None` for interpreter-style WASM binaries.
+///
+/// Large interpreter runtimes (PHP 13 MB, Python 30 MB, Ruby 50 MB) contain huge
+/// functions (e.g. PHP's parser dispatch loop at ~207 KB of WASM bytecode) that
+/// cause Cranelift's register allocator to take pathologically long with the default
+/// `OptLevel::Speed`.  `OptLevel::None` skips most optimisation passes and reduces
+/// compilation time from tens-of-minutes to a few seconds for these binaries.
+///
+/// The runtime perf difference for interpreter WASM is negligible — the interpreter
+/// loop dominates execution time regardless of Cranelift codegen quality.
+pub fn build_engine_fast() -> Engine {
+    let mut cfg = Config::new();
+    cfg.consume_fuel(true);
+    cfg.async_support(true);
+    cfg.cranelift_opt_level(OptLevel::None);
+    Engine::new(&cfg).expect("failed to build Wasmtime fast engine")
+}
+
 // ─── Core execution ────────────────────────────────────────────────────────
 
 /// Compile a WASM module from raw bytes using the shared engine.
@@ -144,6 +172,61 @@ pub fn build_engine() -> Engine {
 pub fn compile_module(engine: &Engine, bytes: &[u8]) -> Result<Module, String> {
     Module::from_binary(engine, bytes)
         .map_err(|e| format!("wasm compilation failed: {}", e))
+}
+
+/// Parse the `flux.wasi-args` custom WASM section from raw bytes.
+///
+/// The section contains NUL-separated argument strings, e.g.:
+///   `php\0-r\0<?php echo json_encode(['ok'=>true]);`
+///
+/// This is used for interpreter-style WASM bundles (PHP, future Ruby CLI builds)
+/// where the interpreter binary is distributed separately and the user script is
+/// embedded at deploy time by the Flux CLI.
+///
+/// Returns an empty Vec if the section is absent (self-contained WASM like Go,
+/// Rust, AssemblyScript — they don't need WASI args).
+pub fn parse_wasi_args(bytes: &[u8]) -> Vec<String> {
+    // WASM binary: magic(4) + version(4) then sections.
+    // Custom section: id=0, size(leb128), name_len(leb128), name, content.
+    if bytes.len() < 8 { return Vec::new(); }
+    let mut pos = 8usize;
+    while pos < bytes.len() {
+        let section_id = bytes[pos]; pos += 1;
+        // Read LEB128 section size
+        let mut size: usize = 0; let mut shift = 0;
+        loop {
+            if pos >= bytes.len() { return Vec::new(); }
+            let b = bytes[pos]; pos += 1;
+            size |= ((b & 0x7f) as usize) << shift; shift += 7;
+            if b & 0x80 == 0 { break; }
+        }
+        let section_end = pos + size;
+        if section_id == 0 {
+            // Custom section — read name
+            let mut name_len: usize = 0; let mut shift = 0;
+            let mut p = pos;
+            loop {
+                if p >= section_end { break; }
+                let b = bytes[p]; p += 1;
+                name_len |= ((b & 0x7f) as usize) << shift; shift += 7;
+                if b & 0x80 == 0 { break; }
+            }
+            if p + name_len <= section_end {
+                let name = &bytes[p..p + name_len];
+                if name == b"flux.wasi-args" {
+                    let content_start = p + name_len;
+                    let content = &bytes[content_start..section_end];
+                    // Split on NUL bytes; decode each as UTF-8
+                    return content.split(|&b| b == 0)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| String::from_utf8_lossy(s).into_owned())
+                        .collect();
+                }
+            }
+        }
+        pos = section_end;
+    }
+    Vec::new()
 }
 
 /// Execute a pre-compiled `Module`.
@@ -195,6 +278,7 @@ async fn execute_wasm_async(
         stdin_pos:          0,
         stdout_buf:         Vec::new(),
         stderr_buf:         Vec::new(),
+        wasi_argv:          params.wasi_argv,
     };
 
     let mut store = Store::new(engine, host);
@@ -240,8 +324,36 @@ async fn execute_wasm_async(
     ).map_err(|e| e.to_string())?;
 
     // args_get(argv: i32, argv_buf: i32) -> i32
+    //
+    // Write argv pointers and the NUL-terminated argument strings into WASM memory.
+    // Layout:
+    //   argv[0..argc] at argv_ptr: array of i32 pointers into argv_buf
+    //   argv_buf: NUL-terminated strings packed sequentially
+    //
+    // When wasi_argv is empty (default for self-contained WASM like Go, Rust) we
+    // return argc=0 and buf_size=0 — the module sees an empty argv as expected.
     linker.func_wrap("wasi_snapshot_preview1", "args_get",
-        |_: Caller<HostState>, _argv: i32, _argv_buf: i32| -> i32 { 0 }
+        |mut caller: Caller<HostState>, argv_ptr: i32, argv_buf_ptr: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 1,
+            };
+            let argv = caller.data().wasi_argv.clone();
+            if argv.is_empty() {
+                return 0;
+            }
+            // Write each arg as a NUL-terminated string into argv_buf, record pointer.
+            let mut buf_offset = argv_buf_ptr as usize;
+            for (i, arg) in argv.iter().enumerate() {
+                let ptr_offset = argv_ptr as usize + i * 4;
+                let _ = mem.write(&mut caller, ptr_offset, &(buf_offset as u32).to_le_bytes());
+                let bytes = arg.as_bytes();
+                let _ = mem.write(&mut caller, buf_offset, bytes);
+                buf_offset += bytes.len();
+                let _ = mem.write(&mut caller, buf_offset, &[0u8]); // NUL
+                buf_offset += 1;
+            }
+            0
+        }
     ).map_err(|e| e.to_string())?;
 
     // args_sizes_get(argc_out: i32, argv_buf_size_out: i32) -> i32
@@ -250,8 +362,11 @@ async fn execute_wasm_async(
             let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                 Some(m) => m, None => return 1,
             };
-            let _ = mem.write(&mut caller, argc_out as usize, &0u32.to_le_bytes());
-            let _ = mem.write(&mut caller, argv_buf_out as usize, &0u32.to_le_bytes());
+            let argv = &caller.data().wasi_argv;
+            let argc = argv.len() as u32;
+            let buf_size: u32 = argv.iter().map(|a| a.len() as u32 + 1).sum(); // +1 for NUL
+            let _ = mem.write(&mut caller, argc_out as usize, &argc.to_le_bytes());
+            let _ = mem.write(&mut caller, argv_buf_out as usize, &buf_size.to_le_bytes());
             0
         }
     ).map_err(|e| e.to_string())?;
@@ -395,13 +510,106 @@ async fn execute_wasm_async(
         }
     ).map_err(|e| e.to_string())?;
 
-    // poll_oneoff(in: i32, out: i32, nsubscriptions: i32, nevents: i32) -> i32
+    // poll_oneoff(in: i32, out: i32, nsubscriptions: i32, nevents_ptr: i32) -> i32
+    //
+    // WASI subscription layout (48 bytes each):
+    //   offset 0:  userdata (u64, 8 bytes)
+    //   offset 8:  tag (u8)  — 0=CLOCK, 1=FD_READ, 2=FD_WRITE
+    //   offset 9:  padding (7 bytes)
+    //   offset 16: union — for FD_READ/FD_WRITE: fd (u32); for CLOCK: clockid (u32)
+    //
+    // WASI event layout (32 bytes each):
+    //   offset 0:  userdata (u64)
+    //   offset 8:  error (u16) — 0 = success
+    //   offset 10: type (u8)  — same tag values
+    //   offset 11: padding (5 bytes)
+    //   offset 16: nbytes (u64) for FD_READ/FD_WRITE (bytes available)
+    //   offset 24: flags (u16) for FD_READ/FD_WRITE
+    //   offset 26: padding (6 bytes)
+    //
+    // Go's wasip1 goroutine scheduler calls poll_oneoff to wait for I/O events.
+    // When our stub returned 0 events, Go entered a busy-spin loop checking
+    // stdin readiness, exhausting the fuel budget.  We now properly report:
+    //   - FD_READ(fd=0): ready when stdin_buf has unread data; EOF otherwise
+    //   - FD_WRITE(fd=1/2): always ready
+    //   - CLOCK: always elapsed (we have no real timer; treat all deadlines as past)
+    //   - Fallback: if no subscription matched, report a synthetic CLOCK event so
+    //     Go's scheduler yields instead of spinning.
     linker.func_wrap("wasi_snapshot_preview1", "poll_oneoff",
-        |mut caller: Caller<HostState>, _in: i32, _out: i32, _nsubs: i32, nevents: i32| -> i32 {
+        |mut caller: Caller<HostState>, in_ptr: i32, out_ptr: i32, nsubs: i32, nevents_ptr: i32| -> i32 {
             let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                 Some(m) => m, None => return 1,
             };
-            let _ = mem.write(&mut caller, nevents as usize, &0u32.to_le_bytes());
+            if nsubs <= 0 {
+                let _ = mem.write(&mut caller, nevents_ptr as usize, &0u32.to_le_bytes());
+                return 0;
+            }
+            let stdin_has_data = {
+                let d = caller.data();
+                d.stdin_buf.len() > d.stdin_pos
+            };
+            let mut out_buf: Vec<u8> = Vec::new();
+            let mut nevents: u32 = 0;
+            for i in 0..nsubs as usize {
+                let sub_offset = in_ptr as usize + i * 48;
+                let mut sub = [0u8; 48];
+                if mem.read(&caller, sub_offset, &mut sub).is_err() {
+                    continue;
+                }
+                let userdata = u64::from_le_bytes(sub[0..8].try_into().unwrap_or([0u8; 8]));
+                let tag = sub[8];
+                let mut ev = [0u8; 32];
+                ev[0..8].copy_from_slice(&userdata.to_le_bytes());
+                match tag {
+                    0 => {
+                        // CLOCK — treat every deadline as already elapsed so goroutines
+                        // that sleep via time.Sleep or runtime timers can proceed.
+                        ev[10] = 0; // type = CLOCK
+                        out_buf.extend_from_slice(&ev);
+                        nevents += 1;
+                    }
+                    1 => {
+                        // FD_READ
+                        let fd = u32::from_le_bytes(sub[16..20].try_into().unwrap_or([0u8; 4]));
+                        if fd == 0 {
+                            if stdin_has_data {
+                                let nb = (caller.data().stdin_buf.len()
+                                    - caller.data().stdin_pos) as u64;
+                                ev[10] = 1; // type = FD_READ
+                                ev[16..24].copy_from_slice(&nb.to_le_bytes());
+                                out_buf.extend_from_slice(&ev);
+                                nevents += 1;
+                            }
+                            // If stdin is empty (EOF): don't report as ready.
+                            // fd_read will return nread=0 → Go interprets as EOF.
+                        }
+                        // Other fds: not supported, skip (no event reported).
+                    }
+                    2 => {
+                        // FD_WRITE — stdout (1) and stderr (2) are always writable.
+                        let fd = u32::from_le_bytes(sub[16..20].try_into().unwrap_or([0u8; 4]));
+                        if fd == 1 || fd == 2 {
+                            ev[10] = 2; // type = FD_WRITE
+                            ev[16..24].copy_from_slice(&65536u64.to_le_bytes());
+                            out_buf.extend_from_slice(&ev);
+                            nevents += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Fallback: if no subscriptions produced events (e.g. the goroutine
+            // scheduler is waiting solely on a stdin FD_READ after EOF, or on an
+            // unknown subscription type), synthesise a CLOCK event so the scheduler
+            // yields rather than spinning.  This prevents infinite busy-wait.
+            if nevents == 0 {
+                let mut ev = [0u8; 32];
+                ev[10] = 0; // CLOCK
+                out_buf.extend_from_slice(&ev);
+                nevents = 1;
+            }
+            let _ = mem.write(&mut caller, out_ptr as usize, &out_buf);
+            let _ = mem.write(&mut caller, nevents_ptr as usize, &nevents.to_le_bytes());
             0
         }
     ).map_err(|e| e.to_string())?;
@@ -625,20 +833,46 @@ async fn execute_wasm_async(
         }
     ).map_err(|e| e.to_string())?;
 
-    // sock_accept(fd: i32, flags: i32, result_fd: i32) -> i32 — ENOSYS
+    // sock_open(family: i32, socktype: i32, protocol: i32) -> i32 — ENOSYS
+    // PHP uses this for networking; we don't support WASI sockets.
+    linker.func_wrap("wasi_snapshot_preview1", "sock_open",
+        |_: Caller<HostState>, _family: i32, _socktype: i32, _protocol: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // sock_bind(fd: i32, addr: i32, port: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "sock_bind",
+        |_: Caller<HostState>, _fd: i32, _addr: i32, _port: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // sock_listen(fd: i32, backlog: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "sock_listen",
+        |_: Caller<HostState>, _fd: i32, _backlog: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // sock_setsockopt(fd: i32, level: i32, name: i32, buf: i32, buf_len: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "sock_setsockopt",
+        |_: Caller<HostState>, _fd: i32, _level: i32, _name: i32, _buf: i32, _buf_len: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // sock_connect(fd: i32, addr: i32, port: i32) -> i32 — ENOSYS
+    // PHP imports this for socket networking; we deny all outbound socket connections.
+    linker.func_wrap("wasi_snapshot_preview1", "sock_connect",
+        |_: Caller<HostState>, _fd: i32, _addr: i32, _port: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // sock_accept(fd: i32, addr_out: i32) -> i32 — ENOSYS
     linker.func_wrap("wasi_snapshot_preview1", "sock_accept",
-        |_: Caller<HostState>, _fd: i32, _flags: i32, _result_fd: i32| -> i32 { 52 }
+        |_: Caller<HostState>, _fd: i32, _addr_out: i32| -> i32 { 52 }
     ).map_err(|e| e.to_string())?;
 
-    // sock_recv(fd: i32, ri_data: i32, ri_data_len: i32, ri_flags: i32,
-    //           nread: i32, ro_flags: i32) -> i32 — ENOSYS
+    // sock_recv(fd: i32, ri_data: i32, ri_data_len: i32, ri_flags: i32, ro_datalen: i32, ro_flags: i32) -> i32 — ENOSYS
     linker.func_wrap("wasi_snapshot_preview1", "sock_recv",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 52 }
+        |_: Caller<HostState>, _fd: i32, _ri_data: i32, _ri_data_len: i32, _ri_flags: i32, _ro_datalen: i32, _ro_flags: i32| -> i32 { 52 }
     ).map_err(|e| e.to_string())?;
 
-    // sock_send(fd: i32, si_data: i32, si_data_len: i32, si_flags: i32, nwritten: i32) -> i32 — ENOSYS
+    // sock_send(fd: i32, si_data: i32, si_data_len: i32, si_flags: i32, so_datalen: i32) -> i32 — ENOSYS
     linker.func_wrap("wasi_snapshot_preview1", "sock_send",
-        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 52 }
+        |_: Caller<HostState>, _fd: i32, _si_data: i32, _si_data_len: i32, _si_flags: i32, _so_datalen: i32| -> i32 { 52 }
     ).map_err(|e| e.to_string())?;
 
     // sock_shutdown(fd: i32, how: i32) -> i32 — ENOSYS
