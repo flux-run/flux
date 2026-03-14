@@ -24,6 +24,7 @@ use axum::{
     Json,
 };
 use crate::error::{ApiError, ApiResponse, ApiResult};
+use crate::validation::validate_name;
 use api_contract::deployments::{CreateDeploymentPayload, CreateProjectDeploymentPayload};
 use sqlx::PgPool;
 use serde::Deserialize;
@@ -215,8 +216,14 @@ pub async fn deploy_function_cli(
     if name.is_empty() {
         return Err(ApiError::bad_request("name is required"));
     }
+    // Prevent path traversal: name must match [a-zA-Z0-9_-]{1,64}
+    validate_name(&name).map_err(|e| ApiError::bad_request(e))?;
     if bundle_bytes.is_empty() {
         return Err(ApiError::bad_request("bundle is required"));
+    }
+    const MAX_BUNDLE_BYTES: usize = 50 * 1024 * 1024; // 50 MB
+    if bundle_bytes.len() > MAX_BUNDLE_BYTES {
+        return Err(ApiError::bad_request("bundle exceeds 50 MB limit"));
     }
     if runtime.is_empty() {
         runtime = "deno".to_string();

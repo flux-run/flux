@@ -51,3 +51,21 @@ pub struct PublishMessagePayload {
     pub payload:        Option<Value>,
     pub delay_seconds:  Option<i64>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export))]
+pub struct QueueBindingRow {
+    pub id:          Uuid,
+    pub queue_name:  String,
+    pub function_id: Uuid,
+    pub created_at:  DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(export))]
+pub struct CreateBindingPayload {
+    pub function_id: Uuid,
+}

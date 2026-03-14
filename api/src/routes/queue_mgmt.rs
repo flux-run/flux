@@ -13,7 +13,7 @@ use crate::{
     AppState,
 };
 use api_contract::queue::{
-    CreateQueuePayload, DeadLetterJobRow, PublishMessagePayload, QueueConfigRow,
+    CreateQueuePayload, CreateBindingPayload, DeadLetterJobRow, PublishMessagePayload, QueueBindingRow, QueueConfigRow,
 };
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
@@ -48,7 +48,13 @@ pub async fn create_queue(
     Json(payload): Json<CreateQueuePayload>,
 ) -> ApiResult<QueueConfigRow> {
     let max_attempts = payload.max_attempts.unwrap_or(5);
-    let visibility_timeout_ms = payload.visibility_timeout_ms.unwrap_or(30000);
+    if !(1..=100).contains(&max_attempts) {
+        return Err(ApiError::bad_request("max_attempts must be between 1 and 100"));
+    }
+    let visibility_timeout_ms = payload.visibility_timeout_ms.unwrap_or(30_000);
+    if !(100..=3_600_000).contains(&visibility_timeout_ms) {
+        return Err(ApiError::bad_request("visibility_timeout_ms must be between 100 and 3,600,000"));
+    }
 
     let row = sqlx::query_as::<_, QueueConfigRow>(
         "INSERT INTO flux.queue_configs \
@@ -163,26 +169,87 @@ pub async fn publish_message(
 }
 
 pub async fn list_bindings(
-    Path(_name): Path<String>,
-    State(_state): State<AppState>,
+    Path(name): Path<String>,
+    State(state): State<AppState>,
     Extension(_ctx): Extension<RequestContext>,
-    Query(_page): Query<PaginationQuery>,
-) -> ApiResult<Vec<Value>> {
-    Err(ApiError::new(
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "NOT_IMPLEMENTED",
-        "Queue bindings are not yet supported on this server",
-    ))
+    Query(page): Query<PaginationQuery>,
+) -> ApiResult<Vec<QueueBindingRow>> {
+    let (limit, offset) = page.clamped();
+    let rows = sqlx::query_as::<_, QueueBindingRow>(
+        "SELECT id, queue_name, function_id, created_at \
+         FROM flux.queue_bindings \
+         WHERE queue_name = $1 \
+         ORDER BY created_at DESC \
+         LIMIT $2 OFFSET $3",
+    )
+    .bind(&name)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(ApiResponse::new(rows))
 }
 
 pub async fn create_binding(
-    Path(_name): Path<String>,
-) -> ApiResult<serde_json::Value> {
-    Err(ApiError::new(
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "NOT_IMPLEMENTED",
-        "Queue bindings are not yet supported on this server",
-    ))
+    Path(name): Path<String>,
+    State(state): State<AppState>,
+    Extension(_ctx): Extension<RequestContext>,
+    Json(payload): Json<CreateBindingPayload>,
+) -> ApiResult<QueueBindingRow> {
+    // Verify the queue exists.
+    let queue_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM flux.queue_configs WHERE name = $1)",
+    )
+    .bind(&name)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(db_err)?;
+    if !queue_exists {
+        return Err(ApiError::not_found("queue not found"));
+    }
+
+    // Verify the function exists.
+    let fn_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM functions WHERE id = $1)",
+    )
+    .bind(payload.function_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(db_err)?;
+    if !fn_exists {
+        return Err(ApiError::bad_request("function not found"));
+    }
+
+    let row = sqlx::query_as::<_, QueueBindingRow>(
+        "INSERT INTO flux.queue_bindings (queue_name, function_id) \
+         VALUES ($1, $2) \
+         ON CONFLICT (queue_name, function_id) DO NOTHING \
+         RETURNING id, queue_name, function_id, created_at",
+    )
+    .bind(&name)
+    .bind(payload.function_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(db_err)?;
+
+    // If ON CONFLICT fired, fetch the existing row.
+    let row = match row {
+        Some(r) => r,
+        None => sqlx::query_as::<_, QueueBindingRow>(
+            "SELECT id, queue_name, function_id, created_at \
+             FROM flux.queue_bindings \
+             WHERE queue_name = $1 AND function_id = $2",
+        )
+        .bind(&name)
+        .bind(payload.function_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(db_err)?,
+    };
+
+    Ok(ApiResponse::created(row))
 }
 
 pub async fn purge_queue(

@@ -190,8 +190,22 @@ pub async fn require_auth(
         }
     }
 
-    // ── 3. Dev / local mode — no env vars set, pass through ──────────────
-    req.extensions_mut().insert(RequestContext);
+    // ── 3. Dev / local mode — only permitted when explicitly opted in ─────
+    //
+    // Require FLUX_LOCAL=1 or LOCAL_MODE=1 to be set.  A production server
+    // that ships without FLUX_API_KEY must NOT silently accept all traffic.
+    if std::env::var("FLUX_LOCAL").is_ok() || std::env::var("LOCAL_MODE").is_ok() {
+        req.extensions_mut().insert(RequestContext);
+        return next.run(req).await;
+    }
 
-    next.run(req).await
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "error":   "UNAUTHORIZED",
+            "message": "No valid credentials. Set Authorization: Bearer <token> or configure FLUX_API_KEY.",
+            "code":    401,
+        })),
+    )
+    .into_response()
 }
