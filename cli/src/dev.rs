@@ -148,15 +148,35 @@ pub async fn execute() -> anyhow::Result<()> {
         _ = signal::ctrl_c() => {
             println!();
             println!("{}", "Stopping…".dimmed());
-            let _ = server.kill().await;
-            let _ = server.wait().await;
+            // Send SIGTERM first so the server closes its DB connections
+            // gracefully; give it up to 3 s before forcing SIGKILL.
+            if let Some(pid) = server.id() {
+                #[cfg(unix)]
+                let _ = std::process::Command::new("kill")
+                    .args(["-s", "TERM", &pid.to_string()])
+                    .status();
+                tokio::select! {
+                    _ = server.wait() => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
+                        let _ = server.kill().await;
+                        let _ = server.wait().await;
+                    }
+                }
+            } else {
+                let _ = server.kill().await;
+                let _ = server.wait().await;
+            }
         }
     }
 
-    // 11. Stop embedded PostgreSQL if we started it
+    // 11. Stop embedded PostgreSQL if we started it.
+    // Cap the shutdown at 5 s to avoid hanging the terminal on Ctrl+C.
     println!("{}", "Stopping PostgreSQL…".dimmed());
     if let Some(pg) = _pg {
-        let _ = pg.stop().await;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            pg.stop(),
+        ).await;
     }
     println!("{}", "✔  Stopped.".green());
 
@@ -664,6 +684,12 @@ async fn watch_functions(functions_dir: &Path, build_dir: &Path, port: u16) -> a
                 if !is_write { continue; }
 
                 for path in &event.paths {
+                    // Ignore build outputs inside functions/<name>/dist/ — those are written by
+                    // bundle_js itself and would cause an infinite rebuild loop.
+                    if path.components().any(|c| c.as_os_str() == "dist" || c.as_os_str() == "node_modules") {
+                        continue;
+                    }
+
                     // Derive function name from the immediate child dir of functions_dir.
                     let func_name = path
                         .strip_prefix(functions_dir)
