@@ -23,6 +23,7 @@ pub mod environments;
 pub mod events;
 pub mod functions;
 pub mod gateway;
+pub mod logs;
 pub mod queue;
 pub mod schedules;
 pub mod secrets;

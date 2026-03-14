@@ -13,7 +13,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { apiFetch } from '@/lib/api'
-import type { RouteRow } from '@fluxbase/api-types'
+import type { RouteRow, FunctionResponse } from '@fluxbase/api-types'
 import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 
@@ -47,7 +47,7 @@ export default function RoutesPage() {
   const [jsonSchema, setJsonSchema] = useState('')
 
   // Fetch routes
-  const { data: routes, isLoading: routesLoading } = useQuery({
+  const { data: routes, isLoading } = useQuery({
     queryKey: ['projects', projectId, 'routes'],
     queryFn: async () => {
       const resp = await apiFetch<RouteRow[]>(`/routes?project_id=${projectId}`)
@@ -56,22 +56,10 @@ export default function RoutesPage() {
     enabled: !!projectId
   })
 
-  // Fetch project details for slugs
-  const { data: project, isLoading: projectLoading } = useQuery({
-    queryKey: ['projects', projectId, 'detail'],
-    queryFn: async () => {
-      const resp = await apiFetch<any>(`/projects/${projectId}`)
-      return resp
-    },
-    enabled: !!projectId
-  })
-
-  const isLoading = routesLoading || projectLoading
-
   // Fetch functions for the dropdown
   const { data: functionsData } = useQuery({
     queryKey: ['functions', projectId],
-    queryFn: () => apiFetch<{ functions: any[] }>('/functions'),
+    queryFn: () => apiFetch<{ functions: FunctionResponse[] }>('/functions'),
     enabled: !!projectId
   })
   const functions = functionsData?.functions ?? []
@@ -160,10 +148,7 @@ export default function RoutesPage() {
     setCreateOpen(true)
   }
 
-  const getBaseDomain = () => {
-    if (!project || !project.tenant_slug) return 'fluxbase.co'
-    return `${project.tenant_slug}.fluxbase.co`
-  }
+  const getBaseDomain = () => 'localhost:4000'
 
   const getFullUrl = (routePath: string) => {
     const cleanPath = routePath.startsWith('/') ? routePath : `/${routePath}`

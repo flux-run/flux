@@ -1,4 +1,4 @@
-.PHONY: dev api dashboard server build migrate install clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types
+.PHONY: dev api dashboard server build migrate install clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types check-types
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API + dashboard in parallel, printing labelled output.
@@ -80,6 +80,12 @@ clean:
 generate-types:
 	cargo test -p api_contract --features ts
 	@echo "TypeScript bindings written to shared/api_contract/bindings/"
+
+# Verifies the dashboard compiles against the current contract types.
+# Run this after `make generate-types` to catch dashboard type mismatches.
+check-types:
+	cd dashboard && npx tsc --noEmit
+	@echo "Dashboard type check passed"
 
 # ── Async Wiring Test ───────────────────────────────────────────────────────
 # Runs deterministic staging wiring test for Gateway -> Queue -> Worker -> Runtime.

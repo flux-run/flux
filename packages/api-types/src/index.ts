@@ -50,6 +50,9 @@ export type { RateLimitPayload } from "../../../shared/api_contract/bindings/Rat
 export type { CorsPayload } from "../../../shared/api_contract/bindings/CorsPayload";
 export type { MiddlewareCreatePayload } from "../../../shared/api_contract/bindings/MiddlewareCreatePayload";
 
+// logs
+export type { PlatformLogRow } from "../../../shared/api_contract/bindings/PlatformLogRow";
+
 // queue
 export type { QueueConfigRow } from "../../../shared/api_contract/bindings/QueueConfigRow";
 export type { DeadLetterJobRow } from "../../../shared/api_contract/bindings/DeadLetterJobRow";
