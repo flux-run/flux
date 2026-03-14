@@ -128,6 +128,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // ── Runtime AppState ──────────────────────────────────────────────────
+    let request_timeout_secs: u64 = std::env::var("REQUEST_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
     let runtime_state = Arc::new(runtime::AppState {
         secrets_client: SecretsClient::new(Arc::clone(&api_dispatch)),
         http_client:    http_client.clone(),
@@ -137,9 +141,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         service_token:  service_token.clone(),
         data_engine_url: std::env::var("DATA_ENGINE_URL")
             .unwrap_or_else(|_| "http://localhost:8085".to_string()),
+        runtime_url:    format!("http://localhost:{}", port),
         bundle_cache:   BundleCache::new(100),
         schema_cache:   SchemaCache::new(200),
-        isolate_pool:   IsolatePool::new(isolate_workers),
+        isolate_pool:   IsolatePool::new(isolate_workers, request_timeout_secs),
         wasm_pool:      WasmPool::default_sized(),
     });
 

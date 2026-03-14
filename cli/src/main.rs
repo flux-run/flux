@@ -48,6 +48,9 @@ mod new_function;
 mod why;
 mod generate;
 mod toolchain;
+mod workflow;
+mod agent;
+mod tool;
 #[derive(Parser)]
 #[command(name = "flux")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -485,6 +488,23 @@ enum Commands {
         command: gateway::GatewayCommands,
     },
 
+    // ── Workflows, Agents, Tools ──────────────────────────────────────────────
+    /// Workflow management (list, create, run)
+    Workflow {
+        #[command(subcommand)]
+        command: workflow::WorkflowCommands,
+    },
+    /// Agent management (list, create, simulate)
+    Agent {
+        #[command(subcommand)]
+        command: agent::AgentCommands,
+    },
+    /// Tool management (list)
+    Tool {
+        #[command(subcommand)]
+        command: tool::ToolCommands,
+    },
+
     // ── Schedules, Queues, Events ─────────────────────────────────────────────
     /// Scheduled job management (create, pause, resume, history)
     Schedule {
@@ -787,6 +807,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::ApiKey  { command } => api_key::execute(command).await?,
 
         Commands::Gateway  { command } => gateway::execute(command).await?,
+        Commands::Workflow { command } => workflow::execute(command).await?,
+        Commands::Agent    { command } => agent::execute(command).await?,
+        Commands::Tool     { command } => tool::execute(command).await?,
         Commands::Schedule { command } => schedule::execute(command).await?,
         Commands::Queue    { command } => queue::execute(command).await?,
         Commands::Event    { command } => event::execute(command).await?,

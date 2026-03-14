@@ -1,9 +1,8 @@
-//! `flux secret` — manage local development secrets in `.env.local`.
+//! `flux secret` — manage secrets via API or local `.env.local`.
 //!
-//! Secrets are stored in `.env.local` (gitignored by default) in the current
-//! project directory.  `flux dev` auto-loads this file into the function
-//! environment so secrets are available to your functions without being
-//! committed to source control.
+//! When `FLUXBASE_API_URL` and `FLUXBASE_TOKEN` are both set, secrets are
+//! managed through the API.  Otherwise they are stored in `.env.local`
+//! (gitignored by default) in the current project directory.
 
 use clap::Subcommand;
 use colored::Colorize;
@@ -32,15 +31,76 @@ pub enum SecretsCommands {
 }
 
 pub async fn execute(command: SecretsCommands) -> anyhow::Result<()> {
-    match command {
-        SecretsCommands::List => cmd_list(),
-        SecretsCommands::Get { key } => cmd_get(&key),
-        SecretsCommands::Set { key, value } => cmd_set(&key, &value),
-        SecretsCommands::Delete { key } => cmd_delete(&key),
+    let api_url   = std::env::var("FLUXBASE_API_URL").ok();
+    let api_token = std::env::var("FLUXBASE_TOKEN").ok();
+
+    if api_url.is_some() && api_token.is_some() {
+        execute_api(command, api_url.unwrap(), api_token.unwrap()).await
+    } else {
+        match command {
+            SecretsCommands::List          => cmd_list(),
+            SecretsCommands::Get { key }   => cmd_get(&key),
+            SecretsCommands::Set { key, value } => cmd_set(&key, &value),
+            SecretsCommands::Delete { key } => cmd_delete(&key),
+        }
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── API mode ──────────────────────────────────────────────────────────────────
+
+async fn execute_api(command: SecretsCommands, api_url: String, token: String) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    match command {
+        SecretsCommands::List => {
+            let res = client
+                .get(format!("{}/secrets", api_url))
+                .bearer_auth(&token)
+                .send()
+                .await?;
+            let secrets: serde_json::Value = res.error_for_status()?.json().await?;
+            if let Some(arr) = secrets.as_array() {
+                println!("{:<30} {}", "KEY", "VERSION");
+                println!("{}", "-".repeat(40));
+                for s in arr {
+                    let key     = s.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                    let version = s.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
+                    println!("{:<30} {}", key, version);
+                }
+            }
+        }
+        SecretsCommands::Get { key } => {
+            let res = client
+                .get(format!("{}/secrets/{}", api_url, key))
+                .bearer_auth(&token)
+                .send()
+                .await?;
+            let secret: serde_json::Value = res.error_for_status()?.json().await?;
+            println!("{}", serde_json::to_string_pretty(&secret)?);
+        }
+        SecretsCommands::Set { key, value } => {
+            let res = client
+                .post(format!("{}/secrets", api_url))
+                .bearer_auth(&token)
+                .json(&serde_json::json!({ "key": key, "value": value }))
+                .send()
+                .await?;
+            res.error_for_status()?;
+            println!("{} Set secret '{}'", "✔".green().bold(), key.cyan());
+        }
+        SecretsCommands::Delete { key } => {
+            let res = client
+                .delete(format!("{}/secrets/{}", api_url, key))
+                .bearer_auth(&token)
+                .send()
+                .await?;
+            res.error_for_status()?;
+            println!("{} Deleted secret '{}'", "✔".green().bold(), key.cyan());
+        }
+    }
+    Ok(())
+}
+
+// ── Local .env.local mode ────────────────────────────────────────────────────
 
 /// Parse `.env.local` into an ordered map, preserving comment/blank lines as-is.
 fn load_env() -> anyhow::Result<BTreeMap<String, String>> {
