@@ -8,6 +8,10 @@ Flux is not just a functions runtime. The product promise is:
 
 This test plan is built around that promise.
 
+Detailed subsystem and file-level audit:
+
+- [full-system-test-report.md](./full-system-test-report.md)
+
 No test suite can create a literal `0%` production-breakage guarantee. What this repo can do is define a release bar that makes silent regressions in execution recording, traceability, and state auditability very hard to ship.
 
 ## Test layers
