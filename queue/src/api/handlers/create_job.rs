@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, Json};
-use job_contract::job::{CreateJobRequest, CreateJobResponse};
+use job_contract::job::CreateJobRequest;
 use crate::state::AppState;
 use crate::services::job_service;
 use crate::services::job_service::CreateJobInput;
@@ -32,11 +32,15 @@ pub async fn handler(
     match job_service::create_job(pool, input).await {
         Ok(job_id) => (
             StatusCode::CREATED,
-            Json(serde_json::to_value(CreateJobResponse { job_id }).unwrap()),
+            Json(serde_json::json!({ "job_id": job_id })),
         ),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Failed to create job"})),
+            Json(serde_json::json!({
+                "error":   "FUNCTION_ERROR",
+                "message": "failed to create job",
+                "code":    500,
+            })),
         ),
     }
 }

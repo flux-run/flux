@@ -196,7 +196,7 @@ pub async fn records_export(
         .status(StatusCode::OK)
         .header("Content-Type", content_type)
         .body(Body::from_stream(stream))
-        .unwrap();
+        .expect("hardcoded status 200 and Content-Type header are always valid");
     Ok(response)
 }
 

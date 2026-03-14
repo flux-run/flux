@@ -30,7 +30,11 @@ pub async fn handler(
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({
+                "error":   "FUNCTION_ERROR",
+                "message": e.to_string(),
+                "code":    500,
+            })),
         ),
     }
 }

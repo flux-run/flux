@@ -11,8 +11,6 @@ export type {
   FluxSecrets,
   FluxTools,
   FluxWorkflow,
-  FluxAgent,
-  FluxAgentResult,
   FluxContext as Ctx,
   HandlerArgs,
   DefineFunctionOptions,

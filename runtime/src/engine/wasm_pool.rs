@@ -54,7 +54,7 @@ impl WasmPool {
     pub fn new(workers: usize) -> Self {
         let workers = workers.max(1);
         let engine  = Arc::new(build_engine());
-        let cap     = NonZeroUsize::new(256).unwrap();
+        let cap     = NonZeroUsize::new(256).expect("256 is a valid non-zero usize");
         let modules   = Arc::new(Mutex::new(LruCache::new(cap)));
         let raw_bytes = Arc::new(Mutex::new(LruCache::new(cap)));
         let semaphore = Arc::new(Semaphore::new(workers));

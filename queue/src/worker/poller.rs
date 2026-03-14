@@ -62,7 +62,8 @@ pub async fn poll(
         match fetch_jobs::fetch_and_lock_jobs(&pool, 20).await {
             Ok(jobs) => {
                 for job in jobs {
-                    let permit            = semaphore.clone().acquire_owned().await.unwrap();
+                    let permit            = semaphore.clone().acquire_owned().await
+                        .expect("semaphore is open; it is only closed when all owners drop it");
                     let pool_clone        = pool.clone();
                     let api_clone         = Arc::clone(&api);
                     let runtime_url_clone = runtime_url.clone();

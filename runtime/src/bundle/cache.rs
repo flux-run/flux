@@ -60,13 +60,13 @@ impl BundleCache {
     // ── deployment_id cache ───────────────────────────────────────────────
 
     pub fn get(&self, deployment_id: &str) -> Option<String> {
-        self.by_deployment.lock().unwrap().get(deployment_id).cloned()
+        self.by_deployment.lock().unwrap_or_else(|e| e.into_inner()).get(deployment_id).cloned()
     }
 
     // ── function_id cache ─────────────────────────────────────────────────
 
     pub fn get_by_function(&self, function_id: &str) -> Option<String> {
-        let mut c = self.by_function.lock().unwrap();
+        let mut c = self.by_function.lock().unwrap_or_else(|e| e.into_inner());
         match c.get(function_id) {
             Some((code, inserted_at)) if inserted_at.elapsed() < self.function_ttl => {
                 Some(code.clone())
@@ -80,19 +80,19 @@ impl BundleCache {
 
     /// Cache code under both function_id (TTL) and deployment_id (LRU).
     pub fn insert_both(&self, function_id: String, deployment_id: Option<String>, code: String) {
-        self.by_function.lock().unwrap().put(function_id, (code.clone(), Instant::now()));
+        self.by_function.lock().unwrap_or_else(|e| e.into_inner()).put(function_id, (code.clone(), Instant::now()));
         if let Some(d_id) = deployment_id {
-            self.by_deployment.lock().unwrap().put(d_id, code);
+            self.by_deployment.lock().unwrap_or_else(|e| e.into_inner()).put(d_id, code);
         }
     }
 
     // ── Invalidation ─────────────────────────────────────────────────────
 
     pub fn invalidate_function(&self, function_id: &str) {
-        self.by_function.lock().unwrap().pop(function_id);
+        self.by_function.lock().unwrap_or_else(|e| e.into_inner()).pop(function_id);
     }
 
     pub fn invalidate_deployment(&self, deployment_id: &str) {
-        self.by_deployment.lock().unwrap().pop(deployment_id);
+        self.by_deployment.lock().unwrap_or_else(|e| e.into_inner()).pop(deployment_id);
     }
 }

@@ -37,7 +37,7 @@ impl SchemaCache {
     }
 
     pub fn get(&self, function_id: &str) -> Option<FunctionSchema> {
-        let mut c = self.inner.lock().unwrap();
+        let mut c = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match c.get(function_id) {
             Some((schema, inserted_at)) if inserted_at.elapsed() < self.ttl => {
                 Some(schema.clone())
@@ -48,10 +48,10 @@ impl SchemaCache {
     }
 
     pub fn insert(&self, function_id: String, schema: FunctionSchema) {
-        self.inner.lock().unwrap().put(function_id, (schema, Instant::now()));
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).put(function_id, (schema, Instant::now()));
     }
 
     pub fn invalidate(&self, function_id: &str) {
-        self.inner.lock().unwrap().pop(function_id);
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).pop(function_id);
     }
 }

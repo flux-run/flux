@@ -57,7 +57,7 @@ impl SecretsCache {
     }
 
     fn get(&self, key: &str) -> Option<HashMap<String, String>> {
-        let mut c = self.inner.lock().unwrap();
+        let mut c = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match c.get(key) {
             Some((secrets, inserted_at)) if inserted_at.elapsed() < self.ttl => {
                 Some(secrets.clone())
@@ -68,12 +68,12 @@ impl SecretsCache {
     }
 
     fn insert(&self, key: String, secrets: HashMap<String, String>) {
-        self.inner.lock().unwrap().put(key, (secrets, Instant::now()));
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).put(key, (secrets, Instant::now()));
     }
 
     pub fn invalidate(&self, project_id: Option<Uuid>) {
         let key = Self::cache_key(project_id);
-        self.inner.lock().unwrap().pop(&key);
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).pop(&key);
     }
 }
 

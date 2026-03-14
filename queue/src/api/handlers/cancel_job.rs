@@ -12,7 +12,11 @@ pub async fn handler(
         Ok(_) => (StatusCode::OK, Json(serde_json::json!({"status": "cancelled"}))),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Failed to cancel job"})),
+            Json(serde_json::json!({
+                "error":   "FUNCTION_ERROR",
+                "message": "failed to cancel job",
+                "code":    500,
+            })),
         ),
     }
 }

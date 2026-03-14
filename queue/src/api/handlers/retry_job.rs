@@ -13,7 +13,11 @@ pub async fn handler(
         Ok(_) => (StatusCode::ACCEPTED, Json(serde_json::json!({"status": "retried"}))),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Failed to retry job"})),
+            Json(serde_json::json!({
+                "error":   "FUNCTION_ERROR",
+                "message": "failed to retry job",
+                "code":    500,
+            })),
         ),
     }
 }

@@ -2,14 +2,158 @@
  * @fluxbase/schema — Type definitions for Flux schema definitions.
  *
  * One `*.schema.ts` file per DB table. Contains columns, indexes, foreign keys,
- * authorization rules, and lifecycle hooks all in one place.
+ * and optional validation all in one place.
  *
  * Processed by `flux db push`:
  *   columns/indexes/FK  → Postgres DDL (diff + migrate)
- *   rules               → RuleExpr AST JSON → stored in flux.schema_rules → evaluated by Rust
- *   hooks.before/after  → TransformExpr AST or WASM → evaluated by Rust/Wasmtime
- *   hooks.on            → function ref list → pushed to queue
+ *
+ * Access control belongs in function code — the function calling ctx.db IS the policy.
+ * Use ForbiddenError / ValidationError inside your function handlers, not in schema files.
  */
+
+// ── Enums ────────────────────────────────────────────────────────────────────
+
+export interface FluxEnum<Values extends readonly string[]> {
+  readonly __fluxEnum: true;
+  readonly name: string;
+  readonly values: Values;
+}
+
+export function defineEnum<const Values extends readonly string[]>(
+  name: string,
+  values: Values,
+): FluxEnum<Values> {
+  return { __fluxEnum: true, name, values };
+}
+
+// ── Column builder ────────────────────────────────────────────────────────────
+
+/** Internal column descriptor — not used directly by developers */
+export interface ColumnDescriptor<T> {
+  readonly __fluxColumn: true;
+  readonly pgType: string;
+  readonly nullable: boolean;
+  readonly _type: T; // phantom type for inference
+  primaryKey(): ColumnDescriptor<T>;
+  notNull(): ColumnDescriptor<NonNullable<T>>;
+  nullable(): ColumnDescriptor<T | null>;
+  unique(): ColumnDescriptor<T>;
+  default(value: string | number | boolean): ColumnDescriptor<T>;
+  check(expr: string): ColumnDescriptor<T>;
+  schema(jsonSchema: JsonSchemaObject): ColumnDescriptor<T>; // jsonb only
+}
+
+// Column type inference helpers
+type Infer<C> = C extends ColumnDescriptor<infer T> ? T : never;
+export type InferRow<Cols extends Record<string, ColumnDescriptor<unknown>>> = {
+  [K in keyof Cols]: Infer<Cols[K]>;
+};
+
+/** Numeric column with precision + scale */
+interface NumericBuilder extends ColumnDescriptor<number> {
+  precision(p: number, s: number): NumericBuilder;
+}
+
+/** Array column */
+interface ArrayBuilder<T> extends ColumnDescriptor<T[]> {
+  nullable(): ArrayBuilder<T[] | null>;
+}
+
+/** JSONB column with optional schema validation */
+interface JsonbBuilder<T = unknown> extends ColumnDescriptor<T> {
+  schema<S>(jsonSchema: JsonSchemaObject): JsonbBuilder<S>;
+  nullable(): JsonbBuilder<T | null>;
+}
+
+/** The `column` builder namespace */
+export declare const column: {
+  uuid(): ColumnDescriptor<string>;
+  text(): ColumnDescriptor<string>;
+  int(): ColumnDescriptor<number>;
+  bigint(): ColumnDescriptor<number>;
+  float(): ColumnDescriptor<number>;
+  numeric(precision?: number, scale?: number): NumericBuilder;
+  boolean(): ColumnDescriptor<boolean>;
+  timestamptz(): ColumnDescriptor<string>;
+  date(): ColumnDescriptor<string>;
+  bytea(): ColumnDescriptor<Uint8Array>;
+  jsonb<T = unknown>(): JsonbBuilder<T>;
+  array(elementType: "text" | "int" | "uuid" | "float" | "boolean"): ArrayBuilder<unknown>;
+  enum<E extends FluxEnum<readonly string[]>>(e: E): ColumnDescriptor<E["values"][number]>;
+};
+
+// ── Index builder ─────────────────────────────────────────────────────────────
+
+export interface IndexDescriptor {
+  readonly columns: string[];
+  unique(): IndexDescriptor;
+  name(n: string): IndexDescriptor;
+  gin(): IndexDescriptor;       // for jsonb / array columns
+  btree(): IndexDescriptor;     // default
+}
+
+export declare function index(columns: string[]): IndexDescriptor;
+
+// ── Foreign key builder ───────────────────────────────────────────────────────
+
+type FKAction = "restrict" | "cascade" | "set_null" | "no_action";
+
+export interface ForeignKeyDescriptor {
+  readonly columns: string[];
+  references(tableAndColumn: `${string}.${string}`): ForeignKeyDescriptor;
+  onDelete(action: FKAction): ForeignKeyDescriptor;
+  onUpdate(action: FKAction): ForeignKeyDescriptor;
+}
+
+export declare function foreignKey(columns: string[]): ForeignKeyDescriptor;
+
+// ── Error helpers ─────────────────────────────────────────────────────────────
+// Throw these inside function handlers to produce well-structured HTTP errors.
+
+export class ForbiddenError extends Error {
+  constructor(message: string) { super(message); this.name = "ForbiddenError"; }
+}
+export class ValidationError extends Error {
+  constructor(message: string) { super(message); this.name = "ValidationError"; }
+}
+
+// ── defineSchema ──────────────────────────────────────────────────────────────
+
+export interface SchemaDefinition<
+  Cols extends Record<string, ColumnDescriptor<unknown>>,
+> {
+  table:        string;
+  description?: string;
+  timestamps?:  boolean;           // adds created_at + updated_at
+  columns:      Cols;
+  indexes?:     IndexDescriptor[];
+  foreignKeys?: ForeignKeyDescriptor[];
+}
+
+export declare function defineSchema<
+  Cols extends Record<string, ColumnDescriptor<unknown>>,
+>(definition: SchemaDefinition<Cols>): SchemaDefinition<Cols>;
+
+// ── JSON Schema types (for .schema() on jsonb columns) ───────────────────────
+
+export interface JsonSchemaObject {
+  type?: "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
+  properties?: Record<string, JsonSchemaObject>;
+  items?: JsonSchemaObject;
+  required?: string[];
+  additionalProperties?: boolean | JsonSchemaObject;
+  enum?: unknown[];
+  pattern?: string;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  maxItems?: number;
+  default?: unknown;
+  $ref?: string;
+}
+
 
 // ── Enums ────────────────────────────────────────────────────────────────────
 

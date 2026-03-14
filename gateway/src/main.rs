@@ -29,8 +29,13 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load();
 
     // Database pool.
+    let gw_pool_size = std::env::var("GW_DB_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(20);
+
     let db_pool = PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(gw_pool_size)
         .after_connect(|conn, _meta| Box::pin(async move {
             sqlx::query("SET search_path = flux, public").execute(conn).await?;
             Ok(())
