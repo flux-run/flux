@@ -71,7 +71,19 @@ pub async fn proxy_handler(
 
     // Internal-service token so data-engine can trust the call.
     let token = std::env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "fluxbase_secret_token".to_string());
+        .unwrap_or_else(|_| {
+            if std::env::var("FLUX_ENV").as_deref() == Ok("production") {
+                panic!(
+                    "[Flux] INTERNAL_SERVICE_TOKEN must be set in production. \
+                     The API service cannot start without it."
+                );
+            }
+            tracing::warn!(
+                "[Flux] INTERNAL_SERVICE_TOKEN not set — using insecure default 'fluxbase_secret_token'. \
+                 Set INTERNAL_SERVICE_TOKEN in production."
+            );
+            "fluxbase_secret_token".to_string()
+        });
     rb = rb.header("x-service-token", token);
 
     // Inject resolved tenant/project context headers for the data-engine.

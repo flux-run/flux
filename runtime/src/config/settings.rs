@@ -45,7 +45,20 @@ impl Settings {
             .unwrap_or_else(|_| "http://localhost:8084".to_string());
 
         let service_token = env::var("SERVICE_TOKEN")
-            .unwrap_or_else(|_| "stub_token".to_string());
+            .or_else(|_| env::var("INTERNAL_SERVICE_TOKEN"))
+            .unwrap_or_else(|_| {
+                if env::var("FLUX_ENV").as_deref() == Ok("production") {
+                    panic!(
+                        "[Flux] SERVICE_TOKEN must be set in production. \
+                         The runtime cannot start without it."
+                    );
+                }
+                tracing::warn!(
+                    "[Flux] SERVICE_TOKEN not set — using insecure default 'stub_token'. \
+                     Set SERVICE_TOKEN in production."
+                );
+                "stub_token".to_string()
+            });
 
         let data_engine_url = env::var("DATA_ENGINE_URL")
             .unwrap_or_else(|_| "http://localhost:8085".to_string());

@@ -114,7 +114,19 @@ pub async fn get_internal_runtime_secrets(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
 
-    let expected_token = std::env::var("INTERNAL_SERVICE_TOKEN").unwrap_or_else(|_| "stub_token".to_string());
+    let expected_token = std::env::var("INTERNAL_SERVICE_TOKEN").unwrap_or_else(|_| {
+        if std::env::var("FLUX_ENV").as_deref() == Ok("production") {
+            panic!(
+                "[Flux] INTERNAL_SERVICE_TOKEN must be set in production. \
+                 The API service cannot start without it."
+            );
+        }
+        tracing::warn!(
+            "[Flux] INTERNAL_SERVICE_TOKEN not set — using insecure default 'stub_token'. \
+             Set INTERNAL_SERVICE_TOKEN in production."
+        );
+        "stub_token".to_string()
+    });
     
     if token != expected_token {
         return Err(ApiError::unauthorized("invalid_service_token"));
