@@ -128,7 +128,7 @@ pub async fn publish_event(
 
                 if let Some(fid) = fn_id {
                     sqlx::query(
-                        "INSERT INTO jobs (function_id, payload, queue_name) \
+                        "INSERT INTO flux.jobs (function_id, payload, queue_name) \
                          VALUES ($1, $2, $3)",
                     )
                     .bind(fid)

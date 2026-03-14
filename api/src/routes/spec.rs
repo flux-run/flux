@@ -30,7 +30,7 @@ pub async fn project_spec(
     // ── Functions ─────────────────────────────────────────────────────────
     let func_rows = sqlx::query(
         "SELECT id, name, description, input_schema, output_schema, runtime \
-         FROM functions ORDER BY name",
+         FROM flux.functions ORDER BY name",
     )
     .fetch_all(&state.pool)
     .await
@@ -66,8 +66,8 @@ pub async fn project_spec(
     let route_rows = sqlx::query(
         "SELECT r.id, r.path, r.method, r.auth_type, r.is_async, r.cors_enabled, \
                 r.rate_limit, f.name as function_name \
-         FROM routes r \
-         JOIN functions f ON f.id = r.function_id \
+         FROM flux.routes r \
+         JOIN flux.functions f ON f.id = r.function_id \
          ORDER BY r.path",
     )
     .fetch_all(&state.pool)
@@ -96,7 +96,7 @@ pub async fn project_spec(
     // ── Connected tools ───────────────────────────────────────────────────
     let integration_rows = sqlx::query(
         "SELECT provider, account_label, status \
-         FROM integrations WHERE status = 'active' ORDER BY provider",
+         FROM flux.integrations WHERE status = 'active' ORDER BY provider",
     )
     .fetch_all(&state.pool)
     .await
@@ -113,7 +113,7 @@ pub async fn project_spec(
 
     // ── Secret names (not values) ─────────────────────────────────────────
     let secret_rows = sqlx::query(
-        "SELECT key FROM secrets ORDER BY key",
+        "SELECT key FROM flux.secrets ORDER BY key",
     )
     .fetch_all(&state.pool)
     .await

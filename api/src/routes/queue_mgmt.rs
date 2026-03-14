@@ -89,7 +89,7 @@ pub async fn get_queue(
     .ok_or_else(|| ApiError::not_found("queue_not_found"))?;
 
     let count_row = sqlx::query(
-        "SELECT COUNT(*) as count FROM jobs WHERE status = 'pending' AND queue_name = $1",
+        "SELECT COUNT(*) as count FROM flux.jobs WHERE status = 'pending' AND queue_name = $1",
     )
     .bind(&name)
     .fetch_one(&state.pool)
@@ -130,7 +130,7 @@ pub async fn publish_message(
 ) -> ApiResult<serde_json::Value> {
     // Validate that the referenced function actually exists.
     let fn_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM functions WHERE id = $1)",
+        "SELECT EXISTS(SELECT 1 FROM flux.functions WHERE id = $1)",
     )
     .bind(payload.function_id)
     .fetch_one(&state.pool)
@@ -153,7 +153,7 @@ pub async fn publish_message(
     let run_at_naive = run_at.naive_utc();
 
     let row = sqlx::query(
-        "INSERT INTO jobs (function_id, payload, run_at, queue_name) \
+        "INSERT INTO flux.jobs (function_id, payload, run_at, queue_name) \
          VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(payload.function_id)
@@ -212,7 +212,7 @@ pub async fn create_binding(
 
     // Verify the function exists.
     let fn_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM functions WHERE id = $1)",
+        "SELECT EXISTS(SELECT 1 FROM flux.functions WHERE id = $1)",
     )
     .bind(payload.function_id)
     .fetch_one(&state.pool)
@@ -260,7 +260,7 @@ pub async fn purge_queue(
     // Include NULL queue_name rows for backward compatibility with jobs that
     // pre-date the 0011_add_queue_name migration.
     let result = sqlx::query(
-        "DELETE FROM jobs WHERE status = 'pending' \
+        "DELETE FROM flux.jobs WHERE status = 'pending' \
          AND (queue_name = $1 OR queue_name IS NULL)",
     )
     .bind(&name)
@@ -315,7 +315,7 @@ pub async fn replay_dlq(
              ) \
              RETURNING function_id, payload, queue_name \
          ) \
-         INSERT INTO jobs (function_id, payload, queue_name) \
+         INSERT INTO flux.jobs (function_id, payload, queue_name) \
          SELECT function_id, payload, queue_name FROM batch",
     )
     .bind(&name)

@@ -9,11 +9,21 @@ use axum::{
 ///
 /// Signals all runtime workers to drop their in-memory function cache so the
 /// next execution picks up the freshly deployed bundle.
+/// Accepts an optional JSON body `{ "function_id": "..." }` to scope the
+/// invalidation.  Forwards the body (or an empty object) to the runtime.
 pub async fn cache_invalidate(
     State(state): State<crate::AppState>,
+    body: Option<Json<serde_json::Value>>,
 ) -> impl IntoResponse {
+    let payload = body.map(|b| b.0).unwrap_or_else(|| serde_json::json!({}));
+    let service_token = std::env::var("INTERNAL_SERVICE_TOKEN")
+        .unwrap_or_else(|_| "dev-service-token".to_string());
     let url = format!("{}/internal/cache/invalidate", state.runtime_url);
-    match state.http_client.post(&url).send().await {
+    match state.http_client.post(&url)
+        .header("X-Service-Token", &service_token)
+        .json(&payload)
+        .send().await
+    {
         Ok(resp) if resp.status().is_success() => {
             (StatusCode::OK, Json(serde_json::json!({ "invalidated": true })))
         }

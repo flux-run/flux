@@ -28,7 +28,7 @@ pub async fn monitor_status(State(state): State<AppState>) -> ApiResult<Value> {
            COUNT(*) FILTER (WHERE status = 'pending')  AS pending, \
            COUNT(*) FILTER (WHERE status = 'running')  AS running, \
            COUNT(*) FILTER (WHERE status = 'failed')   AS failed \
-         FROM jobs",
+         FROM flux.jobs",
     )
     .fetch_one(&state.pool)
     .await
@@ -44,7 +44,7 @@ pub async fn monitor_status(State(state): State<AppState>) -> ApiResult<Value> {
         .unwrap_or(0);
 
     // Function deploy count.
-    let fn_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM functions")
+    let fn_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM flux.functions")
         .fetch_one(&state.pool)
         .await
         .unwrap_or(0);
@@ -358,7 +358,7 @@ async fn measure_metric(pool: &PgPool, metric: &str, window_secs: i32) -> Result
         }
         "queue_failed" => {
             let c: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM jobs WHERE status = 'failed' \
+                "SELECT COUNT(*) FROM flux.jobs WHERE status = 'failed' \
                  AND created_at > now() - ($1 || ' seconds')::interval",
             )
             .bind(window_secs)
@@ -368,7 +368,7 @@ async fn measure_metric(pool: &PgPool, metric: &str, window_secs: i32) -> Result
         }
         "queue_pending" => {
             let c: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM jobs WHERE status = 'pending'",
+                "SELECT COUNT(*) FROM flux.jobs WHERE status = 'pending'",
             )
             .fetch_one(pool)
             .await?;

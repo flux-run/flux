@@ -1,16 +1,13 @@
-<!-- Build: dotnet build -c Release
-     Install WASI workload: dotnet workload install wasi-experimental -->
+<!-- Build: dotnet publish -c Release
+     Requires: dotnet workload install wasi-experimental
+     Env:     WASI_SDK_PATH=/tmp/wasi-sdk-24.0-arm64-macos -->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <AssemblyName>hello</AssemblyName>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <RuntimeIdentifier>wasi-wasm</RuntimeIdentifier>
-    <UseAppHost>false</UseAppHost>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Optimize>true</Optimize>
+    <PublishAot>true</PublishAot>
   </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="13.*" />
-  </ItemGroup>
 </Project>

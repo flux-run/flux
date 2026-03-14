@@ -1,33 +1,41 @@
-// Build: gradle nativeCompile   (requires GraalVM JDK)
-// Install GraalVM: https://www.graalvm.org/downloads/
+// TeaVM WASM build for Flux function
+// Requires Java 11+ and Gradle 7+
+// Build: cd functions/hello && gradle generateWasm
+// Output: functions/hello/hello.wasm
+
 plugins {
     id 'java'
-    id 'org.graalvm.buildtools.native' version '0.10.1'
-}
+    id 'org.teavm' version '0.10.2'}
 
 group   = 'dev.fluxbase'
 version = '0.1.0'
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
 }
 
 repositories {
     mavenCentral()
 }
 
-dependencies {
-    // GraalVM Native Image API — needed for @CEntryPoint annotation
-    compileOnly 'org.graalvm.sdk:graal-sdk:23.1.4'
-}
-
-graalvmNative {
-    binaries {
-        main {
-            imageName = 'hello'
-            buildArgs.add('--no-fallback')
-            buildArgs.add('-H:Kind=SHARED_LIBRARY')
+sourceSets {
+    main {
+        java {
+            srcDirs = ['.']
         }
     }
 }
+
+teavm {
+    wasi {
+        mainClass = 'Handler'
+        outputDir = file('.')
+        relativePathInOutputDir = 'hello.wasm'
+        optimization = org.teavm.gradle.api.OptimizationLevel.NONE
+    }
+}
+

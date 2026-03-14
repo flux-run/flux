@@ -37,7 +37,7 @@ pub async fn create_secret(
     let version: i32 = 1;
 
     let res = sqlx::query(
-        "INSERT INTO secrets (id, key, encrypted_value, version) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO flux.secrets (id, key, encrypted_value, version) VALUES ($1, $2, $3, $4)",
     )
     .bind(secret_id)
     .bind(&payload.key)
@@ -69,7 +69,7 @@ pub async fn update_secret(
     struct VersionRow { version: i32 }
 
     let row = sqlx::query_as::<_, VersionRow>(
-        "UPDATE secrets SET encrypted_value = $1, version = version + 1, updated_at = NOW() \
+        "UPDATE flux.secrets SET encrypted_value = $1, version = version + 1, updated_at = NOW() \
          WHERE key = $2 RETURNING version",
     )
     .bind(&encrypted)
@@ -90,7 +90,7 @@ pub async fn delete_secret(
     pool: &PgPool,
     key: &str,
 ) -> Result<(), ServiceError> {
-    let res = sqlx::query("DELETE FROM secrets WHERE key = $1")
+    let res = sqlx::query("DELETE FROM flux.secrets WHERE key = $1")
         .bind(key)
         .execute(pool)
         .await
@@ -118,7 +118,7 @@ pub async fn list_secrets(
     }
 
     let records = sqlx::query_as::<_, SecretMetadataRow>(
-        "SELECT key, version, created_at FROM secrets ORDER BY key ASC LIMIT $1 OFFSET $2",
+        "SELECT key, version, created_at FROM flux.secrets ORDER BY key ASC LIMIT $1 OFFSET $2",
     )
     .bind(limit)
     .bind(offset)
@@ -145,7 +145,7 @@ pub async fn get_runtime_secrets(
     }
 
     let records = sqlx::query_as::<_, EncryptedSecretRow>(
-        "SELECT key, encrypted_value FROM secrets",
+        "SELECT key, encrypted_value FROM flux.secrets",
     )
     .fetch_all(pool)
     .await

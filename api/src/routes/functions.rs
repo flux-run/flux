@@ -64,7 +64,7 @@ pub async fn list_functions(
     let (limit, offset) = page.clamped();
     let records = sqlx::query_as::<_, FunctionRow>(
         "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
-         FROM functions \
+         FROM flux.functions \
          ORDER BY created_at DESC \
          LIMIT $1 OFFSET $2",
     )
@@ -89,7 +89,7 @@ pub async fn get_function(
 ) -> ApiResult<serde_json::Value> {
     let record = sqlx::query_as::<_, FunctionRow>(
         "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
-         FROM functions \
+         FROM flux.functions \
          WHERE id = $1",
     )
     .bind(id)
@@ -112,7 +112,7 @@ pub async fn create_function(
     let function_id = Uuid::new_v4();
 
     sqlx::query(
-        "INSERT INTO functions (id, name, runtime) \
+        "INSERT INTO flux.functions (id, name, runtime) \
          VALUES ($1, $2, $3)",
     )
     .bind(function_id)
@@ -142,7 +142,7 @@ pub async fn delete_function(
     Path(id): Path<Uuid>,
 ) -> ApiResult<serde_json::Value> {
     let deleted = sqlx::query(
-        "DELETE FROM functions WHERE id = $1",
+        "DELETE FROM flux.functions WHERE id = $1",
     )
     .bind(id)
     .execute(&pool)
@@ -174,7 +174,7 @@ pub async fn resolve_function(
     Query(q): axum::extract::Query<ResolveQuery>,
 ) -> Result<axum::Json<serde_json::Value>, (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
     let row = sqlx::query_as::<_, ResolveRow>(
-        "SELECT id FROM functions WHERE name = $1 LIMIT 1",
+        "SELECT id FROM flux.functions WHERE name = $1 LIMIT 1",
     )
     .bind(&q.name)
     .fetch_optional(&pool)

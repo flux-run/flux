@@ -220,10 +220,20 @@ fn bundle_wasm(dir: &Path, entry: &str, build_cmd: Option<&str>) -> anyhow::Resu
 
 pub fn bundle_function(dir: &Path, metadata: &Value) -> anyhow::Result<BundleOutput> {
     let runtime = metadata["runtime"].as_str().unwrap_or("deno").to_string();
+
+    // Default entry: for wasm → handler.wasm; for JS/TS → index.ts (prefer .js fallback)
     let entry = metadata["entry"]
         .as_str()
-        .unwrap_or(if runtime == "wasm" { "handler.wasm" } else { "index.ts" })
-        .to_string();
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            if runtime == "wasm" {
+                "handler.wasm".to_string()
+            } else if dir.join("index.js").exists() && !dir.join("index.ts").exists() {
+                "index.js".to_string()
+            } else {
+                "index.ts".to_string()
+            }
+        });
 
     if runtime == "wasm" {
         let build_cmd = metadata["build"].as_str();
@@ -231,8 +241,8 @@ pub fn bundle_function(dir: &Path, metadata: &Value) -> anyhow::Result<BundleOut
         return Ok(BundleOutput { bytes, runtime, kind: BundleKind::Wasm });
     }
 
-    if !entry.ends_with(".ts") {
-        anyhow::bail!("entry '{}' must be a .ts file", entry);
+    if !entry.ends_with(".ts") && !entry.ends_with(".js") {
+        anyhow::bail!("entry '{}' must be a .ts or .js file", entry);
     }
     if !dir.join(&entry).exists() {
         anyhow::bail!("entry file '{}' not found", entry);

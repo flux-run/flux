@@ -59,8 +59,8 @@ pub async fn list_deployments(
 ) -> ApiResult<serde_json::Value> {
     let records = sqlx::query_as::<_, DeploymentRow>(
         "SELECT d.id, d.version, d.is_active, d.status, d.created_at, f.name as function_name \
-         FROM deployments d \
-         JOIN functions f ON f.id = d.function_id \
+         FROM flux.deployments d \
+         JOIN flux.functions f ON f.id = d.function_id \
          WHERE f.name = $1 \
          ORDER BY d.version DESC",
     )
@@ -102,7 +102,7 @@ pub async fn create_deployment(
     #[derive(sqlx::FromRow)]
     struct VersionRow { max: Option<i32> }
     let row = sqlx::query_as::<_, VersionRow>(
-        "SELECT MAX(version) as max FROM deployments WHERE function_id = $1",
+        "SELECT MAX(version) as max FROM flux.deployments WHERE function_id = $1",
     )
     .bind(function_id)
     .fetch_one(&pool)
@@ -112,7 +112,7 @@ pub async fn create_deployment(
     let next_version = row.max.unwrap_or(0) + 1;
 
     sqlx::query(
-        "INSERT INTO deployments (id, function_id, storage_key, version, status) \
+        "INSERT INTO flux.deployments (id, function_id, storage_key, version, status) \
          VALUES ($1, $2, $3, $4, 'ready')",
     )
     .bind(deployment_id)
@@ -141,8 +141,8 @@ pub async fn activate_deployment(
 
     let fn_record = sqlx::query_as::<_, DeploymentFunctionRow>(
         "SELECT d.id as deployment_id, f.id as function_id \
-         FROM deployments d \
-         JOIN functions f ON f.id = d.function_id \
+         FROM flux.deployments d \
+         JOIN flux.functions f ON f.id = d.function_id \
          WHERE f.name = $1 AND d.version = $2",
     )
     .bind(&function_name)
@@ -152,13 +152,13 @@ pub async fn activate_deployment(
     .map_err(ApiError::from)?
     .ok_or_else(|| ApiError::not_found("deployment not found"))?;
 
-    sqlx::query("UPDATE deployments SET is_active = false WHERE function_id = $1")
+    sqlx::query("UPDATE flux.deployments SET is_active = false WHERE function_id = $1")
         .bind(fn_record.function_id)
         .execute(&mut *tx)
         .await
         .map_err(ApiError::from)?;
 
-    sqlx::query("UPDATE deployments SET is_active = true WHERE id = $1")
+    sqlx::query("UPDATE flux.deployments SET is_active = true WHERE id = $1")
         .bind(fn_record.deployment_id)
         .execute(&mut *tx)
         .await
@@ -235,7 +235,7 @@ pub async fn deploy_function_cli(
     struct FunctionLookup { id: Uuid }
 
     let existing = sqlx::query_as::<_, FunctionLookup>(
-        "SELECT id FROM functions WHERE name = $1 LIMIT 1",
+        "SELECT id FROM flux.functions WHERE name = $1 LIMIT 1",
     )
     .bind(&name)
     .fetch_optional(&state.pool)
@@ -249,7 +249,7 @@ pub async fn deploy_function_cli(
         Some(f) => {
             // Update schema metadata on re-deploy
             sqlx::query(
-                "UPDATE functions \
+                "UPDATE flux.functions \
                  SET description = COALESCE($1, description), \
                      input_schema  = COALESCE($2::jsonb, input_schema), \
                      output_schema = COALESCE($3::jsonb, output_schema) \
@@ -267,7 +267,7 @@ pub async fn deploy_function_cli(
         None => {
             let new_id = Uuid::new_v4();
             sqlx::query(
-                "INSERT INTO functions \
+                "INSERT INTO flux.functions \
                      (id, name, runtime, description, input_schema, output_schema) \
                  VALUES ($1, $2, $3, $4, $5, $6)",
             )
@@ -309,7 +309,7 @@ pub async fn deploy_function_cli(
     #[derive(sqlx::FromRow)]
     struct VersionRow { max: Option<i32> }
     let row = sqlx::query_as::<_, VersionRow>(
-        "SELECT MAX(version) as max FROM deployments WHERE function_id = $1",
+        "SELECT MAX(version) as max FROM flux.deployments WHERE function_id = $1",
     )
     .bind(function_id)
     .fetch_one(&state.pool)
@@ -320,14 +320,14 @@ pub async fn deploy_function_cli(
 
     let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
 
-    sqlx::query("UPDATE deployments SET is_active = false WHERE function_id = $1")
+    sqlx::query("UPDATE flux.deployments SET is_active = false WHERE function_id = $1")
         .bind(function_id)
         .execute(&mut *tx)
         .await
         .map_err(ApiError::from)?;
 
     sqlx::query(
-        "INSERT INTO deployments \
+        "INSERT INTO flux.deployments \
              (id, function_id, storage_key, version, status, is_active, bundle_hash, project_deployment_id) \
          VALUES ($1, $2, $3, $4, 'ready', true, $5, $6)",
     )
@@ -350,6 +350,27 @@ pub async fn deploy_function_cli(
         name         = %name,
         "function deployed",
     );
+
+    // Invalidate the runtime's compiled-module and bundle cache so the next
+    // invocation picks up the freshly written bundle instead of a stale one.
+    // In the monolith this is a loopback HTTP call to the runtime's internal
+    // invalidation endpoint.  Failure here is non-fatal — the content-addressed
+    // WasmPool will recompile on the next call if the fingerprint changed.
+    {
+        let service_token = std::env::var("INTERNAL_SERVICE_TOKEN")
+            .unwrap_or_else(|_| "dev-service-token".to_string());
+        let invalidate_url = format!("{}/internal/cache/invalidate", state.runtime_url);
+        let body = serde_json::json!({ "function_id": name });
+        if let Err(e) = state.http_client
+            .post(&invalidate_url)
+            .header("X-Service-Token", &service_token)
+            .json(&body)
+            .send()
+            .await
+        {
+            tracing::warn!(function = %name, error = %e, "cache invalidation request failed (non-fatal)");
+        }
+    }
 
     Ok(ApiResponse::created(serde_json::json!({
         "function_id":   function_id,
@@ -384,8 +405,8 @@ pub async fn get_internal_bundle(
         sqlx::query_as::<_, BundleRow>(
             "SELECT d.id, f.name, f.runtime, \
                     f.input_schema, f.output_schema \
-             FROM deployments d \
-             JOIN functions f ON f.id = d.function_id \
+             FROM flux.deployments d \
+             JOIN flux.functions f ON f.id = d.function_id \
              WHERE d.function_id = $1 AND d.is_active = true \
              ORDER BY d.version DESC LIMIT 1",
         )
@@ -397,8 +418,8 @@ pub async fn get_internal_bundle(
         sqlx::query_as::<_, BundleRow>(
             "SELECT d.id, f.name, f.runtime, \
                     f.input_schema, f.output_schema \
-             FROM deployments d \
-             JOIN functions f ON f.id = d.function_id \
+             FROM flux.deployments d \
+             JOIN flux.functions f ON f.id = d.function_id \
              WHERE f.name = $1 AND d.is_active = true \
              ORDER BY d.version DESC LIMIT 1",
         )
@@ -463,8 +484,8 @@ pub async fn get_deployment_hashes(
 
     let rows = sqlx::query_as::<_, HashRow>(
         "SELECT f.name, d.bundle_hash \
-         FROM functions f \
-         JOIN deployments d ON d.function_id = f.id AND d.is_active = true",
+         FROM flux.functions f \
+         JOIN flux.deployments d ON d.function_id = f.id AND d.is_active = true",
     )
     .fetch_all(&state.pool)
     .await
@@ -597,9 +618,9 @@ pub async fn rollback_project_deployment(
     // Step 1 — deactivate current active deployments for every function that
     //           had a deployment recorded under this project deployment.
     sqlx::query(
-        "UPDATE deployments SET is_active = false \
+        "UPDATE flux.deployments SET is_active = false \
          WHERE function_id IN (\
-             SELECT function_id FROM deployments \
+             SELECT function_id FROM flux.deployments \
              WHERE project_deployment_id = $1\
          )",
     )
@@ -610,7 +631,7 @@ pub async fn rollback_project_deployment(
 
     // Step 2 — activate the snapshot rows.
     let result = sqlx::query(
-        "UPDATE deployments SET is_active = true \
+        "UPDATE flux.deployments SET is_active = true \
          WHERE project_deployment_id = $1",
     )
     .bind(project_deployment_id)

@@ -74,6 +74,14 @@ pub struct HostState {
     pub database:           String,
     /// Dispatch traits for in-process data-engine, queue, and API calls.
     pub dispatchers:        PoolDispatchers,
+    /// WASI stdin buffer — populated before calling `_start` in command-model modules.
+    pub stdin_buf:          Vec<u8>,
+    /// Current read position in `stdin_buf`.
+    pub stdin_pos:          usize,
+    /// WASI stdout capture — populated by fd_write(fd=1) calls from the WASM module.
+    pub stdout_buf:         Vec<u8>,
+    /// WASI stderr capture — populated by fd_write(fd=2) calls (e.g. Go panic messages).
+    pub stderr_buf:         Vec<u8>,
 }
 
 // ─── Params ────────────────────────────────────────────────────────────────
@@ -138,12 +146,13 @@ pub fn compile_module(engine: &Engine, bytes: &[u8]) -> Result<Module, String> {
         .map_err(|e| format!("wasm compilation failed: {}", e))
 }
 
-/// Execute a pre-compiled `Module` asynchronously.
+/// Execute a pre-compiled `Module`.
 ///
-/// With `async_support(true)` in the engine, WASM fibers are suspended during
-/// host I/O calls (`http_fetch`) allowing tokio to drive other pending Futures.
-/// CPU-intensive WASM still runs on a tokio worker thread; the async model only
-/// yields during I/O-bound host imports.
+/// Uses `spawn_blocking` so that CPU-bound WASM execution (Python, Ruby, Go
+/// command-model modules whose host imports are all synchronous) does not starve
+/// the tokio worker pool.  The runtime `Handle` lets async host imports
+/// (`http_fetch`, `db_query`) still schedule on the existing runtime from within
+/// the blocking thread via `Handle::block_on`.
 pub async fn execute_wasm(
     engine: &Engine,
     module: &Module,
@@ -153,10 +162,12 @@ pub async fn execute_wasm(
     let module = module.clone();
     let timeout_secs = params.timeout_secs;
 
-    // tokio::spawn instead of spawn_blocking — async_support means the fiber
-    // yields during host I/O so this does not block a thread for the full duration.
-    let handle = tokio::spawn(async move {
-        execute_wasm_async(&engine, &module, params).await
+    // spawn_blocking runs on a separate OS-thread pool that does not interfere
+    // with tokio's async worker threads.  This fixes thread starvation when
+    // large WASM modules (Python 26 MB, Ruby 47 MB) execute for 30-60 s.
+    let rt = tokio::runtime::Handle::current();
+    let handle = tokio::task::spawn_blocking(move || {
+        rt.block_on(execute_wasm_async(&engine, &module, params))
     });
 
     match timeout(Duration::from_secs(timeout_secs + 5), handle).await {
@@ -180,6 +191,10 @@ async fn execute_wasm_async(
         http_client:        params.http_client.unwrap_or_else(reqwest::Client::new),
         database:           params.database,
         dispatchers:        params.dispatchers,
+        stdin_buf:          Vec::new(),
+        stdin_pos:          0,
+        stdout_buf:         Vec::new(),
+        stderr_buf:         Vec::new(),
     };
 
     let mut store = Store::new(engine, host);
@@ -189,6 +204,454 @@ async fn execute_wasm_async(
     // ── Register host imports ──────────────────────────────────────────────
 
     let mut linker = Linker::<HostState>::new(engine);
+
+    // env.abort(msg: i32, file: i32, line: i32, col: i32)
+    //
+    // AssemblyScript, C/emscripten, and several other toolchains generate an
+    // `env.abort` import as a panicking hook.  We provide a no-op stub so the
+    // module instantiates; if the function is ever called at runtime the WASM
+    // execution will trap (via the Wasmtime fuel/trap mechanism) before
+    // corrupting state.
+    linker.func_wrap("env", "abort", |_: Caller<HostState>, _msg: i32, _file: i32, _line: i32, _col: i32| {
+        // Intentional no-op stub.  Abort in a WASM module is fatal to the
+        // isolate, not the host — return normally and let the module trap.
+    }).map_err(|e| e.to_string())?;
+
+    // ── WASI stubs ──────────────────────────────────────────────────────────────
+    //
+    // Go (GOOS=wasip1) and C (wasi-sdk) modules import WASI host functions.
+    // The Flux runtime does not implement a real WASI environment, so these are
+    // no-op / minimal-viable stubs that let the module instantiate and run the
+    // exported `handle` function.  Calls that would interact with the OS (e.g.
+    // fd_write to stdout) are silently discarded; proc_exit terminates execution
+    // by trapping the isolate (handled by Wasmtime fuel limits).
+
+    // sched_yield() -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "sched_yield",
+        |_: Caller<HostState>| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // proc_exit(code: i32)
+    // Trap with a recognizable sentinel so _start stops cleanly after writing stdout.
+    linker.func_wrap("wasi_snapshot_preview1", "proc_exit",
+        |_: Caller<HostState>, code: i32| -> Result<(), anyhow::Error> {
+            anyhow::bail!("__wasi_proc_exit:{}", code)
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // args_get(argv: i32, argv_buf: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "args_get",
+        |_: Caller<HostState>, _argv: i32, _argv_buf: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // args_sizes_get(argc_out: i32, argv_buf_size_out: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "args_sizes_get",
+        |mut caller: Caller<HostState>, argc_out: i32, argv_buf_out: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 1,
+            };
+            let _ = mem.write(&mut caller, argc_out as usize, &0u32.to_le_bytes());
+            let _ = mem.write(&mut caller, argv_buf_out as usize, &0u32.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // clock_time_get(id: i32, precision: i64, time_out: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "clock_time_get",
+        |mut caller: Caller<HostState>, _id: i32, _prec: i64, out: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 1,
+            };
+            // Return real nanoseconds since UNIX epoch — Go asserts nanotime() != 0.
+            let nanos: u64 = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(1_700_000_000_000_000_000); // fallback: ~Nov 2023
+            let _ = mem.write(&mut caller, out as usize, &nanos.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // clock_res_get(id: i32, res_out: i32) -> i32
+    // Returns the resolution of a clock. Used by Python/Nuitka WASM.
+    linker.func_wrap("wasi_snapshot_preview1", "clock_res_get",
+        |mut caller: Caller<HostState>, _id: i32, res_out: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 1,
+            };
+            // Return 1 nanosecond resolution.
+            let res: u64 = 1;
+            let _ = mem.write(&mut caller, res_out as usize, &res.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // environ_get(environ: i32, environ_buf: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "environ_get",
+        |_: Caller<HostState>, _environ: i32, _environ_buf: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // environ_sizes_get(count_out: i32, size_out: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "environ_sizes_get",
+        |mut caller: Caller<HostState>, count_out: i32, size_out: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 1,
+            };
+            let _ = mem.write(&mut caller, count_out as usize, &0u32.to_le_bytes());
+            let _ = mem.write(&mut caller, size_out as usize, &0u32.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_write(fd: i32, iovs: i32, iovs_len: i32, nwritten: i32) -> i32
+    // fd=1 (stdout) is captured into host.stdout_buf; all other fds are discarded.
+    linker.func_wrap("wasi_snapshot_preview1", "fd_write",
+        |mut caller: Caller<HostState>, fd: i32, iovs: i32, iovs_len: i32, nwritten: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8, // EBADF
+            };
+            let mut total: u32 = 0;
+            let mut captured: Vec<u8> = Vec::new();
+            for i in 0..iovs_len as usize {
+                let base = iovs as usize + i * 8;
+                let mut ptr_bytes = [0u8; 4];
+                let mut len_bytes = [0u8; 4];
+                if mem.read(&caller, base, &mut ptr_bytes).is_err() { break; }
+                if mem.read(&caller, base + 4, &mut len_bytes).is_err() { break; }
+                let buf_ptr = u32::from_le_bytes(ptr_bytes) as usize;
+                let buf_len = u32::from_le_bytes(len_bytes) as usize;
+                total += buf_len as u32;
+                if fd == 1 || fd == 2 {
+                    let data = mem.data(&caller);
+                    if buf_ptr + buf_len <= data.len() {
+                        captured.extend_from_slice(&data[buf_ptr..buf_ptr + buf_len]);
+                    }
+                }
+            }
+            if fd == 1 && !captured.is_empty() {
+                caller.data_mut().stdout_buf.extend(captured);
+            } else if fd == 2 && !captured.is_empty() {
+                caller.data_mut().stderr_buf.extend(captured);
+            }
+            let _ = mem.write(&mut caller, nwritten as usize, &total.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_read(fd: i32, iovs: i32, iovs_len: i32, nread: i32) -> i32
+    // fd=0 (stdin) is served from host.stdin_buf; all other fds return EBADF.
+    linker.func_wrap("wasi_snapshot_preview1", "fd_read",
+        |mut caller: Caller<HostState>, fd: i32, iovs: i32, iovs_len: i32, nread_ptr: i32| -> i32 {
+            if fd != 0 {
+                return 8; // EBADF
+            }
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8,
+            };
+            let stdin_len = caller.data().stdin_buf.len();
+            let stdin_pos = caller.data().stdin_pos;
+            let mut total_read: u32 = 0;
+            for i in 0..iovs_len as usize {
+                let iov_base = iovs as usize + i * 8;
+                let mut ptr_bytes = [0u8; 4];
+                let mut len_bytes = [0u8; 4];
+                if mem.read(&caller, iov_base, &mut ptr_bytes).is_err() { break; }
+                if mem.read(&caller, iov_base + 4, &mut len_bytes).is_err() { break; }
+                let buf_ptr = u32::from_le_bytes(ptr_bytes) as usize;
+                let buf_len = u32::from_le_bytes(len_bytes) as usize;
+                let src_start = stdin_pos + total_read as usize;
+                let remaining = stdin_len.saturating_sub(src_start);
+                let to_copy = remaining.min(buf_len);
+                if to_copy > 0 {
+                    let chunk: Vec<u8> = caller.data().stdin_buf[src_start..src_start + to_copy].to_vec();
+                    if mem.write(&mut caller, buf_ptr, &chunk).is_err() { break; }
+                    total_read += to_copy as u32;
+                }
+            }
+            caller.data_mut().stdin_pos += total_read as usize;
+            let _ = mem.write(&mut caller, nread_ptr as usize, &total_read.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // random_get(buf: i32, buf_len: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "random_get",
+        |mut caller: Caller<HostState>, buf: i32, buf_len: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 1,
+            };
+            // Fill with pseudo-random bytes using a simple xorshift seeded from pointer.
+            let mut state = buf as u32 ^ 0x9e3779b9;
+            let data = mem.data_mut(&mut caller);
+            let start = buf as usize;
+            let end = start.saturating_add(buf_len as usize).min(data.len());
+            for byte in &mut data[start..end] {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                *byte = state as u8;
+            }
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // poll_oneoff(in: i32, out: i32, nsubscriptions: i32, nevents: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "poll_oneoff",
+        |mut caller: Caller<HostState>, _in: i32, _out: i32, _nsubs: i32, nevents: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 1,
+            };
+            let _ = mem.write(&mut caller, nevents as usize, &0u32.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_close(fd: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "fd_close",
+        |_: Caller<HostState>, _fd: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_fdstat_get(fd: i32, stat_out: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "fd_fdstat_get",
+        |mut caller: Caller<HostState>, fd: i32, stat_out: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8,
+            };
+            // fdstat struct layout (24 bytes, little-endian):
+            //   offset 0:  filetype  (u8)  — 2 = FILETYPE_CHARACTER_DEVICE (stdin/stdout/stderr)
+            //   offset 1:  padding   (u8)
+            //   offset 2:  fs_flags  (u16) — 0 (no APPEND, no NONBLOCK)
+            //   offset 4:  padding   (u32)
+            //   offset 8:  rights_base  (u64) — all rights granted so Ruby/Python don't skip fd_write
+            //   offset 16: rights_inheriting (u64) — all rights
+            //
+            // Rights must be non-zero for stdin/stdout/stderr or runtimes like Ruby WASM will
+            // refuse to write to fd=1 (they check rights before calling fd_write).
+            let mut stat = [0u8; 24];
+            // fd 0/1/2 are character devices; all others return EBADF
+            if fd < 0 || fd > 2 {
+                return 8; // EBADF
+            }
+            stat[0] = 2; // FILETYPE_CHARACTER_DEVICE
+            let all_rights: u64 = u64::MAX;
+            stat[8..16].copy_from_slice(&all_rights.to_le_bytes());
+            stat[16..24].copy_from_slice(&all_rights.to_le_bytes());
+            let _ = mem.write(&mut caller, stat_out as usize, &stat);
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_fdstat_set_flags(fd: i32, flags: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "fd_fdstat_set_flags",
+        |_: Caller<HostState>, _fd: i32, _flags: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_prestat_get(fd: i32, prestat_out: i32) -> i32
+    // Return EBADF (8) for all fds — no pre-opened dirs.
+    linker.func_wrap("wasi_snapshot_preview1", "fd_prestat_get",
+        |_: Caller<HostState>, _fd: i32, _prestat_out: i32| -> i32 { 8 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_prestat_dir_name(fd: i32, path: i32, path_len: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "fd_prestat_dir_name",
+        |_: Caller<HostState>, _fd: i32, _path: i32, _path_len: i32| -> i32 { 8 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_advise(fd: i32, offset: i64, len: i64, advice: i32) -> i32 — no-op
+    linker.func_wrap("wasi_snapshot_preview1", "fd_advise",
+        |_: Caller<HostState>, _fd: i32, _offset: i64, _len: i64, _advice: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_datasync(fd: i32) -> i32 — no-op
+    linker.func_wrap("wasi_snapshot_preview1", "fd_datasync",
+        |_: Caller<HostState>, _fd: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_sync(fd: i32) -> i32 — no-op
+    linker.func_wrap("wasi_snapshot_preview1", "fd_sync",
+        |_: Caller<HostState>, _fd: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_tell(fd: i32, offset_out: i32) -> i32
+    // Returns ESPIPE (29) for stdin/stdout; 0 with offset=0 otherwise.
+    linker.func_wrap("wasi_snapshot_preview1", "fd_tell",
+        |mut caller: Caller<HostState>, fd: i32, offset_out: i32| -> i32 {
+            if fd == 0 || fd == 1 || fd == 2 { return 29; } // ESPIPE
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8,
+            };
+            let _ = mem.write(&mut caller, offset_out as usize, &0u64.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_seek(fd: i32, offset: i64, whence: i32, new_offset_out: i32) -> i32
+    // Returns ESPIPE for stdin/stdout; EBADF for other fds.
+    linker.func_wrap("wasi_snapshot_preview1", "fd_seek",
+        |mut caller: Caller<HostState>, fd: i32, _offset: i64, _whence: i32, new_offset_out: i32| -> i32 {
+            if fd == 0 || fd == 1 || fd == 2 { return 29; } // ESPIPE
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8,
+            };
+            let _ = mem.write(&mut caller, new_offset_out as usize, &0u64.to_le_bytes());
+            8 // EBADF for anything else
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_pread(fd: i32, iovs: i32, iovs_len: i32, offset: i64, nread: i32) -> i32
+    // Returns EBADF — no seekable reads in this runtime.
+    linker.func_wrap("wasi_snapshot_preview1", "fd_pread",
+        |mut caller: Caller<HostState>, _fd: i32, _iovs: i32, _iovs_len: i32, _offset: i64, nread: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8,
+            };
+            let _ = mem.write(&mut caller, nread as usize, &0u32.to_le_bytes());
+            0 // return 0 bytes read (EOF)
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_pwrite(fd: i32, iovs: i32, iovs_len: i32, offset: i64, nwritten: i32) -> i32
+    // Discard writes (no seekable write support).
+    linker.func_wrap("wasi_snapshot_preview1", "fd_pwrite",
+        |mut caller: Caller<HostState>, _fd: i32, _iovs: i32, _iovs_len: i32, _offset: i64, nwritten: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8,
+            };
+            let _ = mem.write(&mut caller, nwritten as usize, &0u32.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_filestat_get(fd: i32, stat_out: i32) -> i32
+    // Return zero-filled stat struct (64 bytes).
+    linker.func_wrap("wasi_snapshot_preview1", "fd_filestat_get",
+        |mut caller: Caller<HostState>, _fd: i32, stat_out: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8,
+            };
+            let _ = mem.write(&mut caller, stat_out as usize, &[0u8; 64]);
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_filestat_set_size(fd: i32, size: i64) -> i32 — no-op
+    linker.func_wrap("wasi_snapshot_preview1", "fd_filestat_set_size",
+        |_: Caller<HostState>, _fd: i32, _size: i64| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_filestat_set_times(fd: i32, atim: i64, mtim: i64, fst_flags: i32) -> i32 — no-op
+    linker.func_wrap("wasi_snapshot_preview1", "fd_filestat_set_times",
+        |_: Caller<HostState>, _fd: i32, _atim: i64, _mtim: i64, _fst_flags: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_readdir(fd: i32, buf: i32, buf_len: i32, cookie: i64, bufused_out: i32) -> i32
+    // Return empty directory listing (no entries).
+    linker.func_wrap("wasi_snapshot_preview1", "fd_readdir",
+        |mut caller: Caller<HostState>, _fd: i32, _buf: i32, _buf_len: i32, _cookie: i64, bufused_out: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8,
+            };
+            let _ = mem.write(&mut caller, bufused_out as usize, &0u32.to_le_bytes());
+            0
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // path_open(dirfd: i32, dirflags: i32, path: i32, path_len: i32,
+    //           oflags: i32, fs_rights_base: i64, fs_rights_inheriting: i64,
+    //           fdflags: i32, fd_out: i32) -> i32 — ENOENT (always)
+    linker.func_wrap("wasi_snapshot_preview1", "path_open",
+        |_: Caller<HostState>, _dirfd: i32, _dirflags: i32, _path: i32, _path_len: i32,
+         _oflags: i32, _rights_base: i64, _rights_inh: i64, _fdflags: i32, _fd_out: i32| -> i32 {
+            44 // ENOENT
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // path_filestat_get(dirfd: i32, flags: i32, path: i32, path_len: i32, stat_out: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "path_filestat_get",
+        |_: Caller<HostState>, _dirfd: i32, _flags: i32, _path: i32, _path_len: i32, _stat_out: i32| -> i32 {
+            44 // ENOENT
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // path_filestat_set_times(dirfd: i32, flags: i32, path: i32, path_len: i32,
+    //                         atim: i64, mtim: i64, fst_flags: i32) -> i32 — no-op
+    linker.func_wrap("wasi_snapshot_preview1", "path_filestat_set_times",
+        |_: Caller<HostState>, _dirfd: i32, _flags: i32, _path: i32, _path_len: i32,
+         _atim: i64, _mtim: i64, _fst_flags: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // path_create_directory(dirfd: i32, path: i32, path_len: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "path_create_directory",
+        |_: Caller<HostState>, _dirfd: i32, _path: i32, _path_len: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // path_remove_directory(dirfd: i32, path: i32, path_len: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "path_remove_directory",
+        |_: Caller<HostState>, _dirfd: i32, _path: i32, _path_len: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // path_rename(old_fd: i32, old_path: i32, old_path_len: i32,
+    //             new_fd: i32, new_path: i32, new_path_len: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "path_rename",
+        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // path_link(old_fd: i32, old_flags: i32, old_path: i32, old_path_len: i32,
+    //           new_fd: i32, new_path: i32, new_path_len: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "path_link",
+        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // path_symlink(old_path: i32, old_path_len: i32, fd: i32,
+    //              new_path: i32, new_path_len: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "path_symlink",
+        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // path_unlink_file(fd: i32, path: i32, path_len: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "path_unlink_file",
+        |_: Caller<HostState>, _: i32, _: i32, _: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // path_readlink(fd: i32, path: i32, path_len: i32, buf: i32, buf_len: i32, nread: i32) -> i32
+    linker.func_wrap("wasi_snapshot_preview1", "path_readlink",
+        |mut caller: Caller<HostState>, _fd: i32, _path: i32, _path_len: i32,
+         _buf: i32, _buf_len: i32, nread: i32| -> i32 {
+            let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m, None => return 8,
+            };
+            let _ = mem.write(&mut caller, nread as usize, &0u32.to_le_bytes());
+            44 // ENOENT
+        }
+    ).map_err(|e| e.to_string())?;
+
+    // sock_accept(fd: i32, flags: i32, result_fd: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "sock_accept",
+        |_: Caller<HostState>, _fd: i32, _flags: i32, _result_fd: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // sock_recv(fd: i32, ri_data: i32, ri_data_len: i32, ri_flags: i32,
+    //           nread: i32, ro_flags: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "sock_recv",
+        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // sock_send(fd: i32, si_data: i32, si_data_len: i32, si_flags: i32, nwritten: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "sock_send",
+        |_: Caller<HostState>, _: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // sock_shutdown(fd: i32, how: i32) -> i32 — ENOSYS
+    linker.func_wrap("wasi_snapshot_preview1", "sock_shutdown",
+        |_: Caller<HostState>, _fd: i32, _how: i32| -> i32 { 52 }
+    ).map_err(|e| e.to_string())?;
+
+    // fd_renumber(from: i32, to: i32) -> i32 — used by Ruby; no-op since we have no real fd table
+    linker.func_wrap("wasi_snapshot_preview1", "fd_renumber",
+        |_: Caller<HostState>, _from: i32, _to: i32| -> i32 { 0 }
+    ).map_err(|e| e.to_string())?;
+
+    // ── Flux host imports ────────────────────────────────────────────────────
 
     // fluxbase.log(level: i32, msg_ptr: i32, msg_len: i32)
     linker.func_wrap("fluxbase", "log", |mut caller: Caller<HostState>, level: i32, msg_ptr: i32, msg_len: i32| {
@@ -530,112 +993,211 @@ async fn execute_wasm_async(
     let instance = linker.instantiate_async(&mut store, module).await
         .map_err(|e| format!("wasm instantiation failed: {}", e))?;
 
-    // ── Fetch required exports ─────────────────────────────────────────────
-
-    let memory = instance
-        .get_memory(&mut store, "memory")
-        .ok_or("wasm module missing required 'memory' export")?;
-
-    let alloc_fn = instance
-        .get_typed_func::<i32, i32>(&mut store, "__flux_alloc")
-        .map_err(|_| "wasm module missing required '__flux_alloc' export")?;
-
-    let handle_fn = instance
-        .get_typed_func::<(i32, i32), i32>(&mut store, "handle")
-        .map_err(|_| "wasm module missing required 'handle' export")?;
-
-    // ── Write payload into WASM linear memory ─────────────────────────────
-
-    let payload_json = serde_json::to_string(&params.payload)
-        .map_err(|e| format!("payload serialization failed: {}", e))?;
-    let payload_bytes = payload_json.as_bytes();
-    let payload_len   = payload_bytes.len() as i32;
-
-    let payload_ptr = alloc_fn.call_async(&mut store, payload_len).await
-        .map_err(|e| format!("__flux_alloc failed: {}", e))?;
-
-    if payload_ptr <= 0 {
-        return Err("__flux_alloc returned null pointer".to_string());
-    }
-
-    {
-        let data = memory.data_mut(&mut store);
-        let start = payload_ptr as usize;
-        let end   = start + payload_bytes.len();
-        if end > data.len() {
-            return Err(format!(
-                "payload ({} bytes) overflows linear memory at offset {}",
-                payload_bytes.len(), start
-            ));
-        }
-        data[start..end].copy_from_slice(payload_bytes);
-    }
-
-    // ── Call handle (async — suspends fiber during host I/O) ───────────────
-
-    let result_ptr = handle_fn
-        .call_async(&mut store, (payload_ptr, payload_len)).await
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("fuel") || msg.contains("trap: out of fuel") {
-                "wasm function exceeded CPU fuel limit".to_string()
-            } else {
-                format!("wasm handle trap: {}", msg)
-            }
-        })?;
-
-    // ── Read result from WASM memory ───────────────────────────────────────
+    // ── Detect execution model ─────────────────────────────────────────────
     //
-    // Layout (written by the WASM module):
-    //   [4 bytes u32 LE = payload length][<length> bytes of UTF-8 JSON]
+    // Two models are supported:
+    //
+    //  • Custom Flux ABI: exports `__flux_alloc` + `handle`.
+    //    Used by Rust (wasm32-unknown-unknown) and AssemblyScript.
+    //    Input is passed via direct memory write; result is read back from memory.
+    //
+    //  • WASI stdin/stdout: exports `_start` (command model).
+    //    Used by Go (GOOS=wasip1), C/wasi-sdk, and other WASI-compatible runtimes.
+    //    Input JSON is served on fd=0 (stdin); result JSON is captured from fd=1 (stdout).
+    //    `proc_exit(0)` traps with a recognizable sentinel to stop execution cleanly.
+    //
+    //  • WASI reactor: exports `_initialize` (reactor model) + `handle` or similar.
+    //    Call `_initialize` first, then dispatch via custom ABI.
 
-    let result_json = {
-        let data = memory.data(&store);
+    let has_flux_alloc = instance.get_export(&mut store, "__flux_alloc").is_some();
+    let has_handle     = instance.get_export(&mut store, "handle").is_some();
+    let has_initialize = instance.get_export(&mut store, "_initialize").is_some();
+    let has_start      = instance.get_export(&mut store, "_start").is_some();
 
-        if result_ptr <= 0 {
-            return Err("wasm handle returned null result pointer".to_string());
-        }
-
-        let ptr       = result_ptr as usize;
-        let hdr_end   = ptr + 4;
-        if hdr_end > data.len() {
-            return Err("result pointer out of bounds reading length header".to_string());
-        }
-
-        let result_len = u32::from_le_bytes([data[ptr], data[ptr+1], data[ptr+2], data[ptr+3]]) as usize;
-        let json_end   = hdr_end + result_len;
-
-        if json_end > data.len() {
-            return Err(format!(
-                "result length {} overflows linear memory at offset {}",
-                result_len, hdr_end
-            ));
-        }
-
-        match std::str::from_utf8(&data[hdr_end..json_end]) {
-            Ok(s)  => s.to_string(),
-            Err(e) => return Err(format!("result JSON is not valid UTF-8: {}", e)),
-        }
-    };
-
-    let result_value: serde_json::Value = serde_json::from_str(&result_json)
-        .map_err(|e| format!("result JSON parse error: {} — raw: {:.256}", e, result_json))?;
-
-    // ── Extract output / error from result ────────────────────────────────
-
-    if let Some(err_msg) = result_value.get("error").and_then(|v| v.as_str()) {
-        return Err(serde_json::json!({
-            "code":    "FunctionExecutionError",
-            "message": err_msg
-        }).to_string());
+    if has_initialize {
+        // WASI reactor bootstrap
+        let init_fn = instance.get_typed_func::<(), ()>(&mut store, "_initialize")
+            .map_err(|e| format!("wasm _initialize lookup failed: {}", e))?;
+        init_fn.call_async(&mut store, ()).await
+            .map_err(|e| format!("wasm _initialize failed: {}", e))?;
     }
 
-    let output = result_value.get("output")
-        .cloned()
-        .unwrap_or(result_value.clone());
+    if has_flux_alloc && has_handle {
+        // ── Custom Flux ABI path ───────────────────────────────────────────
 
-    let logs = store.into_data().logs;
-    Ok(ExecutionResult { output, logs })
+        let memory = instance
+            .get_memory(&mut store, "memory")
+            .ok_or("wasm module missing required 'memory' export")?;
+
+        let alloc_fn = instance
+            .get_typed_func::<i32, i32>(&mut store, "__flux_alloc")
+            .map_err(|_| "wasm module missing required '__flux_alloc' export")?;
+
+        let handle_fn = instance
+            .get_typed_func::<(i32, i32), i32>(&mut store, "handle")
+            .map_err(|_| "wasm module missing required 'handle' export")?;
+
+        let payload_json = serde_json::to_string(&params.payload)
+            .map_err(|e| format!("payload serialization failed: {}", e))?;
+        let payload_bytes = payload_json.as_bytes();
+        let payload_len   = payload_bytes.len() as i32;
+
+        let payload_ptr = alloc_fn.call_async(&mut store, payload_len).await
+            .map_err(|e| format!("__flux_alloc failed: {}", e))?;
+
+        if payload_ptr <= 0 {
+            return Err("__flux_alloc returned null pointer".to_string());
+        }
+
+        {
+            let data = memory.data_mut(&mut store);
+            let start = payload_ptr as usize;
+            let end   = start + payload_bytes.len();
+            if end > data.len() {
+                return Err(format!(
+                    "payload ({} bytes) overflows linear memory at offset {}",
+                    payload_bytes.len(), start
+                ));
+            }
+            data[start..end].copy_from_slice(payload_bytes);
+        }
+
+        let result_ptr = handle_fn
+            .call_async(&mut store, (payload_ptr, payload_len)).await
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("fuel") || msg.contains("trap: out of fuel") {
+                    "wasm function exceeded CPU fuel limit".to_string()
+                } else {
+                    format!("wasm handle trap: {}", msg)
+                }
+            })?;
+
+        // Layout: [4 bytes u32 LE = length][<length> bytes UTF-8 JSON]
+        let result_json = {
+            let data = memory.data(&store);
+            if result_ptr <= 0 {
+                return Err("wasm handle returned null result pointer".to_string());
+            }
+            let ptr     = result_ptr as usize;
+            let hdr_end = ptr + 4;
+            if hdr_end > data.len() {
+                return Err("result pointer out of bounds reading length header".to_string());
+            }
+            let result_len = u32::from_le_bytes([data[ptr], data[ptr+1], data[ptr+2], data[ptr+3]]) as usize;
+            let json_end   = hdr_end + result_len;
+            if json_end > data.len() {
+                return Err(format!("result length {} overflows linear memory at offset {}", result_len, hdr_end));
+            }
+            match std::str::from_utf8(&data[hdr_end..json_end]) {
+                Ok(s)  => s.to_string(),
+                Err(e) => return Err(format!("result JSON is not valid UTF-8: {}", e)),
+            }
+        };
+
+        let result_value: serde_json::Value = serde_json::from_str(&result_json)
+            .map_err(|e| format!("result JSON parse error: {} — raw: {:.256}", e, result_json))?;
+
+        if let Some(err_msg) = result_value.get("error").and_then(|v| v.as_str()) {
+            return Err(serde_json::json!({
+                "code":    "FunctionExecutionError",
+                "message": err_msg
+            }).to_string());
+        }
+
+        let output = result_value.get("output").cloned().unwrap_or(result_value);
+        let logs = store.into_data().logs;
+        return Ok(ExecutionResult { output, logs });
+    }
+
+    if has_start {
+        // ── WASI stdin/stdout path ─────────────────────────────────────────
+        //
+        // The module reads its input from stdin (fd=0) and writes its JSON
+        // result to stdout (fd=1), then calls proc_exit(0).
+        // Our proc_exit stub traps with "__wasi_proc_exit:0" to stop _start cleanly.
+
+        let payload_json = serde_json::to_string(&params.payload)
+            .map_err(|e| format!("payload serialization failed: {}", e))?;
+        store.data_mut().stdin_buf = payload_json.into_bytes();
+        store.data_mut().stdin_pos = 0;
+
+        let start_fn = instance
+            .get_typed_func::<(), ()>(&mut store, "_start")
+            .map_err(|e| format!("wasm _start lookup failed: {}", e))?;
+
+        let start_result = start_fn.call_async(&mut store, ()).await;
+        match start_result {
+            Ok(()) => {} // _start returned normally without proc_exit
+            Err(e) => {
+                // Use {:#} to include the full anyhow error chain (incl. "Caused by:" sections).
+                // Our proc_exit stub emits `anyhow::bail!("__wasi_proc_exit:N")` as the root
+                // cause; the outer trap message added by wasmtime contains the WASM backtrace.
+                let full_msg = format!("{:#}", e);
+                let short_msg = e.to_string();
+                if full_msg.contains("fuel") || full_msg.contains("trap: out of fuel") {
+                    return Err("wasm function exceeded CPU fuel limit".to_string());
+                } else if full_msg.contains("__wasi_proc_exit:") {
+                    // Normal or error exit via proc_exit.  Non-zero exit is a crash.
+                    if !full_msg.contains("__wasi_proc_exit:0") {
+                        // Go (and C) write the panic/error to stderr before calling proc_exit.
+                        let stderr = String::from_utf8_lossy(
+                            &store.data().stderr_buf
+                        ).into_owned();
+                        let reason = if stderr.trim().is_empty() {
+                            "non-zero exit without stderr output".to_string()
+                        } else {
+                            stderr.trim().to_string()
+                        };
+                        return Err(format!("wasm function exited with error: {}", reason));
+                    }
+                    // proc_exit(0) — success
+                } else {
+                    // Genuine WASM trap (nil deref, unreachable, OOM, etc.)
+                    let stderr = String::from_utf8_lossy(
+                        &store.data().stderr_buf
+                    ).into_owned();
+                    if stderr.trim().is_empty() {
+                        return Err(format!("wasm _start trap: {}", short_msg));
+                    }
+                    return Err(format!("wasm _start trap: {} — stderr: {}", short_msg, stderr.trim()));
+                }
+            }
+        }
+
+        let stdout_bytes = std::mem::take(&mut store.data_mut().stdout_buf);
+        if stdout_bytes.is_empty() {
+            let stderr = String::from_utf8_lossy(&store.data().stderr_buf).into_owned();
+            if stderr.trim().is_empty() {
+                return Err("wasm function produced no output on stdout".to_string());
+            }
+            return Err(format!("wasm function produced no stdout; stderr: {}", stderr.trim()));
+        }
+
+        let stdout_str = std::str::from_utf8(&stdout_bytes)
+            .map_err(|e| format!("wasm stdout is not valid UTF-8: {}", e))?;
+        // Trim trailing newline (Go's json.Encoder adds one)
+        let stdout_str = stdout_str.trim();
+
+        let result_value: serde_json::Value = serde_json::from_str(stdout_str)
+            .map_err(|e| format!("wasm stdout JSON parse error: {} — raw: {:.256}", e, stdout_str))?;
+
+        if let Some(err_val) = result_value.get("error") {
+            let code = result_value.get("code").and_then(|v| v.as_str()).unwrap_or("FunctionExecutionError");
+            let msg  = err_val.as_str().unwrap_or("unknown error");
+            return Err(serde_json::json!({
+                "code":    code,
+                "message": msg
+            }).to_string());
+        }
+
+        // stdout IS the output (no "output" wrapper for stdin/stdout model)
+        let output = result_value.get("output").cloned().unwrap_or(result_value);
+        let logs = store.into_data().logs;
+        return Ok(ExecutionResult { output, logs });
+    }
+
+    Err("wasm module must export either (__flux_alloc + handle) or _start".to_string())
 }
 
 /// Returns `true` if the URL's host resolves to a private, loopback, or

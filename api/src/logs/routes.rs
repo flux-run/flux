@@ -93,10 +93,10 @@ pub async fn create_log(
         #[derive(sqlx::FromRow)]
         struct FnName { name: String }
         let fn_row = if let Ok(fid) = fid_str.parse::<Uuid>() {
-            sqlx::query_as::<_, FnName>("SELECT name FROM functions WHERE id = $1 LIMIT 1")
+            sqlx::query_as::<_, FnName>("SELECT name FROM flux.functions WHERE id = $1 LIMIT 1")
                 .bind(fid).fetch_optional(&pool).await.map_err(|_| db_err())?
         } else {
-            sqlx::query_as::<_, FnName>("SELECT name FROM functions WHERE name = $1 LIMIT 1")
+            sqlx::query_as::<_, FnName>("SELECT name FROM flux.functions WHERE name = $1 LIMIT 1")
                 .bind(fid_str).fetch_optional(&pool).await.map_err(|_| db_err())?
         };
         match fn_row {
@@ -108,7 +108,7 @@ pub async fn create_log(
     };
 
     sqlx::query(
-        "INSERT INTO platform_logs \
+        "INSERT INTO flux.platform_logs \
          (source, resource_id, level, message, request_id, metadata, span_type) \
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
@@ -147,7 +147,7 @@ pub async fn list_logs(
     // Resolve function UUID → name.
     let resource_id = if let Ok(fid) = params.function_id.parse::<Uuid>() {
         #[derive(sqlx::FromRow)] struct FnName { name: String }
-        sqlx::query_as::<_, FnName>("SELECT name FROM functions WHERE id = $1 LIMIT 1")
+        sqlx::query_as::<_, FnName>("SELECT name FROM flux.functions WHERE id = $1 LIMIT 1")
             .bind(fid).fetch_optional(&pool).await.unwrap_or(None)
             .map(|f| f.name).unwrap_or(params.function_id.clone())
     } else {
@@ -155,7 +155,7 @@ pub async fn list_logs(
     };
 
     let rows = sqlx::query_as::<_, LogRow>(
-        "SELECT id, level, message, timestamp FROM platform_logs \
+        "SELECT id, level, message, timestamp FROM flux.platform_logs \
          WHERE resource_id = $1 AND source = 'function' \
          ORDER BY timestamp DESC LIMIT $2",
     )
@@ -244,7 +244,7 @@ pub async fn list_project_logs(
     let sql = format!(
         "SELECT l.id, l.source, l.resource_id, l.level, l.message, \
                 l.request_id, l.metadata, l.span_type, l.timestamp \
-         FROM platform_logs l \
+         FROM flux.platform_logs l \
          WHERE {} \
          ORDER BY l.timestamp {} LIMIT ${}",
         where_clause, time_order, bind_idx
@@ -317,7 +317,7 @@ pub async fn get_trace(
     let rows = sqlx::query_as::<_, TraceRow>(
         "SELECT l.id, l.source, l.resource_id, l.level, l.message, \
                 l.span_type, l.metadata, l.timestamp \
-         FROM platform_logs l \
+         FROM flux.platform_logs l \
          WHERE l.request_id = $1 \
          ORDER BY l.timestamp ASC",
     )
@@ -520,7 +520,7 @@ pub async fn list_traces(
         // Forward mode: tail polling — requests whose first span arrived AFTER ts
         sqlx::query_as::<_, ReqWindow>(
             "SELECT request_id, MIN(timestamp) AS started_at, MAX(timestamp) AS ended_at \
-             FROM platform_logs \
+             FROM flux.platform_logs \
              WHERE request_id IS NOT NULL AND request_id != '' \
                AND timestamp > $1 \
              GROUP BY request_id \
@@ -538,7 +538,7 @@ pub async fn list_traces(
 
         sqlx::query_as::<_, ReqWindow>(
             "SELECT request_id, MIN(timestamp) AS started_at, MAX(timestamp) AS ended_at \
-             FROM platform_logs \
+             FROM flux.platform_logs \
              WHERE request_id IS NOT NULL AND request_id != '' \
                AND ($2 = '' OR request_id != $2) \
                AND timestamp < $1 \
@@ -563,7 +563,7 @@ pub async fn list_traces(
 
     let gw_sql = format!(
         "SELECT DISTINCT ON (request_id) request_id, metadata \
-         FROM platform_logs \
+         FROM flux.platform_logs \
          WHERE request_id IN ({id_list}) \
            AND (source = 'gateway' OR span_type IN ('request','gateway_request','http_request')) \
          ORDER BY request_id, timestamp ASC",
@@ -597,7 +597,7 @@ pub async fn list_traces(
                   CASE WHEN level='error' OR span_type='error' THEN 1 \
                        WHEN source='runtime' THEN 2 \
                        ELSE 3 END AS pr \
-           FROM platform_logs \
+           FROM flux.platform_logs \
            WHERE request_id IN ({id_list}) \
              AND (level='error' OR span_type='error' OR source='runtime') \
          ) sub \

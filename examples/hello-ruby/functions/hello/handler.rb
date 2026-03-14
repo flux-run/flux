@@ -1,13 +1,15 @@
-# hello — Flux function (compiled to WASM via ruby.wasm)
-# Build: ruby.wasm build handler.rb -o hello.wasm
+# hello — Flux function (compiled to WASM via rbwasm / ruby.wasm)
+# Build: rbwasm build --ruby-version 3.4 -o hello.wasm -- handler.rb
+#
+# Uses WASI stdin/stdout model: reads JSON from stdin, writes JSON to stdout.
 require 'json'
 
-# @param input_json [String]  JSON-encoded input payload
-# @return [String]            JSON-encoded output
-def hello_handler(input_json)
-  _input = JSON.parse(input_json)
-
-  # TODO: implement hello
-
-  JSON.generate(ok: true)
+raw = $stdin.read
+begin
+  _input = JSON.parse(raw)
+rescue JSON::ParserError
+  _input = {}
 end
+
+result = { ok: true }
+$stdout.print(JSON.generate(result))

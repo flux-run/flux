@@ -22,6 +22,20 @@ use wasmtime::{Engine, Module};
 use super::executor::{ExecutionResult, PoolDispatchers};
 use super::wasm_executor::{build_engine, compile_module, execute_wasm, WasmExecutionParams};
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/// Compute a fast non-cryptographic fingerprint of a byte slice.
+/// Used to detect whether newly-arrived bytes differ from the bytes used to
+/// compile the cached Wasmtime `Module`, without storing the full byte slice
+/// twice.  Collisions are vanishingly rare for function bundles.
+fn bytes_fingerprint(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+    let mut h = DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
 // ─── WasmPool ───────────────────────────────────────────────────────────────
 
 /// A pool that executes WASM function bundles with bounded concurrency and
@@ -29,8 +43,9 @@ use super::wasm_executor::{build_engine, compile_module, execute_wasm, WasmExecu
 #[derive(Clone)]
 pub struct WasmPool {
     engine:           Arc<Engine>,
-    /// LRU cache: function_id → compiled Wasmtime Module (Arc for cheap clone/share)
-    modules:          Arc<Mutex<LruCache<String, Arc<Module>>>>,
+    /// LRU cache: function_id → (compiled Module, bytes fingerprint).
+    /// The fingerprint detects new deployments — different bytes = cache miss = recompile.
+    modules:          Arc<Mutex<LruCache<String, (Arc<Module>, u64)>>>,
     /// Raw bytes cache: function_id → (Arc<Vec<u8>>, inserted_at)
     raw_bytes:        Arc<Mutex<LruCache<String, (Arc<Vec<u8>>, Instant)>>>,
     bytes_ttl:        Duration,
@@ -48,7 +63,10 @@ impl WasmPool {
             .unwrap_or(2);
         let workers = (cpus * 2).clamp(2, 16);
         tracing::info!(workers, "wasm pool started");
-        Self::new(workers, 1_000_000_000, 30)
+        // 10 billion fuel: Python/Ruby WASM interpreters consume far more VM
+        // instructions than hand-written WASM (Rust, Go, AssemblyScript).
+        // 120 s timeout: large slow-start WASM (py2wasm, rbwasm) may take 60 s.
+        Self::new(workers, 10_000_000_000, 120)
     }
 
     pub fn new(workers: usize, fuel_limit: u64, timeout_secs: u64) -> Self {
@@ -87,15 +105,10 @@ impl WasmPool {
         }
     }
 
-    /// Store raw bytes for the warm path. Also evicts the compiled module so
-    /// the next execution recompiles from the fresh bytes.
+    /// Store raw bytes for the warm path.
     pub async fn cache_bytes(&self, function_id: String, bytes: Arc<Vec<u8>>) {
-        {
-            let mut cache = self.raw_bytes.lock().await;
-            cache.put(function_id.clone(), (bytes, Instant::now()));
-        }
-        // Don't evict the compiled module — if bytes haven't changed (same
-        // deployment), the cached Module is still valid.
+        let mut cache = self.raw_bytes.lock().await;
+        cache.put(function_id.clone(), (bytes, Instant::now()));
     }
 
     /// Execute a WASM function bundle.
@@ -123,20 +136,57 @@ impl WasmPool {
             .await
             .map_err(|_| "wasm pool is shut down".to_string())?;
 
-        // ── Resolve compiled Module (cache hit → skip compilation) ────────
+        // ── Resolve compiled Module (content-addressed cache) ─────────────
+        //
+        // The cache key is (function_id, bytes_fingerprint).  When a new
+        // deployment writes different bytes, the fingerprint changes → cache
+        // miss → recompile.  This prevents stale compiled modules (e.g. a
+        // module compiled from a WASI-linked binary) from surviving a redeploy.
+        //
+        // Compilation is done on a spawn_blocking thread so that large WASM
+        // modules (Python 26 MB, Ruby 47 MB) do not block tokio worker threads
+        // for the full Cranelift JIT compilation duration (up to several minutes).
+        // The cache lock is held only for the fast lookup and insert — not during
+        // the compile itself.
+        let fingerprint = bytes_fingerprint(&bytes);
         let module: Arc<Module> = {
-            let mut cache = self.modules.lock().await;
-            if let Some(m) = cache.get(&function_id) {
-                tracing::debug!(%function_id, "wasm module cache hit");
-                m.clone()
+            // Fast path: check cache under lock (microseconds).
+            let cached = {
+                let mut cache = self.modules.lock().await;
+                match cache.get(&function_id) {
+                    Some((m, fp)) if *fp == fingerprint => {
+                        tracing::debug!(%function_id, "wasm module cache hit");
+                        Some(m.clone())
+                    }
+                    _ => None,
+                }
+            };
+
+            if let Some(m) = cached {
+                m
             } else {
-                tracing::debug!(%function_id, "wasm module cache miss — compiling");
-                let engine = self.engine.as_ref();
-                let module = compile_module(engine, &bytes)
-                    .map_err(|e| e)?;
-                let arc = Arc::new(module);
-                cache.put(function_id.clone(), arc.clone());
-                arc
+                // Slow path: compile off a tokio worker thread.
+                tracing::debug!(%function_id, "wasm module cache miss — compiling on blocking thread");
+                let engine_arc = self.engine.clone();
+                let bytes_clone = bytes.clone();
+                let compiled = tokio::task::spawn_blocking(move || {
+                    compile_module(engine_arc.as_ref(), &bytes_clone)
+                })
+                .await
+                .map_err(|e| format!("compile task panicked: {}", e))?
+                .map_err(|e| e)?;
+
+                let arc = Arc::new(compiled);
+                // Re-acquire lock to insert — another request may have compiled
+                // concurrently; prefer whichever finished first.
+                let mut cache = self.modules.lock().await;
+                match cache.get(&function_id) {
+                    Some((m, fp)) if *fp == fingerprint => m.clone(),
+                    _ => {
+                        cache.put(function_id.clone(), (arc.clone(), fingerprint));
+                        arc
+                    }
+                }
             }
         };
 

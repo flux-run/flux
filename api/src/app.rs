@@ -109,7 +109,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/functions/{id}",    get(routes::functions::get_function).delete(routes::functions::delete_function))
         // Deploy
         .route("/functions/deploy",  post(routes::deployments::deploy_function_cli)
-            .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)))
+            .layer(axum::extract::DefaultBodyLimit::max(60 * 1024 * 1024)))
         .route("/deployments",               post(routes::deployments::create_deployment))
         .route("/deployments/list/{id}",     get(routes::deployments::list_deployments))
         .route("/deployments/{id}/activate/{version}", post(routes::deployments::activate_deployment))

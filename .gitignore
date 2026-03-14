@@ -52,3 +52,25 @@ docker-compose*.yml
 .env.dev.example
 */.env.example
 projects/
+
+# ── WASM build artifacts (generated; not checked in) ─────────────────────────
+build/
+rubies/
+flux-functions/
+nuitka-crash-report.xml
+
+# ── Java/Gradle build outputs ─────────────────────────────────────────────────
+examples/hello-java/functions/hello/.gradle/
+examples/hello-java/functions/hello/build/
+examples/hello-java/functions/hello/*.class
+examples/hello-java/functions/hello/*.jar
+
+# ── C# build outputs ──────────────────────────────────────────────────────────
+examples/hello-csharp/functions/hello/bin/
+examples/hello-csharp/functions/hello/obj/
+
+# ── Large pre-compiled WASM runtimes (>10MB — too large for git) ──────────────
+# Python: 26MB — build with: py2wasm handler.py -o hello.wasm
+examples/hello-python/functions/hello/hello.wasm
+# Ruby: 47MB — build with: rbwasm pack ruby.wasm --dir .:/ -o hello-ruby.wasm
+examples/hello-ruby/functions/hello/*.wasm

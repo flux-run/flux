@@ -708,7 +708,7 @@ async fn watch_functions(functions_dir: &Path, build_dir: &Path, port: u16) -> a
                                 let _ = reqwest::Client::new()
                                     .post(&url)
                                     .header("X-Service-Token", "dev-service-token")
-                                    .json(&serde_json::json!({ "function_name": name }))
+                                    .json(&serde_json::json!({ "function_id": name }))
                                     .send()
                                     .await;
                                 println!(

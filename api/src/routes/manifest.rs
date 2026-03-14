@@ -33,7 +33,7 @@ pub async fn get_manifest(
     // ── 1. Function contracts ──────────────────────────────────────────────
     let fn_rows = sqlx::query(
         "SELECT id, name, runtime, input_schema, output_schema \
-         FROM functions \
+         FROM flux.functions \
          ORDER BY name",
     )
     .fetch_all(pool)
@@ -56,7 +56,7 @@ pub async fn get_manifest(
 
     // ── 2. Secret keys (names only — never values) ────────────────────────
     let secret_keys: Vec<String> = sqlx::query_scalar(
-        "SELECT key FROM secrets ORDER BY key",
+        "SELECT key FROM flux.secrets ORDER BY key",
     )
     .fetch_all(pool)
     .await

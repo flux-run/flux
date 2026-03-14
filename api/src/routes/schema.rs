@@ -139,7 +139,7 @@ pub async fn graph(
     // ── 2. Load function definitions from API DB ──────────────────────────
     let funcs = sqlx::query(
         "SELECT name, description, input_schema, output_schema \
-         FROM functions ORDER BY name",
+         FROM flux.functions ORDER BY name",
     )
     .fetch_all(&state.pool)
     .await

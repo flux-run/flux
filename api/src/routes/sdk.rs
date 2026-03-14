@@ -54,7 +54,7 @@ pub async fn fetch_schema_graph_pub(
 
     let funcs = sqlx::query(
         "SELECT name, description, input_schema, output_schema \
-         FROM functions ORDER BY name",
+         FROM flux.functions ORDER BY name",
     )
     .fetch_all(&state.pool)
     .await

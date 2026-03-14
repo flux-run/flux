@@ -6,12 +6,11 @@ use serde::{Deserialize, Serialize};
 // All I/O is async at the OS level: the WASM fiber suspends while the runtime
 // handles the call, so no OS threads are blocked.
 //
-// Memory convention:
-//   - Input : pass a pointer + byte length into the module's linear memory.
-//   - Output: pass a pre-allocated buffer (ptr + max_len). The host writes the
-//             result as a UTF-8 JSON string and returns the actual byte count.
-//             A negative return value signals an error; read the buffer for the
-//             error message.
+// Memory convention (Flux WASM ABI):
+//   1. Host calls __flux_alloc(payload_len) -> ptr and writes the JSON payload.
+//   2. Host calls handle(ptr, len) -> result_ptr.
+//   3. Result at result_ptr: [ u32 LE byte-length ][ <length> bytes of UTF-8 JSON ].
+//      JSON must be {"output": ...} on success or {"error": "..."} on failure.
 #[link(wasm_import_module = "fluxbase")]
 extern "C" {
     /// Emit a structured log line.
@@ -103,33 +102,50 @@ pub struct Output {
     ok: bool,
 }
 
-/// Flux calls this function with JSON-encoded input.
-///
-/// Memory layout:
-///   - `ptr` points to `input_bytes` inside the module's linear memory.
-///   - Returns `(out_ptr << 32) | out_len` — caller reads `out_len` bytes at `out_ptr`.
-#[no_mangle]
-pub extern "C" fn hello_handler(ptr: i32, len: i32) -> i64 {
-    let input_bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
-    let _input: Input = serde_json::from_slice(input_bytes).unwrap();
+// ── Required exports ──────────────────────────────────────────────────────────
 
-    flux_log("hello_handler invoked");
+/// Allocate `size` bytes on the heap for the host to write the incoming payload.
+/// Leaking is safe — the Wasmtime Store is dropped after each invocation.
+#[no_mangle]
+pub extern "C" fn __flux_alloc(size: i32) -> i32 {
+    let mut v = Vec::<u8>::with_capacity(size as usize);
+    let ptr = v.as_mut_ptr() as i32;
+    std::mem::forget(v);
+    ptr
+}
+
+/// Main entry point called by the Flux runtime.
+/// Returns a pointer to: [ u32 LE byte-length ][ JSON bytes ].
+#[no_mangle]
+pub extern "C" fn handle(ptr: i32, len: i32) -> i32 {
+    let input_bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+
+    let _input: Input = match serde_json::from_slice(input_bytes) {
+        Ok(v)  => v,
+        Err(e) => return write_result(&serde_json::json!({ "error": e.to_string() })),
+    };
+
+    flux_log("hello handler invoked");
 
     // ── Database example ─────────────────────────────────────────────────
-    // let rows_json = flux_db_query(
-    //     "SELECT id, name FROM users WHERE active = $1",
-    //     "[true]",
-    // ).unwrap_or_else(|e| { flux_log(&format!("db error: {e}")); "[]".into() });
+    // let rows = flux_db_query("SELECT id FROM users WHERE active = $1", "[true]")
+    //     .unwrap_or_else(|e| { flux_log(&format!("db: {e}")); "[]".into() });
 
     // ── Queue example ────────────────────────────────────────────────────
     // flux_queue_push("send_welcome_email", r#"{"userId":"123"}"#, None)
-    //     .unwrap_or_else(|e| { flux_log(&format!("queue error: {e}")); "{}".into() });
+    //     .unwrap_or_else(|e| { flux_log(&format!("q: {e}")); "{}".into() });
 
     let output = Output { ok: true };
-    let out_bytes = serde_json::to_vec(&output).unwrap();
+    write_result(&serde_json::json!({ "output": output }))
+}
 
-    let out_ptr = out_bytes.as_ptr() as i64;
-    let out_len = out_bytes.len() as i64;
-    std::mem::forget(out_bytes);
-    (out_ptr << 32) | out_len
+/// Serialize `value` as `[u32 LE length][JSON bytes]`, leak the buffer, return pointer.
+fn write_result(value: &serde_json::Value) -> i32 {
+    let json = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
+    let mut buf = Vec::with_capacity(4 + json.len());
+    buf.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&json);
+    let ptr = buf.as_ptr() as i32;
+    std::mem::forget(buf);
+    ptr
 }

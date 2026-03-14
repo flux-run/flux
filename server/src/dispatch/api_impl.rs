@@ -36,8 +36,8 @@ impl ApiDispatch for InProcessApiDispatch {
             sqlx::query_as::<_, BundleRow>(
                 "SELECT d.id, f.name, f.runtime, \
                         f.input_schema, f.output_schema \
-                 FROM deployments d \
-                 JOIN functions f ON f.id = d.function_id \
+                 FROM flux.deployments d \
+                 JOIN flux.functions f ON f.id = d.function_id \
                  WHERE d.function_id = $1 AND d.is_active = true \
                  ORDER BY d.version DESC LIMIT 1",
             )
@@ -49,8 +49,8 @@ impl ApiDispatch for InProcessApiDispatch {
             sqlx::query_as::<_, BundleRow>(
                 "SELECT d.id, f.name, f.runtime, \
                         f.input_schema, f.output_schema \
-                 FROM deployments d \
-                 JOIN functions f ON f.id = d.function_id \
+                 FROM flux.deployments d \
+                 JOIN flux.functions f ON f.id = d.function_id \
                  WHERE f.name = $1 AND d.is_active = true \
                  ORDER BY d.version DESC LIMIT 1",
             )
@@ -141,7 +141,7 @@ impl ApiDispatch for InProcessApiDispatch {
 
         let row: Option<Row> = if let Ok(fid) = name.parse::<Uuid>() {
             sqlx::query_as::<_, Row>(
-                "SELECT id FROM functions WHERE id = $1",
+                "SELECT id FROM flux.functions WHERE id = $1",
             )
             .bind(fid)
             .fetch_optional(pool)
@@ -149,7 +149,7 @@ impl ApiDispatch for InProcessApiDispatch {
             .map_err(|e| format!("resolve_function DB query failed: {}", e))?
         } else {
             sqlx::query_as::<_, Row>(
-                "SELECT id FROM functions WHERE name = $1",
+                "SELECT id FROM flux.functions WHERE name = $1",
             )
             .bind(name)
             .fetch_optional(pool)
