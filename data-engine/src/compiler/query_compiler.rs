@@ -36,13 +36,31 @@
 //! independently and joins in Rust — trading SQL complexity for Rust memory.
 use serde::{Deserialize, Serialize};
 use crate::engine::error::EngineError;
-use crate::policy::PolicyResult;
 use crate::router::db_router::{validate_identifier, quote_ident};
 use crate::compiler::relational::{
     parse_selectors, expand_nested_deep, build_nested_ctes,
     selector_depth, build_batched_plan, BatchedPlan, BATCH_DEPTH_THRESHOLD,
     ColumnSelector, RelationshipDef,
 };
+
+// ─── PolicyResult (no-op) ──────────────────────────────────────────────────────
+//
+// Flux does not implement a database-level policy engine. Access control lives
+// entirely in function code — the function calling ctx.db IS the policy.
+//
+// `PolicyResult` is kept here as a passthrough so the compiler can be called
+// with a consistent interface. An empty/default result means "allow all".
+
+#[derive(Debug, Clone, Default)]
+pub struct PolicyResult {
+    /// Columns the policy permits. Empty = all columns permitted.
+    pub allowed_columns: Vec<String>,
+    /// SQL expression appended as an extra WHERE clause. None = no restriction.
+    pub row_condition_sql: Option<String>,
+    /// Bind parameters for `row_condition_sql`.
+    pub row_condition_params: Vec<serde_json::Value>,
+}
+
 
 // ─── Compile result ────────────────────────────────────────────────────────────
 

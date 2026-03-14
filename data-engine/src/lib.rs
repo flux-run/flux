@@ -20,17 +20,12 @@
 //! POST /db/query (HTTP)
 //!        ↓
 //! QueryPipeline::run()          ← orchestrates all steps (see engine/pipeline.rs)
-//!  ├─ AuthContext               ← JWT claims → role, user_id
+//!  ├─ AuthContext               ← request_id, user_id, is_replay flag
 //!  ├─ DbRouter                  ← schema_name (tenant isolation)
 //!  ├─ QueryGuard                ← complexity ceiling + nesting depth
-//!  ├─ PolicyEngine              ← row-level + column-level security (cached)
 //!  ├─ SchemaCache               ← column metadata + relationships (L1 Moka)
 //!  ├─ QueryCompiler             ← JSON query API → SQL + params (L2 plan cache)
-//!  ├─ HookEngine (before)       ← before_insert / before_update / before_delete
-//!  ├─ db_executor::execute()    ← transaction: search_path + timeout + pre-read + user query + state_mutations
-//!  ├─ HookEngine (after)        ← after_insert / after_update / after_delete (non-fatal)
-//!  ├─ TransformEngine           ← computed columns, field masking
-//!  └─ EventEmitter              ← realtime events (Postgres NOTIFY)
+//!  └─ db_executor::execute()    ← transaction: search_path + timeout + pre-read + user query + state_mutations
 //! ```
 
 pub mod schema;
@@ -41,11 +36,7 @@ pub mod config;
 pub mod cron;
 pub mod db;
 pub mod engine;
-pub mod events;
 pub mod executor;
-pub mod file_engine;
-pub mod hooks;
-pub mod policy;
 pub mod query_guard;
 pub mod retention;
 pub mod router;

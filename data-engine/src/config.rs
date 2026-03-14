@@ -7,40 +7,21 @@ pub struct Config {
     pub default_query_limit: i64,
     /// Hard ceiling — a client cannot exceed this even if they send limit=N.
     pub max_query_limit: i64,
-    /// Base URL of the runtime service, used by the hooks engine.
+    /// Base URL of the runtime service, used by the cron worker.
     pub runtime_url: String,
     /// Maximum query complexity score. Requests exceeding this are rejected
     /// with HTTP 400 before any database work is performed.
-    /// Default: 1000. Set to 0 to disable the check.
     pub max_query_complexity: u64,
     /// Query execution timeout in milliseconds.
-    /// The timer starts after compilation and covers the full execute phase.
-    /// Default: 30 000 ms (30 s).
     pub query_timeout_ms: u64,
-    /// Postgres-level statement timeout injected as `SET LOCAL statement_timeout`
-    /// inside every transaction.  Kills the query inside the DB engine itself,
-    /// protecting BYODB customers from runaway hash-joins / seq-scans even if
-    /// the Rust tokio::timeout fires first and drops the connection.
+    /// Postgres-level statement timeout (ms) injected as `SET LOCAL statement_timeout`.
     /// Replay and internal operations use 6× this value.
-    /// Default: 5 000 ms (5 s).
     pub statement_timeout_ms: u64,
     /// Maximum relationship nesting depth in a single query.
-    /// depth=1 is a single join, depth=4+ triggers batched execution.
-    /// Requests deeper than this ceiling are rejected with HTTP 400.
-    /// Default: 6. Set to 0 to disable.
     pub max_nest_depth: usize,
-    /// S3 bucket name for file storage (FILES_BUCKET env var). None = file engine disabled.
-    pub s3_bucket: Option<String>,
-    /// AWS region (default: us-east-1).
-    pub s3_region: String,
-    /// Optional custom endpoint for MinIO / Localstack.
-    pub s3_endpoint: Option<String>,
     // ── Retention ────────────────────────────────────────────────────────────
-    /// Delete successful execution records older than this many days (default: 30).
     pub record_retention_days: u32,
-    /// Delete error execution records older than this many days (default: 3× record_retention_days).
     pub error_retention_days: u32,
-    /// UTC hour (0–23) to run the daily retention job (default: 3).
     pub retention_job_hour: u32,
 }
 
@@ -78,14 +59,6 @@ pub fn load() -> Config {
             .unwrap_or_else(|_| "6".to_string())
             .parse()
             .expect("MAX_NEST_DEPTH must be a non-negative integer"),
-        // FILES_BUCKET — user file uploads (presigned put/get)
-        // Compat alias: S3_BUCKET (legacy deployments)
-        s3_bucket: std::env::var("FILES_BUCKET")
-            .or_else(|_| std::env::var("S3_BUCKET"))
-            .ok(),
-        s3_region: std::env::var("S3_REGION")
-            .unwrap_or_else(|_| "us-east-1".to_string()),
-        s3_endpoint: std::env::var("S3_ENDPOINT").ok(),
         record_retention_days: std::env::var("RECORD_RETENTION_DAYS")
             .unwrap_or_else(|_| "30".to_string())
             .parse()
@@ -93,7 +66,7 @@ pub fn load() -> Config {
         error_retention_days: std::env::var("ERROR_RETENTION_DAYS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0), // 0 = use 3× record_retention_days
+            .unwrap_or(0),
         retention_job_hour: std::env::var("RETENTION_JOB_HOUR")
             .unwrap_or_else(|_| "3".to_string())
             .parse()

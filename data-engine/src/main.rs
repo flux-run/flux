@@ -4,38 +4,25 @@
 
 use std::sync::Arc;
 
-use data_engine::{api, cache, config, cron, db, events, retention, state, telemetry};
+use data_engine::{api, cache, config, cron, db, retention, state, telemetry};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    config::init();    // loads .env
-    telemetry::init(); // sets up tracing subscriber
+    config::init();
+    telemetry::init();
     let cfg = config::load();
 
     tracing::info!("connecting to database...");
-    // init_pool_with_identity_log logs the system_identifier + db_name at startup.
-    // For user-provided (BYODB) pools call verify_db_identity() after pool construction
-    // to enforce the expected identity stored in project_databases.
     let pool = db::connection::init_pool_with_identity_log(&cfg.database_url, "platform").await;
 
     let app_state = Arc::new(state::AppState::new(pool.clone(), &cfg).await);
 
-    // Spawn background workers — each shares the pool but runs independently.
     let worker_pool = Arc::new(pool);
-    let worker_http = Arc::new(app_state.http_client.clone());
+    let worker_http = Arc::new(reqwest::Client::new());
     let worker_runtime_url = cfg.runtime_url.clone();
 
-    // Cache invalidation listener — keeps all instances in sync via
-    // Postgres LISTEN/NOTIFY when running horizontally scaled.
+    // Cache invalidation listener — keeps all instances in sync via Postgres LISTEN/NOTIFY.
     cache::invalidation::start_listener(Arc::clone(&app_state), cfg.database_url.clone());
-
-    // Events delivery worker
-    let ev_pool = Arc::clone(&worker_pool);
-    let ev_http = Arc::clone(&worker_http);
-    let ev_url = worker_runtime_url.clone();
-    tokio::spawn(async move {
-        events::worker::run(ev_pool, ev_http, ev_url).await;
-    });
 
     // Cron scheduler worker
     let cron_pool = Arc::clone(&worker_pool);

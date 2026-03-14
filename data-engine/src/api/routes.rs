@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::{
     api::{
-        handlers::{cron, databases, debug, explain, files, history, hooks, mutations, policies, query, relationships, schema, subscriptions, tables},
+        handlers::{cron, databases, debug, explain, history, mutations, query, relationships, schema, tables},
         middleware::service_auth::require_service_token,
     },
     state::AppState,
@@ -21,18 +21,9 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route("/db/tables",                  post(tables::create))
         .route("/db/tables/{database}",        get(tables::list))
         .route("/db/tables/{database}/{table}", delete(tables::drop_table))
-        // ── Policy management ─────────────────────────────────────────────────
-        .route("/db/policies",               get(policies::list).post(policies::create))
-        .route("/db/policies/{id}",           delete(policies::delete))
-        // ── Hook management ───────────────────────────────────────────────────
-        .route("/db/hooks",     get(hooks::list).post(hooks::create))
-        .route("/db/hooks/{id}", patch(hooks::update).delete(hooks::delete))
         // ── Relationships ─────────────────────────────────────────────────────
         .route("/db/relationships",     get(relationships::list).post(relationships::create))
         .route("/db/relationships/{id}", delete(relationships::delete))
-        // ── Event subscriptions ─────────────────────────────────────────────
-        .route("/db/subscriptions",     get(subscriptions::list).post(subscriptions::create))
-        .route("/db/subscriptions/{id}", patch(subscriptions::update).delete(subscriptions::delete))        // ── Workflows ────────────────────────────────────────────────────────────
         // ── Cron jobs ──────────────────────────────────────────────────────────
         .route("/db/cron",             get(cron::list).post(cron::create))
         .route("/db/cron/{id}",         patch(cron::update).delete(cron::delete))
@@ -47,9 +38,6 @@ pub fn build(state: Arc<AppState>) -> Router {
         // ── Debug / engine introspection ────────────────────────────────────────
         .route("/db/debug",   get(debug::handler))
         .route("/db/explain", post(explain::handler))
-        // ── File presigned URLs ───────────────────────────────────────────────
-        .route("/files/upload-url",   post(files::upload_url))
-        .route("/files/download-url", post(files::download_url))
         // ── Health ────────────────────────────────────────────────────────────
         .route("/health", get(|| async { Json(json!({ "status": "ok" })) }))
         .route("/version", get(|| async {
@@ -59,7 +47,7 @@ pub fn build(state: Arc<AppState>) -> Router {
                 "build_time": std::env::var("BUILD_TIME").unwrap_or_else(|_| "unknown".to_string())
             }))
         }))
-        .layer(axum::extract::DefaultBodyLimit::max(1 * 1024 * 1024)) // 1 MB
+        .layer(axum::extract::DefaultBodyLimit::max(1 * 1024 * 1024))
         .with_state(state)
         .layer(axum_middleware::from_fn(require_service_token))
 }

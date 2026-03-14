@@ -32,8 +32,7 @@ use std::time::Duration;
 use moka::sync::Cache;
 
 use crate::compiler::relational::{parse_selectors, ColumnSelector, RelationshipDef};
-use crate::compiler::query_compiler::QueryRequest;
-use crate::policy::PolicyResult;
+use crate::compiler::query_compiler::{QueryRequest, PolicyResult};
 use crate::transform::ColumnMeta;
 
 /// A fully compiled SELECT query plan.
