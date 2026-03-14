@@ -1,173 +1,98 @@
-//! Warm isolate pool — amortises V8 initialisation cost across requests.
+//! Warm isolate pool — concurrent multi-task V8 execution.
 //!
-//! ## Why warm isolates matter
+//! Each worker thread runs a persistent JS bootstrap loop that accepts tasks via
+//! `op_next_task`. Multiple requests can be in-flight concurrently within a single
+//! V8 isolate: when Task A suspends on `await op_queue_push(...)`, V8 drives Task B.
 //!
-//! Cold path (one `JsRuntime` per request):
-//! - `JsRuntime::new()` + extension registration: **~3–5 ms**
-//! - `std::thread::spawn()` + 8 MB stack: **~0.5 ms**
-//! - `tokio::Runtime::build()` (single-thread): **~0.5 ms**
-//! - Total overhead: **~4–6 ms every request**
-//!
-//! Warm path (this design):
-//! - All three costs paid **once** at pool startup.
-//! - Per-request: `OpState` swap (ns) + IIFE wrapper eval (~0.5 ms)
-//! - Measured reduction: **~30–50 % of p50 latency** for fast functions.
-//!
-//! ## Function affinity
-//!
-//! Each worker tracks `current_function_id`. When a task arrives for a different
-//! function, the worker **recreates** its `JsRuntime` to prevent heap state from
-//! function A leaking to function B. This means:
-//! - High-repeat workloads (same function repeatedly) get maximum isolate reuse.
-//! - Mixed workloads pay one recreate per function switch (per worker).
-//!
-//! ## Concurrency model
-//!
-//! `JsRuntime` is `!Send` — it must stay on its creation thread. Workers are
-//! dedicated OS threads (not Tokio tasks), so the runtime never moves between
-//! threads. Tasks are sent via `mpsc::channel`; results come back on `oneshot`.
-//!
-//! Pool capacity is `workers * 4` pending tasks in the channel. Callers that
-//! exceed this block until a worker is free (natural back-pressure).
+//! Pool dispatch uses round-robin across workers. Results return via per-request
+//! oneshot channels registered in each worker's ResultRegistry.
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration};
+use uuid::Uuid;
 
-use super::executor::{create_js_runtime, execute_with_runtime, ExecutionResult, QueueContext};
+use super::executor::{
+    create_concurrent_js_runtime, ExecutionResult, QueueContext,
+    ResultRegistry, SharedTaskReceiver,
+};
 
-/// A task sent to an isolate worker.
-struct ExecutionTask {
-    code:           String,
-    secrets:        HashMap<String, String>,
-    payload:        serde_json::Value,
-    execution_seed: i64,
-    queue_ctx:      QueueContext,
-    timeout_secs:   u64,
-    reply:          oneshot::Sender<Result<ExecutionResult, String>>,
+/// Handle to a single concurrent worker.
+struct WorkerHandle {
+    /// Send tasks to this worker's op_next_task channel.
+    task_tx:   mpsc::Sender<serde_json::Value>,
+    /// Per-request reply channels; shared with the worker's OpState.
+    registry:  ResultRegistry,
+    /// Number of requests currently in-flight on this worker.
+    in_flight: Arc<AtomicUsize>,
 }
 
-/// A fixed pool of OS threads each owning a **reusable** `JsRuntime` (warm isolates).
-///
-/// ## Architecture
-///
-/// Each worker thread:
-/// 1. Creates one `JsRuntime` at startup (V8 heap + Fluxbase extension loaded once).
-/// 2. Loops over tasks: updates `OpState` with per-request data, executes the IIFE
-///    wrapper, returns the result over a `oneshot` channel.
-/// 3. On execution timeout, recreates the runtime (the V8 event loop may be stuck).
-///
-/// ## Why warm isolates matter
-///
-/// Cold path (old design — one runtime per request):
-/// - `JsRuntime::new()`         → V8 heap init + extension registration: **~3–5 ms**
-/// - `std::thread::spawn()`     → OS thread + 8 MB stack: **~0.5 ms**
-/// - `tokio::Runtime::build()`  → single-thread runtime: **~0.5 ms**
-/// - Total overhead per call: **~4–6 ms per request, every request**
-///
-/// Warm path (this design — runtime created once per worker):
-/// - All three costs above are paid **once** at pool startup, not per request.
-/// - Per-request overhead: `OpState` swap (ns) + wrapper eval (~0.5 ms)
-/// - Measured reduction: **~30–50 % of total p50 latency** for fast functions.
-///
-/// ## Safety
-///
-/// `JsRuntime` is `!Send`; it must stay on its creation thread. Worker threads are
-/// dedicated OS threads, so the runtime never moves between threads. ✓
-///
-/// Per-request state (`__fluxbase_logs`, `__ctx`, secrets, payload) is injected
-/// fresh in each IIFE — declared with `const` inside the closure, not on
-/// `globalThis`. User code *can* pollute `globalThis`, but the critical platform
-/// primitives are re-created every call regardless.
-///
-/// ## Function affinity
-///
-/// Each worker tracks the function it is currently serving (`current_function_id`).
-/// When a task arrives for a *different* function, the worker recreates its
-/// `JsRuntime`. This ensures no V8 heap state from function A can reach function B
-/// and enables maximum isolate reuse for high-repeat workloads.
+/// Pool of V8 isolate workers, each running a concurrent bootstrap loop.
 #[derive(Clone)]
 pub struct IsolatePool {
-    sender:          mpsc::Sender<ExecutionTask>,
-    workers:         usize,
-    timeout_secs:    u64,
+    workers:      Vec<Arc<WorkerHandle>>,
+    next_worker:  Arc<AtomicUsize>,
+    timeout_secs: u64,
+    worker_count: usize,
 }
 
 impl IsolatePool {
     /// Spawn `workers` OS threads and return a pool ready to accept executions.
     pub fn new(workers: usize, timeout_secs: u64) -> Self {
         let workers = workers.max(1);
-        let (tx, rx) = mpsc::channel::<ExecutionTask>(workers * 4);
+        let handles: Vec<Arc<WorkerHandle>> = (0..workers)
+            .map(|id| {
+                let (task_tx, task_rx) = mpsc::channel::<serde_json::Value>(256);
+                let registry: ResultRegistry =
+                    Arc::new(std::sync::Mutex::new(HashMap::new()));
+                let task_receiver: SharedTaskReceiver =
+                    Arc::new(tokio::sync::Mutex::new(task_rx));
 
-        let rx = std::sync::Arc::new(tokio::sync::Mutex::new(rx));
+                let registry_clone = registry.clone();
 
-        for id in 0..workers {
-            let rx = rx.clone();
-            std::thread::Builder::new()
-                .name(format!("isolate-worker-{}", id))
-                .stack_size(8 * 1024 * 1024)
-                .spawn(move || {
-                    let tokio_rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("isolate worker tokio runtime");
+                std::thread::Builder::new()
+                    .name(format!("isolate-worker-{}", id))
+                    .stack_size(8 * 1024 * 1024)
+                    .spawn(move || {
+                        let tokio_rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("isolate worker tokio runtime");
 
-                    tokio_rt.block_on(async move {
-                        // ── Warm isolate: created ONCE per worker thread ───────
-                        let mut js_rt = create_js_runtime();
-                        // Function affinity: recreate the isolate when the function
-                        // changes so no V8 heap state from function A reaches function B.
-                        let mut current_function: Option<String> = None;
-                        tracing::debug!(worker = id, "JsRuntime created (warm isolate ready)");
+                        tokio_rt.block_on(async move {
+                            let mut rt = create_concurrent_js_runtime(task_receiver, registry_clone);
+                            tracing::debug!(worker = id, "concurrent isolate worker ready");
 
-                        loop {
-                            let task = {
-                                let mut guard = rx.lock().await;
-                                guard.recv().await
-                            };
-                            let t = match task {
-                                None => {
-                                    tracing::info!(worker = id, "isolate channel closed, shutting down");
-                                    break;
+                            loop {
+                                match rt.run_event_loop(Default::default()).await {
+                                    Ok(()) => {
+                                        tracing::warn!(worker = id, "event loop terminated");
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(worker = id, error = %e, "event loop error, continuing");
+                                    }
                                 }
-                                Some(t) => t,
-                            };
-
-                            // ── Function affinity check ────────────────────────
-                            // Recreate the isolate when the function changes so that
-                            // no V8 heap state or OpState from function A can reach B.
-                            // The global sweep in build_wrapper handles per-request
-                            // globalThis cleanup within the same function.
-                            let changed = match &current_function {
-                                Some(prev) => prev != &t.code[..prev.len().min(t.code.len())],
-                                None       => false,
-                            };
-                            let _ = changed; // affinity based on code identity via hash is future work
-                            current_function = Some(t.code.clone());
-
-                            let result = execute_with_runtime(
-                                &mut js_rt,
-                                t.code, t.secrets, t.payload,
-                                t.execution_seed, t.queue_ctx,
-                                t.timeout_secs,
-                            ).await;
-
-                            // If execution timed out the V8 event loop may be stuck.
-                            // Recreate the runtime so the next call gets a clean isolate.
-                            if matches!(&result, Err(e) if e.contains("timed out")) {
-                                tracing::warn!(worker = id, "execution timed out — recreating JsRuntime");
-                                js_rt = create_js_runtime();
-                                current_function = None;
                             }
+                        });
+                    })
+                    .expect("failed to spawn isolate worker thread");
 
-                            // If the caller dropped the oneshot (outer timeout), discard.
-                            let _ = t.reply.send(result);
-                        }
-                    });
+                Arc::new(WorkerHandle {
+                    task_tx,
+                    registry,
+                    in_flight: Arc::new(AtomicUsize::new(0)),
                 })
-                .expect("failed to spawn isolate worker thread");
-        }
+            })
+            .collect();
 
-        Self { sender: tx, workers, timeout_secs }
+        Self {
+            worker_count: handles.len(),
+            workers: handles,
+            next_worker: Arc::new(AtomicUsize::new(0)),
+            timeout_secs,
+        }
     }
 
     /// Spawn a pool sized to 2× logical CPUs (min 2, max 16).
@@ -176,13 +101,13 @@ impl IsolatePool {
             .map(|n| n.get())
             .unwrap_or(2);
         let workers = (cpus * 2).clamp(2, 16);
-        tracing::info!(workers, "isolate pool started (warm isolates)");
+        tracing::info!(workers, "isolate pool started (concurrent workers)");
         Self::new(workers, 30)
     }
 
-    pub fn workers(&self) -> usize { self.workers }
+    pub fn workers(&self) -> usize { self.worker_count }
 
-    /// Dispatch a function execution to the next available worker.
+    /// Dispatch a function execution to the least-loaded available worker.
     pub async fn execute(
         &self,
         code:           String,
@@ -191,23 +116,65 @@ impl IsolatePool {
         execution_seed: i64,
         queue_ctx:      QueueContext,
     ) -> Result<ExecutionResult, String> {
-        let (reply_tx, reply_rx) = oneshot::channel();
+        // Pick least-loaded worker (round-robin as tiebreaker)
+        let start = self.next_worker.fetch_add(1, Ordering::Relaxed);
+        let worker = (0..self.worker_count)
+            .map(|i| &self.workers[(start + i) % self.worker_count])
+            .min_by_key(|w| w.in_flight.load(Ordering::Relaxed))
+            .unwrap();
 
-        let task = ExecutionTask {
-            code, secrets, payload, execution_seed, queue_ctx,
-            timeout_secs: self.timeout_secs,
-            reply: reply_tx,
-        };
+        let request_id = Uuid::new_v4().to_string();
+        let (reply_tx, reply_rx) = oneshot::channel::<Result<serde_json::Value, String>>();
 
-        self.sender.send(task).await
-            .map_err(|_| "isolate pool is shut down".to_string())?;
+        // Register reply channel before injecting the task
+        {
+            let mut reg = worker.registry.lock()
+                .map_err(|_| "registry lock poisoned".to_string())?;
+            reg.insert(request_id.clone(), reply_tx);
+        }
 
-        // Allow 5s of headroom above the per-request timeout for overhead.
-        let pool_timeout = self.timeout_secs + 5;
-        timeout(Duration::from_secs(pool_timeout), reply_rx)
-            .await
-            .map_err(|_| "isolate pool: invocation timed out waiting for worker".to_string())?
-            .map_err(|_| "isolate pool: worker dropped reply channel".to_string())?
+        // Build task JSON (carries everything op_next_task delivers to JS)
+        let task_json = serde_json::json!({
+            "request_id":     request_id,
+            "code":           code,
+            "secrets":        secrets,
+            "payload":        payload,
+            "execution_seed": execution_seed,
+            "queue_url":      queue_ctx.queue_url,
+            "api_url":        queue_ctx.api_url,
+            "service_token":  queue_ctx.service_token,
+            "project_id":     queue_ctx.project_id.map(|p| p.to_string()),
+        });
+
+        worker.task_tx.send(task_json).await
+            .map_err(|_| "isolate worker task channel closed".to_string())?;
+
+        worker.in_flight.fetch_add(1, Ordering::Relaxed);
+
+        let result = timeout(
+            Duration::from_secs(self.timeout_secs + 5),
+            reply_rx,
+        ).await;
+
+        worker.in_flight.fetch_sub(1, Ordering::Relaxed);
+
+        match result {
+            Ok(Ok(val)) => val.map(|v| {
+                let output = v.get("result").cloned().unwrap_or_else(|| v.clone());
+                let logs = v.get("logs")
+                    .and_then(|l| serde_json::from_value(l.clone()).ok())
+                    .unwrap_or_default();
+                ExecutionResult { output, logs }
+            }),
+            Ok(Err(_)) => Err("worker dropped reply channel".to_string()),
+            Err(_) => {
+                // Clean up the registry entry to avoid leaking the sender
+                if let Ok(mut reg) = worker.registry.lock() {
+                    reg.remove(&request_id);
+                }
+                Err(format!("function execution timed out after {} seconds", self.timeout_secs))
+            }
+        }
     }
 }
 

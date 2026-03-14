@@ -26,6 +26,8 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration};
 
 
@@ -33,7 +35,7 @@ use tokio::time::{timeout, Duration};
 pub fn build_fluxbase_extension() -> Extension {
     Extension {
         name: "fluxbase",
-        ops: Cow::Owned(vec![op_queue_push()]),
+        ops: Cow::Owned(vec![op_queue_push(), op_next_task(), op_task_complete(), op_task_error()]),
         ..Default::default()
     }
 }
@@ -73,6 +75,12 @@ pub struct QueuePushOpts {
     pub idempotency_key: Option<String>,
 }
 
+/// Receiver side of the task injection channel (wrapped for async op use).
+pub type SharedTaskReceiver = Arc<tokio::sync::Mutex<mpsc::Receiver<serde_json::Value>>>;
+
+/// Per-worker registry mapping request_id → reply oneshot.
+pub type ResultRegistry = Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Result<serde_json::Value, String>>>>>;
+
 #[deno_core::op2(async)]
 #[serde]
 pub async fn op_queue_push(
@@ -80,18 +88,34 @@ pub async fn op_queue_push(
     #[string] function_name: String,
     #[serde]  payload:       serde_json::Value,
     #[serde]  opts:          QueuePushOpts,
+    #[serde]  queue_ctx_override: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, std::io::Error> {
-    let (queue_url, api_url, service_token, project_id, client) = {
-        let s = state.borrow();
-        let qs = s.borrow::<QueueOpState>();
-        (
-            qs.queue_url.clone(),
-            qs.api_url.clone(),
-            qs.service_token.clone(),
-            qs.project_id,
-            qs.client.clone(),
-        )
-    };
+    let (queue_url, api_url, service_token, project_id, client) =
+        if let Some(ref ctx) = queue_ctx_override {
+            // Concurrent path: context carried in the task JSON
+            let queue_url     = ctx["queue_url"].as_str().unwrap_or("").to_string();
+            let api_url       = ctx["api_url"].as_str().unwrap_or("").to_string();
+            let service_token = ctx["service_token"].as_str().unwrap_or("").to_string();
+            let project_id    = ctx["project_id"].as_str()
+                .and_then(|s| uuid::Uuid::parse_str(s).ok());
+            (queue_url, api_url, service_token, project_id, reqwest::Client::new())
+        } else {
+            // Serial path: context in OpState
+            let s = state.borrow();
+            match s.try_borrow::<QueueOpState>() {
+                Some(qs) => (
+                    qs.queue_url.clone(),
+                    qs.api_url.clone(),
+                    qs.service_token.clone(),
+                    qs.project_id,
+                    qs.client.clone(),
+                ),
+                None => return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "op_queue_push: no queue context available",
+                )),
+            }
+        };
 
     let project_id_str = project_id
         .map(|p| p.to_string())
@@ -171,6 +195,55 @@ pub async fn op_queue_push(
     Ok(serde_json::json!({ "job_id": job_data["job_id"] }))
 }
 
+/// Async op: JS bootstrap calls this to get the next task.
+/// Suspends the V8 fiber until a task arrives, freeing the tokio thread.
+#[deno_core::op2(async)]
+#[serde]
+pub async fn op_next_task(
+    state: Rc<RefCell<OpState>>,
+) -> Result<serde_json::Value, std::io::Error> {
+    let receiver = {
+        let s = state.borrow();
+        s.borrow::<SharedTaskReceiver>().clone()
+    };
+    let mut guard = receiver.lock().await;
+    guard.recv().await
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "task channel closed"))
+}
+
+/// Sync op: JS calls this when a task completes successfully.
+#[deno_core::op2(fast)]
+pub fn op_task_complete(
+    state: &mut OpState,
+    #[string] request_id: String,
+    #[string] result_json: String,
+) {
+    let registry = state.borrow::<ResultRegistry>().clone();
+    if let Ok(mut reg) = registry.lock() {
+        if let Some(sender) = reg.remove(&request_id) {
+            match serde_json::from_str::<serde_json::Value>(&result_json) {
+                Ok(v)  => { let _ = sender.send(Ok(v)); }
+                Err(e) => { let _ = sender.send(Err(format!("result parse error: {}", e))); }
+            }
+        }
+    }
+}
+
+/// Sync op: JS calls this when a task fails.
+#[deno_core::op2(fast)]
+pub fn op_task_error(
+    state: &mut OpState,
+    #[string] request_id: String,
+    #[string] error_msg: String,
+) {
+    let registry = state.borrow::<ResultRegistry>().clone();
+    if let Ok(mut reg) = registry.lock() {
+        if let Some(sender) = reg.remove(&request_id) {
+            let _ = sender.send(Err(error_msg));
+        }
+    }
+}
+
 /// Create a warm `JsRuntime` with the Fluxbase extension registered.
 /// Intended to be called once per worker thread; per-request state is injected
 /// via `OpState` before each execution (see `execute_with_runtime`).
@@ -210,6 +283,38 @@ pub fn create_js_runtime() -> JsRuntime {
         globalThis.__fluxbase_allowed_globals =\
             new Set(Object.getOwnPropertyNames(globalThis));",
     ).expect("failed to initialise worker sandbox");
+    rt
+}
+
+/// Create a `JsRuntime` configured for concurrent multi-task execution.
+/// Puts `SharedTaskReceiver` and `ResultRegistry` into OpState, then evaluates
+/// the bootstrap loop so the runtime is ready to receive injected tasks.
+pub fn create_concurrent_js_runtime(
+    task_receiver: SharedTaskReceiver,
+    result_registry: ResultRegistry,
+) -> JsRuntime {
+    let mut rt = JsRuntime::new(RuntimeOptions {
+        extensions: vec![build_fluxbase_extension()],
+        ..Default::default()
+    });
+
+    {
+        let op_state = rt.op_state();
+        let mut state = op_state.borrow_mut();
+        state.put(task_receiver);
+        state.put(result_registry);
+    }
+
+    rt.execute_script(
+        "<fluxbase-init>",
+        "const __protos = [Object, Array, Function, String, Number, Boolean, RegExp, Promise, Map, Set, WeakMap, WeakSet, Error, TypeError, RangeError, SyntaxError, ReferenceError]; for (const C of __protos) { if (C && C.prototype) Object.freeze(C.prototype); } Object.freeze(__protos); globalThis.__fluxbase_allowed_globals = new Set(Object.getOwnPropertyNames(globalThis));",
+    ).expect("failed to initialise worker sandbox");
+
+    rt.execute_script(
+        "<fluxbase-bootstrap>",
+        include_str!("bootstrap.js"),
+    ).expect("failed to start bootstrap loop");
+
     rt
 }
 
@@ -390,6 +495,7 @@ fn build_wrapper(
                                 delay_seconds:   delay,
                                 idempotency_key: opts.idempotencyKey || opts.idempotency_key || null,
                             }},
+                            null
                         );
                         __fluxbase_logs.push({{
                             level:     "info",
