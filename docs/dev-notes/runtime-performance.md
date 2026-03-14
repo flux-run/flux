@@ -119,12 +119,20 @@ hand-compiled Rust/AssemblyScript or the V8 isolate pool.
 TeaVM produces compact WASM and doesn't carry a JVM runtime. Good candidate for teams that
 prefer Java/Kotlin.
 
-**Python / Ruby — impractical:** Both compile their entire interpreter into WASM (26 MB
-and 47 MB respectively). Python takes ~40 s to compile on first use (OptLevel::None fast
-engine — full optimizer would be longer), and 191 ms per warm call (interpreter overhead).
-The 28.3 MB `.cwasm` loads in 480 ms on restart. Ruby exceeds the 200 s compilation
-timeout even with `OptLevel::None`. These runtimes are not viable in a serverless context
-without pre-compiled module caching at deploy time.
+**Python (py2wasm / Nuitka) — functional, high per-call overhead:** Python is compiled
+directly to WASM using [py2wasm](https://github.com/wasmer-python/py2wasm), which runs
+Nuitka to translate Python source → C → WASM. There is no interpreter at runtime — the
+binary contains compiled WASM instructions. However, Nuitka statically links CPython's
+runtime support (GC, type dispatch, dynamic attribute lookup) producing a 26 MB binary.
+This is why warm latency is 191 ms: the overhead is PyObject/GC startup and dynamic
+dispatch per call, not interpretation. The 28.3 MB `.cwasm` loads in 480 ms on restart
+and the first Cranelift compile takes ~40 s. Suitable for batch/async workloads where
+per-call latency can be paid, but not for low-latency synchronous APIs. Build requirement:
+Python 3.11 + `pip install py2wasm`.
+
+**Ruby — not viable:** Ruby (rbwasm) embeds the full Matz Ruby Interpreter into WASM
+(~47 MB). The Cranelift compile exceeds the 200 s timeout even with `OptLevel::None`.
+Not usable until a pre-compiled `.cwasm` is provided at deploy time.
 
 **PHP (php-8.2-wasm) — functional with AOT disk cache:** PHP ships as a 13 MB WASM
 binary (`php-8.2.6-wasmedge.wasm` from vmware-labs/webassembly-language-runtimes, despite
@@ -156,8 +164,8 @@ across process restarts (unlike `DefaultHasher` which uses a random seed per pro
 | Java (TeaVM)   | ✅ Keep       | 1 ms     | 5 ms            | 1.4 s          |
 | Go (wasip1)    | ⚠️ Limited    | 19 ms    | 57 ms           | 27 s           |
 | PHP (php-8.2)  | ⚠️ Limited    | 83 ms    | 256 ms          | 90 s           |
+| Python (py2wasm) | ⚠️ Limited  | 191 ms   | 480 ms          | 40 s           |
 | **C# (.NET)**  | 🚧 Coming soon | ~20–50 ms (est.) | — | — |
-| Python         | ❌ Not viable | 191 ms   | 480 ms          | 40 s           |
 | Ruby           | ❌ Not viable | —        | —               | > 200 s        |
 
 **C# (.NET WASI) — coming soon:** .NET 10 targets WASI via the `wasi-experimental` workload, outputting a WASIP2 **component** (not a core WASM module). The Flux executor requires component-model support (`wasmtime::component::Component` + `wasmtime_wasi` bindings) to run it — this is being added. The managed-runtime approach bundles the .NET runtime + IL into a 12 MB binary, so warm latency is expected in the 20–50 ms range (similar to Go). Not production-ready: the `wasi-experimental` workload and WASI Preview 2 spec are still evolving. Will be benchmarked and promoted once the executor component path lands.
