@@ -595,7 +595,8 @@ enum Commands {
     },
 
     // ── Local Server (native, no Docker) ────────────────────────────────────
-    /// Start all Fluxbase services natively without Docker
+    /// Start all Fluxbase services natively without Docker (alias: serve)
+    #[command(alias = "serve")]
     Server {
         /// Base port — api=<port>, gateway=<port+1>, data-engine=<port+2>, runtime=<port+3>, queue=<port+4>
         #[arg(long, default_value = "8080", value_name = "PORT")]
