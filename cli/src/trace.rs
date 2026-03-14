@@ -531,3 +531,74 @@ pub async fn execute_list(limit: u64, function: Option<String>, json_output: boo
     Ok(())
 }
 
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── format_timestamp ──────────────────────────────────────────────────────
+
+    #[test]
+    fn format_timestamp_standard_rfc3339() {
+        assert_eq!(
+            format_timestamp("2026-03-10T10:01:12.031000Z"),
+            "10:01:12.031"
+        );
+    }
+
+    #[test]
+    fn format_timestamp_milliseconds_zero_padded() {
+        assert_eq!(
+            format_timestamp("2026-03-10T09:00:05.005000Z"),
+            "09:00:05.005"
+        );
+    }
+
+    #[test]
+    fn format_timestamp_truncates_subsecond_to_3_digits() {
+        assert_eq!(
+            format_timestamp("2026-01-01T23:59:59.123456Z"),
+            "23:59:59.123"
+        );
+    }
+
+    #[test]
+    fn format_timestamp_no_subsecond_pads_ms() {
+        let result = format_timestamp("2026-03-10T14:30:00Z");
+        assert!(result.starts_with("14:30:00"));
+    }
+
+    #[test]
+    fn format_timestamp_missing_t_does_not_panic() {
+        let result = format_timestamp("invalid");
+        assert!(!result.is_empty());
+    }
+
+    // ── span_icon ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn span_icon_known_types() {
+        assert_eq!(span_icon("start"), "▶");
+        assert_eq!(span_icon("end"),   "■");
+        assert_eq!(span_icon("error"), "✗");
+    }
+
+    #[test]
+    fn span_icon_unknown_returns_dot() {
+        assert_eq!(span_icon("db"),   "·");
+        assert_eq!(span_icon("tool"), "·");
+        assert_eq!(span_icon(""),     "·");
+    }
+
+    // ── colorize_delta ────────────────────────────────────────────────────────
+
+    #[test]
+    fn colorize_delta_does_not_panic() {
+        let _ = colorize_delta(0, 500, false);
+        let _ = colorize_delta(200, 500, false);
+        let _ = colorize_delta(1000, 500, true);
+        let _ = colorize_delta(-50, 500, false);
+    }
+}
+

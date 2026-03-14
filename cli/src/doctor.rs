@@ -593,3 +593,41 @@ async fn execute_diagnosis(request_id: String, json_output: bool) -> anyhow::Res
     println!();
     Ok(())
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── trunc_d ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn trunc_d_short_string_unchanged() {
+        assert_eq!(trunc_d("hello", 10), "hello");
+    }
+
+    #[test]
+    fn trunc_d_exact_length_unchanged() {
+        assert_eq!(trunc_d("hello", 5), "hello");
+    }
+
+    #[test]
+    fn trunc_d_long_string_gets_ellipsis() {
+        let result = trunc_d("hello world", 5);
+        assert!(result.starts_with("hello"));
+        assert!(result.contains('…'));
+    }
+
+    #[test]
+    fn trunc_d_empty_string_returns_empty() {
+        assert_eq!(trunc_d("", 5), "");
+    }
+
+    #[test]
+    fn trunc_d_zero_limit_produces_ellipsis() {
+        let result = trunc_d("any", 0);
+        assert_eq!(result, "…");
+    }
+}
+
