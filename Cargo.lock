@@ -5499,6 +5499,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd30973c65eceb0f37dfcc430d83abd5eb24015fdfcab6912f52949287e04f0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bitflags 2.11.0",
  "bumpalo",
  "cc",
