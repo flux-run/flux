@@ -162,6 +162,7 @@ impl<'a> ExecutionRunner<'a> {
             ctx.execution_seed,
             queue_ctx,
             db_ctx,
+            Some(ctx.function_id.clone()),
         ).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 

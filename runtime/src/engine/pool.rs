@@ -26,6 +26,11 @@ struct WorkerHandle {
     registry:  ResultRegistry,
     /// Number of requests currently in-flight on this worker.
     in_flight: Arc<AtomicUsize>,
+    /// Bundle key of the last function dispatched to this worker.
+    /// Used for bundle-key affinity routing: requests for the same function
+    /// (same code bundle) are routed to the same worker when possible, so
+    /// the V8 isolate has the module already evaluated in its heap.
+    bundle_key: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// Pool of V8 isolate workers, each running a concurrent bootstrap loop.
@@ -83,6 +88,7 @@ impl IsolatePool {
                     task_tx,
                     registry,
                     in_flight: Arc::new(AtomicUsize::new(0)),
+                    bundle_key: Arc::new(std::sync::Mutex::new(None)),
                 })
             })
             .collect();
@@ -107,7 +113,13 @@ impl IsolatePool {
 
     pub fn workers(&self) -> usize { self.worker_count }
 
-    /// Dispatch a function execution to the least-loaded available worker.
+    /// Dispatch a function execution to the least-loaded available worker,
+    /// preferring one that already has the same bundle loaded (affinity routing).
+    ///
+    /// `bundle_key` is typically the function's code hash or function_id. When
+    /// provided, the pool first looks for a worker whose current bundle matches,
+    /// then falls back to least-loaded. This maximises warm-isolate reuse: the
+    /// same V8 heap already has the module evaluated.
     pub async fn execute(
         &self,
         code:           String,
@@ -116,13 +128,44 @@ impl IsolatePool {
         execution_seed: i64,
         queue_ctx:      QueueContext,
         db_ctx:         DbContext,
+        bundle_key:     Option<String>,
     ) -> Result<ExecutionResult, String> {
-        // Pick least-loaded worker (round-robin as tiebreaker)
+        // ── Pick worker via bundle-key affinity then least-loaded fallback ──
         let start = self.next_worker.fetch_add(1, Ordering::Relaxed);
-        let worker = (0..self.worker_count)
-            .map(|i| &self.workers[(start + i) % self.worker_count])
-            .min_by_key(|w| w.in_flight.load(Ordering::Relaxed))
-            .unwrap();
+
+        let worker: &Arc<WorkerHandle> = if let Some(ref key) = bundle_key {
+            // 1. Try to find an idle worker already serving this bundle
+            let affinity = (0..self.worker_count)
+                .map(|i| &self.workers[(start + i) % self.worker_count])
+                .find(|w| {
+                    let bk = w.bundle_key.lock().unwrap_or_else(|p| p.into_inner());
+                    bk.as_deref() == Some(key.as_str()) && w.in_flight.load(Ordering::Relaxed) == 0
+                });
+
+            if let Some(w) = affinity {
+                w
+            } else {
+                // 2. Fall back to least-loaded (prefer affinity match over pure idle)
+                let best_match = (0..self.worker_count)
+                    .map(|i| &self.workers[(start + i) % self.worker_count])
+                    .min_by_key(|w| {
+                        let load = w.in_flight.load(Ordering::Relaxed);
+                        let has_key = {
+                            let bk = w.bundle_key.lock().unwrap_or_else(|p| p.into_inner());
+                            bk.as_deref() == Some(key.as_str())
+                        };
+                        // Sort by: key mismatch first, then load
+                        (if has_key { 0usize } else { 1usize }, load)
+                    });
+                best_match.unwrap()
+            }
+        } else {
+            // No bundle key: pure least-loaded
+            (0..self.worker_count)
+                .map(|i| &self.workers[(start + i) % self.worker_count])
+                .min_by_key(|w| w.in_flight.load(Ordering::Relaxed))
+                .unwrap()
+        };
 
         let request_id = Uuid::new_v4().to_string();
         let (reply_tx, reply_rx) = oneshot::channel::<Result<serde_json::Value, String>>();
@@ -151,6 +194,13 @@ impl IsolatePool {
 
         worker.task_tx.send(task_json).await
             .map_err(|_| "isolate worker task channel closed".to_string())?;
+
+        // Record this worker's bundle key for future affinity routing
+        if let Some(key) = bundle_key {
+            if let Ok(mut bk) = worker.bundle_key.lock() {
+                *bk = Some(key);
+            }
+        }
 
         worker.in_flight.fetch_add(1, Ordering::Relaxed);
 
@@ -240,6 +290,7 @@ mod tests {
             0,
             test_queue_ctx(),
             test_db_ctx(),
+            None,
         ).await;
 
         assert!(res.is_ok(), "expected Ok, got: {:?}", res.err());
@@ -258,6 +309,7 @@ mod tests {
             0,
             test_queue_ctx(),
             test_db_ctx(),
+            None,
         ).await.unwrap();
 
         assert_eq!(res.output, serde_json::json!(42));
@@ -279,6 +331,7 @@ mod tests {
             0,
             test_queue_ctx(),
             test_db_ctx(),
+            None,
         ).await.unwrap();
 
         assert!(!res.logs.is_empty());
@@ -298,6 +351,7 @@ mod tests {
             0,
             test_queue_ctx(),
             test_db_ctx(),
+            None,
         ).await;
 
         assert!(res.is_err());
@@ -330,6 +384,7 @@ mod tests {
                         database:        String::new(),
                         client:          reqwest::Client::new(),
                     },
+                    None,
                 ).await
             }));
         }
@@ -347,7 +402,7 @@ mod tests {
         // Both should be able to execute
         let code = r#"__fluxbase_fn = async (ctx) => 1;"#;
         let _r = clone.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 0, test_queue_ctx(), test_db_ctx()).await;
+            serde_json::Value::Null, 0, test_queue_ctx(), test_db_ctx(), None).await;
     }
 
     // ── deterministic replay ──────────────────────────────────────────────
@@ -360,11 +415,62 @@ mod tests {
         let code = r#"__fluxbase_fn = async (ctx) => ctx.uuid();"#;
 
         let r1 = pool.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx()).await.unwrap();
+            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None).await.unwrap();
         let r2 = pool.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx()).await.unwrap();
+            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None).await.unwrap();
 
         assert_eq!(r1.output, r2.output,
             "same execution seed must produce same UUID for deterministic replay");
+    }
+
+    // ── bundle-key affinity ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn affinity_key_is_recorded_on_worker() {
+        let pool = IsolatePool::new(2, 30);
+        let code = r#"__fluxbase_fn = async (ctx) => 1;"#;
+
+        let _r = pool.execute(
+            code.to_string(),
+            HashMap::new(),
+            serde_json::Value::Null,
+            0,
+            test_queue_ctx(),
+            test_db_ctx(),
+            Some("fn_abc123".to_string()),
+        ).await;
+
+        // At least one worker should have recorded the bundle key
+        let has_key = pool.workers.iter().any(|w| {
+            w.bundle_key.lock().unwrap().as_deref() == Some("fn_abc123")
+        });
+        assert!(has_key, "expected bundle key to be recorded on a worker");
+    }
+
+    #[tokio::test]
+    async fn affinity_routes_same_key_to_same_worker() {
+        // 3 workers; send 6 requests for the same bundle_key.
+        // After the first request, subsequent ones should route to the same worker.
+        let pool = IsolatePool::new(3, 30);
+        let code = r#"__fluxbase_fn = async (ctx) => 42;"#;
+
+        for _ in 0..6 {
+            let r = pool.execute(
+                code.to_string(),
+                HashMap::new(),
+                serde_json::Value::Null,
+                0,
+                test_queue_ctx(),
+                test_db_ctx(),
+                Some("fn_affinity_test".to_string()),
+            ).await;
+            assert!(r.is_ok());
+        }
+
+        // Exactly one worker should carry the bundle key
+        let keyed: Vec<_> = pool.workers.iter()
+            .filter(|w| w.bundle_key.lock().unwrap().as_deref() == Some("fn_affinity_test"))
+            .collect();
+        assert_eq!(keyed.len(), 1, "bundle key should be pinned to exactly one worker");
     }
 }
