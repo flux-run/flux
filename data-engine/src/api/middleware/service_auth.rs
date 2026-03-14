@@ -53,3 +53,69 @@ pub async fn require_service_token(req: Request, next: Next) -> Response {
             .into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+        middleware::from_fn,
+        routing::get,
+        Json, Router,
+    };
+    use tower::util::ServiceExt;
+
+    use super::require_service_token;
+
+    fn app() -> Router {
+        Router::new()
+            .route("/health", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
+            .route("/db/query", get(|| async { Json(serde_json::json!({ "ok": true })) }))
+            .layer(from_fn(require_service_token))
+    }
+
+    #[tokio::test]
+    async fn health_is_exempt_from_service_auth() {
+        let response = app()
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn protected_path_rejects_missing_token() {
+        let response = app()
+            .oneshot(Request::builder().uri("/db/query").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("unauthorized"),
+            "unexpected body: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_path_accepts_default_token() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/db/query")
+                    .header("x-service-token", "fluxbase_secret_token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}

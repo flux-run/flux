@@ -39,3 +39,55 @@ pub async fn require_service_token(req: Request, next: Next) -> Response {
 
     next.run(req).await
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+        middleware::from_fn,
+        routing::get,
+        Json, Router,
+    };
+    use tower::util::ServiceExt;
+
+    use super::require_service_token;
+
+    fn app() -> Router {
+        Router::new()
+            .route("/ok", get(|| async { Json(serde_json::json!({ "ok": true })) }))
+            .layer(from_fn(require_service_token))
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_service_token() {
+        let response = app()
+            .oneshot(Request::builder().uri("/ok").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_service_token");
+    }
+
+    #[tokio::test]
+    async fn accepts_default_service_token() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/ok")
+                    .header("x-service-token", "dev-service-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["ok"], true);
+    }
+}

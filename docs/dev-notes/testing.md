@@ -12,6 +12,22 @@ No test suite can create a literal `0%` production-breakage guarantee. What this
 
 ## Test layers
 
+## Subsystem matrix
+
+Every major Flux subsystem should have both a direct owner test and a cross-system test.
+
+| Subsystem | Direct coverage | Cross-system coverage |
+|---|---|---|
+| CLI | `cargo test -p cli why::tests` + [cli_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/cli_test.sh) | request inspection via `trace`, `why`, `doctor`, `records`, `invoke` |
+| Server | [server_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/server_test.sh) | monolith mounts `/health`, `/flux/api`, `/flux/dev/invoke` |
+| Gateway | existing crate tests + router tests + [gateway_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/gateway_test.sh) | request entry, readiness, route miss, function invoke |
+| Runtime | [runtime_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/runtime_test.sh) | direct `/execute` behavior |
+| Queue | crate route tests + [queue_service_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/queue_service_test.sh) | job create, get, list, cancel, stats |
+| Agents | schema parse tests + [agent_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/agent_test.sh) | deploy, list, get, delete |
+| API | middleware tests + [api_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/api_test.sh) | health, schema, spec, internal auth |
+| Data engine | middleware/history tests + [data_engine_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/data_engine_test.sh) | direct auth and query execution |
+| End-to-end record loop | [execution_record_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/execution_record_test.sh) + [state_audit_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/state_audit_test.sh) | traceability, logs, records, mutation history, replay window |
+
 ### 1. Unit tests
 
 These protect pure logic and should run on every commit.
@@ -114,6 +130,16 @@ MUTATION_PK_FIELD      # defaults to id
 MUTATION_INSERT_JSON   # full JSON body for POST /db/query
 MUTATION_HISTORY_QUERY # override row lookup query string for /db/history
 TRACE_TEST_PAYLOAD     # override function payload for execution-record test
+```
+
+Optional service and monolith overrides:
+
+```bash
+SERVER_URL                 # explicit monolith base URL; defaults from API_URL/GATEWAY_URL
+INTERNAL_SERVICE_TOKEN     # shared internal token when services are configured with one value
+API_INTERNAL_SERVICE_TOKEN # override token used for /internal/* API tests
+DATA_ENGINE_SERVICE_TOKEN  # override token used for direct data-engine tests
+FLUX_BIN                   # CLI binary path for cli_test.sh
 ```
 
 ## Release-bar scenarios

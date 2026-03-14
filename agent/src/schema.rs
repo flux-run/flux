@@ -84,3 +84,28 @@ fn default_temperature()-> f32    { 0.7 }
 pub fn parse(yaml: &str) -> Result<AgentDefinition, serde_yaml::Error> {
     serde_yaml::from_str(yaml)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+
+    #[test]
+    fn parse_applies_defaults() {
+        let agent = parse(
+            r#"
+name: smoke-agent
+model: gpt-4o-mini
+system: You are a smoke test.
+tools: []
+"#,
+        )
+        .expect("yaml should parse");
+
+        assert_eq!(agent.name, "smoke-agent");
+        assert_eq!(agent.llm_secret, "FLUXBASE_LLM_KEY");
+        assert_eq!(agent.llm_url, "https://api.openai.com/v1/chat/completions");
+        assert_eq!(agent.max_turns, 25);
+        assert_eq!(agent.temperature, 0.7);
+        assert!(agent.tools.is_empty());
+    }
+}
