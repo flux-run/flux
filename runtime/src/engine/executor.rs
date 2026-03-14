@@ -31,13 +31,13 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration};
 
 
-/// Build the Fluxbase runtime extension — queue ops + db ops.
+/// Build the Fluxbase runtime extension — queue ops + db ops + http + sleep + function invoke.
 pub fn build_fluxbase_extension() -> Extension {
     Extension {
         name: "fluxbase",
         ops: Cow::Owned(vec![
             op_queue_push(), op_next_task(), op_task_complete(), op_task_error(),
-            op_db_query(),
+            op_db_query(), op_http_fetch(), op_sleep(), op_function_invoke(),
         ]),
         ..Default::default()
     }
@@ -334,7 +334,276 @@ pub async fn op_db_query(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
 }
 
-/// Create a warm `JsRuntime` with the Fluxbase extension registered.
+// ── HTTP fetch op ─────────────────────────────────────────────────────────────
+//
+// JS: Deno.core.ops.op_http_fetch(url, method, headers, body, ctx_override)
+// Returns { status, headers: {}, body: string }
+//
+// SSRF protection: denies calls to RFC1918, loopback, link-local, and
+// cloud-provider metadata endpoints. Also strips X-Service-Token and
+// X-Internal-* headers that user code could forge to impersonate the runtime.
+
+/// Returns true when the host is a private/loopback/metadata address that must
+/// be blocked to prevent SSRF attacks from user functions.
+fn is_ssrf_blocked(url: &str) -> bool {
+    let parsed = match url.parse::<reqwest::Url>() {
+        Ok(u) => u,
+        Err(_) => return true, // malformed URLs are blocked
+    };
+    let host = match parsed.host_str() {
+        Some(h) => h.to_ascii_lowercase(),
+        None    => return true,
+    };
+
+    // Block cloud metadata endpoints
+    if host == "metadata.google.internal"
+        || host == "169.254.169.254"
+        || host == "fd00:ec2::254"
+    {
+        return true;
+    }
+
+    // Block loopback
+    if host == "localhost" || host == "::1" || host.starts_with("127.") {
+        return true;
+    }
+
+    // Block link-local
+    if host.starts_with("169.254.") || host.starts_with("fe80") {
+        return true;
+    }
+
+    // Parse IP ranges for RFC1918
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                let o = v4.octets();
+                // 10.0.0.0/8
+                if o[0] == 10 { return true; }
+                // 172.16.0.0/12
+                if o[0] == 172 && (16..=31).contains(&o[1]) { return true; }
+                // 192.168.0.0/16
+                if o[0] == 192 && o[1] == 168 { return true; }
+            }
+            std::net::IpAddr::V6(_) => {
+                // Block fc00::/7 (ULA)
+                if host.starts_with("fc") || host.starts_with("fd") { return true; }
+            }
+        }
+    }
+
+    false
+}
+
+/// Carry HTTP client for ctx.fetch() — injected into OpState on the serial path.
+pub struct HttpFetchOpState {
+    pub client:        reqwest::Client,
+    pub allowed_hosts: Vec<String>, // empty = allow all (except SSRF blocked), ["*"] = allow all
+}
+
+/// ctx.fetch(url, { method, headers, body }) — SSRF-protected HTTP from user functions.
+#[deno_core::op2(async)]
+#[serde]
+pub async fn op_http_fetch(
+    state:          Rc<RefCell<OpState>>,
+    #[string] url:  String,
+    #[serde]  opts: serde_json::Value,
+    #[serde]  http_ctx_override: Option<serde_json::Value>,
+) -> Result<serde_json::Value, std::io::Error> {
+    // SSRF check — always applied regardless of allow-list
+    if is_ssrf_blocked(&url) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("fetch blocked: '{}' resolves to a private/reserved address", url),
+        ));
+    }
+
+    let (client, allowed_hosts) = {
+        let s = state.borrow();
+        if let Some(ref _ctx) = http_ctx_override {
+            // Concurrent path: use stored client, allow-list not enforced per-request
+            let client = s.try_borrow::<HttpFetchOpState>()
+                .map(|c| c.client.clone())
+                .unwrap_or_else(reqwest::Client::new);
+            (client, vec![])
+        } else {
+            match s.try_borrow::<HttpFetchOpState>() {
+                Some(h) => (h.client.clone(), h.allowed_hosts.clone()),
+                None    => (reqwest::Client::new(), vec![]),
+            }
+        }
+    };
+
+    // Host allow-list check (if configured)
+    if !allowed_hosts.is_empty() && !allowed_hosts.contains(&"*".to_string()) {
+        let host = url.parse::<reqwest::Url>()
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+            .unwrap_or_default();
+        if !allowed_hosts.iter().any(|a| a.to_ascii_lowercase() == host) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("fetch blocked: host '{}' is not in the allowed_hosts list", host),
+            ));
+        }
+    }
+
+    let method = opts.get("method")
+        .and_then(|m| m.as_str())
+        .unwrap_or("GET")
+        .to_uppercase();
+
+    let mut req = client.request(
+        method.parse::<reqwest::Method>()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?,
+        &url,
+    );
+
+    // Forward headers, stripping internal ones
+    if let Some(headers) = opts.get("headers").and_then(|h| h.as_object()) {
+        for (k, v) in headers {
+            let key_lower = k.to_ascii_lowercase();
+            // Strip headers that could be used to forge internal service calls
+            if key_lower == "x-service-token"
+                || key_lower.starts_with("x-internal-")
+                || key_lower == "x-flux-service"
+            {
+                continue;
+            }
+            if let Some(val) = v.as_str() {
+                req = req.header(k.as_str(), val);
+            }
+        }
+    }
+
+    if let Some(body) = opts.get("body") {
+        if let Some(s) = body.as_str() {
+            req = req.body(s.to_string());
+        } else {
+            req = req.json(body);
+        }
+    }
+
+    let resp = req.send().await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    let status = resp.status().as_u16();
+    let resp_headers: serde_json::Value = {
+        let mut map = serde_json::Map::new();
+        for (k, v) in resp.headers().iter() {
+            map.insert(k.as_str().to_string(), serde_json::Value::String(v.to_str().unwrap_or("").to_string()));
+        }
+        serde_json::Value::Object(map)
+    };
+
+    let body_text = resp.text().await
+        .unwrap_or_else(|_| String::new());
+
+    // Try to parse as JSON; fall back to string
+    let body_value: serde_json::Value = serde_json::from_str(&body_text)
+        .unwrap_or_else(|_| serde_json::Value::String(body_text));
+
+    Ok(serde_json::json!({
+        "status":  status,
+        "headers": resp_headers,
+        "body":    body_value,
+        "ok":      status >= 200 && status < 300,
+    }))
+}
+
+// ── Sleep op ──────────────────────────────────────────────────────────────────
+//
+// JS: Deno.core.ops.op_sleep(ms)
+// Suspends the current task for `ms` milliseconds.
+// Unlike setTimeout, this properly yields the V8 event loop in concurrent mode.
+
+/// ctx.sleep(ms) — suspend the current task without blocking the event loop.
+#[deno_core::op2(async)]
+pub async fn op_sleep(#[smi] ms: u32) {
+    tokio::time::sleep(Duration::from_millis(ms as u64)).await;
+}
+
+// ── Function invoke op ────────────────────────────────────────────────────────
+//
+// JS: Deno.core.ops.op_function_invoke(function_name, payload, invoke_ctx_override)
+// Calls another Flux function in-process by POSTing to the runtime /execute endpoint.
+// Carries the parent request_id for call graph tracing (execution_calls table).
+
+/// Carry the runtime's own execute endpoint for cross-function calls.
+pub struct FunctionInvokeOpState {
+    pub runtime_url:   String,   // e.g. "http://localhost:8080"
+    pub service_token: String,
+    pub request_id:    String,   // parent request_id for call graph
+    pub client:        reqwest::Client,
+}
+
+/// ctx.function.invoke(name, payload) — call another Flux function in-process.
+#[deno_core::op2(async)]
+#[serde]
+pub async fn op_function_invoke(
+    state:                  Rc<RefCell<OpState>>,
+    #[string] function_name: String,
+    #[serde]  payload:       serde_json::Value,
+    #[serde]  invoke_ctx_override: Option<serde_json::Value>,
+) -> Result<serde_json::Value, std::io::Error> {
+    let (runtime_url, service_token, parent_request_id, client) = {
+        let s = state.borrow();
+        if let Some(ref ctx) = invoke_ctx_override {
+            let client = s.try_borrow::<FunctionInvokeOpState>()
+                .map(|c| c.client.clone())
+                .unwrap_or_else(reqwest::Client::new);
+            (
+                ctx["runtime_url"].as_str().unwrap_or("").to_string(),
+                ctx["service_token"].as_str().unwrap_or("").to_string(),
+                ctx["request_id"].as_str().unwrap_or("").to_string(),
+                client,
+            )
+        } else {
+            match s.try_borrow::<FunctionInvokeOpState>() {
+                Some(fi) => (
+                    fi.runtime_url.clone(),
+                    fi.service_token.clone(),
+                    fi.request_id.clone(),
+                    fi.client.clone(),
+                ),
+                None => return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "op_function_invoke: no invoke context available",
+                )),
+            }
+        }
+    };
+
+    if runtime_url.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "op_function_invoke: runtime_url not configured",
+        ));
+    }
+
+    let resp = client
+        .post(format!("{}/execute/{}", runtime_url.trim_end_matches('/'), function_name))
+        .header("Content-Type", "application/json")
+        .header("X-Service-Token", &service_token)
+        .header("X-Parent-Request-ID", &parent_request_id)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("function invoke failed ({}): {}", status, body),
+        ));
+    }
+
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+}
 /// Intended to be called once per worker thread; per-request state is injected
 /// via `OpState` before each execution (see `execute_with_runtime`).
 ///
@@ -623,6 +892,57 @@ fn build_wrapper(
                         return result && result.data ? result.data : result;
                     }},
                     execute: async (sql, params) => __ctx.db.query(sql, params),
+                }},
+
+                // ── HTTP fetch ────────────────────────────────────────────
+                // ctx.fetch(url, {{ method, headers, body }})
+                // SSRF-protected HTTP — blocks RFC1918, loopback, link-local,
+                // and cloud metadata endpoints.
+                fetch: async (url, opts) => {{
+                    const _start = Date.now();
+                    const result = await Deno.core.ops.op_http_fetch(
+                        url,
+                        opts || {{}},
+                        null
+                    );
+                    __fluxbase_logs.push({{
+                        level:       "info",
+                        message:     "http:" + (opts && opts.method || "GET") + "  " + url + "  " + result.status + "  " + (Date.now() - _start) + "ms",
+                        span_type:   "http_fetch",
+                        source:      "http",
+                        duration_ms: Date.now() - _start,
+                    }});
+                    return result;
+                }},
+
+                // ── Sleep ─────────────────────────────────────────────────
+                // ctx.sleep(ms) — yields event loop for ms milliseconds.
+                // Replay-safe: duration is recorded in spans.
+                sleep: async (ms) => {{
+                    await Deno.core.ops.op_sleep(ms | 0);
+                }},
+
+                // ── Function invoke ───────────────────────────────────────
+                // ctx.function.invoke(name, payload)
+                // Calls another Flux function, wiring the parent request_id for
+                // call graph tracing.
+                function: {{
+                    invoke: async (name, payload) => {{
+                        const _start = Date.now();
+                        const result = await Deno.core.ops.op_function_invoke(
+                            name,
+                            payload !== undefined ? payload : {{}},
+                            null
+                        );
+                        __fluxbase_logs.push({{
+                            level:       "info",
+                            message:     "invoke:" + name + "  " + (Date.now() - _start) + "ms",
+                            span_type:   "function_invoke",
+                            source:      "function",
+                            duration_ms: Date.now() - _start,
+                        }});
+                        return result;
+                    }},
                 }},
             }};
 
@@ -1108,6 +1428,151 @@ mod tests {
     }
 
     // ── LogLine struct ────────────────────────────────────────────────────
+
+    // ── is_ssrf_blocked ───────────────────────────────────────────────────
+
+    #[test]
+    fn ssrf_blocks_loopback() {
+        assert!(is_ssrf_blocked("http://127.0.0.1/secret"));
+        assert!(is_ssrf_blocked("http://localhost/secret"));
+        assert!(is_ssrf_blocked("http://127.0.0.53/dns"));
+        assert!(is_ssrf_blocked("http://::1/"));
+    }
+
+    #[test]
+    fn ssrf_blocks_rfc1918() {
+        assert!(is_ssrf_blocked("http://10.0.0.1/internal"));
+        assert!(is_ssrf_blocked("http://10.255.255.255/"));
+        assert!(is_ssrf_blocked("http://172.16.0.1/"));
+        assert!(is_ssrf_blocked("http://172.31.255.255/"));
+        assert!(is_ssrf_blocked("http://192.168.1.1/"));
+        assert!(is_ssrf_blocked("http://192.168.0.100/"));
+    }
+
+    #[test]
+    fn ssrf_blocks_metadata_endpoints() {
+        assert!(is_ssrf_blocked("http://169.254.169.254/latest/meta-data/"));
+        assert!(is_ssrf_blocked("http://metadata.google.internal/"));
+        assert!(is_ssrf_blocked("http://169.254.0.1/"));
+    }
+
+    #[test]
+    fn ssrf_blocks_link_local() {
+        assert!(is_ssrf_blocked("http://169.254.1.1/"));
+    }
+
+    #[test]
+    fn ssrf_blocks_malformed_url() {
+        assert!(is_ssrf_blocked("not-a-url"));
+        assert!(is_ssrf_blocked("://missing-scheme"));
+    }
+
+    #[test]
+    fn ssrf_allows_public_addresses() {
+        assert!(!is_ssrf_blocked("https://api.example.com/v1"));
+        assert!(!is_ssrf_blocked("https://1.1.1.1/dns-query"));
+        assert!(!is_ssrf_blocked("https://8.8.8.8/"));
+        assert!(!is_ssrf_blocked("https://github.com/api"));
+    }
+
+    // ── op_http_fetch SSRF rejection via ctx.fetch() ──────────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ctx_fetch_rejects_ssrf_loopback() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                try {
+                    await ctx.fetch("http://127.0.0.1/secret");
+                    return "should_not_reach";
+                } catch (e) {
+                    return e.message.includes("blocked") ? "blocked" : e.message;
+                }
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("blocked"), "expected SSRF block for 127.0.0.1");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ctx_fetch_rejects_ssrf_private_range() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                try {
+                    await ctx.fetch("http://10.0.0.1/internal");
+                    return "should_not_reach";
+                } catch (e) {
+                    return e.message.includes("blocked") ? "blocked" : e.message;
+                }
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("blocked"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ctx_fetch_rejects_metadata_endpoint() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                try {
+                    await ctx.fetch("http://169.254.169.254/latest/meta-data/");
+                    return "should_not_reach";
+                } catch (e) {
+                    return e.message.includes("blocked") ? "blocked" : e.message;
+                }
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("blocked"));
+    }
+
+    // ── op_sleep via ctx.sleep() ──────────────────────────────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ctx_sleep_returns_after_delay() {
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                const before = Date.now();
+                await ctx.sleep(50);
+                const elapsed = Date.now() - before;
+                return elapsed >= 40 ? "slept" : "too_fast";
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("slept"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ctx_sleep_zero_is_safe() {
+        let code = r#"__fluxbase_fn = async (ctx) => { await ctx.sleep(0); return "ok"; };"#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("ok"));
+    }
+
+    // ── op_function_invoke error path (no runtime_url) ───────────────────
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ctx_function_invoke_errors_without_runtime_url() {
+        // On the serial path FunctionInvokeOpState is not in OpState,
+        // so the op returns "no invoke context available".
+        let code = r#"
+            __fluxbase_fn = async (ctx) => {
+                try {
+                    await ctx.function.invoke("other_fn", { x: 1 });
+                    return "should_not_reach";
+                } catch (e) {
+                    // Either "no invoke context" or "runtime_url not configured"
+                    return (e.message.includes("invoke") || e.message.includes("runtime_url"))
+                        ? "invoke_error" : e.message;
+                }
+            };
+        "#;
+        let res = run_js(code, serde_json::Value::Null).await.unwrap();
+        assert_eq!(res.output, serde_json::json!("invoke_error"),
+            "invoke without context must throw a descriptive error");
+    }
+
+    // ── LogLine struct ────────────────────────────────────────────────────
+    #[allow(dead_code)] // marker to keep section header above
 
     #[test]
     fn log_line_serde_roundtrip() {

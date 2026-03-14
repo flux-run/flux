@@ -196,6 +196,53 @@ async function __flux_run_task(task) {
                 return __ctx.db.query(sql, params);
             },
         },
+
+        // SSRF-protected HTTP — blocks RFC1918, loopback, link-local, metadata endpoints.
+        fetch: async function(url, opts) {
+            var _start = Date.now();
+            var result = await Deno.core.ops.op_http_fetch(
+                url,
+                opts || {},
+                { request_id: task.request_id }
+            );
+            __fluxbase_logs.push({
+                level:       "info",
+                message:     "http:" + (opts && opts.method || "GET") + "  " + url + "  " + result.status + "  " + (Date.now() - _start) + "ms",
+                span_type:   "http_fetch",
+                source:      "http",
+                duration_ms: Date.now() - _start,
+            });
+            return result;
+        },
+
+        // ctx.sleep(ms) — yields the event loop; other concurrent tasks run while sleeping.
+        sleep: async function(ms) {
+            await Deno.core.ops.op_sleep(ms | 0);
+        },
+
+        // ctx.function.invoke(name, payload) — call another Flux function in-process.
+        function: {
+            invoke: async function(name, payload) {
+                var _start = Date.now();
+                var result = await Deno.core.ops.op_function_invoke(
+                    name,
+                    payload !== undefined ? payload : {},
+                    {
+                        runtime_url:   task.runtime_url || "",
+                        service_token: task.service_token,
+                        request_id:    task.request_id,
+                    }
+                );
+                __fluxbase_logs.push({
+                    level:       "info",
+                    message:     "invoke:" + name + "  " + (Date.now() - _start) + "ms",
+                    span_type:   "function_invoke",
+                    source:      "function",
+                    duration_ms: Date.now() - _start,
+                });
+                return result;
+            },
+        },
     };
 
     // Extract the user function in an isolated scope so concurrent tasks don't conflict

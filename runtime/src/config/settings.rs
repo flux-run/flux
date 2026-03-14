@@ -10,6 +10,8 @@ pub struct Settings {
     pub service_token:   String,
     /// Base URL of the data-engine service — used by ctx.db.query() from user functions.
     pub data_engine_url: String,
+    /// This runtime's own base URL — used by ctx.function.invoke() for cross-function calls.
+    pub runtime_url:     String,
     pub port:            u16,
     /// Number of V8 isolate worker threads.
     /// Defaults to 2× logical CPUs (min 2, max 16). Override with `ISOLATE_WORKERS`.
@@ -48,6 +50,9 @@ impl Settings {
         let data_engine_url = env::var("DATA_ENGINE_URL")
             .unwrap_or_else(|_| "http://localhost:8085".to_string());
 
+        let runtime_url = env::var("RUNTIME_URL")
+            .unwrap_or_else(|_| format!("http://localhost:{}", env::var("PORT").unwrap_or_else(|_| "8083".to_string())));
+
         let port = env::var("PORT")
             .unwrap_or_else(|_| "8083".to_string())
             .parse()
@@ -81,6 +86,7 @@ impl Settings {
             queue_url,
             service_token,
             data_engine_url,
+            runtime_url,
             port,
             isolate_workers,
             max_concurrent_per_worker,

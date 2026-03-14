@@ -129,6 +129,7 @@ impl IsolatePool {
         queue_ctx:      QueueContext,
         db_ctx:         DbContext,
         bundle_key:     Option<String>,
+        runtime_url:    String,
     ) -> Result<ExecutionResult, String> {
         // ── Pick worker via bundle-key affinity then least-loaded fallback ──
         let start = self.next_worker.fetch_add(1, Ordering::Relaxed);
@@ -190,6 +191,7 @@ impl IsolatePool {
             "project_id":       queue_ctx.project_id.map(|p| p.to_string()),
             "data_engine_url":  db_ctx.data_engine_url,
             "database":         db_ctx.database,
+            "runtime_url":      runtime_url,
         });
 
         worker.task_tx.send(task_json).await
@@ -291,6 +293,7 @@ mod tests {
             test_queue_ctx(),
             test_db_ctx(),
             None,
+            String::new(),
         ).await;
 
         assert!(res.is_ok(), "expected Ok, got: {:?}", res.err());
@@ -310,6 +313,7 @@ mod tests {
             test_queue_ctx(),
             test_db_ctx(),
             None,
+            String::new(),
         ).await.unwrap();
 
         assert_eq!(res.output, serde_json::json!(42));
@@ -332,6 +336,7 @@ mod tests {
             test_queue_ctx(),
             test_db_ctx(),
             None,
+            String::new(),
         ).await.unwrap();
 
         assert!(!res.logs.is_empty());
@@ -352,6 +357,7 @@ mod tests {
             test_queue_ctx(),
             test_db_ctx(),
             None,
+            String::new(),
         ).await;
 
         assert!(res.is_err());
@@ -385,6 +391,7 @@ mod tests {
                         client:          reqwest::Client::new(),
                     },
                     None,
+                    String::new(),
                 ).await
             }));
         }
@@ -402,7 +409,7 @@ mod tests {
         // Both should be able to execute
         let code = r#"__fluxbase_fn = async (ctx) => 1;"#;
         let _r = clone.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 0, test_queue_ctx(), test_db_ctx(), None).await;
+            serde_json::Value::Null, 0, test_queue_ctx(), test_db_ctx(), None, String::new()).await;
     }
 
     // ── deterministic replay ──────────────────────────────────────────────
@@ -415,9 +422,9 @@ mod tests {
         let code = r#"__fluxbase_fn = async (ctx) => ctx.uuid();"#;
 
         let r1 = pool.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None).await.unwrap();
+            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None, String::new()).await.unwrap();
         let r2 = pool.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None).await.unwrap();
+            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None, String::new()).await.unwrap();
 
         assert_eq!(r1.output, r2.output,
             "same execution seed must produce same UUID for deterministic replay");
@@ -438,6 +445,7 @@ mod tests {
             test_queue_ctx(),
             test_db_ctx(),
             Some("fn_abc123".to_string()),
+            String::new(),
         ).await;
 
         // At least one worker should have recorded the bundle key
@@ -463,6 +471,7 @@ mod tests {
                 test_queue_ctx(),
                 test_db_ctx(),
                 Some("fn_affinity_test".to_string()),
+                String::new(),
             ).await;
             assert!(r.is_ok());
         }

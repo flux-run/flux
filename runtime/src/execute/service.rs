@@ -65,6 +65,7 @@ pub async fn invoke(
         service_token:   &state.service_token,
         data_engine_url: &state.data_engine_url,
         database:        project_schema_name(ctx.project_id),
+        runtime_url:     &state.runtime_url,
     };
 
     let hints = req.runtime_hint.as_deref().unwrap_or("");

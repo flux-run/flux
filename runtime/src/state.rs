@@ -63,6 +63,8 @@ pub struct AppState {
     pub service_token:  String,
     /// Data-engine base URL — forwarded into V8 `op_db_query` op via task JSON.
     pub data_engine_url: String,
+    /// This runtime's own base URL — forwarded into ctx.function.invoke() for in-process calls.
+    pub runtime_url:     String,
     pub bundle_cache:   BundleCache,
     pub schema_cache:   SchemaCache,
     pub isolate_pool:   IsolatePool,

@@ -109,6 +109,7 @@ pub async fn execute_handler(
         service_token:   &state.service_token,
         data_engine_url: &state.data_engine_url,
         database:        project_schema_name(ctx.project_id),
+        runtime_url:     &state.runtime_url,
     };
 
     // ── Warm WASM path ────────────────────────────────────────────────────

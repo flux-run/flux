@@ -63,6 +63,8 @@ pub struct ExecutionRunner<'a> {
     pub data_engine_url:  &'a str,
     /// Postgres schema name for this project — forwarded into ctx.db.query().
     pub database:         String,
+    /// This runtime's own base URL — used by ctx.function.invoke() for in-process calls.
+    pub runtime_url:      &'a str,
 }
 
 impl<'a> ExecutionRunner<'a> {
@@ -163,6 +165,7 @@ impl<'a> ExecutionRunner<'a> {
             queue_ctx,
             db_ctx,
             Some(ctx.function_id.clone()),
+            self.runtime_url.to_string(),
         ).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
