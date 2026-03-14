@@ -8,11 +8,11 @@ The WASM path matters because it opens the runtime to any compiled language whil
 
 WebAssembly gives Flux:
 
-- language diversity — Python, Go, Java, PHP, Rust, C#, and Ruby run alongside TypeScript
+- language diversity — Rust, Go, Java, Python, PHP, and AssemblyScript run alongside TypeScript
 - portable function bundles
 - tighter runtime control and sandboxing
 - a uniform deployment artifact for non-JavaScript languages
-- performance improvements for interpreted languages (PHP, Python) via AOT compilation
+- first-compile AOT caching so cold starts are fast on every deploy after the first
 
 Flux uses one runtime, not a different execution model for every language.
 
@@ -51,16 +51,17 @@ The packaging process differs by language, but the operator experience stays con
 
 ## Supported Languages
 
-| Language | Toolchain | Notes |
-|----------|-----------|-------|
-| TypeScript | Native Deno V8 | First-class, full SDK |
-| Python | WASM (Pyodide) | AOT compilation, faster than CPython cold starts |
-| Go | WASM (TinyGo) | Smaller binaries than standard Go |
-| Java | WASM (TeaVM/GraalVM) | No JVM warmup overhead |
-| PHP | WASM (Emscripten) | Faster than PHP-FPM, underserved audience |
-| Rust | WASM (native wasm32-wasi) | Best WASM toolchain, smallest bundles |
-| C# | WASM (dotnet-wasi-sdk) | Full .NET without CLR overhead |
-| Ruby | WASM (ruby.wasm) | Ruby core team maintained |
+| Language | Toolchain | Warm p50 | Notes |
+|----------|-----------|----------|-------|
+| TypeScript / JS | Native Deno V8 | < 1 ms | First-class, full SDK |
+| AssemblyScript | `asc` → wasm32-wasi | < 1 ms | TypeScript-like syntax, smallest binaries |
+| Rust | `cargo` → wasm32-wasip1 | 1 ms | Best WASM toolchain, sub-100 KB binaries |
+| Java | TeaVM → wasm32-wasi | 1 ms | No JVM warmup; compact 192 KB output |
+| Go | `go build` GOOS=wasip1 | 19 ms | Standard toolchain, no TinyGo required |
+| PHP | php-8.2-wasm (vmware-labs) | 83 ms | Full PHP 8.2, argv-embedded script |
+| Python | py2wasm (Nuitka) | 191 ms | Compiled — not interpreter-in-WASM |
+| C# (.NET) | dotnet `wasi-experimental` | — | 🚧 Coming soon — WASIP2 component model |
+| Ruby | rbwasm | — | ❌ Compilation timeout — not viable |
 
 ## Constraints
 
