@@ -24,8 +24,9 @@ use axum::{
     Json,
 };
 use crate::error::{ApiError, ApiResponse, ApiResult};
-use serde::Deserialize;
+use api_contract::deployments::{CreateDeploymentPayload, CreateProjectDeploymentPayload};
 use sqlx::PgPool;
+use serde::Deserialize;
 use uuid::Uuid;
 use crate::types::context::RequestContext;
 use crate::AppState;
@@ -40,13 +41,6 @@ struct DeploymentRow {
     status:        String,
     created_at:    chrono::NaiveDateTime,
     function_name: String,
-}
-
-// ── Payloads ─────────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct CreateDeploymentPayload {
-    pub storage_key: String,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -477,29 +471,7 @@ pub async fn get_deployment_hashes(
     Ok(ApiResponse::new(serde_json::json!({ "hashes": hashes })))
 }
 
-// ── Payload ──────────────────────────────────────────────────────────────────
 
-#[derive(serde::Deserialize)]
-pub struct FunctionDeploySummaryEntry {
-    pub name:    String,
-    pub version: i64,
-    pub status:  String,  // "deployed" | "skipped" | "failed"
-}
-
-#[derive(serde::Deserialize)]
-pub struct DeploySummary {
-    pub total:     i64,
-    pub deployed:  i64,
-    pub skipped:   i64,
-    pub functions: Vec<FunctionDeploySummaryEntry>,
-}
-
-#[derive(serde::Deserialize)]
-pub struct CreateProjectDeploymentPayload {
-    pub version:     i64,
-    pub summary:     DeploySummary,
-    pub deployed_by: Option<String>,
-}
 
 /// `POST /deployments/project` — record a project-level deployment after the
 /// CLI finishes uploading individual functions.

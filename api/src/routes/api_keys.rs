@@ -2,8 +2,6 @@ use axum::{
     extract::{Extension, Path, Query, State},
     Json,
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -13,25 +11,12 @@ use crate::{
     validation::PaginationQuery,
     AppState,
 };
+use api_contract::api_keys::{ApiKeyRow, CreateApiKeyPayload};
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
 fn db_err(e: sqlx::Error) -> ApiError {
     ApiError::internal(e.to_string())
-}
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct ApiKeyRow {
-    pub id: Uuid,
-    pub name: String,
-    pub key_prefix: String,
-    pub created_at: DateTime<Utc>,
-    pub last_used_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Deserialize)]
-pub struct CreateApiKeyPayload {
-    pub name: String,
 }
 
 pub async fn list_api_keys(

@@ -2,11 +2,8 @@ use axum::{
     extract::{Extension, Path, Query, State},
     Json,
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
-use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResponse},
@@ -14,33 +11,12 @@ use crate::{
     validation::PaginationQuery,
     AppState,
 };
+use api_contract::environments::{CloneEnvPayload, CreateEnvPayload, EnvironmentRow};
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
 fn db_err(e: sqlx::Error) -> ApiError {
     ApiError::internal(e.to_string())
-}
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct EnvironmentRow {
-    pub id: Uuid,
-    pub name: String,
-    pub is_default: bool,
-    pub config: Value,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Deserialize)]
-pub struct CreateEnvPayload {
-    pub name: String,
-    pub slug: String,
-    pub config: Option<Value>,
-}
-
-#[derive(Deserialize)]
-pub struct CloneEnvPayload {
-    pub source: String,
-    pub target: String,
 }
 
 pub async fn list_environments(

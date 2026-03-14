@@ -2,8 +2,6 @@ use axum::{
     extract::{Extension, Path, Query, State},
     Json,
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -13,47 +11,14 @@ use crate::{
     validation::PaginationQuery,
     AppState,
 };
+use api_contract::events::{
+    CreateSubscriptionPayload, EventRow, EventSubscriptionRow, PublishEventPayload,
+};
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
 fn db_err(e: sqlx::Error) -> ApiError {
     ApiError::internal(e.to_string())
-}
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct EventRow {
-    pub id: Uuid,
-    pub event_type: String,
-    pub table_name: String,
-    pub record_id: Option<String>,
-    pub operation: String,
-    pub payload: Value,
-    pub delivered_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct EventSubscriptionRow {
-    pub id: Uuid,
-    pub event_pattern: String,
-    pub target_type: String,
-    pub target_config: Value,
-    pub enabled: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Deserialize)]
-pub struct PublishEventPayload {
-    pub event: String,
-    pub payload: Option<Value>,
-}
-
-#[derive(Deserialize)]
-pub struct CreateSubscriptionPayload {
-    pub event_pattern: String,
-    pub target_type: String,
-    pub target_config: Option<Value>,
 }
 
 pub async fn publish_event(

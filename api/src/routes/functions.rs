@@ -14,6 +14,7 @@ use axum::{
 };
 use crate::error::{ApiError, ApiResponse, ApiResult};
 use crate::validation::{validate_name, PaginationQuery};
+use api_contract::functions::CreateFunctionPayload;
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -31,14 +32,6 @@ struct FunctionRow {
     input_schema: Option<serde_json::Value>,
     output_schema: Option<serde_json::Value>,
     created_at:   chrono::NaiveDateTime,
-}
-
-// ── Payloads ─────────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct CreateFunctionPayload {
-    pub name:    String,
-    pub runtime: Option<String>,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

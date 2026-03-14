@@ -1,4 +1,4 @@
-.PHONY: dev api dashboard build migrate install clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate
+.PHONY: dev api dashboard build migrate install clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API + dashboard in parallel, printing labelled output.
@@ -67,6 +67,13 @@ install:
 clean:
 	cd api && cargo clean
 	cd dashboard && rm -rf dist node_modules/.vite
+
+# ── API Types (TypeScript codegen) ──────────────────────────────────────────
+# Generates TypeScript bindings from Rust types via ts-rs.
+# Output: shared/api_contract/bindings/*.ts  (consumed by packages/api-types)
+generate-types:
+	cargo test -p api_contract --features ts
+	@echo "TypeScript bindings written to shared/api_contract/bindings/"
 
 # ── Async Wiring Test ───────────────────────────────────────────────────────
 # Runs deterministic staging wiring test for Gateway -> Queue -> Worker -> Runtime.

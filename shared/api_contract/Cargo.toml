@@ -1,0 +1,32 @@
+[package]
+name = "api_contract"
+version = "0.1.0"
+edition = "2024"
+description = "Shared HTTP request/response types for all Flux services and clients"
+
+# ── Features ─────────────────────────────────────────────────────────────────
+#
+# server  — adds sqlx::FromRow derives on row types; used by the `api` crate.
+# ts      — adds ts-rs TS derives for TypeScript codegen; run via `make types`.
+#
+# Usage:
+#   api crate:  api_contract = { path = "...", features = ["server"] }
+#   cli crate:  api_contract = { path = "..." }
+#   codegen:    cargo test -p api_contract --features ts
+
+[features]
+default = []
+server = ["dep:sqlx"]
+ts     = ["dep:ts-rs"]
+
+[dependencies]
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid       = { version = "1", features = ["serde"] }
+chrono     = { version = "0.4", features = ["serde"] }
+
+# Optional: sqlx FromRow derives (api crate only)
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "uuid", "chrono", "tls-rustls"], optional = true }
+
+# Optional: TypeScript type generation
+ts-rs = { version = "10", features = ["uuid-impl", "chrono-impl", "serde-compat"], optional = true }

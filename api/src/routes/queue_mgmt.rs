@@ -2,8 +2,6 @@ use axum::{
     extract::{Extension, Path, Query, State},
     Json,
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
 use uuid::Uuid;
@@ -14,45 +12,14 @@ use crate::{
     validation::PaginationQuery,
     AppState,
 };
+use api_contract::queue::{
+    CreateQueuePayload, DeadLetterJobRow, PublishMessagePayload, QueueConfigRow,
+};
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
 fn db_err(e: sqlx::Error) -> ApiError {
     ApiError::internal(e.to_string())
-}
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct QueueConfigRow {
-    pub id: Uuid,
-    pub name: String,
-    pub description: Option<String>,
-    pub max_attempts: i32,
-    pub visibility_timeout_ms: i64,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct DeadLetterJobRow {
-    pub id: Uuid,
-    pub function_id: Option<Uuid>,
-    pub payload: Option<Value>,
-    pub error: Option<String>,
-    pub failed_at: Option<chrono::NaiveDateTime>,
-}
-
-#[derive(Deserialize)]
-pub struct CreateQueuePayload {
-    pub name: String,
-    pub description: Option<String>,
-    pub max_attempts: Option<i32>,
-    pub visibility_timeout_ms: Option<i64>,
-}
-
-#[derive(Deserialize)]
-pub struct PublishMessagePayload {
-    pub function_id: Uuid,
-    pub payload: Option<Value>,
-    pub delay_seconds: Option<i64>,
 }
 
 pub async fn list_queues(

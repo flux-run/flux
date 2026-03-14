@@ -13,38 +13,8 @@ use crate::error::{ApiError, ApiResponse, ApiResult};
 use crate::types::context::RequestContext;
 use crate::validation::{validate_route_path, PaginationQuery};
 use crate::AppState;
-use serde::{Deserialize, Serialize};
+use api_contract::gateway::{RouteConfigRow, SyncRoutesPayload};
 use uuid::Uuid;
-
-// ── Row structs ───────────────────────────────────────────────────────────────
-
-#[derive(sqlx::FromRow, Serialize)]
-struct RouteConfigRow {
-    id:                   Uuid,
-    path:                 String,
-    method:               String,
-    function_name:        String,
-    middleware:           Vec<String>,
-    rate_limit_per_minute: Option<i32>,
-}
-
-// ── Payloads ──────────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct SyncRoutesPayload {
-    pub project_deployment_id: Option<Uuid>,
-    pub routes: Vec<RoutePayloadEntry>,
-}
-
-#[derive(Deserialize)]
-pub struct RoutePayloadEntry {
-    pub path:                  String,
-    pub method:                String,
-    pub function_name:         String,
-    #[serde(default)]
-    pub middleware:            Vec<String>,
-    pub rate_limit_per_minute: Option<i32>,
-}
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 

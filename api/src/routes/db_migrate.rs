@@ -23,7 +23,6 @@
 //!   callers; the request/response contract stays stable.
 
 use axum::{Json, extract::State, http::StatusCode};
-use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::AppState;
@@ -129,23 +128,7 @@ fn strip_sql_comments(sql: &str) -> String {
     out
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct MigrateRequest {
-    /// The filename, e.g. `001_create_users.sql`. Used as the unique key.
-    pub name: String,
-    /// The full SQL content of the migration file.
-    pub content: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MigrateResponse {
-    /// `"applied"` or `"already_applied"`
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
+use api_contract::db_migrate::{MigrateRequest, MigrateResponse};
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 

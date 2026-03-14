@@ -1,0 +1,13 @@
+{
+  "name": "@fluxbase/api-types",
+  "version": "0.1.0",
+  "description": "TypeScript types for the Fluxbase API — generated from Rust via ts-rs",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "generate": "cd ../.. && cargo test -p api_contract --features ts -- --test-output immediate 2>&1 && echo 'Bindings written to shared/api_contract/bindings/'"
+  },
+  "files": [
+    "src/"
+  ]
+}

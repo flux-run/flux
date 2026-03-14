@@ -2,10 +2,7 @@ use axum::{
     extract::{Extension, Path, Query, State},
     Json,
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResponse},
@@ -13,33 +10,12 @@ use crate::{
     validation::PaginationQuery,
     AppState,
 };
+use api_contract::schedules::{CreateSchedulePayload, CronJobRow};
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
 fn db_err(e: sqlx::Error) -> ApiError {
     ApiError::internal(e.to_string())
-}
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct CronJobRow {
-    pub id: Uuid,
-    pub name: String,
-    pub schedule: String,
-    pub action_type: String,
-    pub action_config: Value,
-    pub enabled: bool,
-    pub last_run_at: Option<DateTime<Utc>>,
-    pub next_run_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Deserialize)]
-pub struct CreateSchedulePayload {
-    pub name: String,
-    pub schedule: String,
-    pub action_type: String,
-    pub action_config: Option<Value>,
 }
 
 pub async fn list_schedules(

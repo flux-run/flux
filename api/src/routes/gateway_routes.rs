@@ -3,52 +3,13 @@ use axum::{
     Json,
 };
 use crate::error::{ApiResponse, ApiError};
-use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use crate::types::context::RequestContext;
-
-// ── Row structs ────────────────────────────────────────────────────────────
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct RouteRow {
-    pub id: Uuid,
-    pub path: String,
-    pub method: String,
-    pub function_id: Uuid,
-    pub is_async: bool,
-    pub auth_type: String,
-    pub cors_enabled: bool,
-    pub rate_limit: Option<i32>,
-    pub created_at: chrono::NaiveDateTime,
-}
-
-// ── Payloads ───────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct CreateRoutePayload {
-    pub method: String,
-    pub path: String,
-    pub function_id: Uuid,
-    #[serde(default)]
-    pub is_async: bool,
-    pub auth_type: String,
-    pub cors_enabled: bool,
-    pub rate_limit: Option<i32>,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateRoutePayload {
-    pub path: Option<String>,
-    pub method: Option<String>,
-    pub function_id: Option<Uuid>,
-    pub is_async: Option<bool>,
-    pub auth_type: Option<String>,
-    pub cors_enabled: Option<bool>,
-    pub rate_limit: Option<Option<i32>>,
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
+use api_contract::gateway::{
+    CorsPayload, CreateRoutePayload, MiddlewareCreatePayload,
+    RateLimitPayload, RouteFullRow, RouteRow, UpdateRoutePayload,
+};
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
@@ -174,45 +135,6 @@ pub async fn delete_gateway_route(
     }
 
     Ok(ApiResponse::new(serde_json::json!({ "success": true })))
-}
-
-// ── Gateway extras ─────────────────────────────────────────────────────────
-
-#[derive(sqlx::FromRow, Serialize)]
-pub struct RouteFullRow {
-    pub id: Uuid,
-    pub path: String,
-    pub method: String,
-    pub function_id: Uuid,
-    pub is_async: bool,
-    pub auth_type: String,
-    pub cors_enabled: bool,
-    pub rate_limit: Option<i32>,
-    pub created_at: chrono::NaiveDateTime,
-    pub jwks_url: Option<String>,
-    pub jwt_audience: Option<String>,
-    pub jwt_issuer: Option<String>,
-    pub cors_origins: Option<Vec<String>>,
-    pub cors_headers: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-pub struct RateLimitPayload {
-    pub requests_per_second: i32,
-}
-
-#[derive(Deserialize)]
-pub struct CorsPayload {
-    pub origins: Vec<String>,
-    pub headers: Vec<String>,
-}
-
-#[derive(Deserialize)]
-pub struct MiddlewareCreatePayload {
-    pub route_id: Uuid,
-    #[serde(rename = "type")]
-    pub middleware_type: String,
-    pub config: serde_json::Value,
 }
 
 pub async fn get_gateway_route_by_id(
