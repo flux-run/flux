@@ -45,6 +45,9 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Gateway connected to database");
 
+    // Install Prometheus recorder before any requests are served.
+    gateway::metrics::init_prometheus();
+
     // Route snapshot — warm before accepting traffic so /readiness returns 200.
     let snapshot = snapshot::GatewaySnapshot::new(
         db_pool.clone(),

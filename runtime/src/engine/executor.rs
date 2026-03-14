@@ -97,7 +97,7 @@ pub async fn op_queue_push(
     #[string] function_name: String,
     #[serde]  payload:       serde_json::Value,
     #[serde]  opts:          QueuePushOpts,
-    #[serde]  queue_ctx_override: Option<serde_json::Value>,
+    #[serde]  _queue_ctx_override: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, std::io::Error> {
     // Get dispatch traits from OpState (injected at worker creation)
     let (api, queue) = {
@@ -321,6 +321,25 @@ pub async fn op_http_fetch(
         ));
     }
 
+    // Extract the host once — used for both the allow-list check and circuit breaker.
+    let host = url.parse::<reqwest::Url>()
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+        .unwrap_or_default();
+
+    // ── Circuit breaker check ─────────────────────────────────────────────
+    if !host.is_empty() {
+        if let Some(retry_after) = crate::engine::circuit_breaker::registry().check(&host) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!(
+                    "fetch blocked: circuit open for host '{}', retry after {}s",
+                    host, retry_after,
+                ),
+            ));
+        }
+    }
+
     let (client, allowed_hosts) = {
         let s = state.borrow();
         if let Some(ref _ctx) = http_ctx_override {
@@ -339,10 +358,6 @@ pub async fn op_http_fetch(
 
     // Host allow-list check (if configured)
     if !allowed_hosts.is_empty() && !allowed_hosts.contains(&"*".to_string()) {
-        let host = url.parse::<reqwest::Url>()
-            .ok()
-            .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
-            .unwrap_or_default();
         if !allowed_hosts.iter().any(|a| a.to_ascii_lowercase() == host) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -387,10 +402,30 @@ pub async fn op_http_fetch(
         }
     }
 
-    let resp = req.send().await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            // Connection-level failure — count as a failure against the circuit.
+            if !host.is_empty() {
+                crate::engine::circuit_breaker::registry().record_failure(&host);
+            }
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
+        }
+    };
 
     let status = resp.status().as_u16();
+
+    // ── Circuit breaker bookkeeping ───────────────────────────────────────
+    // HTTP 5xx responses are treated as failures; 1xx–4xx are not (the server
+    // responded successfully even if the request was rejected).
+    if !host.is_empty() {
+        if status >= 500 {
+            crate::engine::circuit_breaker::registry().record_failure(&host);
+        } else {
+            crate::engine::circuit_breaker::registry().record_success(&host);
+        }
+    }
+
     let resp_headers: serde_json::Value = {
         let mut map = serde_json::Map::new();
         for (k, v) in resp.headers().iter() {
@@ -938,7 +973,7 @@ pub async fn execute_with_runtime(
     secrets:        HashMap<String, String>,
     payload:        serde_json::Value,
     execution_seed: i64,
-    queue_ctx:      QueueContext,
+    _queue_ctx:      QueueContext,
     timeout_secs:   u64,
 ) -> Result<ExecutionResult, String> {
     // ── Per-request OpState injection ─────────────────────────────────────────

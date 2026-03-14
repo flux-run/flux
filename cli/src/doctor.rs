@@ -50,7 +50,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use colored::Colorize;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::Value;
 

@@ -108,15 +108,12 @@ pub async fn update_gateway_route(
     Json(payload): Json<UpdateRoutePayload>,
 ) -> ApiResult<RouteRow> {
     // Check ownership
-    #[derive(sqlx::FromRow)]
-    struct RouteId { id: Uuid }
-    let exists = sqlx::query_as::<_, RouteId>("SELECT id FROM routes WHERE id = $1")
+    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM routes WHERE id = $1)")
         .bind(id)
-        .fetch_optional(&pool)
+        .fetch_one(&pool)
         .await
         .map_err(db_err)?;
-    
-    if exists.is_none() {
+    if !exists {
         return Err(ApiError::not_found("route_not_found"));
     }
 

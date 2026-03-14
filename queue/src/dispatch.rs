@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use serde_json::Value;
 use uuid::Uuid;
-use job_contract::dispatch::{ApiDispatch, ExecuteRequest, ExecuteResponse, RuntimeDispatch};
+use job_contract::dispatch::ApiDispatch;
 
 /// HTTP implementation of [`ApiDispatch`] for the queue standalone binary.
 ///

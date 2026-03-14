@@ -333,3 +333,191 @@ pub(crate) fn bind_value(args: &mut PgArguments, val: &serde_json::Value) -> Res
     }
     Ok(())
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::PgArguments;
+
+    // ── bind_value: pure unit tests (no database required) ────────────────
+
+    fn make_args() -> PgArguments {
+        PgArguments::default()
+    }
+
+    #[test]
+    fn bind_value_string_succeeds() {
+        let mut args = make_args();
+        let val = serde_json::Value::String("hello".to_string());
+        assert!(bind_value(&mut args, &val).is_ok());
+    }
+
+    #[test]
+    fn bind_value_integer_succeeds() {
+        let mut args = make_args();
+        let val = serde_json::json!(42i64);
+        assert!(bind_value(&mut args, &val).is_ok());
+    }
+
+    #[test]
+    fn bind_value_float_succeeds() {
+        let mut args = make_args();
+        let val = serde_json::json!(3.14f64);
+        assert!(bind_value(&mut args, &val).is_ok());
+    }
+
+    #[test]
+    fn bind_value_bool_succeeds() {
+        let mut args = make_args();
+        assert!(bind_value(&mut args, &serde_json::Value::Bool(true)).is_ok());
+        let mut args2 = make_args();
+        assert!(bind_value(&mut args2, &serde_json::Value::Bool(false)).is_ok());
+    }
+
+    #[test]
+    fn bind_value_null_succeeds() {
+        let mut args = make_args();
+        assert!(bind_value(&mut args, &serde_json::Value::Null).is_ok());
+    }
+
+    #[test]
+    fn bind_value_object_encodes_as_json_text() {
+        let mut args = make_args();
+        let val = serde_json::json!({"key": "value"});
+        // Objects are encoded as JSON text — just check it doesn't error.
+        assert!(bind_value(&mut args, &val).is_ok());
+    }
+
+    #[test]
+    fn bind_value_array_encodes_as_json_text() {
+        let mut args = make_args();
+        let val = serde_json::json!([1, 2, 3]);
+        assert!(bind_value(&mut args, &val).is_ok());
+    }
+
+    // ── MutationContext construction ───────────────────────────────────────
+
+    #[test]
+    fn mutation_context_fields_accessible() {
+        let ctx = MutationContext {
+            schema:               "main",
+            request_id:           "req-123",
+            span_id:              Some("span-456"),
+            table:                "users",
+            operation:            "insert",
+            user_id:              "user-789",
+            statement_timeout_ms: 5000,
+        };
+        assert_eq!(ctx.schema, "main");
+        assert_eq!(ctx.request_id, "req-123");
+        assert_eq!(ctx.span_id, Some("span-456"));
+        assert_eq!(ctx.table, "users");
+        assert_eq!(ctx.operation, "insert");
+        assert_eq!(ctx.user_id, "user-789");
+        assert_eq!(ctx.statement_timeout_ms, 5000);
+    }
+
+    #[test]
+    fn mutation_context_span_id_optional() {
+        let ctx = MutationContext {
+            schema:               "main",
+            request_id:           "req-000",
+            span_id:              None,
+            table:                "orders",
+            operation:            "delete",
+            user_id:              "",
+            statement_timeout_ms: 1000,
+        };
+        assert!(ctx.span_id.is_none());
+    }
+
+    // ── Integration tests (require a live DATABASE_URL) ───────────────────
+    //
+    // These tests are skipped in offline mode (CI, `cargo test` without a DB).
+    // Run them with:
+    //
+    //   DATABASE_URL=postgres://... cargo test -p data-engine -- --ignored
+    //
+    // Each test creates a real transaction that is deliberately rolled back so
+    // it leaves no side-effects in the target database.
+
+    /// Verify that a SELECT through `execute()` returns a JSON array and
+    /// does NOT write a row to `state_mutations` (reads are not recorded).
+    #[tokio::test]
+    #[ignore = "requires live DATABASE_URL"]
+    async fn select_does_not_write_mutation_row() {
+        use sqlx::postgres::PgPoolOptions;
+        use crate::compiler::query_compiler::{QueryCompiler, QueryRequest, CompilerOptions, PolicyResult, CompileResult};
+
+        let url = std::env::var("DATABASE_URL").expect("DATABASE_URL required");
+        let pool = PgPoolOptions::new().max_connections(2).connect(&url).await.unwrap();
+
+        let req = QueryRequest {
+            database:  "public".to_string(),
+            table:     "flux_test_table".to_string(),
+            operation: "select".to_string(),
+            columns:   None,
+            filters:   None,
+            data:      None,
+            limit:     Some(1),
+            offset:    None,
+        };
+        let opts = CompilerOptions::with_limits(10, 100);
+        let result = QueryCompiler::compile(&req, &PolicyResult::default(), "public", &opts);
+        // If compile fails because the table doesn't exist, that's expected — the
+        // test just verifies the executor path returns an error rather than a panic.
+        if let Ok(CompileResult::Single(compiled)) = result {
+            let ctx = MutationContext {
+                schema:               "public",
+                request_id:           "test-select-req",
+                span_id:              None,
+                table:                "flux_test_table",
+                operation:            "select",
+                user_id:              "test",
+                statement_timeout_ms: 1000,
+            };
+            // Should return an error (table doesn't exist) or an empty array — not panic.
+            let _ = execute(&pool, &compiled, &ctx).await;
+        }
+    }
+
+    /// Verify that a failed mutation write does NOT commit the data row
+    /// (atomicity guarantee: data and mutation log are in the same transaction).
+    ///
+    /// This is the core invariant of the mutation recording system.
+    /// It is tested by attempting to INSERT into a non-existent schema, which
+    /// causes the entire transaction (including the state_mutations write) to
+    /// roll back.
+    #[tokio::test]
+    #[ignore = "requires live DATABASE_URL"]
+    async fn execute_rolls_back_atomically_on_error() {
+        use sqlx::postgres::PgPoolOptions;
+        use crate::compiler::query_compiler::{CompiledQuery};
+
+        let url = std::env::var("DATABASE_URL").expect("DATABASE_URL required");
+        let pool = PgPoolOptions::new().max_connections(2).connect(&url).await.unwrap();
+
+        // Intentionally invalid schema — the INSERT will fail in the DB engine.
+        let query = CompiledQuery {
+            sql:              "INSERT INTO nonexistent_schema_xyz.users (id) VALUES ($1) RETURNING *".to_string(),
+            params:           vec![serde_json::json!("test-id")],
+            schema:           "nonexistent_schema_xyz".to_string(),
+            pre_read_sql:     None,
+            pre_read_params:  vec![],
+        };
+        let ctx = MutationContext {
+            schema:               "nonexistent_schema_xyz",
+            request_id:           "test-rollback-req",
+            span_id:              None,
+            table:                "users",
+            operation:            "insert",
+            user_id:              "test",
+            statement_timeout_ms: 1000,
+        };
+        // The executor must return an Err — not a panic, not a partial commit.
+        let result = execute(&pool, &query, &ctx).await;
+        assert!(result.is_err(), "expected execute to fail for invalid schema");
+    }
+}

@@ -129,7 +129,7 @@ impl IsolatePool {
         secrets:        HashMap<String, String>,
         payload:        serde_json::Value,
         execution_seed: i64,
-        queue_ctx:      QueueContext,
+        _queue_ctx:      QueueContext,
         db_ctx:         DbContext,
         bundle_key:     Option<String>,
     ) -> Result<ExecutionResult, String> {

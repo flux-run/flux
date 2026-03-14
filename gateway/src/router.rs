@@ -62,9 +62,10 @@ fn build_cors() -> CorsLayer {
 
 pub fn create_router(state: SharedState) -> Router {
     Router::new()
-        .route("/health",    get(crate::handlers::health::handle))
-        .route("/readiness", get(crate::handlers::readiness::handle))
-        .route("/{*path}",   any(crate::handlers::dispatch::handle))
+        .route("/health",             get(crate::handlers::health::handle))
+        .route("/readiness",          get(crate::handlers::readiness::handle))
+        .route("/internal/metrics",   get(crate::metrics::prometheus_handler))
+        .route("/{*path}",            any(crate::handlers::dispatch::handle))
         .layer(middleware::from_fn_with_state(state.clone(), crate::metrics::record_metrics))
         .layer(build_cors())
         .with_state(state)

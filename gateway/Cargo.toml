@@ -36,6 +36,8 @@ sha2 = "0.10"
 bytes = "1"
 base64 = "0.22"
 futures = "0.3"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }

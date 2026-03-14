@@ -37,7 +37,7 @@ pub async fn execute(
     pool:          PgPool,
     api:           Arc<dyn ApiDispatch>,
     runtime:       Arc<dyn RuntimeDispatch>,
-    service_token: String,
+    _service_token: String,
     job:           Job,
 ) {
     info!(job_id = %job.id, function_id = %job.function_id, "job started");

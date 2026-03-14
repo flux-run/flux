@@ -260,7 +260,7 @@ pub async fn list_project_logs(
 
     let rows = q.fetch_all(pool).await.map_err(|_| db_err())?;
 
-    let mut logs: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+    let logs: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
         "id":         r.id,
         "source":     r.source,
         "resource":   r.resource_id,

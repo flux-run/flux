@@ -68,7 +68,7 @@ impl<'a> BundleResolver<'a> {
     pub async fn cold_fetch(
         &self,
         function_id: &str,
-        tracer:      &TraceEmitter,
+        _tracer:     &TraceEmitter,
     ) -> Result<ResolvedBundle, Response> {
         // Fetch bundle metadata via the ApiDispatch trait (HTTP in multi-process
         // mode, direct call in single-binary mode).  The dispatch impl already

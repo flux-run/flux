@@ -54,6 +54,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load .env if present (silently ignored in production).
     dotenvy::dotenv().ok();
 
+    // Install the Prometheus metrics recorder once at startup.
+    // The scrape endpoint /internal/metrics is registered in gateway::create_router.
+    gateway::metrics::init_prometheus();
+
     // ── Config ────────────────────────────────────────────────────────────
     let port = std::env::var("PORT")
         .unwrap_or_else(|_| "4000".to_string())

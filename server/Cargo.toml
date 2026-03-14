@@ -45,6 +45,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Async trait
 async-trait   = "0.1"
 
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
+
 # HTTP client (for inter-service calls)
 reqwest       = { version = "0.13", features = ["json", "rustls"], default-features = false }
 
