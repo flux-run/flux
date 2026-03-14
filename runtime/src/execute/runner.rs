@@ -264,3 +264,313 @@ pub fn allowed_wasm_http_hosts() -> Vec<String> {
         .filter(|s| !s.is_empty())
         .collect()
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+
+    use async_trait::async_trait;
+    use axum::http::StatusCode;
+    use serde_json::{json, Value};
+    use uuid::Uuid;
+
+    use job_contract::dispatch::ApiDispatch;
+    use crate::engine::pool::IsolatePool;
+    use crate::engine::wasm_pool::WasmPool;
+    use crate::execute::bundle::ResolvedBundle;
+    use crate::execute::types::InvocationCtx;
+    use crate::schema::cache::{FunctionSchema, SchemaCache};
+    use crate::trace::emitter::TraceEmitter;
+
+    // ── Test doubles ─────────────────────────────────────────────────────────
+
+    /// No-op ApiDispatch — fire-and-forget spans are discarded.
+    struct NullApi;
+
+    #[async_trait]
+    impl ApiDispatch for NullApi {
+        async fn get_bundle(&self, _: &str) -> Result<Value, String> {
+            Err("not used in runner tests".into())
+        }
+        async fn write_log(&self, _: Value) -> Result<(), String> {
+            Ok(())
+        }
+        async fn get_secrets(&self, _: Option<Uuid>) -> Result<HashMap<String, String>, String> {
+            Ok(HashMap::new())
+        }
+    }
+
+    fn null_tracer() -> TraceEmitter {
+        TraceEmitter::new(Arc::new(NullApi), "test_fn".into(), None, None, None)
+    }
+
+    fn ctx(function_id: &str) -> InvocationCtx {
+        InvocationCtx {
+            function_id:    function_id.to_string(),
+            project_id:     None,
+            payload:        json!({"name": "flux"}),
+            execution_seed: 1,
+            request_id:     None,
+            parent_span_id: None,
+        }
+    }
+
+    fn runner<'a>(
+        isolate_pool: &'a IsolatePool,
+        wasm_pool:    &'a WasmPool,
+        schema_cache: &'a SchemaCache,
+        http_client:  &'a reqwest::Client,
+    ) -> ExecutionRunner<'a> {
+        ExecutionRunner {
+            isolate_pool,
+            wasm_pool,
+            schema_cache,
+            http_client,
+            wasm_http_hosts: vec![],
+            queue_url:       "http://localhost:8084",
+            api_url:         "http://localhost:8080",
+            service_token:   "stub_token",
+            data_engine_url: "http://localhost:8085",
+            database:        String::new(),
+            runtime_url:     "http://localhost:8083",
+        }
+    }
+
+    // ── project_schema_name ───────────────────────────────────────────────────
+
+    #[test]
+    fn project_schema_name_with_uuid() {
+        let id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        assert_eq!(
+            project_schema_name(Some(id)),
+            "project_550e8400e29b41d4a716446655440000"
+        );
+    }
+
+    #[test]
+    fn project_schema_name_none_returns_empty() {
+        assert_eq!(project_schema_name(None), "");
+    }
+
+    // ── allowed_wasm_http_hosts ───────────────────────────────────────────────
+
+    #[test]
+    fn wasm_http_hosts_unset_returns_empty() {
+        // Guard against env bleed from other tests.
+        unsafe { std::env::remove_var("WASM_HTTP_ALLOWED_HOSTS"); }
+        assert!(allowed_wasm_http_hosts().is_empty());
+    }
+
+    #[test]
+    fn wasm_http_hosts_parses_csv() {
+        unsafe { std::env::set_var("WASM_HTTP_ALLOWED_HOSTS", "api.example.com, hooks.slack.com , "); }
+        let hosts = allowed_wasm_http_hosts();
+        assert_eq!(hosts, vec!["api.example.com", "hooks.slack.com"]);
+        unsafe { std::env::remove_var("WASM_HTTP_ALLOWED_HOSTS"); }
+    }
+
+    #[test]
+    fn wasm_http_hosts_wildcard_passthrough() {
+        unsafe { std::env::set_var("WASM_HTTP_ALLOWED_HOSTS", "*"); }
+        let hosts = allowed_wasm_http_hosts();
+        assert_eq!(hosts, vec!["*"]);
+        unsafe { std::env::remove_var("WASM_HTTP_ALLOWED_HOSTS"); }
+    }
+
+    // ── Schema validation (run() short-circuits before pool is touched) ───────
+
+    #[tokio::test]
+    async fn schema_validation_failure_returns_400() {
+        let schema_cache = SchemaCache::new(10);
+        schema_cache.insert("validate_fn".into(), FunctionSchema {
+            input: Some(json!({
+                "type": "object",
+                "required": ["user_id"],
+                "properties": { "user_id": { "type": "string" } }
+            })),
+            output: None,
+        });
+
+        let isolate_pool = IsolatePool::new(1, 5);
+        let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
+        let client = reqwest::Client::new();
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+
+        let mut c = ctx("validate_fn");
+        c.payload = json!({"wrong_key": 123}); // missing required "user_id"
+
+        let (status, body) = r.run(
+            ResolvedBundle::Deno { code: "".into() },
+            HashMap::new(),
+            &c,
+            &null_tracer(),
+            Instant::now(),
+        ).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "INPUT_VALIDATION_ERROR");
+        assert!(body["violations"].is_array());
+    }
+
+    #[tokio::test]
+    async fn no_schema_skips_validation() {
+        // Empty cache → validation step is bypassed; pool will error with bad code,
+        // but the point is we get a 500 (execution error), not a 400 (schema error).
+        let schema_cache = SchemaCache::new(10);
+        let isolate_pool = IsolatePool::new(1, 5);
+        let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
+        let client = reqwest::Client::new();
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+
+        let (status, _body) = r.run(
+            ResolvedBundle::Deno { code: "throw new Error('boom')".into() },
+            HashMap::new(),
+            &ctx("no_schema_fn"),
+            &null_tracer(),
+            Instant::now(),
+        ).await;
+
+        // Not 400 — schema wasn't the problem.
+        assert_ne!(status, StatusCode::BAD_REQUEST);
+    }
+
+    // ── execution_error: JSON error envelope parsing ──────────────────────────
+
+    #[tokio::test]
+    async fn json_error_code_extracted_from_pool_error() {
+        // Deno throws structured errors as JSON strings, e.g.:
+        //   {"code":"NOT_FOUND","message":"user not found"}
+        // The runner must parse code/message and preserve them.
+        let schema_cache = SchemaCache::new(10);
+        let isolate_pool = IsolatePool::new(1, 5);
+        let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
+        let client = reqwest::Client::new();
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+
+        // Code that throws a structured JSON error.
+        let code = r#"__fluxbase_fn = async (ctx) => {
+            const err = {code: "NOT_FOUND", message: "user not found"};
+            throw new Error(JSON.stringify(err));
+        };"#.to_string();
+
+        let (status, body) = r.run(
+            ResolvedBundle::Deno { code },
+            HashMap::new(),
+            &ctx("json_error_fn"),
+            &null_tracer(),
+            Instant::now(),
+        ).await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        // The error field should be present.
+        assert!(body.get("error").is_some() || body.get("message").is_some(),
+            "expected error body, got: {}", body);
+    }
+
+    #[tokio::test]
+    async fn input_validation_error_code_in_pool_error_returns_400() {
+        // If the pool itself returns INPUT_VALIDATION_ERROR (unlikely but possible),
+        // the runner must map it to 400.
+        let schema_cache = SchemaCache::new(10);
+        let isolate_pool = IsolatePool::new(1, 5);
+        let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
+        let client = reqwest::Client::new();
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+
+        // Code that throws INPUT_VALIDATION_ERROR — runner must map it to 400.
+        let code = r#"__fluxbase_fn = async (ctx) => {
+            const err = {code: "INPUT_VALIDATION_ERROR", message: "bad input from user code"};
+            throw new Error(JSON.stringify(err));
+        };"#.to_string();
+
+        let (status, body) = r.run(
+            ResolvedBundle::Deno { code },
+            HashMap::new(),
+            &ctx("input_val_fn"),
+            &null_tracer(),
+            Instant::now(),
+        ).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST,
+            "INPUT_VALIDATION_ERROR must map to 400, body: {}", body);
+        assert_eq!(body["error"], "INPUT_VALIDATION_ERROR");
+    }
+
+    // ── Successful Deno execution round-trip ──────────────────────────────────
+
+    #[tokio::test]
+    async fn deno_success_returns_200_with_result() {
+        let schema_cache = SchemaCache::new(10);
+        let isolate_pool = IsolatePool::new(1, 10);
+        let wasm_pool    = WasmPool::new(1, 1_000_000, 10);
+        let client = reqwest::Client::new();
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+
+        let code = r#"__fluxbase_fn = async (ctx) => ({ ok: true, echo: ctx.payload.name });"#.to_string();
+
+        let (status, body) = r.run(
+            ResolvedBundle::Deno { code },
+            HashMap::new(),
+            &ctx("echo_fn"),
+            &null_tracer(),
+            Instant::now(),
+        ).await;
+
+        assert_eq!(status, StatusCode::OK, "body: {}", body);
+        assert_eq!(body["result"]["ok"], true);
+        assert!(body["duration_ms"].is_number());
+    }
+
+    // ── duration_ms is present on success ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn successful_run_includes_duration_ms() {
+        let schema_cache = SchemaCache::new(10);
+        let isolate_pool = IsolatePool::new(1, 10);
+        let wasm_pool    = WasmPool::new(1, 1_000_000, 10);
+        let client = reqwest::Client::new();
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+
+        let (status, body) = r.run(
+            ResolvedBundle::Deno { code: r#"__fluxbase_fn = async (ctx) => 42;"#.into() },
+            HashMap::new(),
+            &ctx("duration_fn"),
+            &null_tracer(),
+            Instant::now(),
+        ).await;
+
+        assert_eq!(status, StatusCode::OK, "body: {}", body);
+        assert!(body["duration_ms"].as_u64().is_some(), "duration_ms must be a number");
+    }
+
+    // ── run_response wraps into HTTP response ─────────────────────────────────
+
+    #[tokio::test]
+    async fn run_response_returns_axum_response() {
+        use axum::body::to_bytes;
+
+        let schema_cache = SchemaCache::new(10);
+        let isolate_pool = IsolatePool::new(1, 10);
+        let wasm_pool    = WasmPool::new(1, 1_000_000, 10);
+        let client = reqwest::Client::new();
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+
+        let resp = r.run_response(
+            ResolvedBundle::Deno { code: r#"__fluxbase_fn = async (ctx) => ({ v: 1 });"#.into() },
+            HashMap::new(),
+            &ctx("wrap_fn"),
+            &null_tracer(),
+            Instant::now(),
+        ).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["result"]["v"], 1);
+    }
+}
