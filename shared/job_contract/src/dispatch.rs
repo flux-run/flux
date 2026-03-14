@@ -98,7 +98,7 @@ pub trait QueueDispatch: Send + Sync {
         function_id: &str,
         project_id:  Option<Uuid>,
         payload:     Value,
-        delay_ms:    Option<u64>,
+        delay_seconds: Option<u64>,
         idempotency_key: Option<String>,
     ) -> Result<(), String>;
 }

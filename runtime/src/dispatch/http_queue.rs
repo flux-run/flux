@@ -24,7 +24,7 @@ impl QueueDispatch for HttpQueueDispatch {
         function_id: &str,
         project_id:  Option<Uuid>,
         payload:     Value,
-        delay_ms:    Option<u64>,
+        delay_seconds: Option<u64>,
         idempotency_key: Option<String>,
     ) -> Result<(), String> {
         let url = format!("{}/jobs", self.queue_url.trim_end_matches('/'));
@@ -36,8 +36,8 @@ impl QueueDispatch for HttpQueueDispatch {
         if let Some(pid) = project_id {
             body["project_id"] = serde_json::json!(pid.to_string());
         }
-        if let Some(d) = delay_ms {
-            body["delay_ms"] = serde_json::json!(d);
+        if let Some(d) = delay_seconds {
+            body["delay_seconds"] = serde_json::json!(d);
         }
         if let Some(k) = idempotency_key {
             body["idempotency_key"] = serde_json::json!(k);

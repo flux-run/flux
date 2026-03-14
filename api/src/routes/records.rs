@@ -52,7 +52,8 @@ pub struct RecordsQuery {
 
 #[derive(Deserialize)]
 pub struct PruneQuery {
-    pub before: Option<String>,
+    pub before:  Option<String>,
+    pub confirm: Option<String>,
 }
 
 // ── Row type for export ───────────────────────────────────────────────────────
@@ -207,6 +208,12 @@ pub async fn records_prune(
     Extension(ctx): Extension<RequestContext>,
     Query(params): Query<PruneQuery>,
 ) -> ApiResult<serde_json::Value> {
+    if params.confirm.as_deref() != Some("true") {
+        return Err(ApiError::bad_request(
+            "Destructive operation requires ?confirm=true",
+        ));
+    }
+
     let before_ts = params.before.as_deref().and_then(parse_age);
 
     if before_ts.is_none() {
@@ -227,6 +234,12 @@ pub async fn records_prune(
 
     let result = qb.build().execute(&pool).await.map_err(ApiError::from)?;
     let deleted = result.rows_affected();
+
+    tracing::warn!(
+        project_id = %ctx.project_id,
+        deleted,
+        "platform_logs pruned",
+    );
 
     Ok(ApiResponse::new(serde_json::json!({ "deleted": deleted })))
 }

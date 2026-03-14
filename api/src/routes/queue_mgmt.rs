@@ -55,7 +55,7 @@ pub struct CreateQueuePayload {
 pub struct PublishMessagePayload {
     pub function_id: Uuid,
     pub payload: Option<Value>,
-    pub delay_ms: Option<i64>,
+    pub delay_seconds: Option<i64>,
 }
 
 pub async fn list_queues(
@@ -161,8 +161,8 @@ pub async fn publish_message(
     Json(payload): Json<PublishMessagePayload>,
 ) -> ApiResult<serde_json::Value> {
     let run_at = payload
-        .delay_ms
-        .map(|ms| chrono::Utc::now() + chrono::Duration::milliseconds(ms))
+        .delay_seconds
+        .map(|secs| chrono::Utc::now() + chrono::Duration::seconds(secs))
         .unwrap_or_else(chrono::Utc::now);
 
     let run_at_naive = run_at.naive_utc();

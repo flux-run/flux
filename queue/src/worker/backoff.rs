@@ -2,20 +2,24 @@
 //!
 //! The base formula is `5s × 2^attempts`, then ±25% full jitter is applied
 //! to prevent thundering-herd storms when many jobs fail simultaneously.
+//! Attempts are capped at 10 (base ~85 min) to keep retry windows practical.
 //!
-//! | Attempt | Base  | Jitter range        |
-//! |---------|-------|---------------------|
-//! | 1       | 5 s   | 3.75 s – 6.25 s     |
-//! | 2       | 10 s  | 7.5 s  – 12.5 s     |
-//! | 3       | 20 s  | 15 s   – 25 s        |
-//! | 4       | 40 s  | 30 s   – 50 s        |
-//! | 5       | 80 s  | 60 s   – 100 s       |
+//! | Attempt | Base    | Jitter range            |
+//! |---------|---------|-------------------------|
+//! | 1       | 10 s    | 7.5 s  – 12.5 s         |
+//! | 2       | 20 s    | 15 s   – 25 s            |
+//! | 3       | 40 s    | 30 s   – 50 s            |
+//! | 5       | 160 s   | 120 s  – 200 s           |
+//! | 8       | 1280 s  | 960 s  – 1600 s          |
+//! | 10      | 5120 s  | 3840 s – 6400 s  (~85 min)|
 use rand::Rng;
 use std::time::Duration;
 
 /// Exponential backoff with ±25% jitter: base is `5s × 2^attempts`.
 pub fn retry_delay(attempts: u32) -> Duration {
-    let base_secs = 5.0 * (1u64 << attempts.min(20)) as f64;
+    // Cap at attempt 10 — base 5s × 2^10 = 5120s (~85 min max before jitter).
+    // Capping at 20 would give ~60 days which is impractical for any retry policy.
+    let base_secs = 5.0 * (1u64 << attempts.min(10)) as f64;
     // ±25% full jitter — scale factor in [0.75, 1.25)
     let jitter_factor = 1.0 + rand::thread_rng().gen_range(-0.25_f64..0.25_f64);
     let final_secs = (base_secs * jitter_factor).max(1.0); // never less than 1s
@@ -66,8 +70,14 @@ mod tests {
 
     #[test]
     fn retry_delay_does_not_overflow_on_large_attempts() {
-        // attempts > 20 should be capped (min() on the shift)
-        let d = retry_delay(100);
-        assert!(d > Duration::from_secs(0));
+        // attempts > 10 are capped — delay is bounded to ~85 min
+        let d_10 = retry_delay(10);
+        let d_100 = retry_delay(100);
+        let d_1000 = retry_delay(1000);
+        // All should be equal (same base after cap)
+        assert!(d_10 > Duration::from_secs(0));
+        // Large-attempt values must not exceed ~6400s (1.25 × 5120s)
+        assert!(d_100.as_secs() <= 6_400, "cap failed: {:?}", d_100);
+        assert!(d_1000.as_secs() <= 6_400, "cap failed: {:?}", d_1000);
     }
 }
