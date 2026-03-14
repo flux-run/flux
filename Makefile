@@ -1,4 +1,4 @@
-.PHONY: dev api dashboard build migrate install clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types
+.PHONY: dev api dashboard server build migrate install clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API + dashboard in parallel, printing labelled output.
@@ -10,8 +10,14 @@ dev:
 api:
 	cd api && SQLX_OFFLINE=true cargo run
 
+# Runs the Next.js dev server (hot-reload).
+# Use `cargo build -p server` to get the *production* static export baked in.
 dashboard:
 	cd dashboard && npm run dev
+
+# Monolith — builds dashboard static export then compiles the server binary.
+server:
+	SQLX_OFFLINE=true cargo build -p server
 
 # ── Build (production artefacts) ────────────────────────────────────────────
 # Builds all services using the new build script.
