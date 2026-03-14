@@ -12,8 +12,11 @@ use super::models::{Claims, CreateUserRequest, PlatformUser};
 // ── JWT secret ────────────────────────────────────────────────────────────────
 
 fn jwt_secret() -> String {
-    std::env::var("FLUX_JWT_SECRET")
-        .unwrap_or_else(|_| "flux-dev-jwt-secret-change-in-prod".to_string())
+    crate::middleware::require_secret(
+        "FLUX_JWT_SECRET",
+        "flux-dev-jwt-secret-change-in-prod",
+        "JWT signing secret (FLUX_JWT_SECRET)",
+    )
 }
 
 // ── Password helpers ──────────────────────────────────────────────────────────

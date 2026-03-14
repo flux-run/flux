@@ -17,8 +17,22 @@ impl std::fmt::Display for EncryptionError {
 
 // Ensure the secret key is 32 bytes for AES-256. If missing, panic at init.
 fn get_cipher() -> Result<Aes256Gcm, EncryptionError> {
-    let key_str = env::var("FLUXBASE_SECRET_KEY")
-        .unwrap_or_else(|_| "01234567890123456789012345678901".to_string());
+    let key_str = match env::var("FLUXBASE_SECRET_KEY") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            if env::var("FLUX_ENV").as_deref() == Ok("production") {
+                panic!(
+                    "[Flux] FLUXBASE_SECRET_KEY must be set in production. \
+                     Generate a 32-byte random key with: openssl rand -hex 16"
+                );
+            }
+            tracing::warn!(
+                "[Flux] FLUXBASE_SECRET_KEY not configured — using insecure default AES key. \
+                 Set FLUXBASE_SECRET_KEY (exactly 32 bytes) before deploying to production."
+            );
+            "01234567890123456789012345678901".to_string()
+        }
+    };
     
     let key_bytes = key_str.as_bytes();
     

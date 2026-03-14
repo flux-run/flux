@@ -57,7 +57,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("DATABASE_URL is required");
 
     let service_token = std::env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "dev-service-token".to_string());
+        .unwrap_or_else(|_| {
+            if std::env::var("FLUX_ENV").as_deref() == Ok("production") {
+                panic!(
+                    "[Flux] INTERNAL_SERVICE_TOKEN must be set in production. \
+                     The server cannot start without it."
+                );
+            }
+            tracing::warn!(
+                "[Flux] INTERNAL_SERVICE_TOKEN not set — using insecure default 'dev-service-token'. \
+                 Set INTERNAL_SERVICE_TOKEN in production."
+            );
+            "dev-service-token".to_string()
+        });
 
     let isolate_workers = std::env::var("ISOLATE_WORKERS")
         .unwrap_or_else(|_| "4".to_string())

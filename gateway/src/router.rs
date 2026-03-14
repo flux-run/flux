@@ -5,29 +5,80 @@
 //!   GET /readiness — readiness probe (503 until snapshot loaded)
 //!   ANY /{*path}   — function invocation
 use axum::{middleware, routing::{any, get}, Router};
-use tower_http::cors::{CorsLayer, Any};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use crate::state::SharedState;
 
-pub fn create_router(state: SharedState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+/// Build the CORS layer.
+///
+/// In production (`FLUX_ENV=production`), `CORS_ALLOWED_ORIGINS` **must** be
+/// set to a comma-separated list of allowed origins, e.g.:
+///
+///   CORS_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
+///
+/// In development (default), origins are unrestricted so local tooling works
+/// without configuration, and a warning is logged.
+fn build_cors() -> CorsLayer {
+    use tower_http::cors::Any;
 
+    let is_production = std::env::var("FLUX_ENV").as_deref() == Ok("production");
+    let configured = std::env::var("CORS_ALLOWED_ORIGINS").ok();
+
+    match configured {
+        Some(origins_str) => {
+            let origins: Vec<axum::http::HeaderValue> = origins_str
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| s.parse().ok())
+                .collect();
+
+            if origins.is_empty() {
+                if is_production {
+                    panic!("[Flux] CORS_ALLOWED_ORIGINS is set but contains no valid origins. \
+                            Cannot start in production with no allowed CORS origins.");
+                }
+                tracing::warn!("[Flux] CORS_ALLOWED_ORIGINS is empty or invalid — falling back to allow-all in dev mode.");
+                return CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
+            }
+
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(origins))
+                .allow_methods(Any)
+                .allow_headers(Any)
+        }
+        None => {
+            if is_production {
+                panic!("[Flux] CORS_ALLOWED_ORIGINS must be set in production. \
+                        Example: CORS_ALLOWED_ORIGINS=https://your-app.example.com");
+            }
+            tracing::warn!(
+                "[Flux] CORS_ALLOWED_ORIGINS not set — allowing all origins in dev mode. \
+                 Set CORS_ALLOWED_ORIGINS in production."
+            );
+            CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any)
+        }
+    }
+}
+
+pub fn create_router(state: SharedState) -> Router {
     Router::new()
         .route("/health",    get(crate::handlers::health::handle))
         .route("/readiness", get(crate::handlers::readiness::handle))
         .route("/{*path}",   any(crate::handlers::dispatch::handle))
         .layer(middleware::from_fn_with_state(state.clone(), crate::metrics::record_metrics))
-        .layer(cors)
+        .layer(build_cors())
         .with_state(state)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
+
+    // Serializes tests that read/write CORS env vars to prevent races between
+    // cors_headers_on_health_checks and cors_restricted_to_configured_origin.
+    static CORS_ENV_LOCK: Mutex<()> = Mutex::new(());
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
@@ -101,7 +152,12 @@ mod tests {
 
     #[tokio::test]
     async fn cors_headers_on_health_checks() {
-        // Test that OPTIONS request handles cors headers properly.
+        // Serialize against cors_restricted_to_configured_origin to avoid env-var races.
+        let _lock = CORS_ENV_LOCK.lock().unwrap();
+        // In dev mode (no CORS_ALLOWED_ORIGINS), the gateway allows all origins.
+        unsafe { std::env::remove_var("CORS_ALLOWED_ORIGINS"); }
+        unsafe { std::env::remove_var("FLUX_ENV"); }
+
         let response = create_router(state())
             .oneshot(
                 Request::builder()
@@ -115,14 +171,45 @@ mod tests {
             .await
             .unwrap();
 
-        // 200 OK because tower-http cors intercepts OPTIONS requests to any mapped route.
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get("access-control-allow-origin").unwrap(),
             "*"
         );
         let methods = response.headers().get("access-control-allow-methods").unwrap();
-        // Since Any allows all methods, it replies with access-control-allow-methods: *
         assert_eq!(methods, "*");
+    }
+
+    #[tokio::test]
+    async fn cors_restricted_to_configured_origin() {
+        // Serialize against cors_headers_on_health_checks to avoid env-var races.
+        let _lock = CORS_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("FLUX_ENV");
+            std::env::set_var("CORS_ALLOWED_ORIGINS", "https://app.example.com");
+        }
+
+        let response = create_router(state())
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/health")
+                    .header("Origin", "https://app.example.com")
+                    .header("Access-Control-Request-Method", "GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let allow_origin = response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert_eq!(allow_origin, "https://app.example.com");
+
+        unsafe { std::env::remove_var("CORS_ALLOWED_ORIGINS"); }
     }
 }

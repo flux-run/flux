@@ -16,8 +16,11 @@ use axum::{
 };
 
 pub async fn require_service_token(req: Request, next: Next) -> Response {
-    let expected = std::env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "dev-service-token".to_string());
+    let expected = crate::middleware::require_secret(
+        "INTERNAL_SERVICE_TOKEN",
+        "dev-service-token",
+        "Internal service token (INTERNAL_SERVICE_TOKEN)",
+    );
 
     let provided = req
         .headers()

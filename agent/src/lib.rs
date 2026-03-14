@@ -47,7 +47,7 @@ pub async fn run(
     project_id: Uuid,
     secrets:    &HashMap<String, String>,
 ) -> Result<serde_json::Value, AgentError> {
-    let agent = registry::get_agent(&state.pool, name).await
+    let agent = registry::get_agent(&state.pool, name, project_id).await
         .map_err(|e| AgentError::Registry(e.to_string()))?
         .ok_or_else(|| AgentError::NotFound(name.to_string()))?;
 

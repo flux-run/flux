@@ -23,7 +23,19 @@ pub fn load() -> Config {
             .unwrap_or_else(|_| "http://localhost:8083".to_string()),
         service_token: std::env::var("INTERNAL_SERVICE_TOKEN")
             .or_else(|_| std::env::var("SERVICE_TOKEN"))
-            .unwrap_or_else(|_| "stub_token".to_string()),
+            .unwrap_or_else(|_| {
+                if std::env::var("FLUX_ENV").as_deref() == Ok("production") {
+                    panic!(
+                        "[Flux] INTERNAL_SERVICE_TOKEN must be set in production. \
+                         The queue service cannot start without it."
+                    );
+                }
+                tracing::warn!(
+                    "[Flux] INTERNAL_SERVICE_TOKEN not set — using insecure default 'stub_token'. \
+                     Set INTERNAL_SERVICE_TOKEN in production."
+                );
+                "stub_token".to_string()
+            }),
         port: std::env::var("PORT")
             .or_else(|_| std::env::var("QUEUE_PORT"))
             .unwrap_or_else(|_| "8084".to_string())

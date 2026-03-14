@@ -23,17 +23,20 @@ pub struct AgentSummary {
 
 /// Parse YAML, validate tool names exist in DB, then upsert the agent record.
 ///
+/// `project_id` scopes the agent to the calling project.
+///
 /// Returns the parsed definition so the caller can show a summary.
-pub async fn deploy_from_yaml(pool: &PgPool, raw_yaml: &str) -> Result<AgentDefinition, String> {
+pub async fn deploy_from_yaml(pool: &PgPool, raw_yaml: &str, project_id: Uuid) -> Result<AgentDefinition, String> {
     let agent = crate::schema::parse(raw_yaml)
         .map_err(|e| format!("yaml_parse: {}", e))?;
 
-    // Validate: all listed tools must exist as functions
+    // Validate: all listed tools must exist as functions in this project
     if !agent.tools.is_empty() {
         let existing: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM functions WHERE name = ANY($1)",
+            "SELECT name FROM functions WHERE name = ANY($1) AND project_id = $2",
         )
         .bind(&agent.tools)
+        .bind(project_id)
         .fetch_all(pool)
         .await
         .map_err(|e| format!("db: {}", e))?;
@@ -67,11 +70,11 @@ pub async fn deploy_from_yaml(pool: &PgPool, raw_yaml: &str) -> Result<AgentDefi
 
     sqlx::query(
         "INSERT INTO flux.agents
-             (name, model, system, tools, llm_url, llm_secret,
+             (project_id, name, model, system, tools, llm_url, llm_secret,
               max_turns, temperature, config, input_schema, output_schema,
               rules, content_sha)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-         ON CONFLICT (name) DO UPDATE SET
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         ON CONFLICT (project_id, name) DO UPDATE SET
              model        = EXCLUDED.model,
              system       = EXCLUDED.system,
              tools        = EXCLUDED.tools,
@@ -86,6 +89,7 @@ pub async fn deploy_from_yaml(pool: &PgPool, raw_yaml: &str) -> Result<AgentDefi
              content_sha  = EXCLUDED.content_sha,
              updated_at   = NOW()",
     )
+    .bind(project_id)
     .bind(&agent.name)
     .bind(&agent.model)
     .bind(&agent.system)
@@ -106,8 +110,8 @@ pub async fn deploy_from_yaml(pool: &PgPool, raw_yaml: &str) -> Result<AgentDefi
     Ok(agent)
 }
 
-/// Load a single agent by name.  Returns `None` if not found.
-pub async fn get_agent(pool: &PgPool, name: &str) -> Result<Option<AgentDefinition>, String> {
+/// Load a single agent by name, scoped to a project.  Returns `None` if not found.
+pub async fn get_agent(pool: &PgPool, name: &str, project_id: Uuid) -> Result<Option<AgentDefinition>, String> {
     #[derive(sqlx::FromRow)]
     struct Row {
         model:        String,
@@ -126,9 +130,10 @@ pub async fn get_agent(pool: &PgPool, name: &str) -> Result<Option<AgentDefiniti
     let row = sqlx::query_as::<_, Row>(
         "SELECT model, system, tools, llm_url, llm_secret, max_turns, temperature,
                 config, input_schema, output_schema, rules
-         FROM flux.agents WHERE name = $1 LIMIT 1",
+         FROM flux.agents WHERE name = $1 AND project_id = $2 LIMIT 1",
     )
     .bind(name)
+    .bind(project_id)
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("db: {}", e))?;
@@ -153,21 +158,23 @@ pub async fn get_agent(pool: &PgPool, name: &str) -> Result<Option<AgentDefiniti
     Ok(Some(agent))
 }
 
-/// List all deployed agents (summary only, no system prompt).
-pub async fn list_agents(pool: &PgPool) -> Result<Vec<AgentSummary>, String> {
+/// List all deployed agents for a project (summary only, no system prompt).
+pub async fn list_agents(pool: &PgPool, project_id: Uuid) -> Result<Vec<AgentSummary>, String> {
     sqlx::query_as::<_, AgentSummary>(
         "SELECT id, name, model, llm_url, content_sha, deployed_at, updated_at
-         FROM flux.agents ORDER BY name ASC",
+         FROM flux.agents WHERE project_id = $1 ORDER BY name ASC",
     )
+    .bind(project_id)
     .fetch_all(pool)
     .await
     .map_err(|e| format!("db: {}", e))
 }
 
-/// Delete an agent by name.  Returns `true` if a row was deleted.
-pub async fn delete_agent(pool: &PgPool, name: &str) -> Result<bool, String> {
-    let result = sqlx::query("DELETE FROM flux.agents WHERE name = $1")
+/// Delete an agent by name within a project.  Returns `true` if a row was deleted.
+pub async fn delete_agent(pool: &PgPool, name: &str, project_id: Uuid) -> Result<bool, String> {
+    let result = sqlx::query("DELETE FROM flux.agents WHERE name = $1 AND project_id = $2")
         .bind(name)
+        .bind(project_id)
         .execute(pool)
         .await
         .map_err(|e| format!("db: {}", e))?;

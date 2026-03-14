@@ -32,8 +32,7 @@ pub async fn agent_deploy(
     Extension(ctx): Extension<RequestContext>,
     body: String,
 ) -> ApiResult<serde_json::Value> {
-    let _ = ctx; // project-scoped auth already validated by middleware
-    let agent = agent::registry::deploy_from_yaml(&pool, &body)
+    let agent = agent::registry::deploy_from_yaml(&pool, &body, ctx.project_id)
         .await
         .map_err(ApiError::bad_request)?;
 
@@ -52,9 +51,9 @@ pub async fn agent_deploy(
 
 pub async fn agents_list(
     State(pool): State<PgPool>,
-    Extension(_ctx): Extension<RequestContext>,
+    Extension(ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    let agents = agent::registry::list_agents(&pool)
+    let agents = agent::registry::list_agents(&pool, ctx.project_id)
         .await
         .map_err(db_err)?;
 
@@ -69,10 +68,10 @@ pub async fn agents_list(
 
 pub async fn agent_get(
     State(pool): State<PgPool>,
-    Extension(_ctx): Extension<RequestContext>,
+    Extension(ctx): Extension<RequestContext>,
     Path(name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    let agent = agent::registry::get_agent(&pool, &name)
+    let agent = agent::registry::get_agent(&pool, &name, ctx.project_id)
         .await
         .map_err(db_err)?
         .ok_or_else(|| ApiError::not_found(format!("agent `{}` not found", name)))?;
@@ -84,10 +83,10 @@ pub async fn agent_get(
 
 pub async fn agent_delete(
     State(pool): State<PgPool>,
-    Extension(_ctx): Extension<RequestContext>,
+    Extension(ctx): Extension<RequestContext>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let deleted = agent::registry::delete_agent(&pool, &name)
+    let deleted = agent::registry::delete_agent(&pool, &name, ctx.project_id)
         .await
         .map_err(db_err)?;
 

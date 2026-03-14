@@ -22,8 +22,24 @@ pub async fn require_service_token(req: Request, next: Next) -> Response {
         return next.run(req).await;
     }
 
-    let expected = std::env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "fluxbase_secret_token".to_string());
+    let expected = {
+        match std::env::var("INTERNAL_SERVICE_TOKEN") {
+            Ok(v) if !v.is_empty() => v,
+            _ => {
+                if std::env::var("FLUX_ENV").as_deref() == Ok("production") {
+                    panic!(
+                        "[Flux] INTERNAL_SERVICE_TOKEN must be set in production. \
+                         The data-engine service cannot start without it."
+                    );
+                }
+                tracing::warn!(
+                    "[Flux] INTERNAL_SERVICE_TOKEN not set — using insecure default \
+                     'fluxbase_secret_token'. Set this env var in production."
+                );
+                "fluxbase_secret_token".to_string()
+            }
+        }
+    };
 
     let request_id = req
         .headers()

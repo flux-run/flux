@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use axum::{Router, routing::{post, get}};
+use axum::{Router, middleware, routing::{post, get}};
 use crate::state::AppState;
 
 pub fn routes(state: Arc<AppState>) -> Router {
@@ -23,6 +23,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
                 "build_time": std::env::var("BUILD_TIME").unwrap_or_else(|_| "unknown".to_string())
             }))
         }))
+        .layer(middleware::from_fn(crate::api::middleware::require_service_token))
         .with_state(state)
 }
 
