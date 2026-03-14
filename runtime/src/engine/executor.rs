@@ -1482,7 +1482,6 @@ mod tests {
     }
 
     // ── LogLine struct ────────────────────────────────────────────────────
-    #[allow(dead_code)] // marker to keep section header above
 
     #[test]
     fn log_line_serde_roundtrip() {

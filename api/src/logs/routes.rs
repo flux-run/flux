@@ -73,8 +73,7 @@ pub struct LogEntry {
     pub message:     String,
     // ── Legacy compat ─────────────────────────────────────────────────────
     pub function_id: Option<String>,
-    #[allow(dead_code)]
-    pub timestamp:   Option<String>,
+
 }
 
 pub async fn create_log(
