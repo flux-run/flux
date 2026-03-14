@@ -59,11 +59,12 @@ mod tests {
             Ok(())
         }
 
-        async fn get_secrets(
-            &self,
-            _project_id: Option<Uuid>,
-        ) -> Result<HashMap<String, String>, String> {
+        async fn get_secrets(&self) -> Result<HashMap<String, String>, String> {
             Ok(HashMap::new())
+        }
+
+        async fn resolve_function(&self, _name: &str) -> Result<job_contract::dispatch::ResolvedFunction, String> {
+            Err("not implemented".to_string())
         }
     }
 

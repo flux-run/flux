@@ -6,7 +6,6 @@
 use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Deserialize;
-use uuid::Uuid;
 
 use crate::AppState;
 
@@ -14,7 +13,6 @@ use crate::AppState;
 pub struct InvalidateCacheRequest {
     pub function_id:   Option<String>,
     pub deployment_id: Option<String>,
-    pub project_id:    Option<Uuid>,
 }
 
 pub async fn invalidate_cache_handler(
@@ -47,7 +45,6 @@ pub async fn invalidate_cache_handler(
     tracing::info!(
         function_id   = ?req.function_id,
         deployment_id = ?req.deployment_id,
-        project_id    = ?req.project_id,
         "cache invalidated: {:?}", evicted,
     );
 

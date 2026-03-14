@@ -65,18 +65,16 @@ fn row_to_json(r: FunctionRow, gateway_url: &str) -> serde_json::Value {
 
 pub async fn list_functions(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(page): Query<PaginationQuery>,
 ) -> ApiResult<serde_json::Value> {
     let (limit, offset) = page.clamped();
     let records = sqlx::query_as::<_, FunctionRow>(
         "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
          FROM functions \
-         WHERE project_id = $1 \
          ORDER BY created_at DESC \
-         LIMIT $2 OFFSET $3",
+         LIMIT $1 OFFSET $2",
     )
-    .bind(context.project_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
@@ -93,16 +91,15 @@ pub async fn list_functions(
 
 pub async fn get_function(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<serde_json::Value> {
     let record = sqlx::query_as::<_, FunctionRow>(
         "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
          FROM functions \
-         WHERE id = $1 AND project_id = $2",
+         WHERE id = $1",
     )
     .bind(id)
-    .bind(context.project_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(ApiError::from)?
@@ -113,7 +110,7 @@ pub async fn get_function(
 
 pub async fn create_function(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<CreateFunctionPayload>,
 ) -> ApiResult<serde_json::Value> {
     validate_name(&payload.name).map_err(|e| ApiError::bad_request(e))?;
@@ -122,12 +119,10 @@ pub async fn create_function(
     let function_id = Uuid::new_v4();
 
     sqlx::query(
-        "INSERT INTO functions (id, tenant_id, project_id, name, runtime) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO functions (id, name, runtime) \
+         VALUES ($1, $2, $3)",
     )
     .bind(function_id)
-    .bind(context.tenant_id)
-    .bind(context.project_id)
     .bind(&payload.name)
     .bind(&runtime)
     .execute(&state.pool)
@@ -137,7 +132,6 @@ pub async fn create_function(
     tracing::info!(
         function_id = %function_id,
         name        = %payload.name,
-        project_id  = %context.project_id,
         "function created",
     );
 
@@ -151,14 +145,13 @@ pub async fn create_function(
 
 pub async fn delete_function(
     State(pool): State<PgPool>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<serde_json::Value> {
     let deleted = sqlx::query(
-        "DELETE FROM functions WHERE id = $1 AND project_id = $2",
+        "DELETE FROM functions WHERE id = $1",
     )
     .bind(id)
-    .bind(context.project_id)
     .execute(&pool)
     .await
     .map_err(ApiError::from)?
@@ -171,45 +164,32 @@ pub async fn delete_function(
     Ok(ApiResponse::new(serde_json::json!({ "deleted": true })))
 }
 
-// ── Internal: resolve function name → id for que / runtime ──────────────────
+// ── Internal: resolve function name → id for queue / runtime ─────────────────
 
 #[derive(Deserialize)]
 pub struct ResolveQuery {
-    pub name:       String,
-    pub project_id: Option<Uuid>,
+    pub name: String,
 }
 
 #[derive(sqlx::FromRow)]
 struct ResolveRow {
-    id:         Uuid,
-    project_id: Uuid,
+    id: Uuid,
 }
 
 pub async fn resolve_function(
     State(pool): State<PgPool>,
     Query(q): axum::extract::Query<ResolveQuery>,
 ) -> Result<axum::Json<serde_json::Value>, (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
-    let query = if let Some(pid) = q.project_id {
-        sqlx::query_as::<_, ResolveRow>(
-            "SELECT id, project_id FROM functions WHERE name = $1 AND project_id = $2 LIMIT 1",
-        )
-        .bind(&q.name)
-        .bind(pid)
-        .fetch_optional(&pool)
-        .await
-    } else {
-        sqlx::query_as::<_, ResolveRow>(
-            "SELECT id, project_id FROM functions WHERE name = $1 LIMIT 1",
-        )
-        .bind(&q.name)
-        .fetch_optional(&pool)
-        .await
-    };
+    let row = sqlx::query_as::<_, ResolveRow>(
+        "SELECT id FROM functions WHERE name = $1 LIMIT 1",
+    )
+    .bind(&q.name)
+    .fetch_optional(&pool)
+    .await;
 
-    match query {
-        Ok(Some(row)) => Ok(axum::Json(serde_json::json!({
-            "function_id": row.id,
-            "project_id":  row.project_id,
+    match row {
+        Ok(Some(r)) => Ok(axum::Json(serde_json::json!({
+            "function_id": r.id,
         }))),
         Ok(None) => Err((
             axum::http::StatusCode::NOT_FOUND,

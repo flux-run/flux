@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use sqlx::PgPool;
 use tokio::sync::watch;
-use job_contract::dispatch::ApiDispatch;
+use job_contract::dispatch::{ApiDispatch, RuntimeDispatch};
 
 /// Start the background worker pool.
 ///
@@ -14,11 +14,11 @@ use job_contract::dispatch::ApiDispatch;
 pub async fn start(
     pool:             PgPool,
     api:              Arc<dyn ApiDispatch>,
-    runtime_url:      String,
+    runtime:          Arc<dyn RuntimeDispatch>,
     service_token:    String,
     concurrency:      usize,
     poll_interval_ms: u64,
     shutdown_rx:      watch::Receiver<()>,
 ) {
-    crate::worker::poller::poll(pool, api, runtime_url, service_token, concurrency, poll_interval_ms, shutdown_rx).await;
+    crate::worker::poller::poll(pool, api, runtime, service_token, concurrency, poll_interval_ms, shutdown_rx).await;
 }

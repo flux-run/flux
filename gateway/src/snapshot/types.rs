@@ -16,8 +16,6 @@ use serde::Serialize;
 pub struct RouteRecord {
     /// Primary key from `flux.routes.id` — used as part of the rate-limit key.
     pub id:           Uuid,
-    /// `flux.routes.project_id` — used to scope the trace root DB write.
-    pub project_id:   Uuid,
     /// `flux.routes.function_name` — name of the function to invoke.
     pub function_name: String,
     /// `flux.routes.path` — the URL path this route matches (e.g. `/hello`).

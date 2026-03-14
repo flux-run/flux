@@ -14,7 +14,7 @@ use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 use super::executor::{
-    create_concurrent_js_runtime, DbContext, ExecutionResult, QueueContext,
+    create_concurrent_js_runtime, DbContext, ExecutionResult, PoolDispatchers, QueueContext,
     ResultRegistry, SharedTaskReceiver,
 };
 
@@ -44,7 +44,7 @@ pub struct IsolatePool {
 
 impl IsolatePool {
     /// Spawn `workers` OS threads and return a pool ready to accept executions.
-    pub fn new(workers: usize, timeout_secs: u64) -> Self {
+    pub fn new(workers: usize, timeout_secs: u64, dispatchers: PoolDispatchers) -> Self {
         let workers = workers.max(1);
         let handles: Vec<Arc<WorkerHandle>> = (0..workers)
             .map(|id| {
@@ -55,6 +55,7 @@ impl IsolatePool {
                     Arc::new(tokio::sync::Mutex::new(task_rx));
 
                 let registry_clone = registry.clone();
+                let dispatchers_clone = dispatchers.clone();
 
                 std::thread::Builder::new()
                     .name(format!("isolate-worker-{}", id))
@@ -66,7 +67,9 @@ impl IsolatePool {
                             .expect("isolate worker tokio runtime");
 
                         tokio_rt.block_on(async move {
-                            let mut rt = create_concurrent_js_runtime(task_receiver, registry_clone);
+                            let mut rt = create_concurrent_js_runtime(
+                                task_receiver, registry_clone, dispatchers_clone,
+                            );
                             tracing::debug!(worker = id, "concurrent isolate worker ready");
 
                             loop {
@@ -102,13 +105,13 @@ impl IsolatePool {
     }
 
     /// Spawn a pool sized to 2× logical CPUs (min 2, max 16).
-    pub fn default_sized() -> Self {
+    pub fn default_sized(dispatchers: PoolDispatchers) -> Self {
         let cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(2);
         let workers = (cpus * 2).clamp(2, 16);
         tracing::info!(workers, "isolate pool started (concurrent workers)");
-        Self::new(workers, 30)
+        Self::new(workers, 30, dispatchers)
     }
 
     pub fn workers(&self) -> usize { self.worker_count }
@@ -129,7 +132,6 @@ impl IsolatePool {
         queue_ctx:      QueueContext,
         db_ctx:         DbContext,
         bundle_key:     Option<String>,
-        runtime_url:    String,
     ) -> Result<ExecutionResult, String> {
         // ── Pick worker via bundle-key affinity then least-loaded fallback ──
         let start = self.next_worker.fetch_add(1, Ordering::Relaxed);
@@ -178,20 +180,14 @@ impl IsolatePool {
             reg.insert(request_id.clone(), reply_tx);
         }
 
-        // Build task JSON (carries everything op_next_task delivers to JS)
+        // Build task JSON (carries per-request data — dispatch traits are in OpState)
         let task_json = serde_json::json!({
             "request_id":       request_id,
             "code":             code,
             "secrets":          secrets,
             "payload":          payload,
             "execution_seed":   execution_seed,
-            "queue_url":        queue_ctx.queue_url,
-            "api_url":          queue_ctx.api_url,
-            "service_token":    queue_ctx.service_token,
-            "project_id":       queue_ctx.project_id.map(|p| p.to_string()),
-            "data_engine_url":  db_ctx.data_engine_url,
             "database":         db_ctx.database,
-            "runtime_url":      runtime_url,
         });
 
         worker.task_tx.send(task_json).await
@@ -238,43 +234,70 @@ impl IsolatePool {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::{Arc, OnceLock};
+    use async_trait::async_trait;
+    use job_contract::dispatch::{
+        ApiDispatch, DataEngineDispatch, QueueDispatch,
+        ExecuteRequest, ExecuteResponse, ResolvedFunction,
+    };
 
-    fn test_queue_ctx() -> QueueContext {
-        QueueContext {
-            queue_url:     "http://127.0.0.1:0".to_string(),
-            api_url:       "http://127.0.0.1:0".to_string(),
-            service_token: "test".to_string(),
-            project_id:    None,
-            client:        reqwest::Client::new(),
+    // ── Mock dispatchers (never called — tests run simple JS only) ────────
+
+    struct MockApiDispatch;
+    #[async_trait]
+    impl ApiDispatch for MockApiDispatch {
+        async fn get_bundle(&self, _: &str) -> Result<serde_json::Value, String> { Err("mock".into()) }
+        async fn write_log(&self, _: serde_json::Value) -> Result<(), String> { Ok(()) }
+        async fn get_secrets(&self) -> Result<HashMap<String, String>, String> { Ok(HashMap::new()) }
+        async fn resolve_function(&self, _: &str) -> Result<ResolvedFunction, String> { Err("mock".into()) }
+    }
+
+    struct MockQueueDispatch;
+    #[async_trait]
+    impl QueueDispatch for MockQueueDispatch {
+        async fn push_job(&self, _: &str, _: serde_json::Value, _: Option<u64>, _: Option<String>) -> Result<(), String> { Err("mock".into()) }
+    }
+
+    struct MockDataEngineDispatch;
+    #[async_trait]
+    impl DataEngineDispatch for MockDataEngineDispatch {
+        async fn execute_sql(&self, _: String, _: Vec<serde_json::Value>, _: String, _: String) -> Result<serde_json::Value, String> { Err("mock".into()) }
+    }
+
+    fn test_dispatchers() -> PoolDispatchers {
+        PoolDispatchers {
+            api:         Arc::new(MockApiDispatch),
+            queue:       Arc::new(MockQueueDispatch),
+            data_engine: Arc::new(MockDataEngineDispatch),
+            runtime:     Arc::new(OnceLock::new()),
         }
     }
 
+    fn test_queue_ctx() -> QueueContext {
+        QueueContext {}
+    }
+
     fn test_db_ctx() -> DbContext {
-        DbContext {
-            data_engine_url: "http://127.0.0.1:0".to_string(),
-            service_token:   "test".to_string(),
-            database:        String::new(),
-            client:          reqwest::Client::new(),
-        }
+        DbContext { database: String::new() }
     }
 
     // ── construction ──────────────────────────────────────────────────────
 
     #[test]
     fn new_pool_reports_worker_count() {
-        let pool = IsolatePool::new(2, 30);
+        let pool = IsolatePool::new(2, 30, test_dispatchers());
         assert_eq!(pool.workers(), 2);
     }
 
     #[test]
     fn minimum_one_worker_when_zero_given() {
-        let pool = IsolatePool::new(0, 30);
+        let pool = IsolatePool::new(0, 30, test_dispatchers());
         assert_eq!(pool.workers(), 1);
     }
 
     #[test]
     fn default_sized_has_at_least_two_workers() {
-        let pool = IsolatePool::default_sized();
+        let pool = IsolatePool::default_sized(test_dispatchers());
         assert!(pool.workers() >= 2);
     }
 
@@ -282,18 +305,12 @@ mod tests {
 
     #[tokio::test]
     async fn execute_simple_js_returns_value() {
-        let pool = IsolatePool::new(1, 30);
+        let pool = IsolatePool::new(1, 30, test_dispatchers());
         let code = r#"__fluxbase_fn = async (ctx) => "hello";"#;
 
         let res = pool.execute(
-            code.to_string(),
-            HashMap::new(),
-            serde_json::Value::Null,
-            0,
-            test_queue_ctx(),
-            test_db_ctx(),
-            None,
-            String::new(),
+            code.to_string(), HashMap::new(), serde_json::Value::Null, 0,
+            test_queue_ctx(), test_db_ctx(), None,
         ).await;
 
         assert!(res.is_ok(), "expected Ok, got: {:?}", res.err());
@@ -302,18 +319,12 @@ mod tests {
 
     #[tokio::test]
     async fn execute_passes_payload() {
-        let pool = IsolatePool::new(1, 30);
+        let pool = IsolatePool::new(1, 30, test_dispatchers());
         let code = r#"__fluxbase_fn = async (ctx) => ctx.payload.x * 2;"#;
 
         let res = pool.execute(
-            code.to_string(),
-            HashMap::new(),
-            serde_json::json!({"x": 21}),
-            0,
-            test_queue_ctx(),
-            test_db_ctx(),
-            None,
-            String::new(),
+            code.to_string(), HashMap::new(), serde_json::json!({"x": 21}), 0,
+            test_queue_ctx(), test_db_ctx(), None,
         ).await.unwrap();
 
         assert_eq!(res.output, serde_json::json!(42));
@@ -321,7 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_captures_logs() {
-        let pool = IsolatePool::new(1, 30);
+        let pool = IsolatePool::new(1, 30, test_dispatchers());
         let code = r#"
             __fluxbase_fn = async (ctx) => {
                 ctx.log("pool log test", "warn");
@@ -329,14 +340,8 @@ mod tests {
             };
         "#;
         let res = pool.execute(
-            code.to_string(),
-            HashMap::new(),
-            serde_json::Value::Null,
-            0,
-            test_queue_ctx(),
-            test_db_ctx(),
-            None,
-            String::new(),
+            code.to_string(), HashMap::new(), serde_json::Value::Null, 0,
+            test_queue_ctx(), test_db_ctx(), None,
         ).await.unwrap();
 
         assert!(!res.logs.is_empty());
@@ -346,18 +351,12 @@ mod tests {
 
     #[tokio::test]
     async fn execute_js_error_returns_err() {
-        let pool = IsolatePool::new(1, 30);
+        let pool = IsolatePool::new(1, 30, test_dispatchers());
         let code = r#"__fluxbase_fn = async (ctx) => { throw new Error("pool err"); };"#;
 
         let res = pool.execute(
-            code.to_string(),
-            HashMap::new(),
-            serde_json::Value::Null,
-            0,
-            test_queue_ctx(),
-            test_db_ctx(),
-            None,
-            String::new(),
+            code.to_string(), HashMap::new(), serde_json::Value::Null, 0,
+            test_queue_ctx(), test_db_ctx(), None,
         ).await;
 
         assert!(res.is_err());
@@ -368,7 +367,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_multiple_concurrent_tasks() {
-        let pool = IsolatePool::new(2, 30);
+        let pool = IsolatePool::new(2, 30, test_dispatchers());
         let code = r#"__fluxbase_fn = async (ctx) => ctx.payload.n;"#;
 
         let mut handles = vec![];
@@ -377,21 +376,9 @@ mod tests {
             let c = code.to_string();
             handles.push(tokio::spawn(async move {
                 p.execute(c, HashMap::new(), serde_json::json!({"n": n}), 0,
-                    QueueContext {
-                        queue_url: "http://127.0.0.1:0".to_string(),
-                        api_url:   "http://127.0.0.1:0".to_string(),
-                        service_token: "t".to_string(),
-                        project_id: None,
-                        client: reqwest::Client::new(),
-                    },
-                    DbContext {
-                        data_engine_url: "http://127.0.0.1:0".to_string(),
-                        service_token:   "t".to_string(),
-                        database:        String::new(),
-                        client:          reqwest::Client::new(),
-                    },
+                    QueueContext {},
+                    DbContext { database: String::new() },
                     None,
-                    String::new(),
                 ).await
             }));
         }
@@ -404,27 +391,24 @@ mod tests {
 
     #[tokio::test]
     async fn pool_is_clone_and_send() {
-        let pool = IsolatePool::new(1, 30);
+        let pool = IsolatePool::new(1, 30, test_dispatchers());
         let clone = pool.clone();
-        // Both should be able to execute
         let code = r#"__fluxbase_fn = async (ctx) => 1;"#;
         let _r = clone.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 0, test_queue_ctx(), test_db_ctx(), None, String::new()).await;
+            serde_json::Value::Null, 0, test_queue_ctx(), test_db_ctx(), None).await;
     }
 
     // ── deterministic replay ──────────────────────────────────────────────
 
     #[tokio::test]
     async fn same_seed_produces_same_output() {
-        let pool = IsolatePool::new(1, 30);
-        // Use ctx.uuid() — the per-task seeded method — not crypto.randomUUID()
-        // which in concurrent mode is V8's native non-seeded implementation.
+        let pool = IsolatePool::new(1, 30, test_dispatchers());
         let code = r#"__fluxbase_fn = async (ctx) => ctx.uuid();"#;
 
         let r1 = pool.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None, String::new()).await.unwrap();
+            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None).await.unwrap();
         let r2 = pool.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None, String::new()).await.unwrap();
+            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None).await.unwrap();
 
         assert_eq!(r1.output, r2.output,
             "same execution seed must produce same UUID for deterministic replay");
@@ -434,21 +418,14 @@ mod tests {
 
     #[tokio::test]
     async fn affinity_key_is_recorded_on_worker() {
-        let pool = IsolatePool::new(2, 30);
+        let pool = IsolatePool::new(2, 30, test_dispatchers());
         let code = r#"__fluxbase_fn = async (ctx) => 1;"#;
 
         let _r = pool.execute(
-            code.to_string(),
-            HashMap::new(),
-            serde_json::Value::Null,
-            0,
-            test_queue_ctx(),
-            test_db_ctx(),
-            Some("fn_abc123".to_string()),
-            String::new(),
+            code.to_string(), HashMap::new(), serde_json::Value::Null, 0,
+            test_queue_ctx(), test_db_ctx(), Some("fn_abc123".to_string()),
         ).await;
 
-        // At least one worker should have recorded the bundle key
         let has_key = pool.workers.iter().any(|w| {
             w.bundle_key.lock().unwrap().as_deref() == Some("fn_abc123")
         });
@@ -457,26 +434,17 @@ mod tests {
 
     #[tokio::test]
     async fn affinity_routes_same_key_to_same_worker() {
-        // 3 workers; send 6 requests for the same bundle_key.
-        // After the first request, subsequent ones should route to the same worker.
-        let pool = IsolatePool::new(3, 30);
+        let pool = IsolatePool::new(3, 30, test_dispatchers());
         let code = r#"__fluxbase_fn = async (ctx) => 42;"#;
 
         for _ in 0..6 {
             let r = pool.execute(
-                code.to_string(),
-                HashMap::new(),
-                serde_json::Value::Null,
-                0,
-                test_queue_ctx(),
-                test_db_ctx(),
-                Some("fn_affinity_test".to_string()),
-                String::new(),
+                code.to_string(), HashMap::new(), serde_json::Value::Null, 0,
+                test_queue_ctx(), test_db_ctx(), Some("fn_affinity_test".to_string()),
             ).await;
             assert!(r.is_ok());
         }
 
-        // Exactly one worker should carry the bundle key
         let keyed: Vec<_> = pool.workers.iter()
             .filter(|w| w.bundle_key.lock().unwrap().as_deref() == Some("fn_affinity_test"))
             .collect();

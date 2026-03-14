@@ -47,12 +47,11 @@ pub fn create_token(user: &PlatformUser) -> Result<String, ApiError> {
     let now = chrono::Utc::now();
     let exp = (now + chrono::Duration::days(7)).timestamp() as usize;
     let claims = Claims {
-        sub:       user.id.to_string(),
-        email:     user.email.clone(),
-        role:      user.role.clone(),
-        tenant_id: user.tenant_id.map(|t| t.to_string()),
+        sub:   user.id.to_string(),
+        email: user.email.clone(),
+        role:  user.role.clone(),
         exp,
-        iat:       now.timestamp() as usize,
+        iat:   now.timestamp() as usize,
     };
     encode(
         &Header::default(),
@@ -88,7 +87,7 @@ pub async fn count_users(pool: &PgPool) -> Result<i64, ApiError> {
 
 pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<PlatformUser>, ApiError> {
     sqlx::query_as(
-        "SELECT id, username, email, password_hash, role, tenant_id, created_at
+        "SELECT id, username, email, password_hash, role, created_at
          FROM flux.platform_users WHERE email = $1",
     )
     .bind(email)
@@ -99,7 +98,7 @@ pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<Platform
 
 pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<PlatformUser>, ApiError> {
     sqlx::query_as(
-        "SELECT id, username, email, password_hash, role, tenant_id, created_at
+        "SELECT id, username, email, password_hash, role, created_at
          FROM flux.platform_users WHERE id = $1",
     )
     .bind(id)
@@ -117,15 +116,14 @@ pub async fn create_user(pool: &PgPool, req: CreateUserRequest) -> Result<Platfo
     }
     let password_hash = hash_password(&req.password)?;
     sqlx::query_as(
-        "INSERT INTO flux.platform_users (username, email, password_hash, role, tenant_id)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, username, email, password_hash, role, tenant_id, created_at",
+        "INSERT INTO flux.platform_users (username, email, password_hash, role)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, username, email, password_hash, role, created_at",
     )
     .bind(req.username)
     .bind(req.email)
     .bind(password_hash)
     .bind(req.role)
-    .bind(req.tenant_id)
     .fetch_one(pool)
     .await
     .map_err(|e| {
@@ -207,13 +205,12 @@ mod tests {
 
     fn dummy_user() -> PlatformUser {
         PlatformUser {
-            id:        Uuid::new_v4(),
-            username:  "testuser".to_string(),
-            email:     "test@example.com".to_string(),
+            id:            Uuid::new_v4(),
+            username:      "testuser".to_string(),
+            email:         "test@example.com".to_string(),
             password_hash: "x".to_string(),
-            role:      "admin".to_string(),
-            tenant_id: Some(Uuid::new_v4()),
-            created_at: chrono::Utc::now(),
+            role:          "admin".to_string(),
+            created_at:    chrono::Utc::now(),
         }
     }
 
@@ -248,14 +245,11 @@ mod tests {
     }
 
     #[test]
-    fn token_claims_contain_tenant_id() {
+    fn token_claims_contain_role() {
         let user   = dummy_user();
         let token  = create_token(&user).unwrap();
         let claims = verify_token(&token).unwrap();
-        assert_eq!(
-            claims.tenant_id,
-            user.tenant_id.map(|t| t.to_string()),
-        );
+        assert_eq!(claims.role, user.role);
     }
 
     #[test]

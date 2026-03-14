@@ -23,8 +23,6 @@ fn db_err(e: sqlx::Error) -> ApiError {
 #[derive(sqlx::FromRow, Serialize)]
 pub struct CronJobRow {
     pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub project_id: Uuid,
     pub name: String,
     pub schedule: String,
     pub action_type: String,
@@ -46,17 +44,16 @@ pub struct CreateSchedulePayload {
 
 pub async fn list_schedules(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<CronJobRow>> {
     let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, CronJobRow>(
-        "SELECT id, tenant_id, project_id, name, schedule, action_type, action_config, \
+        "SELECT id, name, schedule, action_type, action_config, \
          enabled, last_run_at, next_run_at, created_at, updated_at \
-         FROM fluxbase_internal.cron_jobs WHERE project_id = $1 ORDER BY created_at DESC \
-         LIMIT $2 OFFSET $3",
+         FROM fluxbase_internal.cron_jobs ORDER BY created_at DESC \
+         LIMIT $1 OFFSET $2",
     )
-    .bind(ctx.project_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
@@ -68,18 +65,16 @@ pub async fn list_schedules(
 
 pub async fn create_schedule(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<CreateSchedulePayload>,
 ) -> ApiResult<CronJobRow> {
     let row = sqlx::query_as::<_, CronJobRow>(
         "INSERT INTO fluxbase_internal.cron_jobs \
-         (tenant_id, project_id, name, schedule, action_type, action_config) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
-         RETURNING id, tenant_id, project_id, name, schedule, action_type, action_config, \
+         (name, schedule, action_type, action_config) \
+         VALUES ($1, $2, $3, $4) \
+         RETURNING id, name, schedule, action_type, action_config, \
          enabled, last_run_at, next_run_at, created_at, updated_at",
     )
-    .bind(ctx.tenant_id)
-    .bind(ctx.project_id)
     .bind(&payload.name)
     .bind(&payload.schedule)
     .bind(&payload.action_type)
@@ -93,14 +88,13 @@ pub async fn create_schedule(
 
 pub async fn delete_schedule(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
-        "DELETE FROM fluxbase_internal.cron_jobs WHERE name = $1 AND project_id = $2",
+        "DELETE FROM fluxbase_internal.cron_jobs WHERE name = $1",
     )
     .bind(&name)
-    .bind(ctx.project_id)
     .execute(&state.pool)
     .await
     .map_err(db_err)?;
@@ -111,14 +105,13 @@ pub async fn delete_schedule(
 pub async fn pause_schedule(
     Path(name): Path<String>,
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
         "UPDATE fluxbase_internal.cron_jobs SET enabled = false, updated_at = now() \
-         WHERE name = $1 AND project_id = $2",
+         WHERE name = $1",
     )
     .bind(&name)
-    .bind(ctx.project_id)
     .execute(&state.pool)
     .await
     .map_err(db_err)?;
@@ -129,14 +122,13 @@ pub async fn pause_schedule(
 pub async fn resume_schedule(
     Path(name): Path<String>,
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
         "UPDATE fluxbase_internal.cron_jobs SET enabled = true, updated_at = now() \
-         WHERE name = $1 AND project_id = $2",
+         WHERE name = $1",
     )
     .bind(&name)
-    .bind(ctx.project_id)
     .execute(&state.pool)
     .await
     .map_err(db_err)?;
@@ -147,14 +139,13 @@ pub async fn resume_schedule(
 pub async fn run_schedule_now(
     Path(name): Path<String>,
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
         "UPDATE fluxbase_internal.cron_jobs SET next_run_at = now(), updated_at = now() \
-         WHERE name = $1 AND project_id = $2",
+         WHERE name = $1",
     )
     .bind(&name)
-    .bind(ctx.project_id)
     .execute(&state.pool)
     .await
     .map_err(db_err)?;

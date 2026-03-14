@@ -27,12 +27,11 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use reqwest::Client;
 use tokio::sync::{watch, Semaphore};
 use tokio::time::sleep;
 use sqlx::PgPool;
 use tracing::{error, info};
-use job_contract::dispatch::ApiDispatch;
+use job_contract::dispatch::{ApiDispatch, RuntimeDispatch};
 use crate::queue::fetch_jobs;
 use crate::worker::executor;
 
@@ -40,13 +39,12 @@ use crate::worker::executor;
 pub async fn poll(
     pool:             PgPool,
     api:              Arc<dyn ApiDispatch>,
-    runtime_url:      String,
+    runtime:          Arc<dyn RuntimeDispatch>,
     service_token:    String,
     concurrency:      usize,
     poll_interval_ms: u64,
     mut shutdown_rx:  watch::Receiver<()>,
 ) {
-    let client    = Client::new();
     let semaphore = Arc::new(Semaphore::new(concurrency));
 
     loop {
@@ -66,13 +64,12 @@ pub async fn poll(
                         .expect("semaphore is open; it is only closed when all owners drop it");
                     let pool_clone        = pool.clone();
                     let api_clone         = Arc::clone(&api);
-                    let runtime_url_clone = runtime_url.clone();
+                    let runtime_clone     = Arc::clone(&runtime);
                     let token_clone       = service_token.clone();
-                    let client_clone      = client.clone();
 
                     tokio::spawn(async move {
                         let _permit = permit; // dropped when task completes
-                        executor::execute(pool_clone, api_clone, runtime_url_clone, token_clone, client_clone, job).await;
+                        executor::execute(pool_clone, api_clone, runtime_clone, token_clone, job).await;
                     });
                 }
             }

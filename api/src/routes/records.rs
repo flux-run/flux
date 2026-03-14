@@ -74,7 +74,7 @@ struct RecordRow {
 
 pub async fn records_count(
     State(pool): State<PgPool>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(params): Query<RecordsQuery>,
 ) -> ApiResult<serde_json::Value> {
     let before_ts   = params.before.as_deref().and_then(parse_age);
@@ -82,9 +82,8 @@ pub async fn records_count(
     let errors_only = params.errors_only.unwrap_or(false);
 
     let mut qb = QueryBuilder::<sqlx::Postgres>::new(
-        "SELECT COUNT(*) FROM platform_logs WHERE project_id = ",
+        "SELECT COUNT(*) FROM platform_logs WHERE true",
     );
-    qb.push_bind(ctx.project_id);
 
     if errors_only {
         qb.push(" AND level = 'error'");
@@ -115,7 +114,7 @@ pub async fn records_count(
 
 pub async fn records_export(
     State(pool): State<PgPool>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(params): Query<RecordsQuery>,
 ) -> Result<Response, ApiError> {
     let before_ts   = params.before.as_deref().and_then(parse_age);
@@ -136,9 +135,8 @@ pub async fn records_export(
 
         let mut qb = QueryBuilder::<sqlx::Postgres>::new(
             "SELECT id, level, message, timestamp, source, resource_id, request_id, metadata \
-             FROM platform_logs WHERE project_id = ",
+             FROM platform_logs WHERE true",
         );
-        qb.push_bind(ctx.project_id);
 
         if errors_only {
             qb.push(" AND level = 'error'");
@@ -205,7 +203,7 @@ pub async fn records_export(
 
 pub async fn records_prune(
     State(pool): State<PgPool>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(params): Query<PruneQuery>,
 ) -> ApiResult<serde_json::Value> {
     if params.confirm.as_deref() != Some("true") {
@@ -223,9 +221,8 @@ pub async fn records_prune(
     }
 
     let mut qb = QueryBuilder::<sqlx::Postgres>::new(
-        "DELETE FROM platform_logs WHERE project_id = ",
+        "DELETE FROM platform_logs WHERE true",
     );
-    qb.push_bind(ctx.project_id);
 
     if let Some(ts) = before_ts {
         qb.push(" AND timestamp < ");
@@ -236,7 +233,6 @@ pub async fn records_prune(
     let deleted = result.rows_affected();
 
     tracing::warn!(
-        project_id = %ctx.project_id,
         deleted,
         "platform_logs pruned",
     );

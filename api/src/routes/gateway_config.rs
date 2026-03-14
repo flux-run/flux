@@ -46,22 +46,15 @@ pub struct RoutePayloadEntry {
     pub rate_limit_per_minute: Option<i32>,
 }
 
-#[derive(Deserialize)]
-pub struct GatewayRoutesQuery {
-    pub project_id: Uuid,
-}
-
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `POST /routes/sync` — Replace all active routes for the project with the new set.
 /// Called by `flux deploy` after a successful deployment.
 pub async fn sync_routes(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<SyncRoutesPayload>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context.project_id;
-
     // Validate all route paths before touching the DB.
     for route in &payload.routes {
         validate_route_path(&route.path)
@@ -70,12 +63,11 @@ pub async fn sync_routes(
 
     let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
 
-    // Deactivate all current active routes for this project.
+    // Deactivate all current active routes.
     sqlx::query(
         "UPDATE flux.routes SET is_active = false \
-         WHERE project_id = $1 AND is_active = true",
+         WHERE is_active = true",
     )
-    .bind(project_id)
     .execute(&mut *tx)
     .await
     .map_err(ApiError::from)?;
@@ -85,11 +77,10 @@ pub async fn sync_routes(
     for route in &payload.routes {
         sqlx::query(
             "INSERT INTO flux.routes \
-               (id, project_id, project_deployment_id, path, method, function_name, middleware, rate_limit_per_minute, is_active) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)",
+               (id, project_deployment_id, path, method, function_name, middleware, rate_limit_per_minute, is_active) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, true)",
         )
         .bind(Uuid::new_v4())
-        .bind(project_id)
         .bind(payload.project_deployment_id)
         .bind(&route.path)
         .bind(&route.method)
@@ -109,20 +100,18 @@ pub async fn sync_routes(
 /// `GET /routes` — List all active routes for the authenticated project.
 pub async fn list_routes(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(page): Query<PaginationQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context.project_id;
     let (limit, offset) = page.clamped();
 
     let rows = sqlx::query_as::<_, RouteConfigRow>(
         "SELECT id, path, method, function_name, middleware, rate_limit_per_minute \
          FROM flux.routes \
-         WHERE project_id = $1 AND is_active = true \
+         WHERE is_active = true \
          ORDER BY path, method \
-         LIMIT $2 OFFSET $3",
+         LIMIT $1 OFFSET $2",
     )
-    .bind(project_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
@@ -132,19 +121,17 @@ pub async fn list_routes(
     Ok(ApiResponse::new(serde_json::json!({ "routes": rows, "limit": limit, "offset": offset })))
 }
 
-/// `GET /internal/routes?project_id=uuid` — Load the route table for the gateway.
+/// `GET /internal/routes` — Load the route table for the gateway.
 /// No project auth context required; the gateway calls this on startup and periodically.
 pub async fn get_routes_for_gateway(
     State(state): State<AppState>,
-    Query(params): Query<GatewayRoutesQuery>,
 ) -> Result<ApiResponse<serde_json::Value>, ApiError> {
     let rows = sqlx::query_as::<_, RouteConfigRow>(
         "SELECT id, path, method, function_name, middleware, rate_limit_per_minute \
          FROM flux.routes \
-         WHERE project_id = $1 AND is_active = true \
+         WHERE is_active = true \
          ORDER BY path, method",
     )
-    .bind(params.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(ApiError::from)?;

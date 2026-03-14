@@ -11,6 +11,8 @@ use tracing::info;
 use runtime::config::settings::Settings;
 use runtime::secrets::client::SecretsClient;
 use runtime::dispatch::http_api::HttpApiDispatch;
+use runtime::dispatch::http_queue::HttpQueueDispatch;
+use runtime::engine::executor::PoolDispatchers;
 use runtime::engine::pool::IsolatePool;
 use runtime::engine::wasm_pool::WasmPool;
 use runtime::bundle::cache::BundleCache;
@@ -18,7 +20,43 @@ use runtime::schema::cache::SchemaCache;
 use runtime::execute::handler::execute_handler;
 use runtime::execute::invalidate::invalidate_cache_handler;
 use runtime::AppState;
-use job_contract::dispatch::ApiDispatch;
+use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch};
+
+/// HTTP implementation of DataEngineDispatch for the standalone runtime binary.
+struct HttpDataEngineDispatch {
+    client:          reqwest::Client,
+    data_engine_url: String,
+    service_token:   String,
+}
+
+#[async_trait::async_trait]
+impl DataEngineDispatch for HttpDataEngineDispatch {
+    async fn execute_sql(
+        &self,
+        sql:        String,
+        params:     Vec<serde_json::Value>,
+        database:   String,
+        request_id: String,
+    ) -> Result<serde_json::Value, String> {
+        let url = format!("{}/db/query", self.data_engine_url);
+        let body = serde_json::json!({ "sql": sql, "params": params, "database": database });
+        let resp = self.client
+            .post(&url)
+            .header("X-Service-Token", &self.service_token)
+            .header("x-request-id", &request_id)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("data_engine_unreachable: {}", e))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("data_engine parse error: {}", e))?;
+        if !status.is_success() {
+            return Err(format!("data_engine HTTP {}: {:?}", status, json));
+        }
+        Ok(json)
+    }
+}
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -40,23 +78,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         token:   settings.service_token.clone(),
     });
 
-    let state = Arc::new(AppState {
-        secrets_client: SecretsClient::new(Arc::clone(&api_dispatch)),
-        http_client:    http_client.clone(),
-        api:            api_dispatch,
-        api_url:        settings.api_url.clone(),
-        queue_url:      settings.queue_url.clone(),
-        service_token:  settings.service_token.clone(),
+    let queue_dispatch: Arc<dyn QueueDispatch> = Arc::new(HttpQueueDispatch {
+        client:    http_client.clone(),
+        queue_url: settings.queue_url.clone(),
+        token:     settings.service_token.clone(),
+    });
+
+    let data_engine_dispatch: Arc<dyn DataEngineDispatch> = Arc::new(HttpDataEngineDispatch {
+        client:          http_client.clone(),
         data_engine_url: settings.data_engine_url.clone(),
-        runtime_url:     settings.runtime_url.clone(),
-        bundle_cache:   BundleCache::new(100),
-        schema_cache:   SchemaCache::new(200),
-        isolate_pool:   IsolatePool::new(settings.isolate_workers, settings.request_timeout_secs),
-        wasm_pool:      WasmPool::new(
+        service_token:   settings.service_token.clone(),
+    });
+
+    let dispatchers = PoolDispatchers {
+        api:         Arc::clone(&api_dispatch),
+        queue:       Arc::clone(&queue_dispatch),
+        data_engine: Arc::clone(&data_engine_dispatch),
+        runtime:     Arc::new(std::sync::OnceLock::new()),
+    };
+
+    let state = Arc::new(AppState {
+        secrets_client:  SecretsClient::new(Arc::clone(&api_dispatch)),
+        http_client:     http_client.clone(),
+        api:             api_dispatch,
+        queue:           queue_dispatch,
+        data_engine:     data_engine_dispatch,
+        service_token:   settings.service_token.clone(),
+        bundle_cache:    BundleCache::new(100),
+        schema_cache:    SchemaCache::new(200),
+        isolate_pool:    IsolatePool::new(settings.isolate_workers, settings.request_timeout_secs, dispatchers.clone()),
+        wasm_pool:       WasmPool::new(
             std::thread::available_parallelism().map(|n| (n.get() * 2).clamp(2, 16)).unwrap_or(4),
             settings.wasm_fuel_limit,
             settings.request_timeout_secs,
         ),
+        dispatchers,
     });
 
     let workers = settings.isolate_workers;

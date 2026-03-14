@@ -3,41 +3,6 @@
 //! The manifest is the single source of truth for `flux generate`. The CLI
 //! calls this endpoint, writes `.flux/manifest.json`, then generates typed
 //! ctx bindings for all supported languages.
-//!
-//! ## Response shape
-//!
-//! ```json
-//! {
-//!   "version": 1,
-//!   "project_id": "uuid",
-//!   "generated_at": "2026-03-13T09:57:36Z",
-//!   "schema_hash": "a3f8c1d2",
-//!   "database": {
-//!     "users": {
-//!       "columns": [
-//!         { "name": "id", "type": "uuid", "nullable": false }
-//!       ]
-//!     }
-//!   },
-//!   "functions": {
-//!     "create_user": {
-//!       "id": "uuid-string",
-//!       "runtime": "deno",
-//!       "input_schema":  { ... },
-//!       "output_schema": { ... }
-//!     }
-//!   },
-//!   "secrets": ["OPENAI_KEY", "STRIPE_SECRET"]
-//! }
-//! ```
-//!
-//! Protected by service-token middleware on the `/internal/*` router AND
-//! exposed on the public `/sdk/manifest` route protected by API key.
-//!
-//! # SOLID
-//! SRP: this file only shapes the manifest response. All DB queries are inline
-//! but each block is clearly labelled. DIP: depends on `AppState` trait, not
-//! concrete pool fields.
 
 use axum::extract::{Extension, Query, State};
 use serde::Deserialize;
@@ -54,38 +19,23 @@ use crate::error::ApiResponse;
 
 #[derive(Deserialize)]
 pub struct ManifestQuery {
-    /// Target project UUID — required on the internal route; optional on /sdk/manifest
-    /// (falls back to the RequestContext injected by auth middleware).
-    pub project_id: Option<Uuid>,
-    /// Tenant UUID — required on the internal route; optional on /sdk/manifest.
-    pub tenant_id:  Option<Uuid>,
+    /// Optional database name for data-engine schema lookup.
+    pub database: Option<String>,
 }
 
 pub async fn get_manifest(
     State(state): State<AppState>,
-    Query(params): Query<ManifestQuery>,
-    ctx: Option<Extension<RequestContext>>,
+    Query(_params): Query<ManifestQuery>,
+    _ctx: Option<Extension<RequestContext>>,
 ) -> Result<ApiResponse<Value>, ApiError> {
     let pool = &state.pool;
-
-    // Resolve project_id + tenant_id: query params take precedence (used by
-    // /internal/introspect/manifest), then RequestContext (auth middleware on
-    // /sdk/manifest), then AppState local defaults.
-    let (project_id, tenant_id) = match (params.project_id, params.tenant_id) {
-        (Some(p), Some(t)) => (p, t),
-        _ => ctx
-            .map(|Extension(rc)| (rc.project_id, rc.tenant_id))
-            .unwrap_or((state.local_project_id, state.local_tenant_id)),
-    };
 
     // ── 1. Function contracts ──────────────────────────────────────────────
     let fn_rows = sqlx::query(
         "SELECT id, name, runtime, input_schema, output_schema \
          FROM functions \
-         WHERE project_id = $1 \
          ORDER BY name",
     )
-    .bind(project_id)
     .fetch_all(pool)
     .await
     .map_err(|e| {
@@ -106,13 +56,8 @@ pub async fn get_manifest(
 
     // ── 2. Secret keys (names only — never values) ────────────────────────
     let secret_keys: Vec<String> = sqlx::query_scalar(
-        "SELECT key FROM secrets \
-         WHERE tenant_id = $1 \
-           AND (project_id = $2 OR project_id IS NULL) \
-         ORDER BY key",
+        "SELECT key FROM secrets ORDER BY key",
     )
-    .bind(tenant_id)
-    .bind(project_id)
     .fetch_all(pool)
     .await
     .map_err(|e| {
@@ -165,7 +110,6 @@ pub async fn get_manifest(
 
     Ok(ApiResponse::new(json!({
         "version":      1,
-        "project_id":   project_id,
         "generated_at": chrono::Utc::now().to_rfc3339(),
         "schema_hash":  schema_hash,
         "database":     database_map,

@@ -30,7 +30,6 @@ pub struct QueueSpanEmitter {
     api:         Arc<dyn ApiDispatch>,
     job_id:      Uuid,
     function_id: Uuid,
-    project_id:  Option<Uuid>,
     request_id:  String,
 }
 
@@ -39,10 +38,9 @@ impl QueueSpanEmitter {
         api:         Arc<dyn ApiDispatch>,
         job_id:      Uuid,
         function_id: Uuid,
-        project_id:  Option<Uuid>,
         request_id:  String,
     ) -> Self {
-        Self { api, job_id, function_id, project_id, request_id }
+        Self { api, job_id, function_id, request_id }
     }
 
     /// Emit a job lifecycle span (started, completed, failed, retried, dead_lettered).
@@ -57,14 +55,12 @@ impl QueueSpanEmitter {
         let api        = Arc::clone(&self.api);
         let job_id     = self.job_id;
         let fn_id      = self.function_id.to_string();
-        let project_id = self.project_id;
         let request_id = self.request_id.clone();
 
         tokio::spawn(async move {
             let _ = api.write_log(serde_json::json!({
                 "source":      "queue",
                 "resource_id": fn_id,
-                "project_id":  project_id,
                 "level":       level,
                 "message":     message,
                 "request_id":  request_id,

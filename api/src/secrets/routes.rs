@@ -1,12 +1,10 @@
 use axum::{
-    extract::{Extension, Path, Query, State},
+    extract::{Extension, Path, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
-use serde::Deserialize;
 use serde_json::Value;
 use sqlx::PgPool;
-use uuid::Uuid;
 
 use crate::types::context::RequestContext;
 use crate::types::response::{ApiResponse, ApiError};
@@ -38,76 +36,49 @@ fn map_err(err: ServiceError) -> ApiError {
 
 pub async fn create_secret(
     State(pool): State<PgPool>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<CreateSecretRequest>,
 ) -> ApiResult<Value> {
-    let tenant_id = context.tenant_id;
-
-    let (secret_id, version) = svc_create(&pool, tenant_id, payload).await.map_err(map_err)?;
+    let (secret_id, version) = svc_create(&pool, payload).await.map_err(map_err)?;
 
     Ok(ApiResponse::new(serde_json::json!({ "secret_id": secret_id, "version": version })))
 }
 
 pub async fn update_secret(
     State(pool): State<PgPool>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(key): Path<String>,
     Json(payload): Json<UpdateSecretRequest>,
 ) -> ApiResult<Value> {
-    let tenant_id = context.tenant_id;
-
-    let version = svc_update(&pool, tenant_id, &key, payload).await.map_err(map_err)?;
+    let version = svc_update(&pool, &key, payload).await.map_err(map_err)?;
 
     Ok(ApiResponse::new(serde_json::json!({ "version": version })))
 }
 
-#[derive(Deserialize)]
-pub struct DeleteSecretQuery {
-    project_id: Option<Uuid>,
-}
-
 pub async fn delete_secret(
     State(pool): State<PgPool>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(key): Path<String>,
-    Query(query): Query<DeleteSecretQuery>,
 ) -> ApiResult<Value> {
-    let tenant_id = context.tenant_id;
-
-    svc_delete(&pool, tenant_id, query.project_id, &key).await.map_err(map_err)?;
+    svc_delete(&pool, &key).await.map_err(map_err)?;
 
     Ok(ApiResponse::new(serde_json::json!({ "deleted": true })))
 }
 
-#[derive(Deserialize)]
-pub struct ListSecretsQuery {
-    project_id: Option<Uuid>,
-}
-
 pub async fn list_secrets(
     State(pool): State<PgPool>,
-    Extension(context): Extension<RequestContext>,
-    Query(query): Query<ListSecretsQuery>,
+    Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<Value> {
-    let tenant_id = context.tenant_id;
-
-    let secrets = svc_list(&pool, tenant_id, query.project_id).await.map_err(map_err)?;
+    let secrets = svc_list(&pool).await.map_err(map_err)?;
 
     Ok(ApiResponse::new(serde_json::json!({ "secrets": secrets })))
 }
 
 // ── Internal Runtime API ────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-pub struct InternalRuntimeSecretQuery {
-    tenant_id: Uuid,
-    project_id: Option<Uuid>,
-}
-
 pub async fn get_internal_runtime_secrets(
     headers: HeaderMap,
     State(pool): State<PgPool>,
-    Query(query): Query<InternalRuntimeSecretQuery>,
 ) -> ApiResult<Value> {
     // Basic service token verification
     let token = headers.get("X-Service-Token")
@@ -125,7 +96,7 @@ pub async fn get_internal_runtime_secrets(
         return Err(ApiError::unauthorized("invalid_service_token"));
     }
 
-    let map = svc_get_runtime(&pool, query.tenant_id, query.project_id)
+    let map = svc_get_runtime(&pool)
         .await
         .map_err(map_err)?;
 

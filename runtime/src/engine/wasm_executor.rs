@@ -59,7 +59,7 @@ use wasmtime::{
 };
 use tokio::time::{timeout, Duration};
 
-use crate::engine::executor::{ExecutionResult, LogLine};
+use crate::engine::executor::{ExecutionResult, LogLine, PoolDispatchers};
 // ─── HostState ─────────────────────────────────────────────────────────────
 
 /// Data owned by the Wasmtime `Store` — accessible from host import callbacks.
@@ -68,20 +68,12 @@ pub struct HostState {
     pub logs:               Vec<LogLine>,
     /// `http_fetch` allow-list.  Empty vec = deny all.  Contains `"*"` = allow all.
     pub allowed_http_hosts: Vec<String>,
-    /// Shared reqwest client for outbound HTTP from `fluxbase.http_fetch` and DB calls.
+    /// Shared reqwest client for outbound HTTP from `fluxbase.http_fetch`.
     pub http_client:        reqwest::Client,
-    /// Data-engine base URL for `fluxbase.db_query`.
-    pub data_engine_url:    String,
-    /// Internal service token forwarded to data-engine and queue service.
-    pub service_token:      String,
     /// Project Postgres schema name (e.g. `project_abc123`).
     pub database:           String,
-    /// Queue service base URL for `fluxbase.queue_push`.
-    pub queue_url:          String,
-    /// API base URL for function name → UUID resolution in `queue_push`.
-    pub api_url:            String,
-    /// Project UUID (string) forwarded to queue service.
-    pub project_id:         Option<String>,
+    /// Dispatch traits for in-process data-engine, queue, and API calls.
+    pub dispatchers:        PoolDispatchers,
 }
 
 // ─── Params ────────────────────────────────────────────────────────────────
@@ -98,22 +90,17 @@ pub struct WasmExecutionParams {
     pub http_client: Option<reqwest::Client>,
     /// Per-request wall-clock timeout in seconds.
     pub timeout_secs: u64,
-    /// Data-engine base URL for `fluxbase.db_query`.
-    pub data_engine_url: String,
-    /// Internal service token forwarded to data-engine and queue service.
-    pub service_token: String,
     /// Project Postgres schema name (e.g. `project_abc123`).
     pub database: String,
-    /// Queue service base URL for `fluxbase.queue_push`.
-    pub queue_url: String,
-    /// API base URL for function name → UUID resolution in `queue_push`.
-    pub api_url: String,
-    /// Project UUID (string) forwarded to queue service.
-    pub project_id: Option<String>,
+    /// Dispatch traits for in-process data-engine, queue, and API calls.
+    pub dispatchers: PoolDispatchers,
 }
 
-impl Default for WasmExecutionParams {
-    fn default() -> Self {
+impl WasmExecutionParams {
+    /// Create params with default values for testing.
+    /// Requires a `PoolDispatchers` since there's no meaningful default.
+    #[cfg(test)]
+    pub fn test_default(dispatchers: PoolDispatchers) -> Self {
         Self {
             secrets:            HashMap::new(),
             payload:            serde_json::Value::Null,
@@ -121,12 +108,8 @@ impl Default for WasmExecutionParams {
             allowed_http_hosts: Vec::new(),
             http_client:        None,
             timeout_secs:       30,
-            data_engine_url:    String::new(),
-            service_token:      String::new(),
             database:           String::new(),
-            queue_url:          String::new(),
-            api_url:            String::new(),
-            project_id:         None,
+            dispatchers,
         }
     }
 }
@@ -195,12 +178,8 @@ async fn execute_wasm_async(
         logs:               Vec::new(),
         allowed_http_hosts: params.allowed_http_hosts,
         http_client:        params.http_client.unwrap_or_else(reqwest::Client::new),
-        data_engine_url:    params.data_engine_url,
-        service_token:      params.service_token,
         database:           params.database,
-        queue_url:          params.queue_url,
-        api_url:            params.api_url,
-        project_id:         params.project_id,
+        dispatchers:        params.dispatchers,
     };
 
     let mut store = Store::new(engine, host);
@@ -450,35 +429,21 @@ async fn execute_wasm_async(
                 serde_json::Value::Null
             };
 
-            let data_engine_url = caller.data().data_engine_url.clone();
-            let service_token   = caller.data().service_token.clone();
-            let database        = caller.data().database.clone();
-            let client          = caller.data().http_client.clone();
+            let database = caller.data().database.clone();
+            let de = caller.data().dispatchers.data_engine.clone();
 
-            if data_engine_url.is_empty() { return -1; }
+            let params_vec = match sql_params {
+                serde_json::Value::Array(arr) => arr,
+                serde_json::Value::Null => vec![],
+                other => vec![other],
+            };
 
-            let body = serde_json::json!({ "sql": sql, "params": sql_params, "database": database });
-            let result = client
-                .post(format!("{}/db/sql", data_engine_url))
-                .header("Content-Type", "application/json")
-                .header("X-Service-Token", &service_token)
-                .json(&body)
-                .send()
-                .await;
-
-            let response_bytes = match result {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.bytes().await {
-                        Ok(b) => b.to_vec(),
-                        Err(_) => return -1,
-                    }
-                }
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    let err_json = format!("{{\"error\":\"db_query failed: HTTP {}\"}}", status);
+            let response_bytes = match de.execute_sql(sql, params_vec, database, String::new()).await {
+                Ok(val) => serde_json::to_vec(&val).unwrap_or_default(),
+                Err(e) => {
+                    let err_json = format!("{{\"error\":\"{}\"}}", e.replace('"', "\\\""));
                     err_json.into_bytes()
                 }
-                Err(_) => return -1,
             };
 
             let write_len = response_bytes.len().min(out_max as usize);
@@ -510,43 +475,44 @@ async fn execute_wasm_async(
                 Err(_) => return -1,
             };
 
-            let queue_url   = caller.data().queue_url.clone();
-            let api_url     = caller.data().api_url.clone();
-            let service_token = caller.data().service_token.clone();
-            let project_id  = caller.data().project_id.clone();
-            let client      = caller.data().http_client.clone();
+            let api = caller.data().dispatchers.api.clone();
+            let queue = caller.data().dispatchers.queue.clone();
 
-            if queue_url.is_empty() { return -1; }
+            let function_name = match req.get("function").and_then(|f| f.as_str()) {
+                Some(name) => name.to_string(),
+                None => return -1,
+            };
+            let payload = req.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+            let delay_secs = req.get("delay_secs").and_then(|d| d.as_u64());
 
-            let body = serde_json::json!({
-                "function": req.get("function"),
-                "payload":  req.get("payload").unwrap_or(&serde_json::Value::Null),
-                "delay_secs": req.get("delay_secs").unwrap_or(&serde_json::Value::Null),
-                "project_id": project_id,
-                "api_url": api_url,
-            });
-
-            let result = client
-                .post(format!("{}/push", queue_url))
-                .header("Content-Type", "application/json")
-                .header("X-Service-Token", &service_token)
-                .json(&body)
-                .send()
-                .await;
-
-            let response_bytes = match result {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.bytes().await {
-                        Ok(b) => b.to_vec(),
-                        Err(_) => return -1,
+            // Resolve function name → ID
+            let resolved = match api.resolve_function(&function_name).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let err_json = format!("{{\"error\":\"resolve failed: {}\"}}", e.replace('"', "\\\""));
+                    let err_bytes = err_json.as_bytes();
+                    let write_len = err_bytes.len().min(out_max as usize);
+                    let data = memory.data_mut(&mut caller);
+                    let out_start = out_ptr as usize;
+                    if out_start + write_len <= data.len() {
+                        data[out_start..out_start + write_len].copy_from_slice(&err_bytes[..write_len]);
                     }
+                    return write_len as i32;
                 }
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    let err_json = format!("{{\"error\":\"queue_push failed: HTTP {}\"}}", status);
+            };
+
+            // Push job via dispatch
+            let response_bytes = match queue.push_job(
+                &resolved.function_id.to_string(),
+                payload,
+                delay_secs,
+                None,
+            ).await {
+                Ok(()) => b"{\"ok\":true}".to_vec(),
+                Err(e) => {
+                    let err_json = format!("{{\"error\":\"queue_push failed: {}\"}}", e.replace('"', "\\\""));
                     err_json.into_bytes()
                 }
-                Err(_) => return -1,
             };
 
             let write_len = response_bytes.len().min(out_max as usize);
@@ -740,6 +706,42 @@ fn is_private_host(url: &reqwest::Url) -> bool {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::{Arc, OnceLock};
+    use async_trait::async_trait;
+    use job_contract::dispatch::{
+        ApiDispatch, DataEngineDispatch, QueueDispatch, RuntimeDispatch,
+        ExecuteRequest, ExecuteResponse, ResolvedFunction,
+    };
+
+    struct MockApiDispatch;
+    #[async_trait]
+    impl ApiDispatch for MockApiDispatch {
+        async fn get_bundle(&self, _: &str) -> Result<serde_json::Value, String> { Err("mock".into()) }
+        async fn write_log(&self, _: serde_json::Value) -> Result<(), String> { Ok(()) }
+        async fn get_secrets(&self) -> Result<HashMap<String, String>, String> { Ok(HashMap::new()) }
+        async fn resolve_function(&self, _: &str) -> Result<ResolvedFunction, String> { Err("mock".into()) }
+    }
+
+    struct MockQueueDispatch;
+    #[async_trait]
+    impl QueueDispatch for MockQueueDispatch {
+        async fn push_job(&self, _: &str, _: serde_json::Value, _: Option<u64>, _: Option<String>) -> Result<(), String> { Err("mock".into()) }
+    }
+
+    struct MockDataEngineDispatch;
+    #[async_trait]
+    impl DataEngineDispatch for MockDataEngineDispatch {
+        async fn execute_sql(&self, _: String, _: Vec<serde_json::Value>, _: String, _: String) -> Result<serde_json::Value, String> { Err("mock".into()) }
+    }
+
+    fn mock_dispatchers() -> PoolDispatchers {
+        PoolDispatchers {
+            api:         Arc::new(MockApiDispatch),
+            queue:       Arc::new(MockQueueDispatch),
+            data_engine: Arc::new(MockDataEngineDispatch),
+            runtime:     Arc::new(OnceLock::new()),
+        }
+    }
 
     /// Minimal WAT module satisfying the fluxbase WASM ABI.
     ///
@@ -784,10 +786,9 @@ mod tests {
     }
 
     fn default_params() -> WasmExecutionParams {
-        WasmExecutionParams {
-            payload: serde_json::json!({"msg": "test"}),
-            ..Default::default()
-        }
+        let mut p = WasmExecutionParams::test_default(mock_dispatchers());
+        p.payload = serde_json::json!({"msg": "test"});
+        p
     }
 
     // ── build_engine ──────────────────────────────────────────────────────
@@ -879,11 +880,9 @@ mod tests {
         let mut secrets = HashMap::new();
         secrets.insert("API_KEY".to_string(), "secret123".to_string());
 
-        let params = WasmExecutionParams {
-            secrets,
-            payload: serde_json::json!({}),
-            ..Default::default()
-        };
+        let mut params = WasmExecutionParams::test_default(mock_dispatchers());
+        params.secrets = secrets;
+        params.payload = serde_json::json!({});
         // The minimal module doesn't call secrets_get, but execution should succeed.
         let result = execute_wasm(&engine, &module, params).await;
         assert!(result.is_ok());
@@ -891,7 +890,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_wasm_default_fuel_limit_is_nonzero() {
-        let params = WasmExecutionParams::default();
+        let params = WasmExecutionParams::test_default(mock_dispatchers());
         assert!(params.fuel_limit > 0);
     }
 
@@ -899,13 +898,13 @@ mod tests {
 
     #[test]
     fn wasm_params_default_payload_is_null() {
-        let p = WasmExecutionParams::default();
+        let p = WasmExecutionParams::test_default(mock_dispatchers());
         assert!(p.payload.is_null());
     }
 
     #[test]
     fn wasm_params_default_allowed_hosts_is_empty() {
-        let p = WasmExecutionParams::default();
+        let p = WasmExecutionParams::test_default(mock_dispatchers());
         assert!(p.allowed_http_hosts.is_empty());
     }
 

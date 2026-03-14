@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use uuid::Uuid;
 
-use job_contract::dispatch::ApiDispatch;
+use job_contract::dispatch::{ApiDispatch, ResolvedFunction};
 use api::AppState as ApiState;
 
 /// Calls `api` crate internals directly — used by the monolithic server binary.
@@ -101,11 +101,10 @@ impl ApiDispatch for InProcessApiDispatch {
         let span_type  = entry.get("span_type") .and_then(|v| v.as_str()).map(|s| s.to_string());
         let metadata   = entry.get("metadata").cloned();
 
-        // tenant_id: prefer explicit field, fall back to local_tenant_id
         let tenant_id = entry.get("tenant_id")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<Uuid>().ok())
-            .unwrap_or(self.state.local_tenant_id);
+            .unwrap_or_else(Uuid::nil);
 
         let project_id = entry.get("project_id")
             .and_then(|v| v.as_str())
@@ -133,16 +132,45 @@ impl ApiDispatch for InProcessApiDispatch {
         Ok(())
     }
 
-    async fn get_secrets(
-        &self,
-        project_id: Option<Uuid>,
-    ) -> Result<HashMap<String, String>, String> {
+    async fn get_secrets(&self) -> Result<HashMap<String, String>, String> {
         api::secrets::service::get_runtime_secrets(
             &self.state.pool,
-            self.state.local_tenant_id,
-            project_id,
         )
         .await
         .map_err(|e| format!("secrets fetch failed: {:?}", e))
+    }
+
+    async fn resolve_function(
+        &self,
+        name: &str,
+    ) -> Result<ResolvedFunction, String> {
+        #[derive(sqlx::FromRow)]
+        struct Row { id: Uuid }
+
+        let pool = &self.state.pool;
+
+        let row: Option<Row> = if let Ok(fid) = name.parse::<Uuid>() {
+            sqlx::query_as::<_, Row>(
+                "SELECT id FROM functions WHERE id = $1",
+            )
+            .bind(fid)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("resolve_function DB query failed: {}", e))?
+        } else {
+            sqlx::query_as::<_, Row>(
+                "SELECT id FROM functions WHERE name = $1",
+            )
+            .bind(name)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("resolve_function DB query failed: {}", e))?
+        };
+
+        let r = row.ok_or_else(|| format!("function '{}' not found", name))?;
+
+        Ok(ResolvedFunction {
+            function_id: r.id,
+        })
     }
 }

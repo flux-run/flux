@@ -29,6 +29,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration};
+use job_contract::dispatch::{
+    ApiDispatch, DataEngineDispatch, QueueDispatch, RuntimeDispatch,
+};
 
 
 /// Build the Fluxbase runtime extension — queue ops + db ops + http + sleep + function invoke.
@@ -47,37 +50,31 @@ pub fn build_fluxbase_extension() -> Extension {
 //
 // Deno bridge: JS calls Deno.core.ops.op_queue_push(functionName, payload, delay, key)
 // from inside ctx.queue.push().
-// The op:
-//   1. Resolves function name → UUID via GET {api_url}/internal/functions/resolve
-//   2. POSTs to queue service /jobs
-//   3. Returns { job_id }
+// The op uses in-process dispatch traits (ApiDispatch + QueueDispatch) injected
+// into the worker's OpState — no HTTP calls.
 
-/// Per-request queue context injected into Deno OpState.
-pub struct QueueOpState {
-    pub queue_url:     String,
-    pub api_url:       String,
-    pub service_token: String,
-    pub project_id:    Option<uuid::Uuid>,
-    pub client:        reqwest::Client,
-}
+/// Per-request queue context injected into Deno OpState (serial path).
+pub struct QueueOpState {}
 
-/// Carry queue context from the async Tokio world (pool.rs) into execute_with_runtime.
+/// Carry queue context from the async Tokio world (pool.rs) into the V8 op.
 #[derive(Clone)]
-pub struct QueueContext {
-    pub queue_url:     String,
-    pub api_url:       String,
-    pub service_token: String,
-    pub project_id:    Option<uuid::Uuid>,
-    pub client:        reqwest::Client,
-}
+pub struct QueueContext {}
 
 /// Carry data-engine context from the pool into the V8 op.
 #[derive(Clone)]
 pub struct DbContext {
-    pub data_engine_url: String,
-    pub service_token:   String,
     pub database:        String,
-    pub client:          reqwest::Client,
+}
+
+/// Dispatch traits shared across all workers in the isolate pool.
+/// Stored in each worker's `OpState` once at creation time.
+/// V8 ops use these instead of making HTTP calls.
+#[derive(Clone)]
+pub struct PoolDispatchers {
+    pub api:         Arc<dyn ApiDispatch>,
+    pub queue:       Arc<dyn QueueDispatch>,
+    pub data_engine: Arc<dyn DataEngineDispatch>,
+    pub runtime:     Arc<std::sync::OnceLock<Arc<dyn RuntimeDispatch>>>,
 }
 
 /// Options forwarded from JS's `opts` argument to `ctx.queue.push()`.
@@ -102,109 +99,43 @@ pub async fn op_queue_push(
     #[serde]  opts:          QueuePushOpts,
     #[serde]  queue_ctx_override: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, std::io::Error> {
-    let (queue_url, api_url, service_token, project_id, client) =
-        if let Some(ref ctx) = queue_ctx_override {
-            // Concurrent path: context carried in the task JSON
-            let queue_url     = ctx["queue_url"].as_str().unwrap_or("").to_string();
-            let api_url       = ctx["api_url"].as_str().unwrap_or("").to_string();
-            let service_token = ctx["service_token"].as_str().unwrap_or("").to_string();
-            let project_id    = ctx["project_id"].as_str()
-                .and_then(|s| uuid::Uuid::parse_str(s).ok());
-            (queue_url, api_url, service_token, project_id, reqwest::Client::new())
-        } else {
-            // Serial path: context in OpState
-            let s = state.borrow();
-            match s.try_borrow::<QueueOpState>() {
-                Some(qs) => (
-                    qs.queue_url.clone(),
-                    qs.api_url.clone(),
-                    qs.service_token.clone(),
-                    qs.project_id,
-                    qs.client.clone(),
-                ),
-                None => return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "op_queue_push: no queue context available",
-                )),
-            }
-        };
+    // Get dispatch traits from OpState (injected at worker creation)
+    let (api, queue) = {
+        let s = state.borrow();
+        match s.try_borrow::<PoolDispatchers>() {
+            Some(d) => (Arc::clone(&d.api), Arc::clone(&d.queue)),
+            None => return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "op_queue_push: no dispatch traits available",
+            )),
+        }
+    };
 
-    let project_id_str = project_id
-        .map(|p| p.to_string())
-        .unwrap_or_default();
+    // Get per-request data from context override (concurrent) or OpState (serial)
+    // project_id is no longer scoped — single-instance system
 
-    // ── Resolve function name → { function_id, tenant_id } ───────────────
-    let resolve_url = format!(
-        "{}/internal/functions/resolve?name={}&project_id={}",
-        api_url.trim_end_matches('/'), function_name, project_id_str,
-    );
-
-    let resolve_resp = client
-        .get(&resolve_url)
-        .header("X-Service-Token", &service_token)
-        .send()
+    // ── Resolve function name → function_id (in-process) ─────────────────
+    let resolved = api.resolve_function(&function_name)
         .await
         .map_err(|e| std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("function resolve request failed: {}", e),
-        ))?;
-
-    if !resolve_resp.status().is_success() {
-        return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("ctx.queue.push: function '{}' not found in project", function_name),
-        ));
-    }
-
-    let resolved: serde_json::Value = resolve_resp.json().await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-
-    let function_id = resolved["function_id"].as_str()
-        .ok_or_else(|| std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "missing function_id in resolve response",
+            format!("ctx.queue.push: function '{}' not found: {}", function_name, e),
         ))?;
 
-    let tenant_id = resolved["tenant_id"].as_str()
-        .ok_or_else(|| std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "missing tenant_id in resolve response",
-        ))?;
+    // ── Push to queue via dispatch (in-process) ──────────────────────────
+    queue.push_job(
+        &resolved.function_id.to_string(),
+        payload,
+        opts.delay_seconds.map(|d| d as u64),
+        opts.idempotency_key,
+    )
+    .await
+    .map_err(|e| std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("queue push failed: {}", e),
+    ))?;
 
-    // ── Push to queue service ─────────────────────────────────────────────
-    let job_body = serde_json::json!({
-        "tenant_id":       tenant_id,
-        "project_id":      project_id,
-        "function_id":     function_id,
-        "payload":         payload,
-        "delay_seconds":   opts.delay_seconds,
-        "idempotency_key": opts.idempotency_key,
-    });
-
-    let queue_resp = client
-        .post(format!("{}/jobs", queue_url.trim_end_matches('/')))
-        .bearer_auth(&service_token)
-        .json(&job_body)
-        .send()
-        .await
-        .map_err(|e| std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("queue push failed: {}", e),
-        ))?;
-
-    if !queue_resp.status().is_success() {
-        let status = queue_resp.status();
-        let body = queue_resp.text().await.unwrap_or_default();
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("queue returned {}: {}", status, body),
-        ));
-    }
-
-    let job_data: serde_json::Value = queue_resp.json().await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-
-    Ok(serde_json::json!({ "job_id": job_data["job_id"] }))
+    Ok(serde_json::json!({ "job_id": resolved.function_id.to_string() }))
 }
 
 /// Async op: JS bootstrap calls this to get the next task.
@@ -256,9 +187,9 @@ pub fn op_task_error(
     }
 }
 
-/// Async op: execute raw SQL via the data-engine service.
+/// Async op: execute raw SQL via the data-engine dispatch (in-process).
 /// JS calls: Deno.core.ops.op_db_query(sql, params, db_ctx_override)
-/// db_ctx_override carries { data_engine_url, service_token, database, request_id }
+/// db_ctx_override carries { database, request_id } (no URLs needed)
 #[deno_core::op2(async)]
 #[serde]
 pub async fn op_db_query(
@@ -267,36 +198,32 @@ pub async fn op_db_query(
     #[serde]  params:   serde_json::Value,
     #[serde]  db_ctx_override: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, std::io::Error> {
-    let (data_engine_url, service_token, database, request_id, client) = {
-        if let Some(ref ctx) = db_ctx_override {
-            // Concurrent path: context carried in the task JSON
-            let s = state.borrow();
-            let client = s.try_borrow::<DbContext>()
-                .map(|c| c.client.clone())
-                .unwrap_or_else(reqwest::Client::new);
-            (
-                ctx["data_engine_url"].as_str().unwrap_or("").to_string(),
-                ctx["service_token"].as_str().unwrap_or("").to_string(),
-                ctx["database"].as_str().unwrap_or("").to_string(),
-                ctx["request_id"].as_str().unwrap_or("").to_string(),
-                client,
-            )
-        } else {
-            // Serial path: context in OpState
-            let s = state.borrow();
-            match s.try_borrow::<DbContext>() {
-                Some(db) => (
-                    db.data_engine_url.clone(),
-                    db.service_token.clone(),
-                    db.database.clone(),
-                    String::new(),
-                    db.client.clone(),
-                ),
-                None => return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "op_db_query: no db context available",
-                )),
-            }
+    // Get dispatch trait from OpState
+    let data_engine = {
+        let s = state.borrow();
+        match s.try_borrow::<PoolDispatchers>() {
+            Some(d) => Arc::clone(&d.data_engine),
+            None => return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "op_db_query: no dispatch traits available",
+            )),
+        }
+    };
+
+    // Get per-request database/request_id from context override or OpState
+    let (database, request_id) = if let Some(ref ctx) = db_ctx_override {
+        (
+            ctx["database"].as_str().unwrap_or("").to_string(),
+            ctx["request_id"].as_str().unwrap_or("").to_string(),
+        )
+    } else {
+        let s = state.borrow();
+        match s.try_borrow::<DbContext>() {
+            Some(db) => (db.database.clone(), String::new()),
+            None => return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "op_db_query: no db context available",
+            )),
         }
     };
 
@@ -305,33 +232,9 @@ pub async fn op_db_query(
         .cloned()
         .unwrap_or_default();
 
-    let body = serde_json::json!({
-        "sql":        sql,
-        "params":     params_array,
-        "database":   database,
-        "request_id": request_id,
-    });
-
-    let resp = client
-        .post(format!("{}/db/sql", data_engine_url.trim_end_matches('/')))
-        .header("X-Service-Token", &service_token)
-        .json(&body)
-        .send()
+    data_engine.execute_sql(sql, params_array, database, request_id)
         .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("db query failed ({}): {}", status, body),
-        ));
-    }
-
-    resp.json::<serde_json::Value>()
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
 // ── HTTP fetch op ─────────────────────────────────────────────────────────────
@@ -526,15 +429,12 @@ pub async fn op_sleep(#[smi] ms: u32) {
 // ── Function invoke op ────────────────────────────────────────────────────────
 //
 // JS: Deno.core.ops.op_function_invoke(function_name, payload, invoke_ctx_override)
-// Calls another Flux function in-process by POSTing to the runtime /execute endpoint.
+// Calls another Flux function via in-process RuntimeDispatch (no HTTP).
 // Carries the parent request_id for call graph tracing (execution_calls table).
 
-/// Carry the runtime's own execute endpoint for cross-function calls.
+/// Per-request function invoke context (serial path only).
 pub struct FunctionInvokeOpState {
-    pub runtime_url:   String,   // e.g. "http://localhost:8080"
-    pub service_token: String,
     pub request_id:    String,   // parent request_id for call graph
-    pub client:        reqwest::Client,
 }
 
 /// ctx.function.invoke(name, payload) — call another Flux function in-process.
@@ -546,63 +446,48 @@ pub async fn op_function_invoke(
     #[serde]  payload:       serde_json::Value,
     #[serde]  invoke_ctx_override: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, std::io::Error> {
-    let (runtime_url, service_token, parent_request_id, client) = {
+    // Get RuntimeDispatch from OnceLock in PoolDispatchers
+    let runtime = {
         let s = state.borrow();
-        if let Some(ref ctx) = invoke_ctx_override {
-            let client = s.try_borrow::<FunctionInvokeOpState>()
-                .map(|c| c.client.clone())
-                .unwrap_or_else(reqwest::Client::new);
-            (
-                ctx["runtime_url"].as_str().unwrap_or("").to_string(),
-                ctx["service_token"].as_str().unwrap_or("").to_string(),
-                ctx["request_id"].as_str().unwrap_or("").to_string(),
-                client,
-            )
-        } else {
-            match s.try_borrow::<FunctionInvokeOpState>() {
-                Some(fi) => (
-                    fi.runtime_url.clone(),
-                    fi.service_token.clone(),
-                    fi.request_id.clone(),
-                    fi.client.clone(),
-                ),
-                None => return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "op_function_invoke: no invoke context available",
-                )),
-            }
+        match s.try_borrow::<PoolDispatchers>() {
+            Some(d) => d.runtime.get().cloned().ok_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "op_function_invoke: runtime dispatch not yet initialized",
+            ))?,
+            None => return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "op_function_invoke: no dispatch traits available",
+            )),
         }
     };
 
-    if runtime_url.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "op_function_invoke: runtime_url not configured",
-        ));
-    }
+    // Get per-request request_id
+    let parent_request_id = if let Some(ref ctx) = invoke_ctx_override {
+        ctx["request_id"].as_str().unwrap_or("").to_string()
+    } else {
+        let s = state.borrow();
+        s.try_borrow::<FunctionInvokeOpState>()
+            .map(|fi| fi.request_id.clone())
+            .unwrap_or_default()
+    };
 
-    let resp = client
-        .post(format!("{}/execute/{}", runtime_url.trim_end_matches('/'), function_name))
-        .header("Content-Type", "application/json")
-        .header("X-Service-Token", &service_token)
-        .header("X-Parent-Request-ID", &parent_request_id)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let req = job_contract::dispatch::ExecuteRequest {
+        function_id:    function_name,
+        payload,
+        execution_seed: None,
+        request_id:     Some(uuid::Uuid::new_v4().to_string()),
+        parent_span_id: if parent_request_id.is_empty() { None } else { Some(parent_request_id) },
+        runtime_hint:   None,
+        user_id:        None,
+        jwt_claims:     None,
+    };
 
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("function invoke failed ({}): {}", status, body),
-        ));
-    }
+    let resp = runtime.execute(req).await.map_err(|e| std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("function invoke failed: {}", e),
+    ))?;
 
-    resp.json::<serde_json::Value>()
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    Ok(resp.body)
 }
 /// Intended to be called once per worker thread; per-request state is injected
 /// via `OpState` before each execution (see `execute_with_runtime`).
@@ -646,11 +531,12 @@ pub fn create_js_runtime() -> JsRuntime {
 }
 
 /// Create a `JsRuntime` configured for concurrent multi-task execution.
-/// Puts `SharedTaskReceiver` and `ResultRegistry` into OpState, then evaluates
-/// the bootstrap loop so the runtime is ready to receive injected tasks.
+/// Puts `SharedTaskReceiver`, `ResultRegistry`, and `PoolDispatchers` into OpState,
+/// then evaluates the bootstrap loop so the runtime is ready to receive injected tasks.
 pub fn create_concurrent_js_runtime(
     task_receiver: SharedTaskReceiver,
     result_registry: ResultRegistry,
+    dispatchers: PoolDispatchers,
 ) -> JsRuntime {
     let mut rt = JsRuntime::new(RuntimeOptions {
         extensions: vec![build_fluxbase_extension()],
@@ -662,6 +548,7 @@ pub fn create_concurrent_js_runtime(
         let mut state = op_state.borrow_mut();
         state.put(task_receiver);
         state.put(result_registry);
+        state.put(dispatchers);
     }
 
     rt.execute_script(
@@ -1061,13 +948,7 @@ pub async fn execute_with_runtime(
         let mut state = op_state.borrow_mut();
 
         let _ = state.try_take::<QueueOpState>();
-        state.put(QueueOpState {
-            queue_url:     queue_ctx.queue_url,
-            api_url:       queue_ctx.api_url,
-            service_token: queue_ctx.service_token,
-            project_id:    queue_ctx.project_id,
-            client:        queue_ctx.client,
-        });
+        state.put(QueueOpState {});
     }
 
     // ── Build + execute the IIFE wrapper ───────────────────────────────────
@@ -1115,13 +996,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn no_op_queue_ctx() -> QueueContext {
-        QueueContext {
-            queue_url:     "http://127.0.0.1:0".to_string(),
-            api_url:       "http://127.0.0.1:0".to_string(),
-            service_token: "test-token".to_string(),
-            project_id:    None,
-            client:        reqwest::Client::new(),
-        }
+        QueueContext {}
     }
 
     /// Execute `code` in a fresh JsRuntime and return the result.

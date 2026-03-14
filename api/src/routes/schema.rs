@@ -93,7 +93,7 @@ pub fn forward_headers(headers: &HeaderMap) -> reqwest::header::HeaderMap {
 /// Returns the unified schema graph for the authenticated project.
 pub async fn graph(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     headers: HeaderMap,
     Query(params): Query<SchemaQuery>,
 ) -> ApiResult<Value> {
@@ -103,8 +103,6 @@ pub async fn graph(
         .unwrap_or("-")
         .to_owned();
 
-    let project_id = ctx.project_id;
-
     // ── 1. Fetch DB schema from Data Engine ───────────────────────────────
     let mut de_url = format!("{}/db/schema", state.data_engine_url);
     if let Some(ref db) = params.database {
@@ -113,7 +111,6 @@ pub async fn graph(
 
     tracing::info!(
         request_id = %request_id,
-        project_id = %project_id,
         de_url     = %de_url,
         "calling data-engine",
     );
@@ -142,9 +139,8 @@ pub async fn graph(
     // ── 2. Load function definitions from API DB ──────────────────────────
     let funcs = sqlx::query(
         "SELECT name, description, input_schema, output_schema \
-         FROM functions WHERE project_id = $1 ORDER BY name",
+         FROM functions ORDER BY name",
     )
-    .bind(project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(|_| ApiError::internal("db_error"))?;
@@ -188,9 +184,6 @@ pub async fn push_schema(
     State(state): State<AppState>,
     Json(manifest): Json<SchemaManifest>,
 ) -> ApiResult<serde_json::Value> {
-    let tenant_id = state.local_tenant_id;
-    let project_id = state.local_project_id;
-
     // Ensure schema_rules column exists
     sqlx::query(
         "ALTER TABLE fluxbase_internal.table_metadata \
@@ -206,13 +199,11 @@ pub async fn push_schema(
     // Upsert table metadata
     sqlx::query(
         "INSERT INTO fluxbase_internal.table_metadata \
-         (tenant_id, project_id, schema_name, table_name, columns, schema_rules, updated_at) \
-         VALUES ($1, $2, 'public', $3, $4, $5, now()) \
-         ON CONFLICT (tenant_id, project_id, schema_name, table_name) \
+         (schema_name, table_name, columns, schema_rules, updated_at) \
+         VALUES ('public', $1, $2, $3, now()) \
+         ON CONFLICT (schema_name, table_name) \
          DO UPDATE SET columns = EXCLUDED.columns, schema_rules = EXCLUDED.schema_rules, updated_at = now()",
     )
-    .bind(tenant_id)
-    .bind(project_id)
     .bind(&manifest.table)
     .bind(&manifest.columns)
     .bind(&manifest.rules)
@@ -236,14 +227,12 @@ pub async fn push_schema(
                             if let Ok(function_id) = uuid::Uuid::parse_str(fn_id_str) {
                                 sqlx::query(
                                     "INSERT INTO fluxbase_internal.hooks \
-                                     (tenant_id, project_id, table_name, event, function_id) \
-                                     VALUES ($1, $2, $3, $4, $5) \
-                                     ON CONFLICT (tenant_id, project_id, table_name, event) \
+                                     (table_name, event, function_id) \
+                                     VALUES ($1, $2, $3) \
+                                     ON CONFLICT (table_name, event) \
                                      DO UPDATE SET function_id = EXCLUDED.function_id, \
                                                    transform_expr = NULL, enabled = true",
                                 )
-                                .bind(tenant_id)
-                                .bind(project_id)
                                 .bind(&manifest.table)
                                 .bind(event_name)
                                 .bind(function_id)
@@ -258,14 +247,12 @@ pub async fn push_schema(
                             // JSON object → TransformExpr hook (compiled TypeScript transform)
                             sqlx::query(
                                 "INSERT INTO fluxbase_internal.hooks \
-                                 (tenant_id, project_id, table_name, event, transform_expr) \
-                                 VALUES ($1, $2, $3, $4, $5) \
-                                 ON CONFLICT (tenant_id, project_id, table_name, event) \
+                                 (table_name, event, transform_expr) \
+                                 VALUES ($1, $2, $3) \
+                                 ON CONFLICT (table_name, event) \
                                  DO UPDATE SET transform_expr = EXCLUDED.transform_expr, \
                                                function_id = NULL, enabled = true",
                             )
-                            .bind(tenant_id)
-                            .bind(project_id)
                             .bind(&manifest.table)
                             .bind(event_name)
                             .bind(fn_item)
@@ -297,12 +284,10 @@ pub async fn push_schema(
 
                 sqlx::query(
                     "INSERT INTO fluxbase_internal.event_subscriptions \
-                     (tenant_id, project_id, event_pattern, target_type, target_config) \
-                     VALUES ($1, $2, $3, 'function', $4) \
+                     (event_pattern, target_type, target_config) \
+                     VALUES ($1, 'function', $2) \
                      ON CONFLICT DO NOTHING",
                 )
-                .bind(tenant_id)
-                .bind(project_id)
                 .bind(event_pattern)
                 .bind(&target_config)
                 .execute(&state.pool)

@@ -1,12 +1,10 @@
 use serde::Deserialize;
 use serde_json::Value;
-use uuid::Uuid;
 
 /// Inbound request from the Gateway — no tenant concept.
 #[derive(Deserialize)]
 pub struct ExecuteRequest {
     pub function_id:    String,
-    pub project_id:     Option<Uuid>,
     pub payload:        Value,
     /// Deterministic randomness seed.
     /// When provided (replay path) Math.random / crypto.randomUUID / nanoid are
@@ -20,7 +18,6 @@ pub struct ExecuteRequest {
 #[derive(Clone)]
 pub struct InvocationCtx {
     pub function_id:    String,
-    pub project_id:     Option<Uuid>,
     pub payload:        Value,
     pub execution_seed: i64,
     /// Forwarded `x-request-id` header — used to correlate spans across services.

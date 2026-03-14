@@ -88,7 +88,6 @@ pub async fn stream_events(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let cursor = cursor_from(&headers, params.since);
     let pool = state.pool.clone();
-    let project_id = state.local_project_id;
 
     let s = stream::unfold(cursor, move |cursor| {
         let pool = pool.clone();
@@ -99,12 +98,11 @@ pub async fn stream_events(
                 r#"
                 SELECT id, event_type, table_name, operation, record_id, created_at
                 FROM   fluxbase_internal.events
-                WHERE  project_id = $1 AND created_at > $2
+                WHERE  created_at > $1
                 ORDER  BY created_at ASC
                 LIMIT  50
                 "#,
             )
-            .bind(project_id)
             .bind(cursor)
             .fetch_all(&pool)
             .await
@@ -155,7 +153,6 @@ pub async fn stream_executions(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let cursor = cursor_from(&headers, params.since);
     let pool = state.pool.clone();
-    let project_id = state.local_project_id;
 
     let s = stream::unfold(cursor, move |cursor| {
         let pool = pool.clone();
@@ -166,12 +163,11 @@ pub async fn stream_executions(
                 r#"
                 SELECT request_id, method, path, response_status, duration_ms, created_at
                 FROM   fluxbase_internal.trace_requests
-                WHERE  project_id = $1 AND created_at > $2
+                WHERE  created_at > $1
                 ORDER  BY created_at ASC
                 LIMIT  50
                 "#,
             )
-            .bind(project_id)
             .bind(cursor)
             .fetch_all(&pool)
             .await
@@ -224,7 +220,6 @@ pub async fn stream_mutations(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let cursor = cursor_from(&headers, params.since);
     let pool = state.pool.clone();
-    let project_id = state.local_project_id;
 
     let s = stream::unfold(cursor, move |cursor| {
         let pool = pool.clone();
@@ -235,12 +230,11 @@ pub async fn stream_mutations(
                 r#"
                 SELECT request_id, table_name, operation, record_pk, mutation_seq, mutation_ts
                 FROM   fluxbase_internal.state_mutations
-                WHERE  project_id = $1 AND mutation_ts > $2
+                WHERE  mutation_ts > $1
                 ORDER  BY mutation_ts ASC
                 LIMIT  100
                 "#,
             )
-            .bind(project_id)
             .bind(cursor)
             .fetch_all(&pool)
             .await

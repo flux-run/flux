@@ -24,7 +24,6 @@ fn db_err(e: sqlx::Error) -> ApiError {
 #[derive(sqlx::FromRow, Serialize)]
 pub struct QueueConfigRow {
     pub id: Uuid,
-    pub project_id: Uuid,
     pub name: String,
     pub description: Option<String>,
     pub max_attempts: i32,
@@ -35,8 +34,6 @@ pub struct QueueConfigRow {
 #[derive(sqlx::FromRow, Serialize)]
 pub struct DeadLetterJobRow {
     pub id: Uuid,
-    pub tenant_id: Option<Uuid>,
-    pub project_id: Option<Uuid>,
     pub function_id: Option<Uuid>,
     pub payload: Option<Value>,
     pub error: Option<String>,
@@ -60,16 +57,15 @@ pub struct PublishMessagePayload {
 
 pub async fn list_queues(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<QueueConfigRow>> {
     let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, QueueConfigRow>(
-        "SELECT id, project_id, name, description, max_attempts, visibility_timeout_ms, created_at \
-         FROM flux.queue_configs WHERE project_id = $1 ORDER BY created_at DESC \
-         LIMIT $2 OFFSET $3",
+        "SELECT id, name, description, max_attempts, visibility_timeout_ms, created_at \
+         FROM flux.queue_configs ORDER BY created_at DESC \
+         LIMIT $1 OFFSET $2",
     )
-    .bind(ctx.project_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
@@ -81,7 +77,7 @@ pub async fn list_queues(
 
 pub async fn create_queue(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<CreateQueuePayload>,
 ) -> ApiResult<QueueConfigRow> {
     let max_attempts = payload.max_attempts.unwrap_or(5);
@@ -89,11 +85,10 @@ pub async fn create_queue(
 
     let row = sqlx::query_as::<_, QueueConfigRow>(
         "INSERT INTO flux.queue_configs \
-         (project_id, name, description, max_attempts, visibility_timeout_ms) \
-         VALUES ($1, $2, $3, $4, $5) \
-         RETURNING id, project_id, name, description, max_attempts, visibility_timeout_ms, created_at",
+         (name, description, max_attempts, visibility_timeout_ms) \
+         VALUES ($1, $2, $3, $4) \
+         RETURNING id, name, description, max_attempts, visibility_timeout_ms, created_at",
     )
-    .bind(ctx.project_id)
     .bind(&payload.name)
     .bind(&payload.description)
     .bind(max_attempts)
@@ -107,22 +102,20 @@ pub async fn create_queue(
 
 pub async fn get_queue(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let queue = sqlx::query_as::<_, QueueConfigRow>(
-        "SELECT id, project_id, name, description, max_attempts, visibility_timeout_ms, created_at \
-         FROM flux.queue_configs WHERE name = $1 AND project_id = $2",
+        "SELECT id, name, description, max_attempts, visibility_timeout_ms, created_at \
+         FROM flux.queue_configs WHERE name = $1",
     )
     .bind(&name)
-    .bind(ctx.project_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(db_err)?
     .ok_or_else(|| ApiError::not_found("queue_not_found"))?;
 
-    let count_row = sqlx::query("SELECT COUNT(*) as count FROM jobs WHERE project_id = $1 AND status = 'pending'")
-        .bind(ctx.project_id)
+    let count_row = sqlx::query("SELECT COUNT(*) as count FROM jobs WHERE status = 'pending'")
         .fetch_one(&state.pool)
         .await
         .map_err(db_err)?;
@@ -141,12 +134,11 @@ pub async fn get_queue(
 
 pub async fn delete_queue(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
-    sqlx::query("DELETE FROM flux.queue_configs WHERE name = $1 AND project_id = $2")
+    sqlx::query("DELETE FROM flux.queue_configs WHERE name = $1")
         .bind(&name)
-        .bind(ctx.project_id)
         .execute(&state.pool)
         .await
         .map_err(db_err)?;
@@ -156,7 +148,7 @@ pub async fn delete_queue(
 
 pub async fn publish_message(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(_name): Path<String>,
     Json(payload): Json<PublishMessagePayload>,
 ) -> ApiResult<serde_json::Value> {
@@ -168,11 +160,9 @@ pub async fn publish_message(
     let run_at_naive = run_at.naive_utc();
 
     let row = sqlx::query(
-        "INSERT INTO jobs (tenant_id, project_id, function_id, payload, run_at) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        "INSERT INTO jobs (function_id, payload, run_at) \
+         VALUES ($1, $2, $3) RETURNING id",
     )
-    .bind(state.local_tenant_id)
-    .bind(ctx.project_id)
     .bind(payload.function_id)
     .bind(payload.payload.unwrap_or(Value::Object(Default::default())))
     .bind(run_at_naive)
@@ -202,10 +192,9 @@ pub async fn create_binding(
 pub async fn purge_queue(
     Path(_name): Path<String>,
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
-    let result = sqlx::query("DELETE FROM jobs WHERE project_id = $1 AND status = 'pending'")
-        .bind(ctx.project_id)
+    let result = sqlx::query("DELETE FROM jobs WHERE status = 'pending'")
         .execute(&state.pool)
         .await
         .map_err(db_err)?;
@@ -219,16 +208,15 @@ pub async fn purge_queue(
 pub async fn list_dlq(
     Path(_name): Path<String>,
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<DeadLetterJobRow>> {
     let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, DeadLetterJobRow>(
-        "SELECT id, tenant_id, project_id, function_id, payload, error, failed_at \
-         FROM dead_letter_jobs WHERE project_id = $1 \
-         ORDER BY failed_at DESC LIMIT $2 OFFSET $3",
+        "SELECT id, function_id, payload, error, failed_at \
+         FROM dead_letter_jobs \
+         ORDER BY failed_at DESC LIMIT $1 OFFSET $2",
     )
-    .bind(ctx.project_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
@@ -241,19 +229,17 @@ pub async fn list_dlq(
 pub async fn replay_dlq(
     Path(_name): Path<String>,
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
-        "INSERT INTO jobs (tenant_id, project_id, function_id, payload) \
-         SELECT tenant_id, project_id, function_id, payload FROM dead_letter_jobs WHERE project_id = $1",
+        "INSERT INTO jobs (function_id, payload) \
+         SELECT function_id, payload FROM dead_letter_jobs",
     )
-    .bind(ctx.project_id)
     .execute(&state.pool)
     .await
     .map_err(db_err)?;
 
-    sqlx::query("DELETE FROM dead_letter_jobs WHERE project_id = $1")
-        .bind(ctx.project_id)
+    sqlx::query("DELETE FROM dead_letter_jobs")
         .execute(&state.pool)
         .await
         .map_err(db_err)?;

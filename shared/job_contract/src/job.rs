@@ -4,8 +4,6 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateJobRequest {
-    pub tenant_id: Uuid,
-    pub project_id: Uuid,
     pub function_id: Uuid,
     pub payload: Value,
     /// Optional caller-supplied deduplication key.
@@ -35,12 +33,8 @@ mod tests {
 
     #[test]
     fn create_job_request_roundtrip() {
-        let tid = Uuid::new_v4();
-        let pid = Uuid::new_v4();
         let fid = Uuid::new_v4();
         let req = CreateJobRequest {
-            tenant_id:       tid,
-            project_id:      pid,
             function_id:     fid,
             payload:         json!({"task": "send_email"}),
             idempotency_key: Some("idem-key-1".to_string()),
@@ -48,8 +42,6 @@ mod tests {
         };
         let json_str = serde_json::to_string(&req).unwrap();
         let back: CreateJobRequest = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(back.tenant_id,       tid);
-        assert_eq!(back.project_id,      pid);
         assert_eq!(back.function_id,     fid);
         assert_eq!(back.idempotency_key, Some("idem-key-1".to_string()));
         assert_eq!(back.delay_seconds,   Some(60));
@@ -58,8 +50,8 @@ mod tests {
     #[test]
     fn create_job_request_defaults_optional_fields() {
         let json_str = format!(
-            r#"{{"tenant_id":"{}","project_id":"{}","function_id":"{}","payload":{{}}}}"#,
-            Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()
+            r#"{{"function_id":"{}","payload":{{}}}}"#,
+            Uuid::new_v4()
         );
         let req: CreateJobRequest = serde_json::from_str(&json_str).unwrap();
         assert!(req.idempotency_key.is_none());
@@ -69,15 +61,13 @@ mod tests {
     #[test]
     fn create_job_request_clone() {
         let req = CreateJobRequest {
-            tenant_id:       Uuid::new_v4(),
-            project_id:      Uuid::new_v4(),
             function_id:     Uuid::new_v4(),
             payload:         json!({}),
             idempotency_key: None,
             delay_seconds:   None,
         };
         let c = req.clone();
-        assert_eq!(c.tenant_id, req.tenant_id);
+        assert_eq!(c.function_id, req.function_id);
     }
 
     // ── CreateJobResponse ─────────────────────────────────────────────────
@@ -102,8 +92,6 @@ mod tests {
     #[test]
     fn zero_delay_seconds_is_valid() {
         let req = CreateJobRequest {
-            tenant_id:       Uuid::new_v4(),
-            project_id:      Uuid::new_v4(),
             function_id:     Uuid::new_v4(),
             payload:         json!({}),
             idempotency_key: None,

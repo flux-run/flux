@@ -64,8 +64,6 @@ pub struct LogEntry {
     // ── Unified fields ────────────────────────────────────────────────────
     pub source:      Option<String>,
     pub resource_id: Option<String>,
-    pub tenant_id:   Option<Uuid>,
-    pub project_id:  Option<Uuid>,
     pub request_id:  Option<String>,
     pub metadata:    Option<serde_json::Value>,
     /// Trace span classification: start | end | error | event (default)
@@ -89,34 +87,22 @@ pub async fn create_log(
     let level  = entry.level.as_deref().unwrap_or("info");
     let source = entry.source.as_deref().unwrap_or("function");
 
-    // ── Resolve tenant_id / project_id / resource_id ──────────────────────
-    let (tenant_id, project_id, resource_id) = if let Some(tid) = entry.tenant_id {
-        (tid, entry.project_id, entry.resource_id.clone().unwrap_or_default())
+    // ── Resolve resource_id ───────────────────────────────────────────────
+    let resource_id = if let Some(rid) = entry.resource_id.clone().filter(|s| !s.is_empty()) {
+        rid
     } else if let Some(fid_str) = &entry.function_id {
         #[derive(sqlx::FromRow)]
-        struct FnCtx { tenant_id: Uuid, project_id: Uuid, name: String }
-        let fn_ctx = if let Ok(fid) = fid_str.parse::<Uuid>() {
-            sqlx::query_as::<_, FnCtx>(
-                "SELECT t.id AS tenant_id, f.project_id, f.name \
-                 FROM functions f \
-                 JOIN projects p ON p.id = f.project_id \
-                 JOIN tenants  t ON t.id = p.tenant_id \
-                 WHERE f.id = $1 LIMIT 1",
-            ).bind(fid).fetch_optional(&pool).await.map_err(|_| db_err())?
+        struct FnName { name: String }
+        let fn_row = if let Ok(fid) = fid_str.parse::<Uuid>() {
+            sqlx::query_as::<_, FnName>("SELECT name FROM functions WHERE id = $1 LIMIT 1")
+                .bind(fid).fetch_optional(&pool).await.map_err(|_| db_err())?
         } else {
-            sqlx::query_as::<_, FnCtx>(
-                "SELECT t.id AS tenant_id, f.project_id, f.name \
-                 FROM functions f \
-                 JOIN projects p ON p.id = f.project_id \
-                 JOIN tenants  t ON t.id = p.tenant_id \
-                 WHERE f.name = $1 LIMIT 1",
-            ).bind(fid_str).fetch_optional(&pool).await.map_err(|_| db_err())?
+            sqlx::query_as::<_, FnName>("SELECT name FROM functions WHERE name = $1 LIMIT 1")
+                .bind(fid_str).fetch_optional(&pool).await.map_err(|_| db_err())?
         };
-        if let Some(ctx) = fn_ctx {
-            let res = entry.resource_id.clone().unwrap_or(ctx.name);
-            (ctx.tenant_id, Some(ctx.project_id), res)
-        } else {
-            return Ok(ApiResponse::new(serde_json::json!({ "logged": false, "reason": "function_not_found" })));
+        match fn_row {
+            Some(f) => f.name,
+            None => return Ok(ApiResponse::new(serde_json::json!({ "logged": false, "reason": "function_not_found" }))),
         }
     } else {
         return Ok(ApiResponse::new(serde_json::json!({ "logged": false, "reason": "missing_context" })));
@@ -124,10 +110,10 @@ pub async fn create_log(
 
     sqlx::query(
         "INSERT INTO platform_logs \
-         (tenant_id, project_id, source, resource_id, level, message, request_id, metadata, span_type) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+         (source, resource_id, level, message, request_id, metadata, span_type) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
-    .bind(tenant_id).bind(project_id).bind(source).bind(&resource_id)
+    .bind(source).bind(&resource_id)
     .bind(level).bind(&entry.message).bind(&entry.request_id).bind(&entry.metadata)
     .bind(&entry.span_type)
     .execute(&pool).await.map_err(|_| db_err())?;
@@ -206,10 +192,9 @@ pub struct ProjectLogQuery {
 
 pub async fn list_project_logs(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(params): Query<ProjectLogQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context.project_id;
     let pool       = &state.pool;
     let limit      = params.limit.unwrap_or(100).min(1_000);
 
@@ -238,8 +223,8 @@ pub async fn list_project_logs(
     }
 
     // ── Build dynamic SQL query ───────────────────────────────────────────
-    let mut conditions: Vec<String> = vec!["l.project_id = $1".to_string()];
-    let mut bind_idx = 2usize;
+    let mut conditions: Vec<String> = Vec::new();
+    let mut bind_idx = 1usize;
 
     if source.is_some()   { conditions.push(format!("l.source = ${bind_idx}"));      bind_idx += 1; }
     if resource.is_some() { conditions.push(format!("l.resource_id = ${bind_idx}")); bind_idx += 1; }
@@ -252,16 +237,21 @@ pub async fn list_project_logs(
     if since.is_some() { bind_idx += 1; }
     conditions.push(time_cond);
 
+    let where_clause = if conditions.is_empty() {
+        "1=1".to_string()
+    } else {
+        conditions.join(" AND ")
+    };
     let sql = format!(
         "SELECT l.id, l.source, l.resource_id, l.level, l.message, \
                 l.request_id, l.metadata, l.span_type, l.timestamp \
          FROM platform_logs l \
          WHERE {} \
          ORDER BY l.timestamp {} LIMIT ${}",
-        conditions.join(" AND "), time_order, bind_idx
+        where_clause, time_order, bind_idx
     );
 
-    let mut q = sqlx::query_as::<_, PlatformLogRow>(&sql).bind(project_id);
+    let mut q = sqlx::query_as::<_, PlatformLogRow>(&sql);
     if let Some(s)  = source   { q = q.bind(s); }
     if let Some(r)  = resource { q = q.bind(r); }
     if let Some(l)  = level    { q = q.bind(l); }
@@ -306,11 +296,10 @@ pub struct TraceQuery {
 
 pub async fn get_trace(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(request_id): Path<String>,
     Query(params): Query<TraceQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id  = context.project_id;
     let pool        = &state.pool;
     let slow_thresh = params.slow_ms.unwrap_or(500);   // 500ms default
 
@@ -330,10 +319,9 @@ pub async fn get_trace(
         "SELECT l.id, l.source, l.resource_id, l.level, l.message, \
                 l.span_type, l.metadata, l.timestamp \
          FROM platform_logs l \
-         WHERE l.project_id = $1 AND l.request_id = $2 \
+         WHERE l.request_id = $1 \
          ORDER BY l.timestamp ASC",
     )
-    .bind(project_id)
     .bind(&request_id)
     .fetch_all(pool)
     .await
@@ -510,10 +498,9 @@ pub struct ListTracesQuery {
 
 pub async fn list_traces(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(params): Query<ListTracesQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let project_id = context.project_id;
     let pool       = &state.pool;
     let limit      = params.limit.unwrap_or(5).min(20);
     let exclude    = params.exclude.unwrap_or_default();
@@ -535,14 +522,13 @@ pub async fn list_traces(
         sqlx::query_as::<_, ReqWindow>(
             "SELECT request_id, MIN(timestamp) AS started_at, MAX(timestamp) AS ended_at \
              FROM platform_logs \
-             WHERE project_id = $1 \
-               AND request_id IS NOT NULL AND request_id != '' \
-               AND timestamp > $2 \
+             WHERE request_id IS NOT NULL AND request_id != '' \
+               AND timestamp > $1 \
              GROUP BY request_id \
              ORDER BY started_at ASC \
-             LIMIT $3",
+             LIMIT $2",
         )
-        .bind(project_id).bind(ts).bind(limit)
+        .bind(ts).bind(limit)
         .fetch_all(pool).await.map_err(|_| db_err())?
     } else {
         // Backward mode: why — requests whose first span started BEFORE before_ts
@@ -554,15 +540,14 @@ pub async fn list_traces(
         sqlx::query_as::<_, ReqWindow>(
             "SELECT request_id, MIN(timestamp) AS started_at, MAX(timestamp) AS ended_at \
              FROM platform_logs \
-             WHERE project_id = $1 \
-               AND request_id IS NOT NULL AND request_id != '' \
-               AND ($3 = '' OR request_id != $3) \
-               AND timestamp < $2 \
+             WHERE request_id IS NOT NULL AND request_id != '' \
+               AND ($2 = '' OR request_id != $2) \
+               AND timestamp < $1 \
              GROUP BY request_id \
              ORDER BY started_at DESC \
-             LIMIT $4",
+             LIMIT $3",
         )
-        .bind(project_id).bind(before_ts).bind(&exclude).bind(limit)
+        .bind(before_ts).bind(&exclude).bind(limit)
         .fetch_all(pool).await.map_err(|_| db_err())?
     };
 
@@ -580,12 +565,11 @@ pub async fn list_traces(
     let gw_sql = format!(
         "SELECT DISTINCT ON (request_id) request_id, metadata \
          FROM platform_logs \
-         WHERE project_id = $1 AND request_id IN ({id_list}) \
+         WHERE request_id IN ({id_list}) \
            AND (source = 'gateway' OR span_type IN ('request','gateway_request','http_request')) \
          ORDER BY request_id, timestamp ASC",
     );
     let gw_spans = sqlx::query_as::<_, GatewaySpan>(&gw_sql)
-        .bind(project_id)
         .fetch_all(pool).await.unwrap_or_default();
 
     let gw_map: std::collections::HashMap<String, serde_json::Value> = gw_spans
@@ -615,13 +599,12 @@ pub async fn list_traces(
                        WHEN source='runtime' THEN 2 \
                        ELSE 3 END AS pr \
            FROM platform_logs \
-           WHERE project_id = $1 AND request_id IN ({id_list}) \
+           WHERE request_id IN ({id_list}) \
              AND (level='error' OR span_type='error' OR source='runtime') \
          ) sub \
          ORDER BY request_id, pr, timestamp ASC",
     );
     let enrich_rows = sqlx::query_as::<_, EnrichSpan>(&enrich_sql)
-        .bind(project_id)
         .fetch_all(pool).await.unwrap_or_default();
 
     // Build maps: request_id → function_name, request_id → error_message

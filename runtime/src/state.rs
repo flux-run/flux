@@ -7,7 +7,7 @@
 //!   on warm invocations.
 //!
 //! - **`http_client`** — Shared reqwest client for user-facing outbound calls:
-//!   WASM `fluxbase.http_fetch`, agent LLM calls, `ctx.queue.push()` HTTP op.
+//!   WASM `fluxbase.http_fetch`, agent LLM calls.
 //!   Connection pooling is critical here — user functions can be invoked at high
 //!   concurrency and each must not open a new TCP connection.
 //!
@@ -15,11 +15,10 @@
 //!   In multi-process mode this is `HttpApiDispatch`; in server mode it is
 //!   `InProcessApiDispatch`. The runtime never knows which — DIP satisfied.
 //!
-//! - **`api_url`** — Raw API base URL forwarded into the V8 `op_queue_push` op context.
-//!   Kept alongside `api` until `QueueOpState` is refactored to use `QueueDispatch`.
+//! - **`queue`** — Queue dispatch: in-process job enqueue via `QueueDispatch`.
 //!
-//! - **`queue_url`** — Queue service URL forwarded into `op_queue_push`.
-//!   TODO: replace with `Arc<dyn QueueDispatch>` once the op is refactored.
+//! - **`data_engine`** — Data-engine dispatch: in-process SQL execution via
+//!   `DataEngineDispatch`.
 //!
 //! - **`service_token`** — Internal service token threaded to queue and API calls
 //!   originating from inside user functions.
@@ -40,33 +39,30 @@
 
 use std::sync::Arc;
 use crate::secrets::client::SecretsClient;
+use crate::engine::executor::PoolDispatchers;
 use crate::engine::pool::IsolatePool;
 use crate::engine::wasm_pool::WasmPool;
 use crate::bundle::cache::BundleCache;
 use crate::schema::cache::SchemaCache;
-use job_contract::dispatch::ApiDispatch;
+use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch};
 
 #[derive(Clone)]
 pub struct AppState {
     /// Secrets with built-in LRU cache.
     pub secrets_client: SecretsClient,
-    /// HTTP client for user-facing calls (WASM host HTTP, agent LLM, queue op).
+    /// HTTP client for user-facing calls (WASM host HTTP).
     pub http_client:    reqwest::Client,
     /// Control-plane dispatch: bundle fetch, log write, secrets fetch.
     pub api:            Arc<dyn ApiDispatch>,
-    /// Raw API base URL — forwarded into V8 `op_queue_push` op context.
-    /// Kept alongside `api` until QueueOpState is refactored to use QueueDispatch.
-    pub api_url:        String,
-    /// Queue service URL — forwarded into V8 `op_queue_push` op.
-    /// TODO: replace with `Arc<dyn QueueDispatch>` once the V8 op is refactored.
-    pub queue_url:      String,
+    /// Queue dispatch: enqueue jobs from V8/WASM ops.
+    pub queue:          Arc<dyn QueueDispatch>,
+    /// Data-engine dispatch: execute SQL from V8/WASM ops.
+    pub data_engine:    Arc<dyn DataEngineDispatch>,
     pub service_token:  String,
-    /// Data-engine base URL — forwarded into V8 `op_db_query` op via task JSON.
-    pub data_engine_url: String,
-    /// This runtime's own base URL — forwarded into ctx.function.invoke() for in-process calls.
-    pub runtime_url:     String,
     pub bundle_cache:   BundleCache,
     pub schema_cache:   SchemaCache,
     pub isolate_pool:   IsolatePool,
     pub wasm_pool:      WasmPool,
+    /// Dispatch traits shared with V8 ops and WASM host functions.
+    pub dispatchers:    PoolDispatchers,
 }

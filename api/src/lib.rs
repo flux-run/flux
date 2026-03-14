@@ -18,4 +18,4 @@ pub mod types;
 pub mod validation;
 
 // Convenience re-exports at crate root.
-pub use app::{AppState, build_cors, create_app, init_local_mode};
+pub use app::{AppState, build_cors, create_app};

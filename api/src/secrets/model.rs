@@ -4,8 +4,6 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct Secret {
     pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub project_id: Option<Uuid>,
     pub key: String,
     pub encrypted_value: String,
     pub version: i32,

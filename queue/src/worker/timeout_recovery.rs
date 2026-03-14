@@ -97,8 +97,8 @@ async fn dead_letter_timed_out(pool: &PgPool, job: StuckJob) {
         "job timed out and exhausted retries — moving to dead letter"
     );
     let _ = sqlx::query(
-        "INSERT INTO dead_letter_jobs (id, tenant_id, project_id, function_id, payload, error, failed_at)
-         SELECT id, tenant_id, project_id, function_id, payload, $1, now()
+        "INSERT INTO dead_letter_jobs (id, function_id, payload, error, failed_at)
+         SELECT id, function_id, payload, $1, now()
          FROM jobs WHERE id = $2",
     )
     .bind("timed out after max attempts")

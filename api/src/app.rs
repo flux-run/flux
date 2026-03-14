@@ -12,8 +12,6 @@ use axum::{
 use tower_http::cors::{CorsLayer, AllowOrigin};
 use axum::http::{HeaderValue, Method, header};
 use tracing::info;
-use uuid::Uuid;
-
 use crate::auth;
 use crate::middleware;
 use crate::secrets;
@@ -28,10 +26,6 @@ pub struct AppState {
     pub http_client:      reqwest::Client,
     pub data_engine_url:  String,
     pub gateway_url:      String,
-    /// Fixed tenant UUID used in local / single-tenant mode.
-    pub local_tenant_id:  Uuid,
-    /// Default project UUID; can be overridden by FLUX_PROJECT_ID env var.
-    pub local_project_id: Uuid,
     /// Directory where function bundles live on the filesystem.
     ///
     /// - Dev:        `{project_root}/.flux/build`  (set by `flux dev`)
@@ -81,7 +75,6 @@ pub fn build_cors() -> CorsLayer {
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::ACCEPT,
-            "x-flux-project".parse().expect("x-flux-project is a valid header name"),
             "x-request-id".parse().expect("x-request-id is a valid header name"),
         ])
         .allow_credentials(true)
@@ -249,43 +242,4 @@ pub fn create_app(state: AppState) -> Router {
         .with_state(state)
 }
 
-// ── Local mode seed ───────────────────────────────────────────────────────────
 
-/// Idempotently seeds the local tenant and project rows so FK constraints are
-/// satisfied even on a fresh database.  Called once at startup before the server
-/// starts accepting requests.
-pub async fn init_local_mode(pool: &sqlx::PgPool) -> Result<(Uuid, Uuid), sqlx::Error> {
-    const LOCAL_TENANT_ID: &str = "00000000-0000-0000-0000-000000000001";
-    const LOCAL_PROJECT_ID: &str = "00000000-0000-0000-0000-000000000002";
-
-    let tenant_id = Uuid::parse_str(LOCAL_TENANT_ID)
-        .expect("LOCAL_TENANT_ID is a valid UUID constant");
-
-    sqlx::query(
-        "INSERT INTO tenants (id, name, slug) VALUES ($1, 'local', 'local') ON CONFLICT (id) DO NOTHING"
-    )
-    .bind(tenant_id)
-    .execute(pool)
-    .await?;
-
-    let project_id = std::env::var("FLUX_PROJECT_ID")
-        .ok()
-        .and_then(|s| Uuid::parse_str(&s).ok())
-        .unwrap_or_else(|| Uuid::parse_str(LOCAL_PROJECT_ID).unwrap());
-
-    sqlx::query(
-        "INSERT INTO projects (id, tenant_id, name, slug) VALUES ($1, $2, $3, $3) ON CONFLICT (id) DO NOTHING"
-    )
-    .bind(project_id)
-    .bind(tenant_id)
-    .bind("default")
-    .execute(pool)
-    .await?;
-
-    info!(
-        "Local mode: tenant_id={} project_id={}",
-        tenant_id, project_id
-    );
-
-    Ok((tenant_id, project_id))
-}

@@ -20,11 +20,10 @@
 //!   together in the trace timeline
 
 use std::sync::Arc;
-use reqwest::Client;
 use sqlx::PgPool;
 use tracing::{info, warn, error};
 use uuid::Uuid;
-use job_contract::dispatch::ApiDispatch;
+use job_contract::dispatch::{ApiDispatch, ExecuteRequest, RuntimeDispatch};
 use crate::models::job::Job;
 use crate::services::retry_service;
 use crate::queue::update_status::update_status;
@@ -37,9 +36,8 @@ use super::span_emitter::QueueSpanEmitter;
 pub async fn execute(
     pool:          PgPool,
     api:           Arc<dyn ApiDispatch>,
-    runtime_url:   String,
+    runtime:       Arc<dyn RuntimeDispatch>,
     service_token: String,
-    client:        Client,
     job:           Job,
 ) {
     info!(job_id = %job.id, function_id = %job.function_id, "job started");
@@ -62,40 +60,35 @@ pub async fn execute(
         api,
         job.id,
         job.function_id,
-        Some(job.project_id),
         request_id.to_string(),
     );
 
     emitter.emit("info", format!("job started (attempt {})", job.attempts + 1), "start");
 
-    let runtime_endpoint = format!("{}/execute", runtime_url.trim_end_matches('/'));
+    let req = ExecuteRequest {
+        function_id:    job.function_id.to_string(),
+        payload:        job.payload.clone(),
+        execution_seed: None,
+        request_id:     Some(request_id.to_string()),
+        parent_span_id: None,
+        runtime_hint:   None,
+        user_id:        None,
+        jwt_claims:     None,
+    };
 
-    let res = client
-        .post(&runtime_endpoint)
-        .bearer_auth(&service_token)
-        .header("x-request-id", request_id.to_string())
-        .json(&serde_json::json!({
-            "function_id": job.function_id,
-            "project_id":  job.project_id,
-            "payload":     job.payload,
-        }))
-        .send()
-        .await;
-
-    match res {
-        Ok(response) if response.status().is_success() => {
+    match runtime.execute(req).await {
+        Ok(resp) if resp.status < 400 => {
             let _ = update_status(&pool, job.id, "completed").await;
             info!(job_id = %job.id, %request_id, "job completed");
             emitter.emit("info", format!("job completed (trace: {})", request_id), "end");
         }
-        Ok(response) => {
-            let status = response.status();
-            error!(job_id = %job.id, %request_id, %status, "runtime returned error");
-            emitter.emit("error", format!("job failed: runtime returned {}", status), "error");
+        Ok(resp) => {
+            error!(job_id = %job.id, %request_id, status = resp.status, "runtime returned error");
+            emitter.emit("error", format!("job failed: runtime returned {}", resp.status), "error");
             handle_failure(&pool, &emitter, job).await;
         }
         Err(e) => {
-            error!(job_id = %job.id, %request_id, error = %e, "runtime request failed");
+            error!(job_id = %job.id, %request_id, error = %e, "runtime dispatch failed");
             emitter.emit("error", format!("job failed: {}", e), "error");
             handle_failure(&pool, &emitter, job).await;
         }

@@ -1,4 +1,4 @@
-//! Authentication + project-context middleware.
+//! Authentication middleware.
 //!
 //! ## Three operating modes (checked in order)
 //!
@@ -10,11 +10,10 @@
 //! | **Local** (default) | No env vars, no key | `flux dev` — pass through |
 //!
 //! In all modes the middleware injects a [`RequestContext`] so downstream
-//! handlers never need to deal with `Option<Uuid>`.
+//! handlers that declare `Extension(ctx): Extension<RequestContext>` compile.
 //!
 //! ## SOLID note (Dependency Inversion)
 //! Routes depend on `RequestContext` (abstraction), not on how auth works.
-//! Swapping from local-mode to external auth = change this one middleware.
 
 use axum::{
     extract::{Request, State},
@@ -24,7 +23,6 @@ use axum::{
     Json,
 };
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use crate::auth::service as auth_service;
 use crate::types::context::RequestContext;
@@ -82,21 +80,7 @@ pub async fn require_auth(
                 .into_response();
             }
 
-            // Prefer tenant from JWT claims, fall back to app default.
-            let tenant_id = claims
-                .tenant_id
-                .as_deref()
-                .and_then(|t| Uuid::parse_str(t).ok())
-                .unwrap_or(state.local_tenant_id);
-
-            let project_id: Uuid = req
-                .headers()
-                .get("X-Flux-Project")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| Uuid::parse_str(s).ok())
-                .unwrap_or(state.local_project_id);
-
-            req.extensions_mut().insert(RequestContext { project_id, tenant_id });
+            req.extensions_mut().insert(RequestContext);
             return next.run(req).await;
         }
     }
@@ -155,17 +139,7 @@ pub async fn require_auth(
                         .await;
                     });
 
-                    let project_id: Uuid = req
-                        .headers()
-                        .get("X-Flux-Project")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| Uuid::parse_str(s).ok())
-                        .unwrap_or(state.local_project_id);
-
-                    req.extensions_mut().insert(RequestContext {
-                        project_id,
-                        tenant_id: state.local_tenant_id,
-                    });
+                    req.extensions_mut().insert(RequestContext);
                     return next.run(req).await;
                 }
                 Ok(false) => {
@@ -188,17 +162,7 @@ pub async fn require_auth(
     }
 
     // ── 3. Dev / local mode — no env vars set, pass through ──────────────
-    let project_id: Uuid = req
-        .headers()
-        .get("X-Flux-Project")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| Uuid::parse_str(s).ok())
-        .unwrap_or(state.local_project_id);
-
-    req.extensions_mut().insert(RequestContext {
-        project_id,
-        tenant_id: state.local_tenant_id,
-    });
+    req.extensions_mut().insert(RequestContext);
 
     next.run(req).await
 }

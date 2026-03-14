@@ -38,7 +38,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::Value;
 
-use crate::engine::executor::{DbContext, ExecutionResult, QueueContext};
+use crate::engine::executor::{DbContext, ExecutionResult, PoolDispatchers, QueueContext};
 use crate::engine::pool::IsolatePool;
 use crate::engine::wasm_pool::WasmPool;
 use crate::execute::bundle::ResolvedBundle;
@@ -53,18 +53,9 @@ pub struct ExecutionRunner<'a> {
     pub schema_cache:     &'a SchemaCache,
     pub http_client:      &'a reqwest::Client,
     pub wasm_http_hosts:  Vec<String>,
-    /// Queue service base URL — forwarded into ctx.queue.push() via QueueOpState.
-    pub queue_url:        &'a str,
-    /// API service base URL — used by ctx.queue.push() to resolve function names.
-    pub api_url:          &'a str,
-    /// Internal service token threaded to queue + API calls from user functions.
-    pub service_token:    &'a str,
-    /// Data-engine base URL — forwarded into ctx.db.query() via task JSON.
-    pub data_engine_url:  &'a str,
     /// Postgres schema name for this project — forwarded into ctx.db.query().
     pub database:         String,
-    /// This runtime's own base URL — used by ctx.function.invoke() for in-process calls.
-    pub runtime_url:      &'a str,
+    pub dispatchers:      &'a PoolDispatchers,
 }
 
 impl<'a> ExecutionRunner<'a> {
@@ -144,18 +135,9 @@ impl<'a> ExecutionRunner<'a> {
         tracer:  &TraceEmitter,
         start:   Instant,
     ) -> (Result<ExecutionResult, (StatusCode, Value)>, u64) {
-        let queue_ctx = QueueContext {
-            queue_url:     self.queue_url.to_string(),
-            api_url:       self.api_url.to_string(),
-            service_token: self.service_token.to_string(),
-            project_id:    ctx.project_id,
-            client:        self.http_client.clone(),
-        };
+        let queue_ctx = QueueContext {};
         let db_ctx = DbContext {
-            data_engine_url: self.data_engine_url.to_string(),
-            service_token:   self.service_token.to_string(),
-            database:        self.database.clone(),
-            client:          self.http_client.clone(),
+            database: self.database.clone(),
         };
         let result = self.isolate_pool.execute(
             code,
@@ -165,7 +147,6 @@ impl<'a> ExecutionRunner<'a> {
             queue_ctx,
             db_ctx,
             Some(ctx.function_id.clone()),
-            self.runtime_url.to_string(),
         ).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -194,12 +175,8 @@ impl<'a> ExecutionRunner<'a> {
             None,
             self.wasm_http_hosts.clone(),
             self.http_client.clone(),
-            self.data_engine_url.to_string(),
-            self.service_token.to_string(),
             self.database.clone(),
-            self.queue_url.to_string(),
-            self.api_url.to_string(),
-            ctx.project_id.map(|id| id.to_string()),
+            self.dispatchers.clone(),
         ).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -241,13 +218,9 @@ impl<'a> ExecutionRunner<'a> {
 
 /// Derive the Postgres schema name for a project.
 ///
-/// Projects get their own schema in the form `project_<uuid_no_hyphens>`.
-/// Returns an empty string if no project_id is available.
-pub fn project_schema_name(project_id: Option<uuid::Uuid>) -> String {
-    match project_id {
-        Some(id) => format!("project_{}", id.as_simple()),
-        None => String::new(),
-    }
+/// Single-tenant: always returns an empty string.
+pub fn project_schema_name() -> String {
+    String::new()
 }
 
 /// Return the list of hosts WASM functions may call via `fluxbase.http_fetch`.
@@ -279,7 +252,8 @@ mod tests {
     use serde_json::{json, Value};
     use uuid::Uuid;
 
-    use job_contract::dispatch::ApiDispatch;
+    use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch, ResolvedFunction};
+    use crate::engine::executor::PoolDispatchers;
     use crate::engine::pool::IsolatePool;
     use crate::engine::wasm_pool::WasmPool;
     use crate::execute::bundle::ResolvedBundle;
@@ -300,19 +274,46 @@ mod tests {
         async fn write_log(&self, _: Value) -> Result<(), String> {
             Ok(())
         }
-        async fn get_secrets(&self, _: Option<Uuid>) -> Result<HashMap<String, String>, String> {
+        async fn get_secrets(&self) -> Result<HashMap<String, String>, String> {
             Ok(HashMap::new())
+        }
+        async fn resolve_function(&self, _: &str) -> Result<ResolvedFunction, String> {
+            Err("not used in runner tests".into())
+        }
+    }
+
+    struct NullQueueDispatch;
+    #[async_trait]
+    impl QueueDispatch for NullQueueDispatch {
+        async fn push_job(&self, _: &str, _: Value, _: Option<u64>, _: Option<String>) -> Result<(), String> {
+            Err("not used in runner tests".into())
+        }
+    }
+
+    struct NullDataEngineDispatch;
+    #[async_trait]
+    impl DataEngineDispatch for NullDataEngineDispatch {
+        async fn execute_sql(&self, _: String, _: Vec<Value>, _: String, _: String) -> Result<Value, String> {
+            Err("not used in runner tests".into())
+        }
+    }
+
+    fn test_dispatchers() -> PoolDispatchers {
+        PoolDispatchers {
+            api:         Arc::new(NullApi),
+            queue:       Arc::new(NullQueueDispatch),
+            data_engine: Arc::new(NullDataEngineDispatch),
+            runtime:     Arc::new(std::sync::OnceLock::new()),
         }
     }
 
     fn null_tracer() -> TraceEmitter {
-        TraceEmitter::new(Arc::new(NullApi), "test_fn".into(), None, None, None)
+        TraceEmitter::new(Arc::new(NullApi), "test_fn".into(), None, None)
     }
 
     fn ctx(function_id: &str) -> InvocationCtx {
         InvocationCtx {
             function_id:    function_id.to_string(),
-            project_id:     None,
             payload:        json!({"name": "flux"}),
             execution_seed: 1,
             request_id:     None,
@@ -325,6 +326,7 @@ mod tests {
         wasm_pool:    &'a WasmPool,
         schema_cache: &'a SchemaCache,
         http_client:  &'a reqwest::Client,
+        dispatchers:  &'a PoolDispatchers,
     ) -> ExecutionRunner<'a> {
         ExecutionRunner {
             isolate_pool,
@@ -332,29 +334,16 @@ mod tests {
             schema_cache,
             http_client,
             wasm_http_hosts: vec![],
-            queue_url:       "http://localhost:8084",
-            api_url:         "http://localhost:8080",
-            service_token:   "stub_token",
-            data_engine_url: "http://localhost:8085",
             database:        String::new(),
-            runtime_url:     "http://localhost:8083",
+            dispatchers,
         }
     }
 
     // ── project_schema_name ───────────────────────────────────────────────────
 
     #[test]
-    fn project_schema_name_with_uuid() {
-        let id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        assert_eq!(
-            project_schema_name(Some(id)),
-            "project_550e8400e29b41d4a716446655440000"
-        );
-    }
-
-    #[test]
-    fn project_schema_name_none_returns_empty() {
-        assert_eq!(project_schema_name(None), "");
+    fn project_schema_name_returns_empty() {
+        assert_eq!(project_schema_name(), "");
     }
 
     // ── allowed_wasm_http_hosts ───────────────────────────────────────────────
@@ -396,10 +385,11 @@ mod tests {
             output: None,
         });
 
-        let isolate_pool = IsolatePool::new(1, 5);
+        let dispatchers = test_dispatchers();
+        let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
         let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         let mut c = ctx("validate_fn");
         c.payload = json!({"wrong_key": 123}); // missing required "user_id"
@@ -422,10 +412,11 @@ mod tests {
         // Empty cache → validation step is bypassed; pool will error with bad code,
         // but the point is we get a 500 (execution error), not a 400 (schema error).
         let schema_cache = SchemaCache::new(10);
-        let isolate_pool = IsolatePool::new(1, 5);
+        let dispatchers = test_dispatchers();
+        let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
         let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         let (status, _body) = r.run(
             ResolvedBundle::Deno { code: "throw new Error('boom')".into() },
@@ -447,10 +438,11 @@ mod tests {
         //   {"code":"NOT_FOUND","message":"user not found"}
         // The runner must parse code/message and preserve them.
         let schema_cache = SchemaCache::new(10);
-        let isolate_pool = IsolatePool::new(1, 5);
+        let dispatchers = test_dispatchers();
+        let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
         let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         // Code that throws a structured JSON error.
         let code = r#"__fluxbase_fn = async (ctx) => {
@@ -477,10 +469,11 @@ mod tests {
         // If the pool itself returns INPUT_VALIDATION_ERROR (unlikely but possible),
         // the runner must map it to 400.
         let schema_cache = SchemaCache::new(10);
-        let isolate_pool = IsolatePool::new(1, 5);
+        let dispatchers = test_dispatchers();
+        let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
         let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         // Code that throws INPUT_VALIDATION_ERROR — runner must map it to 400.
         let code = r#"__fluxbase_fn = async (ctx) => {
@@ -506,10 +499,11 @@ mod tests {
     #[tokio::test]
     async fn deno_success_returns_200_with_result() {
         let schema_cache = SchemaCache::new(10);
-        let isolate_pool = IsolatePool::new(1, 10);
+        let dispatchers = test_dispatchers();
+        let isolate_pool = IsolatePool::new(1, 10, dispatchers.clone());
         let wasm_pool    = WasmPool::new(1, 1_000_000, 10);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         let code = r#"__fluxbase_fn = async (ctx) => ({ ok: true, echo: ctx.payload.name });"#.to_string();
 
@@ -531,10 +525,11 @@ mod tests {
     #[tokio::test]
     async fn successful_run_includes_duration_ms() {
         let schema_cache = SchemaCache::new(10);
-        let isolate_pool = IsolatePool::new(1, 10);
+        let dispatchers = test_dispatchers();
+        let isolate_pool = IsolatePool::new(1, 10, dispatchers.clone());
         let wasm_pool    = WasmPool::new(1, 1_000_000, 10);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         let (status, body) = r.run(
             ResolvedBundle::Deno { code: r#"__fluxbase_fn = async (ctx) => 42;"#.into() },
@@ -555,10 +550,11 @@ mod tests {
         use axum::body::to_bytes;
 
         let schema_cache = SchemaCache::new(10);
-        let isolate_pool = IsolatePool::new(1, 10);
+        let dispatchers = test_dispatchers();
+        let isolate_pool = IsolatePool::new(1, 10, dispatchers.clone());
         let wasm_pool    = WasmPool::new(1, 1_000_000, 10);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client);
+        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         let resp = r.run_response(
             ResolvedBundle::Deno { code: r#"__fluxbase_fn = async (ctx) => ({ v: 1 });"#.into() },

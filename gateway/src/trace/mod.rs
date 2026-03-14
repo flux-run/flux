@@ -94,7 +94,6 @@ pub fn write_root(
     body:         serde_json::Value,
 ) {
     let rid  = request_id.to_string();
-    let pid  = route.project_id;
     let fname = route.function_name.clone();
     let m   = method.to_string();
     let p   = path.to_string();
@@ -102,13 +101,12 @@ pub fn write_root(
     tokio::spawn(async move {
         let _ = sqlx::query(
             "INSERT INTO flux.gateway_trace_requests
-               (request_id, project_id, function_name, method, path,
+               (request_id, function_name, method, path,
                 headers, query_params, body, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
              ON CONFLICT (request_id) DO NOTHING",
         )
         .bind(&rid)
-        .bind(pid)
         .bind(&fname)
         .bind(&m)
         .bind(&p)

@@ -35,7 +35,6 @@ impl RuntimeDispatch for HttpRuntimeDispatch {
 
         let mut body = serde_json::json!({
             "function_id":    req.function_id,
-            "project_id":     req.project_id,
             "payload":        req.payload,
         });
         if let Some(seed) = req.execution_seed {

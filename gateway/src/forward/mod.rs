@@ -67,7 +67,6 @@ pub async fn to_runtime(
 
     let req = ExecuteRequest {
         function_id:    route.function_name.clone(),
-        project_id:     Some(route.project_id),
         payload,
         execution_seed: None,
         request_id:     Some(request_id.to_string()),

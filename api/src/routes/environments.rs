@@ -24,9 +24,7 @@ fn db_err(e: sqlx::Error) -> ApiError {
 #[derive(sqlx::FromRow, Serialize)]
 pub struct EnvironmentRow {
     pub id: Uuid,
-    pub project_id: Uuid,
     pub name: String,
-    pub slug: String,
     pub is_default: bool,
     pub config: Value,
     pub created_at: DateTime<Utc>,
@@ -47,16 +45,15 @@ pub struct CloneEnvPayload {
 
 pub async fn list_environments(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<Value>> {
     let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, EnvironmentRow>(
-        "SELECT id, project_id, name, slug, is_default, config, created_at \
-         FROM flux.environments WHERE project_id = $1 ORDER BY created_at \
-         LIMIT $2 OFFSET $3",
+        "SELECT id, name, is_default, config, created_at \
+         FROM flux.environments ORDER BY created_at \
+         LIMIT $1 OFFSET $2",
     )
-    .bind(ctx.project_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
@@ -80,17 +77,15 @@ pub async fn list_environments(
 
 pub async fn create_environment(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<CreateEnvPayload>,
 ) -> ApiResult<EnvironmentRow> {
     let row = sqlx::query_as::<_, EnvironmentRow>(
-        "INSERT INTO flux.environments (project_id, name, slug, config) \
-         VALUES ($1, $2, $3, $4) \
-         RETURNING id, project_id, name, slug, is_default, config, created_at",
+        "INSERT INTO flux.environments (name, config) \
+         VALUES ($1, $2) \
+         RETURNING id, name, is_default, config, created_at",
     )
-    .bind(ctx.project_id)
     .bind(&payload.name)
-    .bind(&payload.slug)
     .bind(payload.config.unwrap_or(Value::Object(Default::default())))
     .fetch_one(&state.pool)
     .await
@@ -101,16 +96,15 @@ pub async fn create_environment(
 
 pub async fn delete_environment(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     if name == "production" {
         return Err(ApiError::bad_request("cannot delete production environment"));
     }
 
-    sqlx::query("DELETE FROM flux.environments WHERE slug = $1 AND project_id = $2")
+    sqlx::query("DELETE FROM flux.environments WHERE name = $1")
         .bind(&name)
-        .bind(ctx.project_id)
         .execute(&state.pool)
         .await
         .map_err(db_err)?;
@@ -120,14 +114,13 @@ pub async fn delete_environment(
 
 pub async fn clone_environment(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<CloneEnvPayload>,
 ) -> ApiResult<EnvironmentRow> {
     let source_row = sqlx::query(
-        "SELECT config FROM flux.environments WHERE slug = $1 AND project_id = $2",
+        "SELECT config FROM flux.environments WHERE name = $1",
     )
     .bind(&payload.source)
-    .bind(ctx.project_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(db_err)?
@@ -136,12 +129,10 @@ pub async fn clone_environment(
     let config: Value = source_row.get("config");
 
     let row = sqlx::query_as::<_, EnvironmentRow>(
-        "INSERT INTO flux.environments (project_id, name, slug, config) \
-         VALUES ($1, $2, $3, $4) \
-         RETURNING id, project_id, name, slug, is_default, config, created_at",
+        "INSERT INTO flux.environments (name, config) \
+         VALUES ($1, $2) \
+         RETURNING id, name, is_default, config, created_at",
     )
-    .bind(ctx.project_id)
-    .bind(&payload.target)
     .bind(&payload.target)
     .bind(config)
     .fetch_one(&state.pool)

@@ -59,18 +59,17 @@ fn run_url(gateway_url: &str, name: &str) -> String {
 
 pub async fn list_deployments(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(function_name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let records = sqlx::query_as::<_, DeploymentRow>(
         "SELECT d.id, d.version, d.is_active, d.status, d.created_at, f.name as function_name \
          FROM deployments d \
          JOIN functions f ON f.id = d.function_id \
-         WHERE f.name = $1 AND f.project_id = $2 \
+         WHERE f.name = $1 \
          ORDER BY d.version DESC",
     )
     .bind(&function_name)
-    .bind(context.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(ApiError::from)?;
@@ -137,7 +136,7 @@ pub async fn create_deployment(
 
 pub async fn activate_deployment(
     State(pool): State<PgPool>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path((function_name, version)): Path<(String, i32)>,
 ) -> ApiResult<serde_json::Value> {
     #[derive(sqlx::FromRow)]
@@ -149,10 +148,9 @@ pub async fn activate_deployment(
         "SELECT d.id as deployment_id, f.id as function_id \
          FROM deployments d \
          JOIN functions f ON f.id = d.function_id \
-         WHERE f.name = $1 AND f.project_id = $2 AND d.version = $3",
+         WHERE f.name = $1 AND d.version = $2",
     )
     .bind(&function_name)
-    .bind(context.project_id)
     .bind(version)
     .fetch_optional(&mut *tx)
     .await
@@ -190,7 +188,7 @@ pub async fn activate_deployment(
 ///   - `output_schema` — optional JSON Schema for output validation
 pub async fn deploy_function_cli(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     mut multipart: axum::extract::Multipart,
 ) -> ApiResult<serde_json::Value> {
     let mut name         = String::new();
@@ -236,10 +234,9 @@ pub async fn deploy_function_cli(
     struct FunctionLookup { id: Uuid }
 
     let existing = sqlx::query_as::<_, FunctionLookup>(
-        "SELECT id FROM functions WHERE name = $1 AND project_id = $2 LIMIT 1",
+        "SELECT id FROM functions WHERE name = $1 LIMIT 1",
     )
     .bind(&name)
-    .bind(context.project_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(ApiError::from)?;
@@ -270,12 +267,10 @@ pub async fn deploy_function_cli(
             let new_id = Uuid::new_v4();
             sqlx::query(
                 "INSERT INTO functions \
-                     (id, tenant_id, project_id, name, runtime, description, input_schema, output_schema) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                     (id, name, runtime, description, input_schema, output_schema) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(new_id)
-            .bind(context.tenant_id)
-            .bind(context.project_id)
             .bind(&name)
             .bind(&runtime)
             .bind(description.as_deref())
@@ -457,7 +452,7 @@ pub async fn get_internal_bundle(
 /// function in the project so the CLI can skip unchanged functions.
 pub async fn get_deployment_hashes(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
     #[derive(sqlx::FromRow)]
     struct HashRow {
@@ -468,10 +463,8 @@ pub async fn get_deployment_hashes(
     let rows = sqlx::query_as::<_, HashRow>(
         "SELECT f.name, d.bundle_hash \
          FROM functions f \
-         JOIN deployments d ON d.function_id = f.id AND d.is_active = true \
-         WHERE f.project_id = $1",
+         JOIN deployments d ON d.function_id = f.id AND d.is_active = true",
     )
-    .bind(context.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(ApiError::from)?;
@@ -512,7 +505,7 @@ pub struct CreateProjectDeploymentPayload {
 /// CLI finishes uploading individual functions.
 pub async fn create_project_deployment(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<CreateProjectDeploymentPayload>,
 ) -> ApiResult<serde_json::Value> {
     let id = Uuid::new_v4();
@@ -532,12 +525,11 @@ pub async fn create_project_deployment(
     struct CreatedAt { created_at: chrono::DateTime<chrono::Utc> }
 
     let row = sqlx::query_as::<_, CreatedAt>(
-        "INSERT INTO project_deployments (id, project_id, version, summary, deployed_by) \
-         VALUES ($1, $2, $3, $4, $5) \
+        "INSERT INTO project_deployments (id, version, summary, deployed_by) \
+         VALUES ($1, $2, $3, $4) \
          RETURNING created_at",
     )
     .bind(id)
-    .bind(context.project_id)
     .bind(payload.version as i32)
     .bind(&summary_json)
     .bind(&deployed_by)
@@ -555,7 +547,7 @@ pub async fn create_project_deployment(
 /// `GET /deployments/project` — list the last 20 project deployments.
 pub async fn list_project_deployments(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
     #[derive(sqlx::FromRow)]
     struct ProjectDepRow {
@@ -569,11 +561,9 @@ pub async fn list_project_deployments(
     let rows = sqlx::query_as::<_, ProjectDepRow>(
         "SELECT id, version, summary, deployed_by, created_at \
          FROM project_deployments \
-         WHERE project_id = $1 \
          ORDER BY version DESC \
          LIMIT 20",
     )
-    .bind(context.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(ApiError::from)?;
@@ -596,7 +586,7 @@ pub async fn list_project_deployments(
 /// deployments from a previous project deployment.
 pub async fn rollback_project_deployment(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     axum::extract::Path(project_deployment_id): axum::extract::Path<Uuid>,
 ) -> ApiResult<serde_json::Value> {
     // Load the project deployment and verify ownership.
@@ -609,10 +599,9 @@ pub async fn rollback_project_deployment(
     let proj = sqlx::query_as::<_, ProjDepRow>(
         "SELECT version, summary \
          FROM project_deployments \
-         WHERE id = $1 AND project_id = $2",
+         WHERE id = $1",
     )
     .bind(project_deployment_id)
-    .bind(context.project_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(ApiError::from)?
@@ -639,10 +628,9 @@ pub async fn rollback_project_deployment(
         struct FnId { id: Uuid }
 
         let fn_row = sqlx::query_as::<_, FnId>(
-            "SELECT id FROM functions WHERE name = $1 AND project_id = $2",
+            "SELECT id FROM functions WHERE name = $1",
         )
         .bind(fn_name)
-        .bind(context.project_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(ApiError::from)?;

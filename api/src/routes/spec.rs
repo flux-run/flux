@@ -6,12 +6,6 @@
 /// Designed to be the single context file loaded by AI agents,
 /// CLI tooling, and dashboard documentation pages so they never
 /// have to guess what exists in the project.
-///
-/// Example:
-///   curl https://api.fluxbase.co/spec \
-///     -H "Authorization: Bearer $TOKEN" \
-///     -H "X-Fluxbase-Tenant: $TENANT" \
-///     -H "X-Fluxbase-Project: $PROJECT"
 use axum::extract::{Extension, State};
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -26,41 +20,18 @@ use crate::{
 
 pub async fn project_spec(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
 ) -> Result<ApiResponse<Value>, ApiError> {
-    let project_id = ctx.project_id;
-    let tenant_id  = ctx.tenant_id;
-
-    // ── Project info ──────────────────────────────────────────────────────
-    let project_row = sqlx::query(
-        "SELECT p.id, p.name, p.slug, t.slug as tenant_slug, t.id as tenant_id \
-         FROM projects p \
-         JOIN tenants t ON t.id = p.tenant_id \
-         WHERE p.id = $1",
-    )
-    .bind(project_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|_| ApiError::internal("db_error"))?;
-
-    let (project_name, project_slug, tenant_slug) = project_row
-        .as_ref()
-        .map(|r| (
-            r.get::<String, _>("name"),
-            r.get::<String, _>("slug"),
-            r.get::<String, _>("tenant_slug"),
-        ))
-        .unwrap_or_default();
-
-    let gateway_url = format!("https://{}.fluxbase.co", tenant_slug);
-    let api_url = "https://api.fluxbase.co".to_string();
+    let gateway_url = std::env::var("GATEWAY_URL")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let api_url = std::env::var("API_URL")
+        .unwrap_or_else(|_| "http://localhost:8080".to_string());
 
     // ── Functions ─────────────────────────────────────────────────────────
     let func_rows = sqlx::query(
         "SELECT id, name, description, input_schema, output_schema, runtime \
-         FROM functions WHERE project_id = $1 ORDER BY name",
+         FROM functions ORDER BY name",
     )
-    .bind(project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(|_| ApiError::internal("db_error"))?;
@@ -97,9 +68,8 @@ pub async fn project_spec(
                 r.rate_limit, f.name as function_name \
          FROM routes r \
          JOIN functions f ON f.id = r.function_id \
-         WHERE r.project_id = $1 ORDER BY r.path",
+         ORDER BY r.path",
     )
-    .bind(project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(|_| ApiError::internal("db_error"))?;
@@ -126,9 +96,8 @@ pub async fn project_spec(
     // ── Connected tools ───────────────────────────────────────────────────
     let integration_rows = sqlx::query(
         "SELECT provider, account_label, status \
-         FROM integrations WHERE project_id = $1 AND status = 'active' ORDER BY provider",
+         FROM integrations WHERE status = 'active' ORDER BY provider",
     )
-    .bind(project_id)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
@@ -144,12 +113,8 @@ pub async fn project_spec(
 
     // ── Secret names (not values) ─────────────────────────────────────────
     let secret_rows = sqlx::query(
-        "SELECT key FROM secrets \
-         WHERE (project_id = $1 OR (tenant_id = $2 AND project_id IS NULL)) \
-         ORDER BY key",
+        "SELECT key FROM secrets ORDER BY key",
     )
-    .bind(project_id)
-    .bind(tenant_id)
     .fetch_all(&state.pool)
     .await
     .unwrap_or_default();
@@ -185,7 +150,7 @@ pub async fn project_spec(
             "delete": format!("DELETE {}/db/{{table}}/{{id}}", gateway_url),
         },
         "openapi_spec":  format!("{}/openapi.json", api_url),
-        "swagger_ui":    format!("{}/openapi/ui?tenant={}&project={}", api_url, tenant_id, project_id),
+        "swagger_ui":    format!("{}/openapi/ui", api_url),
         "flux_cli": {
             "deploy":  "flux deploy (run inside a function directory containing flux.json)",
             "invoke":  "flux invoke <function-name> --data '{\"key\":\"value\"}'",
@@ -199,15 +164,6 @@ pub async fn project_spec(
     Ok(ApiResponse::new(json!({
         "spec_version": "1",
         "generated_at": chrono::Utc::now().to_rfc3339(),
-        "project": {
-            "id":    project_id.to_string(),
-            "name":  project_name,
-            "slug":  project_slug,
-        },
-        "tenant": {
-            "id":   tenant_id.to_string(),
-            "slug": tenant_slug.clone(),
-        },
         "gateway_url":  gateway_url,
         "api_url":      api_url,
         "functions":    functions,

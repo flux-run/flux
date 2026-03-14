@@ -20,8 +20,6 @@ pub async fn handler(
     };
 
     let input = CreateJobInput {
-        tenant_id: req.tenant_id,
-        project_id: req.project_id,
         function_id: req.function_id,
         payload: req.payload,
         run_at,

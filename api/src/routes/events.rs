@@ -23,8 +23,6 @@ fn db_err(e: sqlx::Error) -> ApiError {
 #[derive(sqlx::FromRow, Serialize)]
 pub struct EventRow {
     pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub project_id: Uuid,
     pub event_type: String,
     pub table_name: String,
     pub record_id: Option<String>,
@@ -37,8 +35,6 @@ pub struct EventRow {
 #[derive(sqlx::FromRow, Serialize)]
 pub struct EventSubscriptionRow {
     pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub project_id: Uuid,
     pub event_pattern: String,
     pub target_type: String,
     pub target_config: Value,
@@ -62,7 +58,7 @@ pub struct CreateSubscriptionPayload {
 
 pub async fn publish_event(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<PublishEventPayload>,
 ) -> ApiResult<EventRow> {
     let parts: Vec<&str> = payload.event.splitn(2, '.').collect();
@@ -71,11 +67,9 @@ pub async fn publish_event(
 
     let row = sqlx::query_as::<_, EventRow>(
         "INSERT INTO fluxbase_internal.events \
-         (tenant_id, project_id, event_type, table_name, operation, payload) \
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+         (event_type, table_name, operation, payload) \
+         VALUES ($1, $2, $3, $4) RETURNING *",
     )
-    .bind(ctx.tenant_id)
-    .bind(ctx.project_id)
     .bind(&payload.event)
     .bind(table_name)
     .bind(&operation)
@@ -89,18 +83,17 @@ pub async fn publish_event(
 
 pub async fn list_subscriptions(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<EventSubscriptionRow>> {
     let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, EventSubscriptionRow>(
-        "SELECT id, tenant_id, project_id, event_pattern, target_type, target_config, \
+        "SELECT id, event_pattern, target_type, target_config, \
          enabled, created_at, updated_at \
          FROM fluxbase_internal.event_subscriptions \
-         WHERE project_id = $1 ORDER BY created_at DESC \
-         LIMIT $2 OFFSET $3",
+         ORDER BY created_at DESC \
+         LIMIT $1 OFFSET $2",
     )
-    .bind(ctx.project_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
@@ -112,18 +105,16 @@ pub async fn list_subscriptions(
 
 pub async fn create_subscription(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Json(payload): Json<CreateSubscriptionPayload>,
 ) -> ApiResult<EventSubscriptionRow> {
     let row = sqlx::query_as::<_, EventSubscriptionRow>(
         "INSERT INTO fluxbase_internal.event_subscriptions \
-         (tenant_id, project_id, event_pattern, target_type, target_config) \
-         VALUES ($1, $2, $3, $4, $5) \
-         RETURNING id, tenant_id, project_id, event_pattern, target_type, target_config, \
+         (event_pattern, target_type, target_config) \
+         VALUES ($1, $2, $3) \
+         RETURNING id, event_pattern, target_type, target_config, \
          enabled, created_at, updated_at",
     )
-    .bind(ctx.tenant_id)
-    .bind(ctx.project_id)
     .bind(&payload.event_pattern)
     .bind(&payload.target_type)
     .bind(payload.target_config.unwrap_or(Value::Object(Default::default())))
@@ -136,14 +127,13 @@ pub async fn create_subscription(
 
 pub async fn delete_subscription(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
-        "DELETE FROM fluxbase_internal.event_subscriptions WHERE id = $1 AND project_id = $2",
+        "DELETE FROM fluxbase_internal.event_subscriptions WHERE id = $1",
     )
     .bind(id)
-    .bind(ctx.project_id)
     .execute(&state.pool)
     .await
     .map_err(db_err)?;

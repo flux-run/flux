@@ -30,8 +30,6 @@ use uuid::Uuid;
 #[derive(FromRow, Serialize, Deserialize, Clone)]
 pub struct Job {
     pub id: Uuid,
-    pub tenant_id: Uuid,
-    pub project_id: Uuid,
     pub function_id: Uuid,
     pub payload: serde_json::Value,
     pub status: String,
@@ -70,8 +68,6 @@ mod tests {
         let now = Utc::now().naive_utc();
         Job {
             id:                  Uuid::new_v4(),
-            tenant_id:           Uuid::new_v4(),
-            project_id:          Uuid::new_v4(),
             function_id:         Uuid::new_v4(),
             payload:             serde_json::json!({}),
             status:              status.into(),

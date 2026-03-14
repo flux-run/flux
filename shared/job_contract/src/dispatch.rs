@@ -24,7 +24,6 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecuteRequest {
     pub function_id:    String,
-    pub project_id:     Option<Uuid>,
     pub payload:        Value,
     /// Deterministic replay seed (omit for live invocations).
     pub execution_seed: Option<i64>,
@@ -79,12 +78,23 @@ pub trait ApiDispatch: Send + Sync {
     /// Ship a structured log/trace entry to the API's log ingestion endpoint.
     async fn write_log(&self, entry: Value) -> Result<(), String>;
 
-    /// Fetch decrypted secrets for `project_id` (or the default project if
-    /// `None`).  Returns a plain `key → value` map.
-    async fn get_secrets(
+    /// Fetch decrypted secrets. Returns a plain `key → value` map.
+    async fn get_secrets(&self) -> Result<HashMap<String, String>, String>;
+
+    /// Resolve a function name (or UUID string) to its function_id.
+    ///
+    /// Used by `ctx.queue.push()` in V8 ops to look up a function before
+    /// enqueuing a job.
+    async fn resolve_function(
         &self,
-        project_id: Option<Uuid>,
-    ) -> Result<HashMap<String, String>, String>;
+        name: &str,
+    ) -> Result<ResolvedFunction, String>;
+}
+
+/// Result of resolving a function name to its ID.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedFunction {
+    pub function_id: Uuid,
 }
 
 /// Runtime (inside user-function V8 op) → Queue boundary.
@@ -96,11 +106,26 @@ pub trait QueueDispatch: Send + Sync {
     async fn push_job(
         &self,
         function_id: &str,
-        project_id:  Option<Uuid>,
         payload:     Value,
         delay_seconds: Option<u64>,
         idempotency_key: Option<String>,
     ) -> Result<(), String>;
+}
+
+/// Runtime (V8 op) → Data-Engine boundary.
+///
+/// Called by `ctx.db.query()` inside JS/WASM functions to execute raw SQL
+/// against the project database. In-process dispatch replaces the HTTP POST
+/// to `/db/sql`.
+#[async_trait]
+pub trait DataEngineDispatch: Send + Sync {
+    async fn execute_sql(
+        &self,
+        sql:        String,
+        params:     Vec<Value>,
+        database:   String,
+        request_id: String,
+    ) -> Result<Value, String>;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -116,7 +141,6 @@ mod tests {
     fn execute_request_roundtrip() {
         let req = ExecuteRequest {
             function_id:    "my-fn".to_string(),
-            project_id:     None,
             payload:        json!({"key": "value"}),
             execution_seed: Some(42),
             request_id:     Some("req-123".to_string()),
@@ -137,7 +161,6 @@ mod tests {
         let json_str = r#"{"function_id":"fn","payload":null}"#;
         let req: ExecuteRequest = serde_json::from_str(json_str).unwrap();
         assert_eq!(req.function_id, "fn");
-        assert!(req.project_id.is_none());
         assert!(req.execution_seed.is_none());
     }
 
@@ -145,7 +168,6 @@ mod tests {
     fn execute_request_clone() {
         let req = ExecuteRequest {
             function_id:    "fn".to_string(),
-            project_id:     None,
             payload:        json!({}),
             execution_seed: None,
             request_id:     None,
@@ -199,5 +221,18 @@ mod tests {
     #[test]
     fn queue_dispatch_is_object_safe() {
         fn _check(_: &dyn QueueDispatch) {}
+    }
+
+    #[test]
+    fn data_engine_dispatch_is_object_safe() {
+        fn _check(_: &dyn DataEngineDispatch) {}
+    }
+
+    #[test]
+    fn resolved_function_roundtrip() {
+        let rf = ResolvedFunction { function_id: Uuid::new_v4() };
+        let json_str = serde_json::to_string(&rf).unwrap();
+        let back: ResolvedFunction = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(back.function_id, rf.function_id);
     }
 }

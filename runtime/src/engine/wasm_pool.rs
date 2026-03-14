@@ -19,7 +19,7 @@ use lru::LruCache;
 use tokio::sync::{Mutex, Semaphore};
 use wasmtime::{Engine, Module};
 
-use super::executor::ExecutionResult;
+use super::executor::{ExecutionResult, PoolDispatchers};
 use super::wasm_executor::{build_engine, compile_module, execute_wasm, WasmExecutionParams};
 
 // ─── WasmPool ───────────────────────────────────────────────────────────────
@@ -114,12 +114,8 @@ impl WasmPool {
         fuel_limit:          Option<u64>,
         allowed_http_hosts:  Vec<String>,
         http_client:         reqwest::Client,
-        data_engine_url:     String,
-        service_token:       String,
         database:            String,
-        queue_url:           String,
-        api_url:             String,
-        project_id:          Option<String>,
+        dispatchers:         PoolDispatchers,
     ) -> Result<ExecutionResult, String> {
         // ── Acquire concurrency slot ──────────────────────────────────────
         let _permit = self.semaphore
@@ -152,12 +148,8 @@ impl WasmPool {
             allowed_http_hosts,
             http_client:         Some(http_client),
             timeout_secs:        self.timeout_secs,
-            data_engine_url,
-            service_token,
             database,
-            queue_url,
-            api_url,
-            project_id,
+            dispatchers,
         };
 
         execute_wasm(self.engine.as_ref(), module.as_ref(), params).await
@@ -177,6 +169,37 @@ impl WasmPool {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use std::collections::HashMap;
+    use async_trait::async_trait;
+    use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch};
+    use crate::engine::executor::PoolDispatchers;
+
+    struct MockApi;
+    #[async_trait]
+    impl ApiDispatch for MockApi {
+        async fn get_bundle(&self, _: &str) -> Result<serde_json::Value, String> { Err("mock".into()) }
+        async fn write_log(&self, _: serde_json::Value) -> Result<(), String> { Ok(()) }
+        async fn get_secrets(&self) -> Result<HashMap<String, String>, String> { Ok(Default::default()) }
+        async fn resolve_function(&self, _: &str) -> Result<job_contract::dispatch::ResolvedFunction, String> { Err("mock".into()) }
+    }
+    struct MockQueue;
+    #[async_trait]
+    impl QueueDispatch for MockQueue {
+        async fn push_job(&self, _: &str, _: serde_json::Value, _: Option<u64>, _: Option<String>) -> Result<(), String> { Ok(()) }
+    }
+    struct MockDataEngine;
+    #[async_trait]
+    impl DataEngineDispatch for MockDataEngine {
+        async fn execute_sql(&self, _: String, _: Vec<serde_json::Value>, _: String, _: String) -> Result<serde_json::Value, String> { Ok(serde_json::json!({})) }
+    }
+    fn test_dispatchers() -> PoolDispatchers {
+        PoolDispatchers {
+            api: Arc::new(MockApi),
+            queue: Arc::new(MockQueue),
+            data_engine: Arc::new(MockDataEngine),
+            runtime: Arc::new(std::sync::OnceLock::new()),
+        }
+    }
 
     const MINIMAL_WAT: &str = r#"(module
         (import "fluxbase" "log"         (func (param i32 i32 i32)))
@@ -269,11 +292,7 @@ mod tests {
             vec![],
             reqwest::Client::new(),
             String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            None,
+            test_dispatchers(),
         ).await;
         assert!(result.is_ok(), "expected Ok, got: {:?}", result);
         assert_eq!(result.unwrap().output, serde_json::json!("ok"));
@@ -286,11 +305,11 @@ mod tests {
         // First call: compiles + executes.
         let r1 = pool.execute("cached_fn".to_string(), bytes.clone(), Default::default(),
             serde_json::json!({}), None, vec![], reqwest::Client::new(),
-            String::new(), String::new(), String::new(), String::new(), String::new(), None).await;
+            String::new(), test_dispatchers()).await;
         // Second call: should hit module cache.
         let r2 = pool.execute("cached_fn".to_string(), bytes, Default::default(),
             serde_json::json!({}), None, vec![], reqwest::Client::new(),
-            String::new(), String::new(), String::new(), String::new(), String::new(), None).await;
+            String::new(), test_dispatchers()).await;
         assert!(r1.is_ok());
         assert!(r2.is_ok());
     }

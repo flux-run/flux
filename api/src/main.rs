@@ -13,7 +13,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     api::config::init();
 
     let pool = api::db::connection::init_pool().await?;
-    let (local_tenant_id, local_project_id) = api::app::init_local_mode(&pool).await?;
 
     let state = api::AppState {
         pool,
@@ -22,8 +21,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
         gateway_url: std::env::var("GATEWAY_URL")
             .unwrap_or_else(|_| "http://localhost:8081".to_string()),
-        local_tenant_id,
-        local_project_id,
         functions_dir: std::env::var("FLUX_FUNCTIONS_DIR")
             .unwrap_or_else(|_| "./flux-functions".to_string()),
     };
