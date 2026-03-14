@@ -75,8 +75,11 @@ pub fn forward_headers(headers: &HeaderMap) -> reqwest::header::HeaderMap {
     }
 
     // Internal service token so the Data Engine trusts the call.
-    let token = std::env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "fluxbase_secret_token".to_string());
+    let token = crate::middleware::require_secret(
+        "INTERNAL_SERVICE_TOKEN",
+        "dev-service-token",
+        "Internal service token (INTERNAL_SERVICE_TOKEN)",
+    );
     if let Ok(val) = reqwest::header::HeaderValue::from_str(&token) {
         map.insert("x-service-token", val);
     }

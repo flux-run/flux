@@ -14,6 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use subtle::ConstantTimeEq;
 
 pub async fn require_service_token(req: Request, next: Next) -> Response {
     let expected = crate::middleware::require_secret(
@@ -29,7 +30,9 @@ pub async fn require_service_token(req: Request, next: Next) -> Response {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if provided != expected {
+    // Constant-time comparison prevents timing-based token enumeration.
+    let token_ok: bool = provided.as_bytes().ct_eq(expected.as_bytes()).into();
+    if !token_ok {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({

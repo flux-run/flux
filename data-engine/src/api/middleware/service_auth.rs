@@ -12,6 +12,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use subtle::ConstantTimeEq;
 
 /// Axum middleware function — rejects requests missing or carrying the wrong
 /// `x-service-token` header.
@@ -34,9 +35,9 @@ pub async fn require_service_token(req: Request, next: Next) -> Response {
                 }
                 tracing::warn!(
                     "[Flux] INTERNAL_SERVICE_TOKEN not set — using insecure default \
-                     'fluxbase_secret_token'. Set this env var in production."
+                     'dev-service-token'. Set this env var in production."
                 );
-                "fluxbase_secret_token".to_string()
+                "dev-service-token".to_string()
             }
         }
     };
@@ -55,7 +56,9 @@ pub async fn require_service_token(req: Request, next: Next) -> Response {
         .unwrap_or("")
         .to_owned();
 
-    if provided == expected {
+    // Constant-time comparison prevents timing-based token enumeration.
+    let token_ok: bool = provided.as_bytes().ct_eq(expected.as_bytes()).into();
+    if token_ok {
         tracing::debug!(request_id = %request_id, path = %path, "request authenticated");
         next.run(req).await
     } else {
@@ -125,7 +128,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/db/query")
-                    .header("x-service-token", "fluxbase_secret_token")
+                    .header("x-service-token", "dev-service-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -201,7 +204,7 @@ mod tests {
 
     #[tokio::test]
     async fn protected_path_rejects_empty_and_whitespace_tokens() {
-        for token in ["", " fluxbase_secret_token ", "fluxbase_secret_token "] {
+        for token in ["", " dev-service-token ", "dev-service-token "] {
             let response = app()
                 .oneshot(
                     Request::builder()
@@ -224,7 +227,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/db/query")
-                    .header("x-service-token", "fluxbase_secret_token")
+                    .header("x-service-token", "dev-service-token")
                     .header("x-request-id", "req-12345")
                     .body(Body::empty())
                     .unwrap(),

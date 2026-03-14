@@ -44,7 +44,8 @@ rand = "0.8"
 base64 = "0.22"
 
 # Schema hashing — SHA-256 for schema_versions content-based cache key
-sha2 = "0.10"
+sha2   = "0.10"
+subtle = "2"
 hex = "0.4"
 
 # Dashboard auth — password hashing + JWT session tokens

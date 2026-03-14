@@ -36,12 +36,14 @@ fn validate_service_token(headers: &HeaderMap) -> Result<(), ApiError> {
                 );
             }
             tracing::warn!(
-                "[Flux] INTERNAL_SERVICE_TOKEN not set — using insecure default 'stub_token'. \
+                "[Flux] INTERNAL_SERVICE_TOKEN not set — using insecure default 'dev-service-token'. \
                  Set INTERNAL_SERVICE_TOKEN in production."
             );
-            "stub_token".to_string()
+            "dev-service-token".to_string()
         });
-    if token != expected { return Err(ApiError::unauthorized("invalid_service_token")); }
+    // Constant-time comparison prevents timing-based token enumeration.
+    use subtle::ConstantTimeEq;
+    if !<bool as From<_>>::from(token.as_bytes().ct_eq(expected.as_bytes())) { return Err(ApiError::unauthorized("invalid_service_token")); }
     Ok(())
 }
 

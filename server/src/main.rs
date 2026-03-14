@@ -140,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         queue_url:      queue_url.clone(),
         service_token:  service_token.clone(),
         data_engine_url: std::env::var("DATA_ENGINE_URL")
-            .unwrap_or_else(|_| "http://localhost:8085".to_string()),
+            .unwrap_or_else(|_| "http://localhost:8082".to_string()),
         runtime_url:    format!("http://localhost:{}", port),
         bundle_cache:   BundleCache::new(100),
         schema_cache:   SchemaCache::new(200),
