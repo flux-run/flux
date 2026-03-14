@@ -26,7 +26,6 @@ The scaffold gives you a complete starting point:
 - `schemas/`
 - `middleware/`
 - `queues/`
-- `agents/`
 - `.env.example`
 - local `.flux/` state for generated files and dev metadata
 

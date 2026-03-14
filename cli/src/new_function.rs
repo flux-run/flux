@@ -7,19 +7,15 @@
 //! substituted at runtime.
 //!
 //! Supported languages — pinned versions:
-//!   typescript    Deno 2.3
+//!   typescript    Deno 2.3 (V8 native)
 //!   javascript    Node.js 22 LTS
-//!   rust          1.87.0 / edition 2021
-//!   go            1.24
-//!   python        3.12
-//!   c / cpp       wasi-sdk 24 / clang 17
-//!   zig           0.13.0
-//!   assemblyscript 0.27.x
-//!   csharp        .NET 9
-//!   swift         6.0
-//!   kotlin        2.1 / Gradle 8.10
-//!   java          21 LTS / Gradle 8.10
-//!   ruby          3.3
+//!   python        3.12 (Pyodide WASM)
+//!   go            1.24 (TinyGo WASM)
+//!   java          21 LTS / Gradle 8.10 (TeaVM WASM)
+//!   php           PHP 8.3 / Emscripten 3.1 WASM
+//!   rust          1.87.0 / edition 2021 (wasm32-wasi)
+//!   csharp        .NET 9 (dotnet-wasi-sdk WASM)
+//!   ruby          3.3 (ruby.wasm)
 
 use std::path::Path;
 
@@ -29,59 +25,44 @@ use colored::Colorize;
 // ── Pinned language versions (shown in `flux function create --help`) ──────────
 
 pub const VERSIONS: &[(&str, &str)] = &[
-    ("typescript",     "Deno 2.3"),
-    ("javascript",     "Node.js 22 LTS"),
-    ("rust",           "1.87.0 / edition 2021"),
-    ("go",             "1.24"),
-    ("python",         "3.12"),
-    ("c",              "wasi-sdk 24 / clang 17"),
-    ("cpp",            "wasi-sdk 24 / clang 17"),
-    ("zig",            "0.13.0"),
-    ("assemblyscript", "0.27.x"),
-    ("csharp",         ".NET 9"),
-    ("swift",          "6.0"),
-    ("kotlin",         "2.1 / Gradle 8.10"),
-    ("java",           "21 LTS / Gradle 8.10"),
-    ("ruby",           "3.3"),
+    ("typescript", "Deno 2.3 (V8 native)"),
+    ("javascript", "Node.js 22 LTS"),
+    ("python",     "3.12 / Pyodide WASM"),
+    ("go",         "1.24 / TinyGo WASM"),
+    ("java",       "21 LTS / TeaVM WASM / Gradle 8.10"),
+    ("php",        "PHP 8.3 / Emscripten 3.1 WASM"),
+    ("rust",       "1.87.0 / wasm32-wasi / edition 2021"),
+    ("csharp",     ".NET 9 / dotnet-wasi-sdk WASM"),
+    ("ruby",       "3.3 / ruby.wasm"),
 ];
 
 // ── Per-language build/run actions ────────────────────────────────────────────
 
 pub const ACTIONS: &[(&str, &str, &str)] = &[
     // (language, check/build cmd, run cmd)
-    ("typescript",     "deno check index.ts",                    "deno run index.ts"),
-    ("javascript",     "node --check index.js",                  "node index.js"),
-    ("rust",           "cargo check --target wasm32-wasip1",     "cargo build --release --target wasm32-wasip1"),
-    ("go",             "GOOS=wasip1 GOARCH=wasm go build .",     "GOOS=wasip1 GOARCH=wasm go build ."),
-    ("python",         "python3 -m py_compile handler.py",       "python3 handler.py"),
-    ("c",              "make check",                             "make"),
-    ("cpp",            "make check",                             "make"),
-    ("zig",            "zig build",                              "zig build"),
-    ("assemblyscript", "npx asc index.ts",                       "npx asc index.ts"),
-    ("csharp",         "dotnet build",                           "dotnet build"),
-    ("swift",          "swift build",                            "swift build"),
-    ("kotlin",         "./gradlew build",                        "./gradlew build"),
-    ("java",           "./gradlew build",                        "./gradlew build"),
-    ("ruby",           "ruby -c handler.rb",                     "ruby handler.rb"),
+    ("typescript", "deno check index.ts",                            "deno run index.ts"),
+    ("javascript", "node --check index.js",                          "node index.js"),
+    ("python",     "python3 -m py_compile handler.py",               "python3 handler.py"),
+    ("go",         "GOOS=wasip1 GOARCH=wasm go build .",             "GOOS=wasip1 GOARCH=wasm go build ."),
+    ("java",       "./gradlew build",                                 "./gradlew build"),
+    ("php",        "make check",                                      "make"),
+    ("rust",       "cargo check --target wasm32-wasip1",             "cargo build --release --target wasm32-wasip1"),
+    ("csharp",     "dotnet build",                                    "dotnet build"),
+    ("ruby",       "ruby -c handler.rb",                              "ruby handler.rb"),
 ];
 
 // ── Supported languages ───────────────────────────────────────────────────────
 
 const LANGUAGES: &[(&str, &[&str])] = &[
-    ("typescript",     &["ts"]),
-    ("javascript",     &["js", "node"]),
-    ("rust",           &["rs"]),
-    ("go",             &["golang"]),
-    ("python",         &["py"]),
-    ("c",              &[]),
-    ("cpp",            &["c++", "cxx"]),
-    ("zig",            &[]),
-    ("assemblyscript", &["as"]),
-    ("csharp",         &["cs", "c#", "dotnet"]),
-    ("swift",          &[]),
-    ("kotlin",         &["kt"]),
-    ("java",           &[]),
-    ("ruby",           &["rb"]),
+    ("typescript", &["ts", "deno"]),
+    ("javascript", &["js", "node"]),
+    ("python",     &["py"]),
+    ("go",         &["golang"]),
+    ("java",       &[]),
+    ("php",        &[]),
+    ("rust",       &["rs"]),
+    ("csharp",     &["cs", "c#", "dotnet"]),
+    ("ruby",       &["rb"]),
 ];
 
 fn resolve_language(input: &str) -> anyhow::Result<&'static str> {
@@ -115,65 +96,36 @@ fn scaffold_files(lang: &str) -> Vec<(&'static str, &'static str)> {
             ("flux.json",     include_str!("../../scaffolds/functions/javascript/flux.json")),
             ("package.json",  include_str!("../../scaffolds/functions/javascript/package.json")),
         ],
-        "rust" => vec![
-            ("src/lib.rs",  include_str!("../../scaffolds/functions/rust/src/lib.rs")),
-            ("Cargo.toml",  include_str!("../../scaffolds/functions/rust/Cargo.toml")),
-            ("flux.json",   include_str!("../../scaffolds/functions/rust/flux.json")),
+        "python" => vec![
+            ("handler.py",       include_str!("../../scaffolds/functions/python/handler.py")),
+            ("requirements.txt", include_str!("../../scaffolds/functions/python/requirements.txt")),
+            ("flux.json",        include_str!("../../scaffolds/functions/python/flux.json")),
         ],
         "go" => vec![
             ("main.go",   include_str!("../../scaffolds/functions/go/main.go")),
             ("go.mod",    include_str!("../../scaffolds/functions/go/go.mod")),
             ("flux.json", include_str!("../../scaffolds/functions/go/flux.json")),
         ],
-        "python" => vec![
-            ("handler.py",       include_str!("../../scaffolds/functions/python/handler.py")),
-            ("requirements.txt", include_str!("../../scaffolds/functions/python/requirements.txt")),
-            ("flux.json",        include_str!("../../scaffolds/functions/python/flux.json")),
+        "java" => vec![
+            ("Handler.java",    include_str!("../../scaffolds/functions/java/Handler.java")),
+            ("build.gradle",    include_str!("../../scaffolds/functions/java/build.gradle")),
+            ("settings.gradle", include_str!("../../scaffolds/functions/java/settings.gradle")),
+            ("flux.json",       include_str!("../../scaffolds/functions/java/flux.json")),
         ],
-        "c" => vec![
-            ("handler.c", include_str!("../../scaffolds/functions/c/handler.c")),
-            ("Makefile",  include_str!("../../scaffolds/functions/c/Makefile")),
-            ("flux.json", include_str!("../../scaffolds/functions/c/flux.json")),
+        "php" => vec![
+            ("handler.php", include_str!("../../scaffolds/functions/php/handler.php")),
+            ("Makefile",    include_str!("../../scaffolds/functions/php/Makefile")),
+            ("flux.json",   include_str!("../../scaffolds/functions/php/flux.json")),
         ],
-        "cpp" => vec![
-            ("handler.cpp", include_str!("../../scaffolds/functions/cpp/handler.cpp")),
-            ("Makefile",    include_str!("../../scaffolds/functions/cpp/Makefile")),
-            ("flux.json",   include_str!("../../scaffolds/functions/cpp/flux.json")),
-        ],
-        "zig" => vec![
-            ("handler.zig", include_str!("../../scaffolds/functions/zig/handler.zig")),
-            ("build.zig",   include_str!("../../scaffolds/functions/zig/build.zig")),
-            ("flux.json",   include_str!("../../scaffolds/functions/zig/flux.json")),
-        ],
-        "assemblyscript" => vec![
-            ("index.ts",                include_str!("../../scaffolds/functions/assemblyscript/index.ts")),
-            ("flux.json",               include_str!("../../scaffolds/functions/assemblyscript/flux.json")),
-            ("asconfig.json",           include_str!("../../scaffolds/functions/assemblyscript/asconfig.json")),
-            ("tsconfig.json",           include_str!("../../scaffolds/functions/assemblyscript/tsconfig.json")),
-            ("assembly.d.ts",           include_str!("../../scaffolds/functions/assemblyscript/assembly.d.ts")),
-            ("@fluxbase-functions.ts",  include_str!("../../scaffolds/functions/assemblyscript/@fluxbase-functions.ts")),
+        "rust" => vec![
+            ("src/lib.rs",  include_str!("../../scaffolds/functions/rust/src/lib.rs")),
+            ("Cargo.toml",  include_str!("../../scaffolds/functions/rust/Cargo.toml")),
+            ("flux.json",   include_str!("../../scaffolds/functions/rust/flux.json")),
         ],
         "csharp" => vec![
             ("Handler.cs",     include_str!("../../scaffolds/functions/csharp/Handler.cs")),
             ("Handler.csproj", include_str!("../../scaffolds/functions/csharp/Handler.csproj")),
             ("flux.json",      include_str!("../../scaffolds/functions/csharp/flux.json")),
-        ],
-        "swift" => vec![
-            ("Handler.swift", include_str!("../../scaffolds/functions/swift/Handler.swift")),
-            ("Package.swift", include_str!("../../scaffolds/functions/swift/Package.swift")),
-            ("flux.json",     include_str!("../../scaffolds/functions/swift/flux.json")),
-        ],
-        "kotlin" => vec![
-            ("Handler.kt",           include_str!("../../scaffolds/functions/kotlin/Handler.kt")),
-            ("build.gradle.kts",     include_str!("../../scaffolds/functions/kotlin/build.gradle.kts")),
-            ("settings.gradle.kts",  include_str!("../../scaffolds/functions/kotlin/settings.gradle.kts")),
-            ("flux.json",            include_str!("../../scaffolds/functions/kotlin/flux.json")),
-        ],
-        "java" => vec![
-            ("Handler.java",   include_str!("../../scaffolds/functions/java/Handler.java")),
-            ("build.gradle",   include_str!("../../scaffolds/functions/java/build.gradle")),
-            ("settings.gradle",include_str!("../../scaffolds/functions/java/settings.gradle")),
-            ("flux.json",      include_str!("../../scaffolds/functions/java/flux.json")),
         ],
         "ruby" => vec![
             ("handler.rb", include_str!("../../scaffolds/functions/ruby/handler.rb")),

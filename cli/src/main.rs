@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 
-mod agent;
 mod api_key;
 mod auth;
 mod bisect;
@@ -486,12 +485,7 @@ enum Commands {
         command: gateway::GatewayCommands,
     },
 
-    // ── Agents, Schedules ─────────────────────────────────────────────────────
-    /// AI Agent operations (create, deploy, run, simulate)
-    Agent {
-        #[command(subcommand)]
-        command: agent::AgentCommands,
-    },
+    // ── Schedules, Queues, Events ─────────────────────────────────────────────
     /// Scheduled job management (create, pause, resume, history)
     Schedule {
         #[command(subcommand)]
@@ -793,7 +787,6 @@ async fn main() -> anyhow::Result<()> {
         Commands::ApiKey  { command } => api_key::execute(command).await?,
 
         Commands::Gateway  { command } => gateway::execute(command).await?,
-        Commands::Agent    { command } => agent::execute(command).await?,
         Commands::Schedule { command } => schedule::execute(command).await?,
         Commands::Queue    { command } => queue::execute(command).await?,
         Commands::Event    { command } => event::execute(command).await?,

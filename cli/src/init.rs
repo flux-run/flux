@@ -40,7 +40,6 @@ fn base_scaffold_files() -> Vec<(&'static str, &'static str)> {
         ("schemas/_shared/jsonb.ts",           include_str!("../../scaffolds/base/schemas/_shared/jsonb.ts")),
         ("schemas/users.schema.ts",            include_str!("../../scaffolds/base/schemas/users.schema.ts")),
         ("middleware/auth.ts",                 include_str!("../../scaffolds/base/middleware/auth.ts")),
-        ("agents/assistant.yaml",              include_str!("../../scaffolds/base/agents/assistant.yaml")),
         ("queues/email.queue.toml",            include_str!("../../scaffolds/base/queues/email.queue.toml")),
     ]
 }

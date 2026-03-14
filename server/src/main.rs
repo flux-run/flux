@@ -25,9 +25,9 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::info;
 
-use dispatch::{InProcessAgentDispatch, InProcessApiDispatch, InProcessRuntimeDispatch};
+use dispatch::{InProcessApiDispatch, InProcessRuntimeDispatch};
 use gateway::state::GatewayState;
-use job_contract::dispatch::{AgentDispatch, ApiDispatch};
+use job_contract::dispatch::ApiDispatch;
 use runtime::secrets::client::SecretsClient;
 use runtime::engine::pool::IsolatePool;
 use runtime::engine::wasm_pool::WasmPool;
@@ -150,15 +150,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime_dispatch_ref: Arc<dyn job_contract::dispatch::RuntimeDispatch> =
         Arc::clone(&runtime_dispatch) as Arc<dyn job_contract::dispatch::RuntimeDispatch>;
 
-    // ── Agent state + in-process dispatch ────────────────────────────────
-    let agent_state = Arc::new(agent::AgentState {
-        pool:             pool.clone(),
-        runtime_dispatch: Arc::clone(&runtime_dispatch) as Arc<dyn job_contract::dispatch::RuntimeDispatch>,
-    });
-    let agent_dispatch: Arc<dyn AgentDispatch> = Arc::new(InProcessAgentDispatch {
-        state: Arc::clone(&agent_state),
-    });
-
     // ── Gateway state ─────────────────────────────────────────────────────
     let snapshot = gateway::snapshot::GatewaySnapshot::new(
         pool.clone(),
@@ -208,9 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tower_http::services::ServeDir::new(&dashboard_dir)
                 .not_found_service(tower_http::services::ServeFile::new(&dashboard_index)),
         )
-        .merge(gateway::create_router(gateway_state))
-        // Inject AgentDispatch so /agents/{name}/run handlers can call agent::run()
-        .layer(axum::Extension(agent_dispatch));
+        .merge(gateway::create_router(gateway_state));
 
     // ── Listen ────────────────────────────────────────────────────────────
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

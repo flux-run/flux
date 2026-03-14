@@ -49,7 +49,7 @@ These tools feel connected because they are reading the same underlying record.
 A trace in Flux includes:
 
 - top-level request identity
-- spans across gateway, runtime, database, queue, and agent/tool work
+- spans across gateway, runtime, database, and queue
 - slow-span markers
 - error spans
 - timing aligned to one execution

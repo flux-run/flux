@@ -28,7 +28,6 @@ Flux has six main logical components:
 - `data-engine` - guarded database execution and mutation recording
 - `queue` - async jobs, retries, schedules
 - `api` - operator-facing APIs for deployments, traces, records, and admin actions
-- `agent` - agent and tool execution surfaces
 
 The `server` crate is where those pieces come together into the monolithic deployment model.
 

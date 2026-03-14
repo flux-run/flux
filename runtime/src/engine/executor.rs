@@ -28,47 +28,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use tokio::time::{timeout, Duration};
 
-use crate::agent::AgentOpState;
 
-
-// ── Agent LLM op ──────────────────────────────────────────────────────────────
-//
-// Deno bridge: JS calls Deno.core.ops.op_agent_llm_call(messages, toolDefs)
-// from inside ctx.agent.run().
-// The op reads AgentOpState (api_key, url, model) from Deno OpState,
-// calls the LLM via agent::llm::call_llm, and returns the action decision.
-
-#[deno_core::op2(async)]
-#[serde]
-pub async fn op_agent_llm_call(
-    state:      Rc<RefCell<OpState>>,
-    #[serde] messages:  serde_json::Value,
-    #[serde] _tool_defs: serde_json::Value,
-) -> Result<serde_json::Value, std::io::Error> {
-    let (llm_key, llm_url, llm_model) = {
-        let s = state.borrow();
-        let ts = s.borrow::<AgentOpState>();
-        (ts.llm_key.clone(), ts.llm_url.clone(), ts.llm_model.clone())
-    };
-
-    let api_key = llm_key.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "agent_not_configured: FLUXBASE_LLM_KEY secret not set. \
-             Add it in your Fluxbase dashboard → Secrets.",
-        )
-    })?;
-
-    crate::agent::llm::call_llm(&api_key, &llm_url, &llm_model, messages)
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-}
-
-/// Build the Fluxbase runtime extension — agent + queue ops.
+/// Build the Fluxbase runtime extension — queue ops.
 pub fn build_fluxbase_extension() -> Extension {
     Extension {
         name: "fluxbase",
-        ops: Cow::Owned(vec![op_agent_llm_call(), op_queue_push()]),
+        ops: Cow::Owned(vec![op_queue_push()]),
         ..Default::default()
     }
 }
@@ -400,57 +365,6 @@ fn build_wrapper(
                     }},
                 }},
 
-                // ── Agent ─────────────────────────────────────────────
-                // ctx.agent.run({{ goal: "...", tools: ["slack.send_message"], maxSteps: 5 }})
-                agent: {{
-                    run: async (options) => {{
-                        options = options || {{}};
-                        const goal      = options.goal || "Complete the task";
-                        const toolNames = options.tools || [];
-                        const maxSteps  = options.maxSteps || 5;
-                        const toolDefs  = toolNames.map(function(t) {{
-                            return {{
-                                type: "function",
-                                function: {{
-                                    name:        t.replace(".", "_"),
-                                    description: "Execute the " + t + " Fluxbase integration",
-                                    parameters:  {{ type: "object", properties: {{}} }},
-                                }},
-                            }};
-                        }});
-                        const messages = [
-                            {{
-                                role:    "system",
-                                content: "You are a Fluxbase automation agent. Goal: " + goal + ". Available tools: " + (toolNames.length > 0 ? toolNames.join(", ") : "none") + ". Respond only with JSON. To call a tool: {{\"done\":false,\"tool\":\"tool.name\",\"input\":{{}}}}. When complete: {{\"done\":true,\"answer\":\"what was done\"}}.",
-                            }},
-                            {{ role: "user", content: "Complete this goal: " + goal }},
-                        ];
-                        let lastOutput = null;
-                        for (let step = 0; step < maxSteps; step++) {{
-                            const _start   = Date.now();
-                            const decision = await Deno.core.ops.op_agent_llm_call(messages, toolDefs);
-                            const duration = Date.now() - _start;
-                            const label    = decision.done ? "[done]" : ("tool=" + (decision.tool || "?"));
-                            __fluxbase_logs.push({{
-                                level:     "info",
-                                message:   "agent:step=" + (step + 1) + "  " + duration + "ms  " + label,
-                                span_type: "agent_step",
-                                source:    "agent",
-                            }});
-                            if (decision.done) {{
-                                return {{ answer: decision.answer, steps: step + 1, output: lastOutput }};
-                            }}
-                            if (!decision.tool) {{
-                                throw new Error("agent: LLM returned neither done=true nor a tool name");
-                            }}
-                            lastOutput = await __ctx.tools.run(decision.tool, decision.input || {{}});
-                            messages.push({{ role: "assistant", content: JSON.stringify({{ tool: decision.tool, input: decision.input }}) }});
-                            messages.push({{ role: "user", content: "Tool " + decision.tool + " returned: " + JSON.stringify(lastOutput) }});
-                        }}
-                        throw new Error("agent: exceeded maxSteps=" + maxSteps);
-                    }},
-                }},
-
                 // ── Queue ─────────────────────────────────────────────
                 // ctx.queue.push("function_name", payload, {{ delay: "5m", idempotencyKey: "..." }})
                 //
@@ -536,24 +450,24 @@ pub struct ExecutionResult {
 ///
 /// Fields added for execution tracing:
 /// - `span_id`           — unique ID for this span; generated JS-side or server-side on ship
-/// - `duration_ms`       — set by tool/workflow/agent spans; propagated to log sink
+/// - `duration_ms`       — set by tool/workflow spans; propagated to log sink
 /// - `execution_state`   — lifecycle state: "started" | "running" | "completed" | "error"
 /// - `tool_name`         — the Fluxbase tool name for `span_type == "tool"` spans
 #[derive(Debug, serde::Deserialize)]
 pub struct LogLine {
     pub level:   String,
     pub message: String,
-    /// "event" (default) | "tool" | "workflow_step" | "agent_step" | "start" | "end"
+    /// "event" (default) | "tool" | "workflow_step" | "start" | "end"
     #[serde(default)]
     pub span_type: Option<String>,
-    /// "function" (default) | "tool" | "workflow" | "agent" | "runtime"
+    /// "function" (default) | "tool" | "workflow" | "runtime"
     #[serde(default)]
     pub source: Option<String>,
     /// Unique span identifier — used to link parent → child spans across services.
     /// If not provided by JS, routes.rs generates a UUID v4 before shipping.
     #[serde(default)]
     pub span_id: Option<String>,
-    /// Duration in ms — set by tool/workflow/agent spans for replay recording.
+    /// Duration in ms — set by tool/workflow spans for replay recording.
     #[serde(default)]
     pub duration_ms: Option<u64>,
     /// Lifecycle state tag used for replay and trace bisect.
@@ -568,7 +482,7 @@ pub struct LogLine {
 ///
 /// This is the hot path used by `IsolatePool` workers. The runtime is created
 /// once per worker thread (`create_js_runtime()`) and reused across invocations.
-/// Per-request state (secrets, tenant, LLM config) is injected into `OpState`
+/// Per-request state (secrets, tenant) is injected into `OpState`
 /// before each execution via `try_take + put` — a clean swap, no reallocations.
 ///
 /// # Performance
@@ -600,14 +514,6 @@ pub async fn execute_with_runtime(
     {
         let op_state = rt.op_state();
         let mut state = op_state.borrow_mut();
-
-        let llm_key   = secrets.get("FLUXBASE_LLM_KEY").cloned();
-        let llm_url   = secrets.get("FLUXBASE_LLM_URL").cloned()
-            .unwrap_or_else(|| "https://api.openai.com/v1/chat/completions".to_string());
-        let llm_model = secrets.get("FLUXBASE_LLM_MODEL").cloned()
-            .unwrap_or_else(|| "gpt-4o-mini".to_string());
-        let _ = state.try_take::<AgentOpState>();
-        state.put(AgentOpState { llm_key, llm_url, llm_model });
 
         let _ = state.try_take::<QueueOpState>();
         state.put(QueueOpState {

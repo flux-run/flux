@@ -53,8 +53,5 @@ aws-config = "1.8.15"
 argon2        = "0.5"
 jsonwebtoken  = "9"
 
-# Agent crate — registry operations (deploy, list, get, delete)
-agent = { path = "../agent" }
-
-# Job contract — AgentDispatch trait (used by run/simulate handlers)
+# Job contract — dispatch traits
 job_contract = { path = "../shared/job_contract" }

@@ -10,7 +10,6 @@
 //! - `ctx.queue.*`    → POST queue service `/jobs`
 //! - `ctx.secrets.*`  → `ApiDispatch::get_secrets` (with LRU cache)
 //! - `ctx.log()`      → `ApiDispatch::write_log` → `flux.platform_logs` (fire-and-forget)
-//! - `ctx.agent.*`    → `AgentDispatch::run`
 //!
 //! ## Execution paths
 //!
@@ -28,7 +27,6 @@
 //!       └─ TraceEmitter::emit_logs()  — fire-and-forget ctx.log() + execution_end span
 //! ```
 
-pub mod agent;
 pub mod bundle;
 pub mod config;
 pub mod dispatch;

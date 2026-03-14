@@ -63,18 +63,7 @@ This family holds:
 
 This preserves causality across async work.
 
-## 6. Agent And Tool Data
-
-This family holds:
-
-- agent runs
-- tool invocations
-- prompts or plan metadata where relevant
-- outputs and downstream execution links
-
-This lets AI-backed work remain debuggable inside the same runtime.
-
-## 7. Maintenance And Retention
+## 6. Maintenance And Retention
 
 This family holds:
 

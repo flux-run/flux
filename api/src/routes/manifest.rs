@@ -2,7 +2,7 @@
 //!
 //! The manifest is the single source of truth for `flux generate`. The CLI
 //! calls this endpoint, writes `.flux/manifest.json`, then generates typed
-//! ctx bindings for all 14 languages.
+//! ctx bindings for all supported languages.
 //!
 //! ## Response shape
 //!
@@ -27,10 +27,7 @@
 //!       "output_schema": { ... }
 //!     }
 //!   },
-//!   "secrets": ["OPENAI_KEY", "STRIPE_SECRET"],
-//!   "agents": {
-//!     "support": { "tools": ["search", "email"] }
-//!   }
+//!   "secrets": ["OPENAI_KEY", "STRIPE_SECRET"]
 //! }
 //! ```
 //!
@@ -157,25 +154,7 @@ pub async fn get_manifest(
         database_map.insert(table, json!({ "columns": columns }));
     }
 
-    // ── 4. Agents ─────────────────────────────────────────────────────────
-    let agent_rows = sqlx::query(
-        "SELECT name, tools FROM flux.agents ORDER BY name",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!(error = %e, "manifest: failed to query agents");
-        ApiError::internal("db_error")
-    })?;
-
-    let mut agents_map = serde_json::Map::new();
-    for r in &agent_rows {
-        let name: String          = r.get("name");
-        let tools: Vec<String>    = r.get("tools");
-        agents_map.insert(name, json!({ "tools": tools }));
-    }
-
-    // ── 5. Schema hash — SHA-256 of serialised functions + db_tables ──────
+    // ── 4. Schema hash — SHA-256 of serialised functions + db_tables ──────
     let hash_input = format!(
         "{}{}",
         serde_json::to_string(&functions_map).unwrap_or_default(),
@@ -192,6 +171,5 @@ pub async fn get_manifest(
         "database":     database_map,
         "functions":    functions_map,
         "secrets":      secret_keys,
-        "agents":       agents_map,
     })))
 }

@@ -39,8 +39,6 @@ Flux is a complete backend runtime built around deterministic debugging.
 - [production-debugging.md](production-debugging.md) - incident response workflow
 - [flux-why-the-viral-command.md](flux-why-the-viral-command.md) - why `flux why` is the hero feature
 - [git-for-backend-execution.md](git-for-backend-execution.md) - execution record as a version-control-like model
-- [workflow-to-agents-migration.md](workflow-to-agents-migration.md) - how orchestration fits into the broader product
-
 ## Operational And Reference Docs
 
 - [api-reference.md](api-reference.md) - route groups and API surface

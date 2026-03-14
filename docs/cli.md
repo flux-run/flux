@@ -96,7 +96,6 @@ It is reasonable for Flux to expose commands for:
 - database and schema
 - queue and schedules
 - gateway config
-- agents
 - deployments
 - traces and incidents
 

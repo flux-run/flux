@@ -18,7 +18,7 @@ Use this checklist before exposing a Flux deployment to real traffic.
 ## Rate Limits And Abuse Controls
 
 - enable sensible per-route rate limits
-- protect expensive routes and agent/tool paths
+- protect expensive routes
 - test error behavior under abusive traffic
 
 ## Execution Safety

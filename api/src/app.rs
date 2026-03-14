@@ -176,11 +176,6 @@ pub fn create_app(state: AppState) -> Router {
         .route("/schedules/{name}/resume",  post(routes::schedules::resume_schedule))
         .route("/schedules/{name}/run",     post(routes::schedules::run_schedule_now))
         .route("/schedules/{name}/history", get(routes::schedules::schedule_history))
-        // ── Agents ────────────────────────────────────────────────────────────
-        .route("/agents",                get(routes::agents::agents_list).post(routes::agents::agent_deploy))
-        .route("/agents/{name}",         get(routes::agents::agent_get).delete(routes::agents::agent_delete))
-        .route("/agents/{name}/run",     post(routes::agents::agent_run))
-        .route("/agents/{name}/simulate",post(routes::agents::agent_simulate))
         // ── Environments ──────────────────────────────────────────────────────
         .route("/environments",          get(routes::environments::list_environments).post(routes::environments::create_environment))
         .route("/environments/clone",    post(routes::environments::clone_environment))

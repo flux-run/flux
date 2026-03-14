@@ -12,7 +12,6 @@ Flux includes:
 - HTTP routing and middleware
 - database execution
 - queues and schedules
-- agents and tool calls
 - deployments, secrets, and configuration
 - an execution record with trace, replay, diff, mutation history, and `flux why`
 
@@ -62,7 +61,7 @@ Flux treats mutations, row history, and state blame as first-class debugging sur
 
 ### 4. Ship A Complete System
 
-Functions, gateway, database execution, async work, and agent/tool orchestration feel like one runtime rather than several loosely connected services.
+Functions, gateway, database execution, and async work feel like one runtime rather than several loosely connected services.
 
 ### 5. Keep Local And Production Legible
 
@@ -75,7 +74,7 @@ Flux is not trying to optimize first for:
 - maximum configurability
 - every language having perfect parity on day one
 - hosted control-plane convenience
-- leading with agents, workflow automation, or generic platform claims
+- leading with workflow automation or generic platform claims
 
 Those things can matter, but they are not the center of the 0.1 story.
 
@@ -131,7 +130,6 @@ Flux feels complete enough to run a real product backend:
 - database schema and guarded execution
 - queue and retry mechanics
 - schedules
-- agents and tool calls
 - secrets and configuration
 - deployments and version history
 - tracing, mutation history, replay, diff, and explanation

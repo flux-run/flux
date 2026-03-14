@@ -11,7 +11,6 @@ pub mod spec;
 pub mod introspect;
 pub mod stubs;
 pub mod records;
-pub mod agents;
 pub mod manifest;
 pub mod db_migrate;
 pub mod api_keys;

@@ -9,7 +9,7 @@ The execution record is the core primitive of Flux.
 An execution record connects:
 
 - the trigger that started work
-- the function, job, or agent step that ran
+- the function or job that ran
 - the code version that handled it
 - spans and logs
 - database reads and mutations
@@ -28,7 +28,6 @@ Functions can be triggered by:
 - a queue worker
 - a scheduled job
 - an event
-- an agent tool call
 
 Flux functions matter because they live inside one runtime and one debugging model.
 
@@ -83,17 +82,6 @@ Cron exists in Flux so that scheduled work uses the same:
 - code versioning
 - mutation history
 
-## Agent
-
-Agents are another execution surface, not a separate product category.
-
-In Flux, an agent is debuggable as a backend execution:
-
-- prompts and tool calls are inspectable
-- external calls are traced
-- state changes are attributable
-- follow-up work stays linked
-
 ## Deployment
 
 Deployments are part of the causal graph.
@@ -135,7 +123,7 @@ It answers:
 
 ## Complete System, Focused Story
 
-Flux includes functions, gateway, database execution, queue, schedules, agents, secrets, and deployment because the execution record has to span the whole backend.
+Flux includes functions, gateway, database execution, queue, schedules, secrets, and deployment because the execution record has to span the whole backend.
 
 But the product message stays narrow:
 

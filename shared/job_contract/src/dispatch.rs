@@ -104,27 +104,7 @@ pub trait QueueDispatch: Send + Sync {
     ) -> Result<(), String>;
 }
 
-// ── AgentDispatch ─────────────────────────────────────────────────────────────
-
-/// Caller → Agent boundary.
-///
-/// Used by:
-///   - The API handlers (`POST /agents/{name}/run`) to trigger an agent.
-///   - The `op_agent_run` Deno op, so user JS functions can call `ctx.agent.run()`.
-///
-/// The in-process implementation (`InProcessAgentDispatch` in server) calls
-/// `agent::run()` directly.
-#[async_trait]
-pub trait AgentDispatch: Send + Sync {
-    async fn run(
-        &self,
-        name:       &str,
-        input:      Value,
-        request_id: &str,
-        project_id: Uuid,
-        secrets:    HashMap<String, String>,
-    ) -> Result<Value, String>;
-}
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -209,7 +189,6 @@ mod tests {
 
     #[test]
     fn runtime_dispatch_is_object_safe() {
-        // If this compiles, the trait is object-safe.
         fn _check(_: &dyn RuntimeDispatch) {}
     }
 
@@ -221,10 +200,5 @@ mod tests {
     #[test]
     fn queue_dispatch_is_object_safe() {
         fn _check(_: &dyn QueueDispatch) {}
-    }
-
-    #[test]
-    fn agent_dispatch_is_object_safe() {
-        fn _check(_: &dyn AgentDispatch) {}
     }
 }

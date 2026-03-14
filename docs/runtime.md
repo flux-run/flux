@@ -21,7 +21,7 @@ The runtime is not the primary place for ingress policy or broad operator APIs.
 
 A typical runtime execution looks like this:
 
-1. receive an execution request from the gateway, queue, schedule, or agent surface
+1. receive an execution request from the gateway, queue, or schedule
 2. resolve the function version and load the bundle
 3. construct the Flux execution context
 4. execute the handler under configured limits

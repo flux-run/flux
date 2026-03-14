@@ -9,5 +9,4 @@ members = [
     "shared/job_contract",
     "data-engine",
     "server",
-    "agent",
 ]

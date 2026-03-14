@@ -1,0 +1,18 @@
+{
+  "name": "{name}",
+  "runtime": "php-wasm",
+  "handler": "handler",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "message": { "type": "string" },
+      "runtime": { "type": "string" }
+    }
+  }
+}

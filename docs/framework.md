@@ -25,7 +25,6 @@ Flux is:
 - an HTTP gateway
 - a database execution layer
 - a queue and scheduler
-- an agent and tool execution surface
 - an operator API, dashboard, and CLI
 - an execution record system for debugging and replay
 
@@ -46,7 +45,7 @@ The core value is deterministic backend debugging. Everything else exists to rei
 
 ### 1. Complete System, Focused Message
 
-The runtime includes functions, database access, queues, schedules, and agents, but the message stays focused:
+The runtime includes functions, database access, queues, and schedules, but the message stays focused:
 
 - Flux is the backend runtime for deterministic production debugging.
 

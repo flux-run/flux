@@ -9,7 +9,6 @@ The repo is split into product-facing subsystems:
 ```text
 flowbase/
 ├── api/              # operator-facing APIs
-├── agent/            # agent execution primitives
 ├── cli/              # developer and operator CLI
 ├── dashboard/        # dashboard UI
 ├── data-engine/      # database execution and mutation recording
@@ -44,8 +43,6 @@ my-app/
 │   └── auth.ts
 ├── queues/
 │   └── email.queue.toml
-├── agents/
-│   └── assistant.yaml
 └── .flux/                    # generated files and local state
 ```
 
@@ -56,7 +53,6 @@ my-app/
 - `schemas/` - database schema or migration definitions
 - `middleware/` - request or route middleware
 - `queues/` - queue definitions and worker settings
-- `agents/` - agent definitions and tool wiring
 - `.env.example` - committed environment template
 - `.env.local` - local secrets and overrides
 - `.flux/` - generated files, manifests, dev state, and caches

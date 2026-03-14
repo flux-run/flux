@@ -129,7 +129,7 @@ flux records export --before 30d --errors-only > errors-2026-03.jsonl
 
 ## The Rule
 
-**Flux owns things it needs to record intelligently: functions, database, queue, agents.**
+**Flux owns things it needs to record intelligently: functions, database, queue.**
 
 Everything else (storage, email, payments, extra databases) is a function that uses an SDK. The generic `ExternalCall` trace is enough — no special primitives needed.
 
