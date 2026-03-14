@@ -114,6 +114,12 @@ impl WasmPool {
         fuel_limit:          Option<u64>,
         allowed_http_hosts:  Vec<String>,
         http_client:         reqwest::Client,
+        data_engine_url:     String,
+        service_token:       String,
+        database:            String,
+        queue_url:           String,
+        api_url:             String,
+        project_id:          Option<String>,
     ) -> Result<ExecutionResult, String> {
         // ── Acquire concurrency slot ──────────────────────────────────────
         let _permit = self.semaphore
@@ -146,6 +152,12 @@ impl WasmPool {
             allowed_http_hosts,
             http_client:         Some(http_client),
             timeout_secs:        self.timeout_secs,
+            data_engine_url,
+            service_token,
+            database,
+            queue_url,
+            api_url,
+            project_id,
         };
 
         execute_wasm(self.engine.as_ref(), module.as_ref(), params).await
@@ -170,6 +182,8 @@ mod tests {
         (import "fluxbase" "log"         (func (param i32 i32 i32)))
         (import "fluxbase" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
         (import "fluxbase" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
+        (import "fluxbase" "db_query"    (func (param i32 i32 i32 i32 i32 i32) (result i32)))
+        (import "fluxbase" "queue_push"  (func (param i32 i32 i32 i32) (result i32)))
         (memory (export "memory") 2)
         (data (i32.const 4) "\0f\00\00\00{\"output\":\"ok\"}")
         (func (export "__flux_alloc") (param i32) (result i32) i32.const 65536)
@@ -254,6 +268,12 @@ mod tests {
             None,
             vec![],
             reqwest::Client::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            None,
         ).await;
         assert!(result.is_ok(), "expected Ok, got: {:?}", result);
         assert_eq!(result.unwrap().output, serde_json::json!("ok"));
@@ -265,10 +285,12 @@ mod tests {
         let bytes = wasm_bytes();
         // First call: compiles + executes.
         let r1 = pool.execute("cached_fn".to_string(), bytes.clone(), Default::default(),
-            serde_json::json!({}), None, vec![], reqwest::Client::new()).await;
+            serde_json::json!({}), None, vec![], reqwest::Client::new(),
+            String::new(), String::new(), String::new(), String::new(), String::new(), None).await;
         // Second call: should hit module cache.
         let r2 = pool.execute("cached_fn".to_string(), bytes, Default::default(),
-            serde_json::json!({}), None, vec![], reqwest::Client::new()).await;
+            serde_json::json!({}), None, vec![], reqwest::Client::new(),
+            String::new(), String::new(), String::new(), String::new(), String::new(), None).await;
         assert!(r1.is_ok());
         assert!(r2.is_ok());
     }

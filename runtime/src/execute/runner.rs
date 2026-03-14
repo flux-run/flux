@@ -190,6 +190,12 @@ impl<'a> ExecutionRunner<'a> {
             None,
             self.wasm_http_hosts.clone(),
             self.http_client.clone(),
+            self.data_engine_url.to_string(),
+            self.service_token.to_string(),
+            self.database.clone(),
+            self.queue_url.to_string(),
+            self.api_url.to_string(),
+            ctx.project_id.map(|id| id.to_string()),
         ).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 

@@ -68,8 +68,20 @@ pub struct HostState {
     pub logs:               Vec<LogLine>,
     /// `http_fetch` allow-list.  Empty vec = deny all.  Contains `"*"` = allow all.
     pub allowed_http_hosts: Vec<String>,
-    /// Shared reqwest client for outbound HTTP from `fluxbase.http_fetch`.
+    /// Shared reqwest client for outbound HTTP from `fluxbase.http_fetch` and DB calls.
     pub http_client:        reqwest::Client,
+    /// Data-engine base URL for `fluxbase.db_query`.
+    pub data_engine_url:    String,
+    /// Internal service token forwarded to data-engine and queue service.
+    pub service_token:      String,
+    /// Project Postgres schema name (e.g. `project_abc123`).
+    pub database:           String,
+    /// Queue service base URL for `fluxbase.queue_push`.
+    pub queue_url:          String,
+    /// API base URL for function name → UUID resolution in `queue_push`.
+    pub api_url:            String,
+    /// Project UUID (string) forwarded to queue service.
+    pub project_id:         Option<String>,
 }
 
 // ─── Params ────────────────────────────────────────────────────────────────
@@ -86,6 +98,18 @@ pub struct WasmExecutionParams {
     pub http_client: Option<reqwest::Client>,
     /// Per-request wall-clock timeout in seconds.
     pub timeout_secs: u64,
+    /// Data-engine base URL for `fluxbase.db_query`.
+    pub data_engine_url: String,
+    /// Internal service token forwarded to data-engine and queue service.
+    pub service_token: String,
+    /// Project Postgres schema name (e.g. `project_abc123`).
+    pub database: String,
+    /// Queue service base URL for `fluxbase.queue_push`.
+    pub queue_url: String,
+    /// API base URL for function name → UUID resolution in `queue_push`.
+    pub api_url: String,
+    /// Project UUID (string) forwarded to queue service.
+    pub project_id: Option<String>,
 }
 
 impl Default for WasmExecutionParams {
@@ -97,6 +121,12 @@ impl Default for WasmExecutionParams {
             allowed_http_hosts: Vec::new(),
             http_client:        None,
             timeout_secs:       30,
+            data_engine_url:    String::new(),
+            service_token:      String::new(),
+            database:           String::new(),
+            queue_url:          String::new(),
+            api_url:            String::new(),
+            project_id:         None,
         }
     }
 }
@@ -165,6 +195,12 @@ async fn execute_wasm_async(
         logs:               Vec::new(),
         allowed_http_hosts: params.allowed_http_hosts,
         http_client:        params.http_client.unwrap_or_else(reqwest::Client::new),
+        data_engine_url:    params.data_engine_url,
+        service_token:      params.service_token,
+        database:           params.database,
+        queue_url:          params.queue_url,
+        api_url:            params.api_url,
+        project_id:         params.project_id,
     };
 
     let mut store = Store::new(engine, host);
@@ -377,6 +413,150 @@ async fn execute_wasm_async(
         data[out_start..out_end].copy_from_slice(&value_bytes[..write_len]);
 
         write_len as i32
+    }).map_err(|e| e.to_string())?;
+
+    // ── Instantiate (async with async_support engine) ──────────────────────
+
+    // fluxbase.db_query(sql_ptr: i32, sql_len: i32, params_ptr: i32, params_len: i32,
+    //                   out_ptr: i32, out_max: i32) → i32 (bytes written, or -1 on error)
+    // Sends a raw SQL request to the data-engine /db/sql endpoint and writes the
+    // JSON result (array of rows or {rows_affected: N}) into WASM linear memory.
+    linker.func_wrap_async("fluxbase", "db_query", |mut caller: Caller<HostState>, args: (i32, i32, i32, i32, i32, i32)| {
+        let (sql_ptr, sql_len, params_ptr, params_len, out_ptr, out_max) = args;
+        Box::new(async move {
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return -1i32,
+            };
+            let data = memory.data(&caller);
+
+            // Read SQL string
+            let sql_end = (sql_ptr as usize).saturating_add(sql_len as usize);
+            if sql_end > data.len() { return -1; }
+            let sql = match std::str::from_utf8(&data[sql_ptr as usize..sql_end]) {
+                Ok(s) => s.to_string(),
+                Err(_) => return -1,
+            };
+
+            // Read optional JSON params array (may be zero-length → null)
+            let sql_params: serde_json::Value = if params_len > 0 {
+                let params_end = (params_ptr as usize).saturating_add(params_len as usize);
+                if params_end > data.len() { return -1; }
+                match serde_json::from_slice(&data[params_ptr as usize..params_end]) {
+                    Ok(v) => v,
+                    Err(_) => serde_json::Value::Null,
+                }
+            } else {
+                serde_json::Value::Null
+            };
+
+            let data_engine_url = caller.data().data_engine_url.clone();
+            let service_token   = caller.data().service_token.clone();
+            let database        = caller.data().database.clone();
+            let client          = caller.data().http_client.clone();
+
+            if data_engine_url.is_empty() { return -1; }
+
+            let body = serde_json::json!({ "sql": sql, "params": sql_params, "database": database });
+            let result = client
+                .post(format!("{}/db/sql", data_engine_url))
+                .header("Content-Type", "application/json")
+                .header("X-Service-Token", &service_token)
+                .json(&body)
+                .send()
+                .await;
+
+            let response_bytes = match result {
+                Ok(resp) if resp.status().is_success() => {
+                    match resp.bytes().await {
+                        Ok(b) => b.to_vec(),
+                        Err(_) => return -1,
+                    }
+                }
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let err_json = format!("{{\"error\":\"db_query failed: HTTP {}\"}}", status);
+                    err_json.into_bytes()
+                }
+                Err(_) => return -1,
+            };
+
+            let write_len = response_bytes.len().min(out_max as usize);
+            let data = memory.data_mut(&mut caller);
+            let out_start = out_ptr as usize;
+            let out_end   = out_start + write_len;
+            if out_end > data.len() { return -1; }
+            data[out_start..out_end].copy_from_slice(&response_bytes[..write_len]);
+            write_len as i32
+        })
+    }).map_err(|e| e.to_string())?;
+
+    // fluxbase.queue_push(req_ptr: i32, req_len: i32, out_ptr: i32, out_max: i32) → i32
+    // Enqueues a job via the Flux queue service. `req_ptr` points to a JSON object
+    // `{function: string, payload: any, delay_secs?: number}`.
+    linker.func_wrap_async("fluxbase", "queue_push", |mut caller: Caller<HostState>, args: (i32, i32, i32, i32)| {
+        let (req_ptr, req_len, out_ptr, out_max) = args;
+        Box::new(async move {
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return -1i32,
+            };
+            let data = memory.data(&caller);
+
+            let req_end = (req_ptr as usize).saturating_add(req_len as usize);
+            if req_end > data.len() { return -1; }
+            let req: serde_json::Value = match serde_json::from_slice(&data[req_ptr as usize..req_end]) {
+                Ok(v) => v,
+                Err(_) => return -1,
+            };
+
+            let queue_url   = caller.data().queue_url.clone();
+            let api_url     = caller.data().api_url.clone();
+            let service_token = caller.data().service_token.clone();
+            let project_id  = caller.data().project_id.clone();
+            let client      = caller.data().http_client.clone();
+
+            if queue_url.is_empty() { return -1; }
+
+            let body = serde_json::json!({
+                "function": req.get("function"),
+                "payload":  req.get("payload").unwrap_or(&serde_json::Value::Null),
+                "delay_secs": req.get("delay_secs").unwrap_or(&serde_json::Value::Null),
+                "project_id": project_id,
+                "api_url": api_url,
+            });
+
+            let result = client
+                .post(format!("{}/push", queue_url))
+                .header("Content-Type", "application/json")
+                .header("X-Service-Token", &service_token)
+                .json(&body)
+                .send()
+                .await;
+
+            let response_bytes = match result {
+                Ok(resp) if resp.status().is_success() => {
+                    match resp.bytes().await {
+                        Ok(b) => b.to_vec(),
+                        Err(_) => return -1,
+                    }
+                }
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let err_json = format!("{{\"error\":\"queue_push failed: HTTP {}\"}}", status);
+                    err_json.into_bytes()
+                }
+                Err(_) => return -1,
+            };
+
+            let write_len = response_bytes.len().min(out_max as usize);
+            let data = memory.data_mut(&mut caller);
+            let out_start = out_ptr as usize;
+            let out_end   = out_start + write_len;
+            if out_end > data.len() { return -1; }
+            data[out_start..out_end].copy_from_slice(&response_bytes[..write_len]);
+            write_len as i32
+        })
     }).map_err(|e| e.to_string())?;
 
     // ── Instantiate (async with async_support engine) ──────────────────────
