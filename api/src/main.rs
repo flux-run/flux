@@ -21,6 +21,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
         gateway_url: std::env::var("GATEWAY_URL")
             .unwrap_or_else(|_| "http://localhost:8081".to_string()),
+        runtime_url: std::env::var("RUNTIME_URL")
+            .unwrap_or_else(|_| "http://localhost:8083".to_string()),
         functions_dir: std::env::var("FLUX_FUNCTIONS_DIR")
             .unwrap_or_else(|_| "./flux-functions".to_string()),
     };

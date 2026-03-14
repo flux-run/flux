@@ -133,6 +133,31 @@ impl IsolatePool {
         db_ctx:         DbContext,
         bundle_key:     Option<String>,
     ) -> Result<ExecutionResult, String> {
+        // ── Backpressure guard ─────────────────────────────────────────────────
+        // Reject immediately when every worker already carries more than
+        // MAX_IN_FLIGHT_PER_WORKER concurrent requests.  This surfaces as an
+        // HTTP 503 + Retry-After to callers rather than a silent timeout.
+        // The threshold is generous (64/worker) to avoid false positives on
+        // bursty workloads; it only fires when the pool is genuinely saturated.
+        const MAX_IN_FLIGHT_PER_WORKER: usize = 64;
+        let total_in_flight: usize = self
+            .workers
+            .iter()
+            .map(|w| w.in_flight.load(Ordering::Relaxed))
+            .sum();
+        let pool_capacity = self.worker_count * MAX_IN_FLIGHT_PER_WORKER;
+        if total_in_flight >= pool_capacity {
+            tracing::warn!(
+                in_flight  = total_in_flight,
+                capacity   = pool_capacity,
+                workers    = self.worker_count,
+                "pool_saturated: all isolate workers at capacity"
+            );
+            return Err(format!(
+                "pool_saturated: {total_in_flight}/{pool_capacity} requests in flight"
+            ));
+        }
+
         // ── Pick worker via bundle-key affinity then least-loaded fallback ──
         let start = self.next_worker.fetch_add(1, Ordering::Relaxed);
 

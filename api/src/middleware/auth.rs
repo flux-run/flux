@@ -87,8 +87,11 @@ pub async fn require_auth(
 
     // ── 2. FLUX_API_KEY guard (CLI / service-to-service) ──────────────────
     if let Ok(expected) = std::env::var("FLUX_API_KEY") {
+        use subtle::ConstantTimeEq;
         let provided = bearer.as_deref().unwrap_or("");
-        if provided != expected {
+        // Constant-time comparison prevents timing-based enumeration of the key.
+        let token_ok: bool = provided.as_bytes().ct_eq(expected.as_bytes()).into();
+        if !token_ok {
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({

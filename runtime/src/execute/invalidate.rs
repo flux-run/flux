@@ -21,9 +21,15 @@ pub async fn invalidate_cache_handler(
     Json(req): Json<InvalidateCacheRequest>,
 ) -> impl IntoResponse {
     let provided = headers.get("X-Service-Token")
+        .or_else(|| headers.get("x-service-token"))
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    if provided != state.service_token {
+    // Constant-time comparison prevents timing-based token enumeration.
+    let token_ok: bool = {
+        use subtle::ConstantTimeEq;
+        provided.as_bytes().ct_eq(state.service_token.as_bytes()).into()
+    };
+    if !token_ok {
         return (StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({ "error": "unauthorized" }))).into_response();
     }

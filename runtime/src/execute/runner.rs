@@ -190,6 +190,25 @@ impl<'a> ExecutionRunner<'a> {
     }
 
     fn execution_error(&self, error: String, duration_ms: u64, tracer: &TraceEmitter) -> (StatusCode, Value) {
+        // Pool saturation — map to 503 before JSON parsing so callers get a
+        // proper Retry-After hint rather than a generic 500.
+        if error.starts_with("pool_saturated") {
+            tracer.post_lifecycle(
+                "warn",
+                "pool_saturated: all workers at capacity".into(),
+                "end", "error",
+                Some(duration_ms),
+            );
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                serde_json::json!({
+                    "error":       "pool_saturated",
+                    "message":     "All function workers are at capacity — retry in a moment",
+                    "retry_after": 2,
+                }),
+            );
+        }
+
         let (err_code, message) = if let Ok(parsed) = serde_json::from_str::<Value>(&error) {
             let code = parsed.get("code")   .and_then(|c| c.as_str()).unwrap_or("FunctionExecutionError").to_string();
             let msg  = parsed.get("message").and_then(|m| m.as_str()).unwrap_or(&error).to_string();

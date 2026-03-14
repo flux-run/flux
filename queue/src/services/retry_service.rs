@@ -39,8 +39,8 @@ pub async fn retry_job(pool: &PgPool, job_id: Uuid, attempts: i32) -> Result<(),
 
 pub async fn dead_letter_job(pool: &PgPool, job_id: Uuid, error: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO dead_letter_jobs (id, tenant_id, project_id, function_id, payload, error, failed_at) \
-         SELECT id, tenant_id, project_id, function_id, payload, $1, now() FROM jobs WHERE id = $2",
+        "INSERT INTO dead_letter_jobs (id, function_id, payload, error, failed_at) \
+         SELECT id, function_id, payload, $1, now() FROM jobs WHERE id = $2",
     )
     .bind(error)
     .bind(job_id)

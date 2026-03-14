@@ -156,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client:     http_client.clone(),
         data_engine_url: format!("{}/flux/data-engine", base_url),
         gateway_url:     base_url.clone(),
+        runtime_url:     base_url.clone(),
         functions_dir: std::env::var("FLUX_FUNCTIONS_DIR")
             .unwrap_or_else(|_| "./flux-functions".to_string()),
     });
@@ -172,10 +173,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue_dispatch: Arc<dyn QueueDispatch> = Arc::new(InProcessQueueDispatch {
         pool: pool.clone(),
     });
-    let de_dispatch: Arc<dyn DataEngineDispatch> = Arc::new(InProcessDataEngineDispatch {
-        pool: de_pool.clone(),
-        statement_timeout_ms: env_parse("STATEMENT_TIMEOUT_MS", 5000),
-    });
+    let de_dispatch: Arc<dyn DataEngineDispatch> = Arc::new(InProcessDataEngineDispatch::new(
+        de_pool.clone(),
+        env_parse("STATEMENT_TIMEOUT_MS", 5000),
+    ));
 
     // ── PoolDispatchers — shared by V8 ops and WASM host functions ────────
     let runtime_lock = Arc::new(std::sync::OnceLock::new());
@@ -332,8 +333,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(dev_invoke_state);
 
     // Runtime execute endpoint — queue worker POSTs here via loopback.
+    // Also exposes cache invalidation so the API can flush bundles after deploy.
     let runtime_execute_router = axum::Router::new()
         .route("/execute", axum::routing::post(runtime::execute::handler::execute_handler))
+        .route("/internal/cache/invalidate", axum::routing::post(runtime::execute::invalidate::invalidate_cache_handler))
         .with_state(runtime_state);
 
     let app = axum::Router::new()

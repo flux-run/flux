@@ -12,7 +12,7 @@ use axum::{
 pub async fn cache_invalidate(
     State(state): State<crate::AppState>,
 ) -> impl IntoResponse {
-    let url = format!("{}/internal/cache/invalidate", state.gateway_url);
+    let url = format!("{}/internal/cache/invalidate", state.runtime_url);
     match state.http_client.post(&url).send().await {
         Ok(resp) if resp.status().is_success() => {
             (StatusCode::OK, Json(serde_json::json!({ "invalidated": true })))

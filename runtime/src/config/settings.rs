@@ -61,7 +61,7 @@ impl Settings {
             });
 
         let data_engine_url = env::var("DATA_ENGINE_URL")
-            .unwrap_or_else(|_| "http://localhost:8085".to_string());
+            .unwrap_or_else(|_| "http://localhost:8082".to_string());
 
         let runtime_url = env::var("RUNTIME_URL")
             .unwrap_or_else(|_| format!("http://localhost:{}", env::var("PORT").unwrap_or_else(|_| "8083".to_string())));

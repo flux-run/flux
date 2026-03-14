@@ -63,8 +63,11 @@ pub async fn handle(
     // ── [1] Content-Length guard ─────────────────────────────────────────────
     // Reject before reading any bytes — avoids holding a connection open while
     // streaming a giant body that we would ultimately discard.
-    if let Some(resp) = check_content_length(&headers, state.max_request_size_bytes) {
-        return resp;
+    if let Some(resp) = check_content_length(&headers, state.max_request_size_bytes) {        tracing::warn!(
+            method = %method_str, path = %path,
+            max_bytes = state.max_request_size_bytes,
+            "gateway_reject: body exceeds size limit (Content-Length guard)"
+        );        return resp;
     }
 
     // ── [2] Route resolution ─────────────────────────────────────────────────
@@ -110,7 +113,15 @@ pub async fn handle(
     } else {
         match auth::check(&state.db_pool, &state.jwks_cache, &headers, &route).await {
             Ok(ctx)    => ctx,
-            Err(msg)   => return unauthorized(&msg),
+            Err(msg)   => {
+                tracing::warn!(
+                    method = %method_str, path = %path,
+                    function = %route.function_name,
+                    reason = %msg,
+                    "gateway_reject: authentication failed"
+                );
+                return unauthorized(&msg);
+            },
         }
     };
 
@@ -128,6 +139,13 @@ pub async fn handle(
         .unwrap_or("unknown");
 
     if !rate_limit::allow(&rate_limit::key(route.id, client_ip), limit) {
+        tracing::warn!(
+            method = %method_str, path = %path,
+            function = %route.function_name,
+            client_ip = %client_ip,
+            limit_per_sec = limit,
+            "gateway_reject: rate limit exceeded"
+        );
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({
@@ -144,7 +162,14 @@ pub async fn handle(
     // partial-read confusion on validation failure.
     let body_bytes = match axum::body::to_bytes(req.into_body(), state.max_request_size_bytes).await {
         Ok(b)  => b,
-        Err(_) => return payload_too_large(state.max_request_size_bytes),
+        Err(_) => {
+            tracing::warn!(
+                method = %method_str, path = %path,
+                max_bytes = state.max_request_size_bytes,
+                "gateway_reject: body exceeds size limit (streaming guard)"
+            );
+            return payload_too_large(state.max_request_size_bytes);
+        },
     };
 
     let payload: serde_json::Value =

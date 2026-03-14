@@ -26,6 +26,10 @@ pub struct AppState {
     pub http_client:      reqwest::Client,
     pub data_engine_url:  String,
     pub gateway_url:      String,
+    /// URL of the Runtime service — used by cache invalidation after a deployment
+    /// (`POST /internal/cache/invalidate`).  In the monolith this is the same
+    /// base URL as everything else (port 4000).
+    pub runtime_url:      String,
     /// Directory where function bundles live on the filesystem.
     ///
     /// - Dev:        `{project_root}/.flux/build`  (set by `flux dev`)

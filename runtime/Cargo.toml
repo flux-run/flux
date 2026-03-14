@@ -28,6 +28,9 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 uuid = { version = "1.22.0", features = ["v4", "serde"] }
 
+# Constant-time comparisons (token validation)
+subtle = "2"
+
 # Deno core for V8 isolates
 deno_core = "0.354.0"
 lru = "0.16.3"

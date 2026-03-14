@@ -3,11 +3,19 @@
 //! Executes raw SQL directly against the project database pool — no HTTP.
 //! Replicates the essential logic of `data-engine/src/api/handlers/sql.rs`
 //! (search_path isolation, statement timeout, param binding, json_agg wrapping).
+//!
+//! ## N+1 detection
+//!
+//! Every `execute_sql` call is tracked per `request_id`.  When the same table
+//! is queried ≥3 times in a single execution this module emits a `tracing::warn!`
+//! so the event appears in logs and the Flux trace timeline.
 
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::postgres::PgArguments;
 use sqlx::{Arguments, PgPool, Row};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use job_contract::dispatch::DataEngineDispatch;
@@ -17,6 +25,15 @@ use job_contract::dispatch::DataEngineDispatch;
 pub struct InProcessDataEngineDispatch {
     pub pool:                 PgPool,
     pub statement_timeout_ms: u64,
+    /// Per-request SQL table call tracker for N+1 detection.
+    /// key: request_id → (table_name → call_count)
+    tracker: Mutex<HashMap<String, HashMap<String, u32>>>,
+}
+
+impl InProcessDataEngineDispatch {
+    pub fn new(pool: PgPool, statement_timeout_ms: u64) -> Self {
+        Self { pool, statement_timeout_ms, tracker: Mutex::new(HashMap::new()) }
+    }
 }
 
 #[async_trait]
@@ -89,6 +106,31 @@ impl DataEngineDispatch for InProcessDataEngineDispatch {
 
         tx.commit().await.map_err(|e| format!("commit failed: {}", e))?;
 
+        // ── N+1 detection ───────────────────────────────────────────────────
+        if !request_id.is_empty() {
+            if let Some(table) = extract_main_table(&sql) {
+                let mut tracker = self.tracker.lock().unwrap_or_else(|p| p.into_inner());
+                let entry = tracker.entry(request_id.clone()).or_default();
+                let count = entry.entry(table.clone()).or_insert(0);
+                *count += 1;
+                if *count == 3 {
+                    tracing::warn!(
+                        request_id = %request_id,
+                        table      = %table,
+                        count      = %count,
+                        sql        = %sql.split_whitespace().take(8).collect::<Vec<_>>().join(" "),
+                        "n1_query_detected: same table queried >=3 times in one execution"
+                    );
+                }
+                // Prevent unbounded growth: evict when tracker exceeds 2000 entries.
+                if tracker.len() > 2000 {
+                    if let Some(oldest) = tracker.keys().next().map(|k| k.clone()) {
+                        tracker.remove(&oldest);
+                    }
+                }
+            }
+        }
+
         let row_count = if rows.is_empty() { affected as usize } else { rows.len() };
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -113,6 +155,30 @@ fn validate_identifier(s: &str) -> Result<(), String> {
         return Err(format!("invalid identifier: '{}'", s));
     }
     Ok(())
+}
+
+/// Extract the primary table name from a SQL statement for N+1 detection.
+///
+/// Recognises the most common patterns: `FROM <table>`, `UPDATE <table>`,
+/// `INTO <table>`.  Returns `None` for unrecognised or DDL statements.
+fn extract_main_table(sql: &str) -> Option<String> {
+    let sql_upper = sql.to_uppercase();
+    for kw in &["FROM ", "UPDATE ", "INTO "] {
+        if let Some(idx) = sql_upper.find(kw) {
+            let rest = sql[idx + kw.len()..].trim_start();
+            let end  = rest
+                .find(|c: char| !c.is_alphanumeric() && c != '_' && c != '"' && c != '.')
+                .unwrap_or(rest.len());
+            if end > 0 {
+                return Some(
+                    rest[..end].to_lowercase()
+                        .trim_matches('"')
+                        .to_string()
+                );
+            }
+        }
+    }
+    None
 }
 
 /// Bind a JSON value to PgArguments.
