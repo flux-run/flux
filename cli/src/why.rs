@@ -123,13 +123,32 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
         .and_then(|s| s.as_array())
         .unwrap_or(&empty_vec);
 
-    let request   = trace_body.get("request").unwrap_or(&Value::Null);
-    let method    = request["method"].as_str().unwrap_or("?");
-    let path      = request["path"].as_str().unwrap_or("?");
-    let function  = request["function"].as_str().unwrap_or("?");
-    let commit    = request["code_sha"].as_str().unwrap_or("?");
-    let status    = request["status"].as_i64().unwrap_or(0);
-    let elapsed   = trace_body["total_ms"].as_i64().unwrap_or(0);
+    // GET /traces/{id} does not return a top-level "request" object.
+    // Extract request metadata from the first gateway/http span's metadata.
+    let gw_span = spans.iter().find(|s| {
+        matches!(
+            s["span_type"].as_str(),
+            Some("request") | Some("gateway_request") | Some("http_request")
+        ) || s["source"].as_str() == Some("gateway")
+    });
+    let gw_meta   = gw_span.and_then(|s| s["metadata"].as_object());
+    let method    = gw_meta.and_then(|m| m.get("method")).and_then(|v| v.as_str()).unwrap_or("?");
+    let path      = gw_meta.and_then(|m| m.get("path")).and_then(|v| v.as_str()).unwrap_or("?");
+    let commit    = gw_meta.and_then(|m| m.get("code_sha")).and_then(|v| v.as_str()).unwrap_or("?");
+    let status    = gw_meta.and_then(|m| m.get("status"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or_else(|| gw_meta.and_then(|m| m.get("status_code")).and_then(|v| v.as_i64()).unwrap_or(0));
+    // Function name: prefer gateway metadata, fallback to first runtime span.
+    let function  = gw_meta.and_then(|m| m.get("function")).and_then(|v| v.as_str())
+        .or_else(|| {
+            spans.iter()
+                .find(|s| s["source"].as_str() == Some("runtime"))
+                .and_then(|s| s["resource"].as_str())
+        })
+        .unwrap_or("?");
+
+    // total_duration_ms is returned at the root of the trace response.
+    let elapsed   = trace_body["total_duration_ms"].as_i64().unwrap_or(0);
     let is_error  = status >= 400 || spans.iter().any(|s| s["span_type"] == "error");
 
     // ── Fetch previous request (context-aware debugging) ─────────────────────

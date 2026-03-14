@@ -437,10 +437,11 @@ fn print_summary(results: &[FunctionResult], project_version: u64, ctx: &Resolve
         match &r.status {
             DeployStatus::Deployed { version, url: _ } => {
                 println!(
-                    "    {} {}   v{}",
+                    "    {} {}   v{}  {}",
                     "↑".green().bold(),
                     format!("{:<20}", r.name).green(),
                     version,
+                    format!("{}ms", r.elapsed_ms).dimmed(),
                 );
             }
             DeployStatus::Skipped => {

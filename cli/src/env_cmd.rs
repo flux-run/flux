@@ -105,7 +105,7 @@ pub async fn execute(command: EnvCommands) -> anyhow::Result<()> {
 
         EnvCommands::Use { name } => {
             // Store selected env in project or global config
-            let mut config = Config::load().await;
+            let config = Config::load().await;
             // We store it as an extra field — for now just acknowledge
             println!(
                 "{} Using environment: {}",

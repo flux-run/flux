@@ -61,22 +61,6 @@ pub async fn execute_deployments(command: DeploymentCommands) -> anyhow::Result<
     Ok(())
 }
 
-pub async fn execute_rollback(name: &str, version: i32) -> anyhow::Result<()> {
-    let client = crate::client::ApiClient::new().await?;
-    let res = client
-        .client
-        .post(format!(
-            "{}/deployments/{}/activate/{}",
-            client.base_url, name, version
-        ))
-        .send()
-        .await?;
-
-    res.error_for_status()?;
-    println!("✅ Rolled back function '{}' to version v{}", name, version);
-    Ok(())
-}
-
 // ── Project-level list ────────────────────────────────────────────────────────
 
 pub async fn execute_list(context_name: Option<String>) -> anyhow::Result<()> {

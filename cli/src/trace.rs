@@ -201,18 +201,18 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
     }
 
     let body: Value = res.json().await?;
-    let data              = &body["data"];
-    let spans             = data["spans"].as_array().cloned().unwrap_or_default();
-    let count             = data["span_count"].as_u64().unwrap_or(spans.len() as u64);
-    let total_ms          = data["total_duration_ms"].as_i64();
-    let slow_count        = data["slow_span_count"].as_u64().unwrap_or(0);
-    let slow_thresh       = data["slow_threshold_ms"].as_u64().unwrap_or(slow_threshold);
-    let slow_db_count     = data["slow_db_count"].as_u64().unwrap_or(0);
-    let n_plus_one_tables: Vec<String> = data["n_plus_one_tables"]
+    // The API returns all fields at the root — no "data" wrapper.
+    let spans             = body["spans"].as_array().cloned().unwrap_or_default();
+    let count             = body["span_count"].as_u64().unwrap_or(spans.len() as u64);
+    let total_ms          = body["total_duration_ms"].as_i64();
+    let slow_count        = body["slow_span_count"].as_u64().unwrap_or(0);
+    let slow_thresh       = body["slow_threshold_ms"].as_u64().unwrap_or(slow_threshold);
+    let slow_db_count     = body["slow_db_count"].as_u64().unwrap_or(0);
+    let n_plus_one_tables: Vec<String> = body["n_plus_one_tables"]
         .as_array()
         .map(|a| a.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect())
         .unwrap_or_default();
-    let suggested_indexes: Vec<serde_json::Value> = data["suggested_indexes"]
+    let suggested_indexes: Vec<serde_json::Value> = body["suggested_indexes"]
         .as_array()
         .cloned()
         .unwrap_or_default();
@@ -422,9 +422,9 @@ pub async fn execute_list(limit: u64, function: Option<String>, json_output: boo
     }
 
     let empty_vec  = vec![];
-    let records = body["data"]
+    // GET /traces returns { "traces": [...] }
+    let records = body["traces"]
         .as_array()
-        .or_else(|| body.as_array())
         .unwrap_or(&empty_vec);
 
     if records.is_empty() {
@@ -458,7 +458,9 @@ pub async fn execute_list(limit: u64, function: Option<String>, json_output: boo
             .unwrap_or("?");
 
         let function_name = {
-            let raw = record["function_name"].as_str()
+            // list_traces uses "function"; legacy fallbacks for older API versions.
+            let raw = record["function"].as_str()
+                .or_else(|| record["function_name"].as_str())
                 .or_else(|| record["resource"].as_str())
                 .unwrap_or("?");
             // Truncate to fit column before padding (avoids ANSI double-count).
@@ -471,22 +473,26 @@ pub async fn execute_list(limit: u64, function: Option<String>, json_output: boo
             }
         };
 
-        let status_raw = record["status"].as_str().unwrap_or("?");
-        let duration_ms = record["total_duration_ms"].as_i64()
-            .or_else(|| record["duration_ms"].as_i64());
-        let span_count = record["span_count"].as_u64().unwrap_or(0);
-        let short_id   = &request_id[..request_id.len().min(8)];
+        // list_traces returns "status" as an integer HTTP code.
+        let http_status = record["status"].as_i64().unwrap_or(0);
+        let is_err      = record["is_error"].as_bool().unwrap_or(http_status >= 400);
+        let status_raw  = if http_status > 0 { http_status.to_string() } else { "?".to_string() };
+        let duration_ms = record["duration_ms"].as_i64()
+            .or_else(|| record["total_duration_ms"].as_i64());
+        let short_id    = &request_id[..request_id.len().min(8)];
 
         // Build padded plain strings, then colorize the whole padded cell.
-        let status_padded   = format!("{:<w$}", status_raw.to_uppercase(), w = W_STATUS);
-        let function_padded = format!("{:<w$}", function_name,             w = W_FUNCTION);
-        let spans_padded    = format!("{:<w$}", span_count,                w = W_SPANS);
+        let status_padded   = format!("{:<w$}", status_raw, w = W_STATUS);
+        let function_padded = format!("{:<w$}", function_name, w = W_FUNCTION);
+        // spans column not available in list response — omit with dashes.
+        let spans_padded    = format!("{:<w$}", "—", w = W_SPANS);
 
-        let status_col = match status_raw.to_uppercase().as_str() {
-            "OK" | "SUCCESS" | "200"    => status_padded.green().bold().to_string(),
-            "ERROR" | "FAILED" | "500"  => status_padded.red().bold().to_string(),
-            "TIMEOUT"                   => status_padded.yellow().bold().to_string(),
-            _                           => status_padded.normal().to_string(),
+        let status_col = if is_err {
+            status_padded.red().bold().to_string()
+        } else if http_status >= 300 {
+            status_padded.yellow().to_string()
+        } else {
+            status_padded.green().bold().to_string()
         };
 
         let duration_plain = match duration_ms {

@@ -37,12 +37,6 @@ pub struct ApiClient {
     pub base_url: String,
     /// Gateway / function invocation base — `http://localhost:4000`
     pub gateway_url: String,
-    /// Legacy runtime URL (only used in separate-binary mode).
-    pub runtime_url: String,
-    /// Legacy data engine URL.
-    pub data_engine_url: String,
-    /// Legacy queue URL.
-    pub queue_url: String,
 }
 
 impl ApiClient {
@@ -72,11 +66,8 @@ impl ApiClient {
 
         Ok(Self {
             client,
-            base_url:        config.api_url,
-            gateway_url:     config.gateway_url,
-            runtime_url:     config.runtime_url,
-            data_engine_url: config.data_engine_url,
-            queue_url:       config.queue_url,
+            base_url:    config.api_url,
+            gateway_url: config.gateway_url,
         })
     }
 }

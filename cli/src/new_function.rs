@@ -36,21 +36,6 @@ pub const VERSIONS: &[(&str, &str)] = &[
     ("ruby",       "3.3 / ruby.wasm"),
 ];
 
-// ── Per-language build/run actions ────────────────────────────────────────────
-
-pub const ACTIONS: &[(&str, &str, &str)] = &[
-    // (language, check/build cmd, run cmd)
-    ("typescript", "deno check index.ts",                            "deno run index.ts"),
-    ("javascript", "node --check index.js",                          "node index.js"),
-    ("python",     "python3 -m py_compile handler.py",               "python3 handler.py"),
-    ("go",         "GOOS=wasip1 GOARCH=wasm go build .",             "GOOS=wasip1 GOARCH=wasm go build ."),
-    ("java",       "./gradlew build",                                 "./gradlew build"),
-    ("php",        "make check",                                      "make"),
-    ("rust",       "cargo check --target wasm32-wasip1",             "cargo build --release --target wasm32-wasip1"),
-    ("csharp",     "dotnet build",                                    "dotnet build"),
-    ("ruby",       "ruby -c handler.rb",                              "ruby handler.rb"),
-];
-
 // ── Supported languages ───────────────────────────────────────────────────────
 
 const LANGUAGES: &[(&str, &[&str])] = &[

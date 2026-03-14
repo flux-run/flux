@@ -215,24 +215,15 @@ enum Commands {
     ///
     /// Examples:
     ///   flux init
-    ///   flux init --name my-api --runtime bun
-    ///   flux init --gateway-port 4000 --api-port 8080
+    ///   flux init --name my-api
+    ///   flux init --gateway-port 4000
     Init {
         /// Project name — creates a new directory. Defaults to current directory name.
         #[arg(value_name = "NAME")]
         name: Option<String>,
-        /// Runtime identifier (nodejs20 | bun | deno). Default: nodejs20
-        #[arg(long, value_name = "RUNTIME")]
-        runtime: Option<String>,
-        /// Override local API port in [dev] section
-        #[arg(long, value_name = "PORT")]
-        api_port: Option<u16>,
         /// Override local gateway port in [dev] section
         #[arg(long, value_name = "PORT")]
         gateway_port: Option<u16>,
-        /// Override local runtime port in [dev] section
-        #[arg(long, value_name = "PORT")]
-        runtime_port: Option<u16>,
     },
 
     /// Dry-run a query: show the compiler output, applied policies, complexity score, and
@@ -742,13 +733,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::New    { name, template } |
         Commands::Create { name, template } => create::execute(name, template).await?,
 
-        Commands::Init { name, runtime, api_port, gateway_port, runtime_port } => {
+        Commands::Init { name, gateway_port } => {
             init::execute(init::InitOptions {
                 name,
-                runtime,
-                api_port,
                 gateway_port,
-                runtime_port,
             }).await?
         }
 

@@ -8,20 +8,11 @@ use tokio::fs;
 // FluxToml URL helpers, dev.rs service table — reads from here.
 // Override at runtime via flux.toml [dev] or FLUXBASE_*_URL env vars.
 
-/// Legacy separate-binary port \u2014 kept for backward-compat with explicit `flux.toml [dev]` overrides.
-#[allow(dead_code)]
-pub const DEFAULT_API_PORT:         u16 = 8080;
-#[allow(dead_code)]
-pub const DEFAULT_GATEWAY_PORT:     u16 = 8081;
 pub const DEFAULT_RUNTIME_PORT:     u16 = 8083;
 pub const DEFAULT_DATA_ENGINE_PORT: u16 = 8082;
 pub const DEFAULT_QUEUE_PORT:       u16 = 8084;
 /// Monolithic server port — single binary serves all services on this port.
 pub const DEFAULT_SERVER_PORT:      u16 = 4000;
-/// Dev-only: Vite HMR port. In production the dashboard is served from the API
-/// binary at `/ui/*` — no separate process or port needed.
-pub const DEFAULT_DASHBOARD_PORT:   u16 = 5173;
-pub const DEFAULT_DB_PORT:          u16 = 5432;
 
 /// Build a localhost URL from a port number.
 #[inline]
@@ -199,16 +190,6 @@ impl FluxLocalConfig {
         serde_json::from_str(&src).ok()
     }
 
-    /// Write `.flux/config.json` in the current directory.
-    pub async fn save(&self) -> Result<PathBuf, std::io::Error> {
-        let path = PathBuf::from(Self::FILE);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-        let contents = serde_json::to_string_pretty(self)?;
-        fs::write(&path, contents).await?;
-        Ok(path)
-    }
 }
 
 //
@@ -414,35 +395,11 @@ impl ProjectConfig {
         Self::find_path()
     }
 
-    /// Synchronous loader used inside `Config::load()` (called from an async
-    /// context where we don't want an extra `.await`).
-    pub fn load_sync() -> Option<Self> {
-        let path = Self::find_path()?;
-        let src  = std::fs::read_to_string(path).ok()?;
-        serde_json::from_str(&src).ok()
-    }
-
     /// Async loader for use in commands that need all fields.
     pub async fn load() -> Option<Self> {
         let path = Self::find_path()?;
         let src  = fs::read_to_string(path).await.ok()?;
         serde_json::from_str(&src).ok()
-    }
-
-    /// Return the path where the project config would be written.
-    pub fn default_path() -> PathBuf {
-        PathBuf::from(Self::FILE)
-    }
-
-    /// Persist the project config to `.fluxbase/config.json` in cwd.
-    pub async fn save(&self) -> Result<PathBuf, std::io::Error> {
-        let path = Self::default_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-        let contents = serde_json::to_string_pretty(self)?;
-        fs::write(&path, contents).await?;
-        Ok(path)
     }
 
     // ── Helpers for sdk.rs  ──────────────────────────────────────────────

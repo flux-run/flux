@@ -19,7 +19,6 @@ use crate::client::ApiClient;
 
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
-    pub version:      u32,
     pub project_id:   String,
     pub generated_at: String,
     pub schema_hash:  String,
@@ -44,15 +43,12 @@ pub struct ColumnDef {
 
 #[derive(Debug, Deserialize)]
 pub struct FunctionSchema {
-    pub id:            String,
-    pub runtime:       String,
     pub input_schema:  Option<serde_json::Value>,
     pub output_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AgentSchema {
-    pub tools: Vec<String>,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -291,16 +287,6 @@ fn pg_to_java(pg: &str) -> &'static str {
         "timestamp with time zone" | "timestamptz" | "timestamp"
         | "timestamp without time zone" => "java.time.Instant",
         _ => "Object",
-    }
-}
-
-fn pg_to_ruby(pg: &str) -> &'static str {
-    match pg {
-        "boolean" | "bool" => "T::Boolean",
-        "integer" | "int4" | "int" | "smallint" | "int2" | "bigint" | "int8" => "Integer",
-        "numeric" | "decimal" | "float8" | "double precision" | "float4" | "real" => "Float",
-        "json" | "jsonb" => "T::Hash",
-        _ => "String",
     }
 }
 

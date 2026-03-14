@@ -49,14 +49,8 @@ fn base_scaffold_files() -> Vec<(&'static str, &'static str)> {
 pub struct InitOptions {
     /// Project name. Defaults to current directory name.
     pub name:         Option<String>,
-    /// Runtime hint — kept for CLI compat but the scaffold is runtime-agnostic.
-    pub runtime:      Option<String>,
     /// Override local gateway port in `[dev]` section.
     pub gateway_port: Option<u16>,
-    /// Override local runtime port in `[dev]` section.
-    pub runtime_port: Option<u16>,
-    /// Override local API port in `[dev]` section.
-    pub api_port:     Option<u16>,
 }
 
 pub async fn execute(opts: InitOptions) -> anyhow::Result<()> {

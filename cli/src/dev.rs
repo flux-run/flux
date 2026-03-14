@@ -155,7 +155,7 @@ pub async fn execute() -> anyhow::Result<()> {
 
     // 11. Stop embedded PostgreSQL if we started it
     println!("{}", "Stopping PostgreSQL…".dimmed());
-    if let Some(mut pg) = _pg {
+    if let Some(pg) = _pg {
         let _ = pg.stop().await;
     }
     println!("{}", "✔  Stopped.".green());
@@ -412,7 +412,7 @@ async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Res
     // Build mutable copies of the static migrators so we can enable
     // ignore_missing — prevents each set from rejecting migrations owned by
     // the other set in the shared _sqlx_migrations tracking table.
-    let mut api_m = sqlx::migrate::Migrator {
+    let api_m = sqlx::migrate::Migrator {
         migrations:      std::borrow::Cow::Borrowed(API_MIGRATIONS.migrations.as_ref()),
         ignore_missing:  true,
         locking:         true,
@@ -421,7 +421,7 @@ async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Res
     api_m.run(&pool).await
         .context("Failed to apply Flux API migrations")?;
 
-    let mut de_m = sqlx::migrate::Migrator {
+    let de_m = sqlx::migrate::Migrator {
         migrations:      std::borrow::Cow::Borrowed(DE_MIGRATIONS.migrations.as_ref()),
         ignore_missing:  true,
         locking:         true,

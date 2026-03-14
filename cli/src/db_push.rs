@@ -52,8 +52,7 @@ struct MigrateRequest {
 
 #[derive(Debug, Deserialize)]
 struct MigrateResponse {
-    status:  String, // "applied" | "already_applied"
-    message: Option<String>,
+    status: String, // "applied" | "already_applied"
 }
 
 /// Schema manifest emitted by the Deno compiler (one per *.schema.ts file).
