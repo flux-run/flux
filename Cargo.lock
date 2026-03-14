@@ -2070,6 +2070,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "job_contract",
+ "rand 0.8.5",
  "reqwest",
  "serde",
  "serde_json",

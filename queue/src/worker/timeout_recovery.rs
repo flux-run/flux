@@ -1,5 +1,6 @@
 use std::time::Duration;
 use sqlx::{FromRow, PgPool};
+use tokio::sync::watch;
 use tokio::time::sleep;
 use tracing::{info, warn, error};
 use uuid::Uuid;
@@ -22,9 +23,15 @@ struct StuckJob {
 /// Each timed-out job has its attempt count incremented:
 /// - If `attempts < max_attempts`: reset to `pending` so a worker picks it up again.
 /// - If `attempts >= max_attempts`: moved to `dead_letter_jobs`.
-pub async fn run(pool: PgPool, check_interval_ms: u64) {
+pub async fn run(pool: PgPool, check_interval_ms: u64, mut shutdown_rx: watch::Receiver<()>) {
     loop {
-        sleep(Duration::from_millis(check_interval_ms)).await;
+        tokio::select! {
+            _ = sleep(Duration::from_millis(check_interval_ms)) => {}
+            _ = shutdown_rx.changed() => {
+                info!("Timeout recovery received shutdown signal — exiting");
+                return;
+            }
+        }
 
         match recover_stuck_jobs(&pool).await {
             Ok(0) => {}

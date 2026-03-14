@@ -50,7 +50,7 @@ It is solved by owning enough of the execution path that the runtime can record:
 
 ### 1. Make `flux why` Worth Reaching For
 
-`flux why` becomes the command people use first when something breaks.
+`flux why` is the command people use first when something breaks.
 
 ### 2. Make Replay And Diff Credible
 
@@ -108,7 +108,7 @@ The initial best-fit users are:
 
 ## Core Workflow
 
-The core workflow Flux must make excellent is:
+The core workflow is:
 
 ```bash
 flux init
@@ -121,7 +121,7 @@ flux incident replay
 flux trace diff
 ```
 
-If this loop feels exceptional, the rest of the system becomes easier to justify.
+This loop is exceptional, and the rest of the system reinforces it.
 
 ## System Scope
 
@@ -140,10 +140,10 @@ Completeness is important. Equal marketing weight for every subsystem is not.
 
 ## Product Bar
 
-Flux succeeds when:
+Flux delivers:
 
-1. a developer can start the full system locally without ceremony
-2. a function can be created, invoked, traced, and explained immediately
+1. a developer starts the full system locally without ceremony
+2. a function is created, invoked, traced, and explained immediately
 3. deployments are visible inside the debugging story
 4. one replay-plus-diff workflow is reliable enough to trust
 5. queue and schedule work preserve the same record model

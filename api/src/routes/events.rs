@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{
     error::{ApiError, ApiResponse},
     types::context::RequestContext,
+    validation::PaginationQuery,
     AppState,
 };
 
@@ -89,14 +90,19 @@ pub async fn publish_event(
 pub async fn list_subscriptions(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<EventSubscriptionRow>> {
+    let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, EventSubscriptionRow>(
         "SELECT id, tenant_id, project_id, event_pattern, target_type, target_config, \
          enabled, created_at, updated_at \
          FROM fluxbase_internal.event_subscriptions \
-         WHERE project_id = $1 ORDER BY created_at DESC",
+         WHERE project_id = $1 ORDER BY created_at DESC \
+         LIMIT $2 OFFSET $3",
     )
     .bind(ctx.project_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await
     .map_err(db_err)?;

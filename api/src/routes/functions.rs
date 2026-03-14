@@ -13,6 +13,7 @@ use axum::{
     Json,
 };
 use crate::error::{ApiError, ApiResponse, ApiResult};
+use crate::validation::{validate_name, PaginationQuery};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -65,14 +66,19 @@ fn row_to_json(r: FunctionRow, gateway_url: &str) -> serde_json::Value {
 pub async fn list_functions(
     State(state): State<AppState>,
     Extension(context): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<serde_json::Value> {
+    let (limit, offset) = page.clamped();
     let records = sqlx::query_as::<_, FunctionRow>(
         "SELECT id, name, runtime, description, input_schema, output_schema, created_at \
          FROM functions \
          WHERE project_id = $1 \
-         ORDER BY created_at DESC",
+         ORDER BY created_at DESC \
+         LIMIT $2 OFFSET $3",
     )
     .bind(context.project_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await
     .map_err(ApiError::from)?;
@@ -82,7 +88,7 @@ pub async fn list_functions(
         .map(|r| row_to_json(r, &state.gateway_url))
         .collect();
 
-    Ok(ApiResponse::new(serde_json::json!({ "functions": functions })))
+    Ok(ApiResponse::new(serde_json::json!({ "functions": functions, "limit": limit, "offset": offset })))
 }
 
 pub async fn get_function(
@@ -110,9 +116,7 @@ pub async fn create_function(
     Extension(context): Extension<RequestContext>,
     Json(payload): Json<CreateFunctionPayload>,
 ) -> ApiResult<serde_json::Value> {
-    if payload.name.is_empty() {
-        return Err(ApiError::bad_request("name is required"));
-    }
+    validate_name(&payload.name).map_err(|e| ApiError::bad_request(e))?;
 
     let runtime = payload.runtime.as_deref().unwrap_or("deno").to_string();
     let function_id = Uuid::new_v4();

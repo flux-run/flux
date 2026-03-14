@@ -20,7 +20,7 @@ If a request bypasses the gateway, the debugging and policy story becomes weaker
 
 ## Why The Gateway Matters To The Product
 
-Flux is not trying to be only a function executor. It is trying to own enough of the request path that an operator can trust the execution record.
+Flux owns enough of the request path that an operator can trust the execution record.
 
 The gateway matters because it ensures that:
 
@@ -64,7 +64,7 @@ Because the gateway owns the first step of a request, it is also the right place
 
 This is why invoking through the gateway is the most representative local test path.
 
-## Target Production Shape
+## Production Shape
 
 In production:
 

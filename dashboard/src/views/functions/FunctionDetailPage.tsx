@@ -20,9 +20,13 @@ interface Deployment { id: string; version: number; is_active: boolean; created_
 
 const RUNTIME_COLOR: Record<string, string> = {
   deno:   'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
-  nodejs: 'text-green-400   bg-green-500/10   border-green-500/20',
   python: 'text-blue-400    bg-blue-500/10    border-blue-500/20',
-  bun:    'text-amber-400   bg-amber-500/10   border-amber-500/20',
+  go:     'text-cyan-400    bg-cyan-500/10    border-cyan-500/20',
+  java:   'text-orange-400  bg-orange-500/10  border-orange-500/20',
+  php:    'text-indigo-400  bg-indigo-500/10  border-indigo-500/20',
+  rust:   'text-amber-400   bg-amber-500/10   border-amber-500/20',
+  csharp: 'text-violet-400  bg-violet-500/10  border-violet-500/20',
+  ruby:   'text-red-400     bg-red-500/10     border-red-500/20',
 }
 
 function relTime(ts: string) {

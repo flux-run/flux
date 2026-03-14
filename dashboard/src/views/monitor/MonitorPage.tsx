@@ -362,7 +362,7 @@ export default function MonitorPage() {
           </div>
           <div className="flex justify-between">
             <span>Function runtimes</span>
-            <span className="text-foreground">Deno V8 · Wasmtime</span>
+            <span className="text-foreground">Deno V8 · Wasmtime (8 languages)</span>
           </div>
           <div className="flex justify-between">
             <span>Data at</span>

@@ -2,7 +2,7 @@
 
 This document describes the logical shape of the Flux database.
 
-It is intentionally conceptual. The exact table names and migration details may evolve, but the product continues to reflect these major data families.
+It is intentionally conceptual. The exact table names and migration details may evolve, but the product reflects these major data families.
 
 ## 1. Project And Configuration Data
 

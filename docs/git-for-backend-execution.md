@@ -2,7 +2,7 @@
 
 Flux can be understood through a version-control analogy.
 
-This analogy is useful because the product is trying to make backend behavior inspectable in the same way Git makes code history inspectable.
+This analogy is useful because the product makes backend behavior inspectable in the same way Git makes code history inspectable.
 
 ## The Analogy
 
@@ -41,7 +41,7 @@ This analogy helps explain why Flux includes:
 - diff
 - blame
 
-The product is trying to make runtime history inspectable, not just observable.
+The product makes runtime history inspectable, not just observable.
 
 ## Boundaries Of The Analogy
 

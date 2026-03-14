@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::{
     error::{ApiError, ApiResponse},
     types::context::RequestContext,
+    validation::PaginationQuery,
     AppState,
 };
 
@@ -60,12 +61,17 @@ pub struct PublishMessagePayload {
 pub async fn list_queues(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<QueueConfigRow>> {
+    let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, QueueConfigRow>(
         "SELECT id, project_id, name, description, max_attempts, visibility_timeout_ms, created_at \
-         FROM flux.queue_configs WHERE project_id = $1 ORDER BY created_at DESC",
+         FROM flux.queue_configs WHERE project_id = $1 ORDER BY created_at DESC \
+         LIMIT $2 OFFSET $3",
     )
     .bind(ctx.project_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await
     .map_err(db_err)?;
@@ -182,6 +188,7 @@ pub async fn list_bindings(
     Path(_name): Path<String>,
     State(_state): State<AppState>,
     Extension(_ctx): Extension<RequestContext>,
+    Query(_page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<Value>> {
     Ok(ApiResponse::new(vec![]))
 }
@@ -213,12 +220,17 @@ pub async fn list_dlq(
     Path(_name): Path<String>,
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<DeadLetterJobRow>> {
+    let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, DeadLetterJobRow>(
         "SELECT id, tenant_id, project_id, function_id, payload, error, failed_at \
-         FROM dead_letter_jobs WHERE project_id = $1",
+         FROM dead_letter_jobs WHERE project_id = $1 \
+         ORDER BY failed_at DESC LIMIT $2 OFFSET $3",
     )
     .bind(ctx.project_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await
     .map_err(db_err)?;

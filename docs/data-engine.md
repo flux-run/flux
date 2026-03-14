@@ -26,7 +26,7 @@ Without a mutation-aware data layer, most incidents still end with:
 - weak replay and diff workflows
 - poor visibility into state-driven regressions
 
-The data engine is what allows Flux to answer state-level questions such as:
+The data engine allows Flux to answer state-level questions such as:
 
 - who changed this row?
 - what request caused this mutation?
@@ -57,7 +57,7 @@ The data engine also protects the system from accidental bad queries by applying
 - policy checks
 - controlled search path or schema routing
 
-The product benefit is not only safety. It is that the runtime can explain why a query failed or was denied.
+The product benefit is not only safety. It is that the runtime explains why a query failed or was denied.
 
 ## Hooks, Events, And Side Effects
 

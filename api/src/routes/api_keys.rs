@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{
     error::{ApiError, ApiResponse},
     types::context::RequestContext,
+    validation::PaginationQuery,
     AppState,
 };
 
@@ -37,12 +38,17 @@ pub struct CreateApiKeyPayload {
 pub async fn list_api_keys(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<ApiKeyRow>> {
+    let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, ApiKeyRow>(
         "SELECT id, project_id, name, key_prefix, created_at, last_used_at \
-         FROM flux.api_keys WHERE project_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC",
+         FROM flux.api_keys WHERE project_id = $1 AND revoked_at IS NULL \
+         ORDER BY created_at DESC LIMIT $2 OFFSET $3",
     )
     .bind(ctx.project_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await
     .map_err(db_err)?;

@@ -77,7 +77,7 @@ The CLI optimizes for:
 - JSON only when requested
 - next-step hints that keep users moving
 
-The CLI avoids teaching outdated or cloud-first concepts as the main workflow.
+The CLI does not teach outdated or cloud-first concepts as the main workflow.
 
 ## Context Model
 
@@ -104,7 +104,7 @@ The command tree keeps the core debugging loop obvious.
 
 ## CLI Success Test
 
-The CLI is doing its job when a new developer can:
+A new developer can:
 
 1. start the product quickly
 2. create and run a function

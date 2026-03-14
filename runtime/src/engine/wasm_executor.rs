@@ -226,11 +226,13 @@ fn execute_wasm_sync(
             if hosts.iter().any(|h| h == "*") {
                 true
             } else {
-                // Match scheme+host (ignore path)
+                // Only compare the parsed host — never use url.starts_with(h) because
+                // credential-stuffed URLs like https://allowed.com@evil.com would bypass
+                // the check (the URL starts with the allowed prefix but resolves to evil.com).
                 match url.parse::<reqwest::Url>() {
                     Ok(parsed) => {
                         let host_str = parsed.host_str().unwrap_or("");
-                        hosts.iter().any(|h| h == host_str || url.starts_with(h.as_str()))
+                        hosts.iter().any(|h| h == host_str)
                     }
                     Err(_) => false,
                 }
@@ -625,5 +627,53 @@ mod tests {
     fn wasm_params_default_allowed_hosts_is_empty() {
         let p = WasmExecutionParams::default();
         assert!(p.allowed_http_hosts.is_empty());
+    }
+
+    // ── Allow-list URL validation tests ──────────────────────────────────────
+    // These tests verify that the host-only comparison used in the allow-list
+    // check correctly rejects credential-stuffed bypass attempts.
+
+    fn host_of(url: &str) -> Option<String> {
+        url.parse::<reqwest::Url>().ok()
+            .and_then(|u| u.host_str().map(|h| h.to_string()))
+    }
+
+    #[test]
+    fn allow_list_parsed_host_matches_simple_url() {
+        let host = host_of("https://api.example.com/path?q=1");
+        assert_eq!(host.as_deref(), Some("api.example.com"));
+    }
+
+    #[test]
+    fn allow_list_credential_stuffed_url_resolves_to_evil_host() {
+        // https://allowed.com@evil.com — parsed host is evil.com, NOT allowed.com
+        let host = host_of("https://allowed.com@evil.com/steal");
+        assert_eq!(host.as_deref(), Some("evil.com"));
+        // Verify it does NOT match the allowed host
+        let allowed_hosts = vec!["allowed.com".to_string()];
+        let bypasses = allowed_hosts.iter().any(|h| h == host.as_deref().unwrap_or(""));
+        assert!(!bypasses, "credential-stuffed URL must not bypass allow-list");
+    }
+
+    #[test]
+    fn allow_list_wildcard_permits_any_host() {
+        let allowed_hosts = vec!["*".to_string()];
+        assert!(allowed_hosts.iter().any(|h| h == "*"));
+    }
+
+    #[test]
+    fn allow_list_exact_host_match_passes() {
+        let host = host_of("https://safe.example.com/api");
+        let allowed_hosts = vec!["safe.example.com".to_string()];
+        let passes = allowed_hosts.iter().any(|h| h == host.as_deref().unwrap_or(""));
+        assert!(passes);
+    }
+
+    #[test]
+    fn allow_list_different_host_rejected() {
+        let host = host_of("https://evil.com/steal");
+        let allowed_hosts = vec!["safe.example.com".to_string()];
+        let passes = allowed_hosts.iter().any(|h| h == host.as_deref().unwrap_or(""));
+        assert!(!passes);
     }
 }

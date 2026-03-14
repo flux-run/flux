@@ -79,7 +79,7 @@ The ideal first users are technical founders and small platform teams who feel d
 
 ## Core Loop
 
-The product has to make this loop feel unusually strong:
+This loop is the center of the product:
 
 1. initialize a project
 2. start the local runtime
@@ -89,7 +89,7 @@ The product has to make this loop feel unusually strong:
 6. understand failures with `flux why`
 7. replay or diff when needed
 
-If this loop is excellent, the complete system feels justified.
+This loop is excellent, and the complete system reinforces it.
 
 ## Architectural Shape
 
@@ -106,7 +106,7 @@ These are not arbitrary services. They are boundaries that support the execution
 
 ## Open Source Standard
 
-For Flux to work as an open-source project, the repo explains:
+The repo explains:
 
 - what the product is
 - why the architecture looks the way it does

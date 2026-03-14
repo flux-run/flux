@@ -75,4 +75,4 @@ Flux supports retention and sampling, and the defaults favor usefulness for debu
 - enough fidelity to trust `why`, replay, and diff
 - clear operator control over storage tradeoffs
 
-The right question is not "do we emit telemetry?" The right question is "can we still explain a production failure later?"
+The right question is not "do we emit telemetry?" The right question is "can we explain a production failure later?"

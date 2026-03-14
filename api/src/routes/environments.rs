@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::{
     error::{ApiError, ApiResponse},
     types::context::RequestContext,
+    validation::PaginationQuery,
     AppState,
 };
 
@@ -47,12 +48,17 @@ pub struct CloneEnvPayload {
 pub async fn list_environments(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<Vec<Value>> {
+    let (limit, offset) = page.clamped();
     let rows = sqlx::query_as::<_, EnvironmentRow>(
         "SELECT id, project_id, name, slug, is_default, config, created_at \
-         FROM flux.environments WHERE project_id = $1 ORDER BY created_at",
+         FROM flux.environments WHERE project_id = $1 ORDER BY created_at \
+         LIMIT $2 OFFSET $3",
     )
     .bind(ctx.project_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await
     .map_err(db_err)?;

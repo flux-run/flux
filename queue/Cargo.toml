@@ -28,3 +28,4 @@ dotenvy = "0.15.7"
 anyhow = "1.0"
 job_contract = { path = "../shared/job_contract" }
 async-trait = "0.1"
+rand = "0.8"

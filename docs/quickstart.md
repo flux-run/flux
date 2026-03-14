@@ -88,7 +88,7 @@ Update your schema or migration files, then apply them:
 target/debug/flux db push
 ```
 
-Flux is meant to treat the database as part of the execution model, not as a separate debugging blind spot.
+Flux treats the database as part of the execution model, not as a separate debugging blind spot.
 
 ## 8. Deploy
 
@@ -96,12 +96,12 @@ Flux is meant to treat the database as part of the execution model, not as a sep
 target/debug/flux deploy
 ```
 
-The deployment loop is:
+The deployment loop:
 
-- detect what changed
-- bundle and upload code
-- record the deployment
-- attach deploy metadata to future executions
+- detects what changed
+- bundles and uploads code
+- records the deployment
+- attaches deploy metadata to future executions
 
 ## 9. Debug A Real Incident
 
@@ -115,9 +115,9 @@ target/debug/flux incident replay --request-id <request_id>
 target/debug/flux trace diff <original_id> <replay_id>
 ```
 
-## What Quickstart Must Prove
+## What This Quickstart Demonstrates
 
-Flux delivers its strongest first impression when a new developer can:
+A new developer can:
 
 1. start a project without reading internal docs
 2. create and invoke one function without port confusion

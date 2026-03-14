@@ -170,6 +170,25 @@ pub async fn list_agents(pool: &PgPool, project_id: Uuid) -> Result<Vec<AgentSum
     .map_err(|e| format!("db: {}", e))
 }
 
+/// Paginated version of `list_agents`.
+pub async fn list_agents_paged(
+    pool:       &PgPool,
+    project_id: Uuid,
+    limit:      i64,
+    offset:     i64,
+) -> Result<Vec<AgentSummary>, String> {
+    sqlx::query_as::<_, AgentSummary>(
+        "SELECT id, name, model, llm_url, content_sha, deployed_at, updated_at
+         FROM flux.agents WHERE project_id = $1 ORDER BY name ASC LIMIT $2 OFFSET $3",
+    )
+    .bind(project_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("db: {}", e))
+}
+
 /// Delete an agent by name within a project.  Returns `true` if a row was deleted.
 pub async fn delete_agent(pool: &PgPool, name: &str, project_id: Uuid) -> Result<bool, String> {
     let result = sqlx::query("DELETE FROM flux.agents WHERE name = $1 AND project_id = $2")

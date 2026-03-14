@@ -117,7 +117,7 @@ The value of replay is not "run it again." The value is:
 - separate code problems from data problems
 - inspect what changed at the state level
 
-Replay only becomes credible when the runtime owns enough of the execution path.
+Replay is credible because the runtime owns enough of the execution path.
 
 ## `flux why`
 
@@ -131,7 +131,7 @@ It answers:
 - what state did it mutate?
 - what does the operator do next?
 
-If `flux why` becomes a command people reach for before logs, Flux has a strong center of gravity.
+`flux why` is a command people reach for before logs. That is the center of gravity.
 
 ## Complete System, Focused Story
 

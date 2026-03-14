@@ -8,9 +8,9 @@ Flux is designed around a simple external promise:
 
 The internal codebase keeps several subsystem boundaries, and the deployment story is a single binary serving the whole product.
 
-## Why A Single-Binary Direction
+## Why A Single Binary
 
-The product feels coherent to operators and developers:
+The product is coherent for operators and developers:
 
 - one local command starts the system
 - one port exposes the product
@@ -69,7 +69,7 @@ The production topology is:
 - one Postgres-backed persistent state layer
 - optional object or blob storage for bundles and artifacts
 
-Internally, the server may still call component modules that mirror the separate crates in this repo.
+Internally, the server calls component modules that mirror the separate crates in this repo.
 
 ## Development Topology
 

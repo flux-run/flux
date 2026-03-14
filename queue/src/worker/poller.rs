@@ -14,6 +14,11 @@
 //! 3. **Dispatch to executor**: each fetched job is spawned into `tokio::spawn`; the actual
 //!    execution and span emission happen in [`crate::worker::executor::execute`].
 //!
+//! ## Graceful shutdown
+//!
+//! When `shutdown_rx` receives a message the poll loop exits cleanly. In-flight jobs
+//! continue to run until they finish (the semaphore drains naturally).
+//!
 //! ## Error handling
 //!
 //! If the DB fetch fails (e.g. transient connection error), the error is logged and the loop
@@ -23,15 +28,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 use reqwest::Client;
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, Semaphore};
 use tokio::time::sleep;
 use sqlx::PgPool;
-use tracing::error;
+use tracing::{error, info};
 use job_contract::dispatch::ApiDispatch;
 use crate::queue::fetch_jobs;
 use crate::worker::executor;
 
-/// Run the poll loop. Blocks forever — call via `tokio::spawn`.
+/// Run the poll loop until `shutdown_rx` fires. Call via `tokio::spawn`.
 pub async fn poll(
     pool:             PgPool,
     api:              Arc<dyn ApiDispatch>,
@@ -39,11 +44,21 @@ pub async fn poll(
     service_token:    String,
     concurrency:      usize,
     poll_interval_ms: u64,
+    mut shutdown_rx:  watch::Receiver<()>,
 ) {
     let client    = Client::new();
     let semaphore = Arc::new(Semaphore::new(concurrency));
 
     loop {
+        // Check for shutdown before each poll iteration.
+        if shutdown_rx.has_changed().unwrap_or(false) {
+            info!("Worker poller received shutdown signal — draining in-flight jobs");
+            // Acquire all permits to ensure in-flight tasks finish.
+            let _ = semaphore.acquire_many(concurrency as u32).await;
+            info!("Worker poller drained — exiting");
+            return;
+        }
+
         match fetch_jobs::fetch_and_lock_jobs(&pool, 20).await {
             Ok(jobs) => {
                 for job in jobs {
@@ -62,6 +77,16 @@ pub async fn poll(
             }
             Err(e) => error!("Failed to fetch jobs: {}", e),
         }
-        sleep(Duration::from_millis(poll_interval_ms)).await;
+
+        // Sleep interruptibly so shutdown can wake us early.
+        tokio::select! {
+            _ = sleep(Duration::from_millis(poll_interval_ms)) => {}
+            _ = shutdown_rx.changed() => {
+                info!("Worker poller received shutdown signal during sleep");
+                let _ = semaphore.acquire_many(concurrency as u32).await;
+                info!("Worker poller drained — exiting");
+                return;
+            }
+        }
     }
 }

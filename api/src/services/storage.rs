@@ -153,11 +153,16 @@ impl StorageService {
 mod tests {
     use super::*;
     use std::env;
+    use std::sync::Mutex;
+
+    // Serialize tests that read/write storage-related env vars to prevent races.
+    static STORAGE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     // ── StorageConfig::from_env ────────────────────────────────────────────
 
     #[test]
     fn storage_config_from_env_uses_defaults_when_unset() {
+        let _lock = STORAGE_ENV_LOCK.lock().unwrap();
         // Remove all storage-related env vars to exercise defaults.
         for var in ["S3_ENDPOINT","R2_ENDPOINT","S3_BUCKET","R2_BUCKET","FUNCTIONS_BUCKET",
                     "S3_ACCESS_KEY_ID","R2_ACCESS_KEY_ID","S3_SECRET_ACCESS_KEY","R2_SECRET_ACCESS_KEY"] {
@@ -172,6 +177,7 @@ mod tests {
 
     #[test]
     fn storage_config_from_env_reads_custom_bucket() {
+        let _lock = STORAGE_ENV_LOCK.lock().unwrap();
         unsafe { env::set_var("FUNCTIONS_BUCKET", "my-custom-functions") };
         let cfg = StorageConfig::from_env();
         assert_eq!(cfg.functions_bucket, "my-custom-functions");
@@ -182,6 +188,7 @@ mod tests {
 
     #[test]
     fn local_mode_is_true_when_no_s3_vars_set() {
+        let _lock = STORAGE_ENV_LOCK.lock().unwrap();
         // When neither S3_ENDPOINT nor R2_ENDPOINT is set, local_mode must be true.
         unsafe {
             env::remove_var("S3_ENDPOINT");
@@ -199,6 +206,7 @@ mod tests {
 
     #[test]
     fn local_mode_is_false_when_s3_endpoint_set() {
+        let _lock = STORAGE_ENV_LOCK.lock().unwrap();
         unsafe {
             env::set_var("S3_ENDPOINT", "http://minio.example.com:9000");
             env::remove_var("R2_ENDPOINT");
@@ -213,6 +221,7 @@ mod tests {
 
     #[test]
     fn local_mode_explicit_true_overrides_endpoint() {
+        let _lock = STORAGE_ENV_LOCK.lock().unwrap();
         unsafe {
             env::set_var("LOCAL_MODE",   "true");
             env::set_var("S3_ENDPOINT",  "http://real-minio:9000");

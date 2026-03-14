@@ -92,12 +92,12 @@ This is where deployment metadata becomes part of the debugging product.
 
 ## What Good Incident Debugging Looks Like
 
-A strong Flux incident workflow makes an operator feel:
+A strong Flux incident workflow gives an operator:
 
-- I can find the failing execution quickly
-- I can see the path through the system
+- I find the failing execution quickly
+- I see the path through the system
 - I know what state changed
 - I know which version ran
-- I can reproduce or compare behavior without rebuilding the whole world
+- I reproduce or compare behavior without rebuilding the whole world
 
 That is the standard the product delivers.

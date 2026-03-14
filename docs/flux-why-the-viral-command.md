@@ -4,7 +4,7 @@
 
 It is the clearest expression of why Flux exists and why the system is intentionally complete.
 
-## What `flux why` Should Do
+## What `flux why` Does
 
 Given a request, job, or execution ID, `flux why` produces a compact root-cause view that connects:
 
@@ -15,7 +15,7 @@ Given a request, job, or execution ID, `flux why` produces a compact root-cause 
 - what the likely causal chain is
 - what the operator does next
 
-If Flux cannot do this well, the product has not reached its center.
+This is the center of the product.
 
 ## Why It Matters
 
@@ -27,13 +27,13 @@ Most backend debugging starts with raw logs and many open tabs.
 - one execution
 - one explanation surface
 
-That is why it has the potential to become the most memorable command in the product.
+That is what makes it the most memorable command in the product.
 
-## Why It Can Be Shareable
+## Why It Is Shareable
 
 `flux why` is inherently communicable because it compresses a debugging story into something small enough to paste into a ticket, issue, or chat message.
 
-The command is "viral" only if it produces output that feels:
+The command is shareable because it produces output that feels:
 
 - surprisingly useful
 - obviously better than grepping logs
@@ -53,7 +53,7 @@ That dependency chain is why Flux includes more than just functions.
 
 ## Success Condition
 
-The command succeeds as a product feature when a user thinks:
+Users think:
 
 - "I would rather start here than in logs"
 - "I immediately understand what changed"

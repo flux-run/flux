@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
 };
 use serde::Deserialize;
@@ -20,6 +20,7 @@ use job_contract::dispatch::AgentDispatch;
 
 use crate::error::{ApiError, ApiResponse, ApiResult};
 use crate::types::context::RequestContext;
+use crate::validation::PaginationQuery;
 
 fn db_err(e: impl std::fmt::Display) -> ApiError {
     ApiError::internal(e.to_string())
@@ -52,15 +53,19 @@ pub async fn agent_deploy(
 pub async fn agents_list(
     State(pool): State<PgPool>,
     Extension(ctx): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<serde_json::Value> {
-    let agents = agent::registry::list_agents(&pool, ctx.project_id)
+    let (limit, offset) = page.clamped();
+    let agents = agent::registry::list_agents_paged(&pool, ctx.project_id, limit, offset)
         .await
         .map_err(db_err)?;
 
     let count = agents.len();
     Ok(ApiResponse::new(serde_json::json!({
-        "data":  agents,
-        "count": count,
+        "data":   agents,
+        "count":  count,
+        "limit":  limit,
+        "offset": offset,
     })))
 }
 

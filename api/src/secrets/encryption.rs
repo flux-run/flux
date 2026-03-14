@@ -102,6 +102,10 @@ pub fn decrypt_secret(encrypted_str: &str) -> Result<String, EncryptionError> {
 mod tests {
     use super::*;
     use std::env;
+    use std::sync::Mutex;
+
+    // Serialize all encryption tests — they all set FLUXBASE_SECRET_KEY.
+    static ENCRYPT_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn set_key(key: &str) {
         unsafe { env::set_var("FLUXBASE_SECRET_KEY", key) };
@@ -115,6 +119,7 @@ mod tests {
 
     #[test]
     fn encrypt_decrypt_roundtrip() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         let plain = "super-secret-value";
         let encrypted = encrypt_secret(plain).expect("encrypt failed");
@@ -124,6 +129,7 @@ mod tests {
 
     #[test]
     fn encrypt_produces_unique_ciphertexts() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         let a = encrypt_secret("hello").unwrap();
         let b = encrypt_secret("hello").unwrap();
@@ -133,6 +139,7 @@ mod tests {
 
     #[test]
     fn roundtrip_empty_string() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         let enc = encrypt_secret("").unwrap();
         let dec = decrypt_secret(&enc).unwrap();
@@ -141,6 +148,7 @@ mod tests {
 
     #[test]
     fn roundtrip_unicode() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         let plain = "🔑 café αβγ";
         let dec = decrypt_secret(&encrypt_secret(plain).unwrap()).unwrap();
@@ -149,6 +157,7 @@ mod tests {
 
     #[test]
     fn roundtrip_long_value() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         let plain = "x".repeat(4096);
         let dec = decrypt_secret(&encrypt_secret(&plain).unwrap()).unwrap();
@@ -157,6 +166,7 @@ mod tests {
 
     #[test]
     fn encrypted_format_has_two_parts() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         let enc = encrypt_secret("test").unwrap();
         let parts: Vec<&str> = enc.split(':').collect();
@@ -167,18 +177,21 @@ mod tests {
 
     #[test]
     fn decrypt_rejects_missing_colon() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         assert!(decrypt_secret("nocolonhere").is_err());
     }
 
     #[test]
     fn decrypt_rejects_bad_nonce_base64() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         assert!(decrypt_secret("!!!not_b64:validciphertext").is_err());
     }
 
     #[test]
     fn decrypt_rejects_wrong_nonce_length() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         // base64 of 6 bytes (need 12)
         use base64::{Engine, engine::general_purpose::STANDARD as b64};
@@ -189,6 +202,7 @@ mod tests {
 
     #[test]
     fn decrypt_rejects_tampered_ciphertext() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         set_key(valid_32_byte_key());
         let enc = encrypt_secret("sensitive").unwrap();
         let parts: Vec<&str> = enc.splitn(2, ':').collect();
@@ -203,6 +217,7 @@ mod tests {
 
     #[test]
     fn wrong_key_length_returns_error() {
+        let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
         unsafe { env::set_var("FLUXBASE_SECRET_KEY", "tooshort") };
         assert!(encrypt_secret("value").is_err());
         // Restore valid key for other tests.

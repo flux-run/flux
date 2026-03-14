@@ -32,14 +32,14 @@ The product depends on that lifecycle being observable, not just fast.
 
 ## Bundle Model
 
-Flux is designed around deployable function bundles.
+Flux uses deployable function bundles.
 
 The runtime:
 
-- load the correct version
-- cache hot bundles
-- invalidate caches after deployment
-- execute the same code shape locally and in production
+- loads the correct version
+- caches hot bundles
+- invalidates caches after deployment
+- executes the same code shape locally and in production
 
 Bundle identity matters because debugging almost always depends on knowing exactly what code ran.
 
@@ -52,7 +52,7 @@ The execution context gives handlers access to:
 - database access
 - queue publishing
 - tracing hooks
-- deployment and environment metadata where relevant
+- deployment and environment metadata
 
 This context is how Flux turns a collection of services into one programming model.
 
@@ -65,7 +65,7 @@ The runtime is also where the platform enforces:
 - language/runtime-specific guardrails
 - controlled side-effect surfaces
 
-The goal is not extreme sandboxing as a headline. The goal is predictable execution that stays explainable.
+The goal is predictable execution that stays explainable.
 
 ## Why The Runtime Matters To Flux
 

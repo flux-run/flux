@@ -11,6 +11,7 @@ use axum::{
 };
 use crate::error::{ApiError, ApiResponse, ApiResult};
 use crate::types::context::RequestContext;
+use crate::validation::{validate_route_path, PaginationQuery};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -61,6 +62,12 @@ pub async fn sync_routes(
 ) -> ApiResult<serde_json::Value> {
     let project_id = context.project_id;
 
+    // Validate all route paths before touching the DB.
+    for route in &payload.routes {
+        validate_route_path(&route.path)
+            .map_err(|e| ApiError::bad_request(format!("invalid route path {:?}: {}", route.path, e)))?;
+    }
+
     let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
 
     // Deactivate all current active routes for this project.
@@ -103,21 +110,26 @@ pub async fn sync_routes(
 pub async fn list_routes(
     State(state): State<AppState>,
     Extension(context): Extension<RequestContext>,
+    Query(page): Query<PaginationQuery>,
 ) -> ApiResult<serde_json::Value> {
     let project_id = context.project_id;
+    let (limit, offset) = page.clamped();
 
     let rows = sqlx::query_as::<_, RouteConfigRow>(
         "SELECT id, path, method, function_name, middleware, rate_limit_per_minute \
          FROM flux.routes \
          WHERE project_id = $1 AND is_active = true \
-         ORDER BY path, method",
+         ORDER BY path, method \
+         LIMIT $2 OFFSET $3",
     )
     .bind(project_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.pool)
     .await
     .map_err(ApiError::from)?;
 
-    Ok(ApiResponse::new(serde_json::json!({ "routes": rows })))
+    Ok(ApiResponse::new(serde_json::json!({ "routes": rows, "limit": limit, "offset": offset })))
 }
 
 /// `GET /internal/routes?project_id=uuid` — Load the route table for the gateway.

@@ -1,6 +1,6 @@
 # Workflow To Agents Migration
 
-Flux can support step-based orchestration, but the product does not treat "workflow" as the headline.
+Flux supports step-based orchestration, but the product does not treat "workflow" as the headline.
 
 The stronger framing is:
 
@@ -48,7 +48,7 @@ Examples:
 
 ## Migration Principle
 
-If an existing workflow system is being brought into Flux, the migration preserves:
+When an existing workflow system is brought into Flux, the migration preserves:
 
 - execution identity
 - state attribution

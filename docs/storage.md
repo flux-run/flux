@@ -28,7 +28,7 @@ Function bundles need durable storage so Flux can answer:
 - can this execution be replayed?
 - what changed between deploys?
 
-Bundle storage may live in Postgres, object storage, or a hybrid design depending on deployment mode, but the product requirement is stable bundle identity.
+Bundle storage lives in Postgres or object storage depending on deployment mode. The requirement is stable bundle identity.
 
 ## Secret Storage
 
@@ -42,13 +42,13 @@ The important rule is that secret access remains attributable within the executi
 
 ## Cache Layers
 
-Flux can use caches for:
+Flux uses caches for:
 
 - hot function bundles
 - secret lookups
 - route or deployment metadata
 
-Caches are useful for performance, but they do not break explainability. Operators can still understand which version and values were active for an execution.
+Caches are useful for performance, but they do not break explainability. Operators understand which version and values were active for an execution.
 
 ## Retention
 

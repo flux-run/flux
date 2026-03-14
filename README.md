@@ -25,7 +25,7 @@ That is why commands like `flux trace`, `flux why`, replay, diff, mutation histo
 
 ## What Flux Includes
 
-Flux is designed as a complete backend runtime:
+Flux is a complete backend runtime:
 
 - functions for synchronous application logic
 - a gateway for routing, auth, validation, and middleware
@@ -39,7 +39,7 @@ The completeness matters because the debugging model only works if Flux can see 
 
 ## Core Developer Loop
 
-The ideal developer loop looks like this:
+The developer loop looks like this:
 
 ```bash
 flux init my-app

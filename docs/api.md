@@ -40,7 +40,7 @@ The CLI experience depends on a coherent operator API for commands like:
 
 If the API is inconsistent, the CLI becomes inconsistent too.
 
-## Target Endpoint Groups
+## Endpoint Groups
 
 The API exposes route groups for:
 
@@ -52,7 +52,7 @@ The API exposes route groups for:
 - gateway and route configuration
 - records, metrics, and operator views
 
-See [api-reference.md](api-reference.md) for the target route map.
+See [api-reference.md](api-reference.md) for the route map.
 
 ## Design Rule
 

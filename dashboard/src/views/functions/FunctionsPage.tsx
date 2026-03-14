@@ -17,12 +17,16 @@ import { cn } from '@/lib/utils'
 
 interface Fn { id: string; name: string; runtime: string; created_at: string }
 
-const RUNTIMES = ['deno', 'nodejs', 'python', 'bun']
+const RUNTIMES = ['deno', 'python', 'go', 'java', 'php', 'rust', 'csharp', 'ruby']
 const RUNTIME_COLOR: Record<string, string> = {
   deno:   'text-emerald-400 bg-emerald-500/10',
-  nodejs: 'text-green-400  bg-green-500/10',
   python: 'text-blue-400   bg-blue-500/10',
-  bun:    'text-amber-400  bg-amber-500/10',
+  go:     'text-cyan-400   bg-cyan-500/10',
+  java:   'text-orange-400 bg-orange-500/10',
+  php:    'text-indigo-400 bg-indigo-500/10',
+  rust:   'text-amber-400  bg-amber-500/10',
+  csharp: 'text-violet-400 bg-violet-500/10',
+  ruby:   'text-red-400    bg-red-500/10',
 }
 
 function relTime(ts: string) {
@@ -115,7 +119,7 @@ export default function FunctionsPage() {
                 <div className="rounded-xl border p-5 space-y-4">
                   <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/40">Workflow</p>
                   {[
-                    { n: '1', label: 'Write a function',  desc: 'TypeScript in sandboxed V8 isolates.',         cmd: null },
+                    { n: '1', label: 'Write a function',  desc: 'TypeScript, Python, Go, Java, PHP, Rust, C#, or Ruby.',  cmd: null },
                     { n: '2', label: 'Deploy from CLI',   desc: 'Push to any project in seconds.',              cmd: 'flux deploy' },
                     { n: '3', label: 'Attach a route',    desc: 'Map an HTTP method and path to your function.',cmd: null },
                     { n: '4', label: 'Trace execution',   desc: 'Every request is recorded end-to-end.',        cmd: 'flux why <id>' },
