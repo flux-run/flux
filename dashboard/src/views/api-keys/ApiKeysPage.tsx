@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, KeyRound, Trash2, Copy, Check } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import type { ApiKeyRow, CreateApiKeyResponse } from '@fluxbase/api-types'
 import { useStore } from '@/state/tenantStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,8 +14,6 @@ import {
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/layout/PageHeader'
-
-interface ApiKey { id: string; name: string; created_at: string; last_used_at?: string }
 
 export default function ApiKeysPage() {
   const { projectId, projectName } = useStore()
@@ -27,13 +26,13 @@ export default function ApiKeysPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['api-keys', projectId],
-    queryFn: () => apiFetch<ApiKey[]>('/api-keys'),
+    queryFn: () => apiFetch<ApiKeyRow[]>('/api-keys'),
     enabled: !!projectId,
   })
 
   const createMutation = useMutation({
     mutationFn: () =>
-      apiFetch<{ key: string; id: string }>('/api-keys', {
+      apiFetch<CreateApiKeyResponse>('/api-keys', {
         method: 'POST',
         body: JSON.stringify({ name: keyName }),
       }),

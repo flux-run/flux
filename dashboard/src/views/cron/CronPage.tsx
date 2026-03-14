@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { Clock, Plus, Trash2, Play } from 'lucide-react'
 import { apiFetch, gatewayFetch } from '@/lib/api'
+import type { CronJobRow } from '@fluxbase/api-types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,18 +16,6 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { useStore } from '@/state/tenantStore'
-
-interface CronJob {
-  id: string
-  name: string
-  schedule: string
-  action_type: string
-  enabled: boolean
-  last_run_at: string | null
-  next_run_at: string | null
-}
-
-interface CronResponse { cron: CronJob[] }
 
 function fmtDate(d: string | null): string {
   if (!d) return '—'
@@ -53,7 +42,7 @@ export default function CronPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['cron', projectId],
-    queryFn: () => apiFetch<CronResponse>('/db/cron'),
+    queryFn: () => apiFetch<{ cron: CronJobRow[] }>('/db/cron'),
     enabled: !!projectId,
   })
 

@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Code2, Trash2, ChevronRight, Terminal, ArrowRight, Clock } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/api'
+import type { FunctionResponse } from '@fluxbase/api-types'
 import { useStore } from '@/state/tenantStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,8 +15,6 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
-
-interface Fn { id: string; name: string; runtime: string; created_at: string }
 
 const RUNTIMES = ['deno', 'python', 'go', 'java', 'php', 'rust', 'csharp', 'ruby']
 const RUNTIME_COLOR: Record<string, string> = {
@@ -49,7 +48,7 @@ export default function FunctionsPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['functions', effectiveId],
-    queryFn: () => apiFetch<{ functions: Fn[] }>('/functions'),
+    queryFn: () => apiFetch<{ functions: FunctionResponse[] }>('/functions'),
     enabled: !!effectiveId,
   })
 

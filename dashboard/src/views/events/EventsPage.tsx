@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { Bell, Plus, Trash2, Radio, Wifi, WifiOff } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import type { EventSubscriptionRow } from '@fluxbase/api-types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,16 +17,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { PageHeader } from '@/components/layout/PageHeader'
 import { useStore } from '@/state/tenantStore'
 import { useEventStream, type AppEvent } from '@/hooks/useEventStream'
-
-interface Subscription {
-  id: string
-  event_pattern: string
-  target_type: string
-  target_config: Record<string, unknown>
-  enabled: boolean
-}
-
-interface SubResponse { subscriptions: Subscription[] }
 
 const TARGET_COLOR: Record<string, string> = {
   webhook:      'bg-sky-500/10 text-sky-700 dark:text-sky-400',
@@ -52,7 +43,7 @@ export default function EventsPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['subscriptions', projectId],
-    queryFn: () => apiFetch<SubResponse>('/db/subscriptions'),
+    queryFn: () => apiFetch<{ subscriptions: EventSubscriptionRow[] }>('/db/subscriptions'),
     enabled: !!projectId,
   })
 
@@ -180,9 +171,9 @@ export default function EventsPage() {
                       <Badge variant="secondary" className="text-[10px]">disabled</Badge>
                     )}
                   </div>
-                  {typeof s.target_config?.url === 'string' && (
+                  {typeof (s.target_config as Record<string, unknown>)?.url === 'string' && (
                     <p className="text-xs text-muted-foreground mt-0.5 truncate max-w-sm">
-                      {s.target_config.url as string}
+                      {(s.target_config as Record<string, unknown>).url as string}
                     </p>
                   )}
                 </div>
