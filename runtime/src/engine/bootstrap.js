@@ -18,13 +18,13 @@ async function __flux_run_task(task) {
     var __payload = task.payload;
     var __secrets = task.secrets || {};
 
-    // Set up per-task seeded globals (Math.random, crypto.randomUUID, nanoid).
-    // Sequential tasks produce deterministic output; concurrent tasks share the
-    // global but since each task re-seeds on entry they are still deterministic
-    // when not interleaved.
-    Math.random = __task_rand;
-    if (typeof crypto === "undefined") globalThis.crypto = {};
-    crypto.randomUUID = function() {
+    // Per-task uuid/nanoid helpers that use the isolated __task_rand closure.
+    // We do NOT override global Math.random: in concurrent mode multiple tasks
+    // are in-flight simultaneously and overwriting a shared global would cause
+    // a race — Task B's seed would clobber Task A's mid-execution.
+    // Users who call Math.random() directly get V8's native PRNG (fast, non-seeded).
+    // For deterministic replay use ctx.uuid() or ctx.nanoid() which are isolated.
+    var __uuid = function() {
         var b = new Uint8Array(16);
         for (var i = 0; i < 16; i++) b[i] = Math.floor(__task_rand() * 256);
         b[6] = (b[6] & 0x0f) | 0x40;
@@ -34,7 +34,7 @@ async function __flux_run_task(task) {
                h(b[6])+h(b[7])+"-"+h(b[8])+h(b[9])+"-"+
                h(b[10])+h(b[11])+h(b[12])+h(b[13])+h(b[14])+h(b[15]);
     };
-    globalThis.nanoid = function(size) {
+    var __nanoid = function(size) {
         size = size || 21;
         var abc = "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
         var id = "";
@@ -45,6 +45,11 @@ async function __flux_run_task(task) {
     var __ctx = {
         payload: __payload,
         env:     __secrets,
+
+        // Deterministic per-request UUID/nanoid — isolated from other concurrent tasks.
+        // Use these (not Math.random) for replay-safe ID generation.
+        uuid:   function() { return __uuid(); },
+        nanoid: function(size) { return __nanoid(size); },
 
         secrets: {
             get: function(key) {

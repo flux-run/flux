@@ -387,6 +387,11 @@ fn build_wrapper(
                 payload: __payload,
                 env:     __secrets,
 
+                // Deterministic per-request UUID/nanoid backed by the seeded PRNG.
+                // Use these instead of crypto.randomUUID() for replay-safe ID generation.
+                uuid:   () => crypto.randomUUID(),
+                nanoid: (size = 21) => globalThis.nanoid(size),
+
                 // Secrets accessor
                 secrets: {{
                     get: (key) => __secrets[key] !== undefined ? __secrets[key] : null,

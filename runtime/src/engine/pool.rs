@@ -333,7 +333,9 @@ mod tests {
     #[tokio::test]
     async fn same_seed_produces_same_output() {
         let pool = IsolatePool::new(1, 30);
-        let code = r#"__fluxbase_fn = async (ctx) => crypto.randomUUID();"#;
+        // Use ctx.uuid() — the per-task seeded method — not crypto.randomUUID()
+        // which in concurrent mode is V8's native non-seeded implementation.
+        let code = r#"__fluxbase_fn = async (ctx) => ctx.uuid();"#;
 
         let r1 = pool.execute(code.to_string(), HashMap::new(),
             serde_json::Value::Null, 42, test_queue_ctx()).await.unwrap();
