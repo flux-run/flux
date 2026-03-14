@@ -7,4 +7,5 @@ pub mod mutations;
 pub mod query;
 pub mod relationships;
 pub mod schema;
+pub mod sql;
 pub mod tables;

@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_url:        settings.api_url.clone(),
         queue_url:      settings.queue_url.clone(),
         service_token:  settings.service_token.clone(),
+        data_engine_url: settings.data_engine_url.clone(),
         bundle_cache:   BundleCache::new(100),
         schema_cache:   SchemaCache::new(200),
         isolate_pool:   IsolatePool::new(settings.isolate_workers, settings.request_timeout_secs),

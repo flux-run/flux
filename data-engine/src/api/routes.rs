@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::{
     api::{
-        handlers::{cron, databases, debug, explain, history, mutations, query, relationships, schema, tables},
+        handlers::{cron, databases, debug, explain, history, mutations, query, relationships, schema, sql, tables},
         middleware::service_auth::require_service_token,
     },
     state::AppState,
@@ -14,6 +14,7 @@ pub fn build(state: Arc<AppState>) -> Router {
     Router::new()
         // ── Data API ──────────────────────────────────────────────────────────
         .route("/db/query",                   post(query::handler))
+        .route("/db/sql",                     post(sql::handler))
         // ── Database management ───────────────────────────────────────────────
         .route("/db/databases",               post(databases::create).get(databases::list))
         .route("/db/databases/{name}",         delete(databases::drop_db))

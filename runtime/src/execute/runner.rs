@@ -38,7 +38,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::Value;
 
-use crate::engine::executor::{ExecutionResult, QueueContext};
+use crate::engine::executor::{DbContext, ExecutionResult, QueueContext};
 use crate::engine::pool::IsolatePool;
 use crate::engine::wasm_pool::WasmPool;
 use crate::execute::bundle::ResolvedBundle;
@@ -59,6 +59,10 @@ pub struct ExecutionRunner<'a> {
     pub api_url:          &'a str,
     /// Internal service token threaded to queue + API calls from user functions.
     pub service_token:    &'a str,
+    /// Data-engine base URL — forwarded into ctx.db.query() via task JSON.
+    pub data_engine_url:  &'a str,
+    /// Postgres schema name for this project — forwarded into ctx.db.query().
+    pub database:         String,
 }
 
 impl<'a> ExecutionRunner<'a> {
@@ -145,12 +149,19 @@ impl<'a> ExecutionRunner<'a> {
             project_id:    ctx.project_id,
             client:        self.http_client.clone(),
         };
+        let db_ctx = DbContext {
+            data_engine_url: self.data_engine_url.to_string(),
+            service_token:   self.service_token.to_string(),
+            database:        self.database.clone(),
+            client:          self.http_client.clone(),
+        };
         let result = self.isolate_pool.execute(
             code,
             secrets,
             ctx.payload.clone(),
             ctx.execution_seed,
             queue_ctx,
+            db_ctx,
         ).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -217,6 +228,17 @@ impl<'a> ExecutionRunner<'a> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Derive the Postgres schema name for a project.
+///
+/// Projects get their own schema in the form `project_<uuid_no_hyphens>`.
+/// Returns an empty string if no project_id is available.
+pub fn project_schema_name(project_id: Option<uuid::Uuid>) -> String {
+    match project_id {
+        Some(id) => format!("project_{}", id.as_simple()),
+        None => String::new(),
+    }
+}
 
 /// Return the list of hosts WASM functions may call via `fluxbase.http_fetch`.
 ///

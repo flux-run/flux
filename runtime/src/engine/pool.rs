@@ -14,7 +14,7 @@ use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 use super::executor::{
-    create_concurrent_js_runtime, ExecutionResult, QueueContext,
+    create_concurrent_js_runtime, DbContext, ExecutionResult, QueueContext,
     ResultRegistry, SharedTaskReceiver,
 };
 
@@ -115,6 +115,7 @@ impl IsolatePool {
         payload:        serde_json::Value,
         execution_seed: i64,
         queue_ctx:      QueueContext,
+        db_ctx:         DbContext,
     ) -> Result<ExecutionResult, String> {
         // Pick least-loaded worker (round-robin as tiebreaker)
         let start = self.next_worker.fetch_add(1, Ordering::Relaxed);
@@ -135,15 +136,17 @@ impl IsolatePool {
 
         // Build task JSON (carries everything op_next_task delivers to JS)
         let task_json = serde_json::json!({
-            "request_id":     request_id,
-            "code":           code,
-            "secrets":        secrets,
-            "payload":        payload,
-            "execution_seed": execution_seed,
-            "queue_url":      queue_ctx.queue_url,
-            "api_url":        queue_ctx.api_url,
-            "service_token":  queue_ctx.service_token,
-            "project_id":     queue_ctx.project_id.map(|p| p.to_string()),
+            "request_id":       request_id,
+            "code":             code,
+            "secrets":          secrets,
+            "payload":          payload,
+            "execution_seed":   execution_seed,
+            "queue_url":        queue_ctx.queue_url,
+            "api_url":          queue_ctx.api_url,
+            "service_token":    queue_ctx.service_token,
+            "project_id":       queue_ctx.project_id.map(|p| p.to_string()),
+            "data_engine_url":  db_ctx.data_engine_url,
+            "database":         db_ctx.database,
         });
 
         worker.task_tx.send(task_json).await
@@ -194,6 +197,15 @@ mod tests {
         }
     }
 
+    fn test_db_ctx() -> DbContext {
+        DbContext {
+            data_engine_url: "http://127.0.0.1:0".to_string(),
+            service_token:   "test".to_string(),
+            database:        String::new(),
+            client:          reqwest::Client::new(),
+        }
+    }
+
     // ── construction ──────────────────────────────────────────────────────
 
     #[test]
@@ -227,6 +239,7 @@ mod tests {
             serde_json::Value::Null,
             0,
             test_queue_ctx(),
+            test_db_ctx(),
         ).await;
 
         assert!(res.is_ok(), "expected Ok, got: {:?}", res.err());
@@ -244,6 +257,7 @@ mod tests {
             serde_json::json!({"x": 21}),
             0,
             test_queue_ctx(),
+            test_db_ctx(),
         ).await.unwrap();
 
         assert_eq!(res.output, serde_json::json!(42));
@@ -264,6 +278,7 @@ mod tests {
             serde_json::Value::Null,
             0,
             test_queue_ctx(),
+            test_db_ctx(),
         ).await.unwrap();
 
         assert!(!res.logs.is_empty());
@@ -282,6 +297,7 @@ mod tests {
             serde_json::Value::Null,
             0,
             test_queue_ctx(),
+            test_db_ctx(),
         ).await;
 
         assert!(res.is_err());
@@ -307,7 +323,13 @@ mod tests {
                         service_token: "t".to_string(),
                         project_id: None,
                         client: reqwest::Client::new(),
-                    }
+                    },
+                    DbContext {
+                        data_engine_url: "http://127.0.0.1:0".to_string(),
+                        service_token:   "t".to_string(),
+                        database:        String::new(),
+                        client:          reqwest::Client::new(),
+                    },
                 ).await
             }));
         }
@@ -325,7 +347,7 @@ mod tests {
         // Both should be able to execute
         let code = r#"__fluxbase_fn = async (ctx) => 1;"#;
         let _r = clone.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 0, test_queue_ctx()).await;
+            serde_json::Value::Null, 0, test_queue_ctx(), test_db_ctx()).await;
     }
 
     // ── deterministic replay ──────────────────────────────────────────────
@@ -338,9 +360,9 @@ mod tests {
         let code = r#"__fluxbase_fn = async (ctx) => ctx.uuid();"#;
 
         let r1 = pool.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 42, test_queue_ctx()).await.unwrap();
+            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx()).await.unwrap();
         let r2 = pool.execute(code.to_string(), HashMap::new(),
-            serde_json::Value::Null, 42, test_queue_ctx()).await.unwrap();
+            serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx()).await.unwrap();
 
         assert_eq!(r1.output, r2.output,
             "same execution seed must produce same UUID for deterministic replay");

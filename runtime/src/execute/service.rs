@@ -12,7 +12,7 @@ use job_contract::dispatch::{ExecuteRequest, ExecuteResponse};
 
 use crate::AppState;
 use crate::execute::bundle::{BundleResolver, ResolvedBundle, bundle_sha};
-use crate::execute::runner::{ExecutionRunner, allowed_wasm_http_hosts};
+use crate::execute::runner::{ExecutionRunner, allowed_wasm_http_hosts, project_schema_name};
 use crate::execute::types::InvocationCtx;
 use crate::trace::emitter::TraceEmitter;
 
@@ -63,6 +63,8 @@ pub async fn invoke(
         queue_url:       &state.queue_url,
         api_url:         &state.api_url,
         service_token:   &state.service_token,
+        data_engine_url: &state.data_engine_url,
+        database:        project_schema_name(ctx.project_id),
     };
 
     let hints = req.runtime_hint.as_deref().unwrap_or("");

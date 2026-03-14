@@ -61,6 +61,8 @@ pub struct AppState {
     /// TODO: replace with `Arc<dyn QueueDispatch>` once the V8 op is refactored.
     pub queue_url:      String,
     pub service_token:  String,
+    /// Data-engine base URL — forwarded into V8 `op_db_query` op via task JSON.
+    pub data_engine_url: String,
     pub bundle_cache:   BundleCache,
     pub schema_cache:   SchemaCache,
     pub isolate_pool:   IsolatePool,

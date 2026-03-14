@@ -31,11 +31,14 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration};
 
 
-/// Build the Fluxbase runtime extension — queue ops.
+/// Build the Fluxbase runtime extension — queue ops + db ops.
 pub fn build_fluxbase_extension() -> Extension {
     Extension {
         name: "fluxbase",
-        ops: Cow::Owned(vec![op_queue_push(), op_next_task(), op_task_complete(), op_task_error()]),
+        ops: Cow::Owned(vec![
+            op_queue_push(), op_next_task(), op_task_complete(), op_task_error(),
+            op_db_query(),
+        ]),
         ..Default::default()
     }
 }
@@ -66,6 +69,15 @@ pub struct QueueContext {
     pub service_token: String,
     pub project_id:    Option<uuid::Uuid>,
     pub client:        reqwest::Client,
+}
+
+/// Carry data-engine context from the pool into the V8 op.
+#[derive(Clone)]
+pub struct DbContext {
+    pub data_engine_url: String,
+    pub service_token:   String,
+    pub database:        String,
+    pub client:          reqwest::Client,
 }
 
 /// Options forwarded from JS's `opts` argument to `ctx.queue.push()`.
@@ -242,6 +254,84 @@ pub fn op_task_error(
             let _ = sender.send(Err(error_msg));
         }
     }
+}
+
+/// Async op: execute raw SQL via the data-engine service.
+/// JS calls: Deno.core.ops.op_db_query(sql, params, db_ctx_override)
+/// db_ctx_override carries { data_engine_url, service_token, database, request_id }
+#[deno_core::op2(async)]
+#[serde]
+pub async fn op_db_query(
+    state:              Rc<RefCell<OpState>>,
+    #[string] sql:      String,
+    #[serde]  params:   serde_json::Value,
+    #[serde]  db_ctx_override: Option<serde_json::Value>,
+) -> Result<serde_json::Value, std::io::Error> {
+    let (data_engine_url, service_token, database, request_id, client) = {
+        if let Some(ref ctx) = db_ctx_override {
+            // Concurrent path: context carried in the task JSON
+            let s = state.borrow();
+            let client = s.try_borrow::<DbContext>()
+                .map(|c| c.client.clone())
+                .unwrap_or_else(reqwest::Client::new);
+            (
+                ctx["data_engine_url"].as_str().unwrap_or("").to_string(),
+                ctx["service_token"].as_str().unwrap_or("").to_string(),
+                ctx["database"].as_str().unwrap_or("").to_string(),
+                ctx["request_id"].as_str().unwrap_or("").to_string(),
+                client,
+            )
+        } else {
+            // Serial path: context in OpState
+            let s = state.borrow();
+            match s.try_borrow::<DbContext>() {
+                Some(db) => (
+                    db.data_engine_url.clone(),
+                    db.service_token.clone(),
+                    db.database.clone(),
+                    String::new(),
+                    db.client.clone(),
+                ),
+                None => return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "op_db_query: no db context available",
+                )),
+            }
+        }
+    };
+
+    let params_array = params
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let body = serde_json::json!({
+        "sql":        sql,
+        "params":     params_array,
+        "database":   database,
+        "request_id": request_id,
+    });
+
+    let resp = client
+        .post(format!("{}/db/sql", data_engine_url.trim_end_matches('/')))
+        .header("X-Service-Token", &service_token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("db query failed ({}): {}", status, body),
+        ));
+    }
+
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
 }
 
 /// Create a warm `JsRuntime` with the Fluxbase extension registered.
@@ -510,6 +600,29 @@ fn build_wrapper(
                         }});
                         return result;
                     }},
+                }},
+
+                // ── Database ──────────────────────────────────────────────
+                // ctx.db.query(sql, params) — executes raw SQL via the data-engine.
+                // ctx.db.execute(sql, params) — alias for ctx.db.query.
+                db: {{
+                    query: async (sql, params) => {{
+                        const _start = Date.now();
+                        const result = await Deno.core.ops.op_db_query(
+                            sql,
+                            Array.isArray(params) ? params : [],
+                            null
+                        );
+                        __fluxbase_logs.push({{
+                            level:       "info",
+                            message:     "db:query  " + (Date.now() - _start) + "ms  " + (result && result.meta ? result.meta.rows + " rows" : ""),
+                            span_type:   "db_query",
+                            source:      "db",
+                            duration_ms: Date.now() - _start,
+                        }});
+                        return result && result.data ? result.data : result;
+                    }},
+                    execute: async (sql, params) => __ctx.db.query(sql, params),
                 }},
             }};
 

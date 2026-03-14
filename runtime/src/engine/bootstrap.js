@@ -169,6 +169,33 @@ async function __flux_run_task(task) {
                 return result;
             },
         },
+
+        db: {
+            query: async function(sql, params) {
+                var _start = Date.now();
+                var result = await Deno.core.ops.op_db_query(
+                    sql,
+                    Array.isArray(params) ? params : [],
+                    {
+                        data_engine_url: task.data_engine_url,
+                        service_token:   task.service_token,
+                        database:        task.database,
+                        request_id:      task.request_id,
+                    }
+                );
+                __fluxbase_logs.push({
+                    level:       "info",
+                    message:     "db:query  " + (Date.now() - _start) + "ms  " + (result && result.meta ? result.meta.rows + " rows" : ""),
+                    span_type:   "db_query",
+                    source:      "db",
+                    duration_ms: Date.now() - _start,
+                });
+                return result && result.data ? result.data : result;
+            },
+            execute: async function(sql, params) {
+                return __ctx.db.query(sql, params);
+            },
+        },
     };
 
     // Extract the user function in an isolated scope so concurrent tasks don't conflict

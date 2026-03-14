@@ -135,6 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_url:        format!("http://localhost:{}/flux/api", port),
         queue_url:      queue_url.clone(),
         service_token:  service_token.clone(),
+        data_engine_url: std::env::var("DATA_ENGINE_URL")
+            .unwrap_or_else(|_| "http://localhost:8085".to_string()),
         bundle_cache:   BundleCache::new(100),
         schema_cache:   SchemaCache::new(200),
         isolate_pool:   IsolatePool::new(isolate_workers),
