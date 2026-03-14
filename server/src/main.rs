@@ -118,6 +118,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         gateway_url: format!("http://localhost:{}", port),
         local_tenant_id,
         local_project_id,
+        functions_dir: std::env::var("FLUX_FUNCTIONS_DIR")
+            .unwrap_or_else(|_| "./flux-functions".to_string()),
     });
 
     // ── In-process API dispatch (no HTTP) ─────────────────────────────────

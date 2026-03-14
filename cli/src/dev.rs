@@ -42,8 +42,9 @@
 //! - DIP: PostgreSQL is behind the `postgresql_embedded::PostgreSQL` type;
 //!   the server is started via `tokio::process::Command`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use colored::Colorize;
@@ -71,7 +72,13 @@ pub async fn execute() -> anyhow::Result<()> {
     let project_root = find_project_root()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    // 2. Load all vars from .env file (skipping DATABASE_URL which is handled below).
+    // 2. Prepare the build directory for function bundles.
+    //    The runtime reads bundles from this directory (FLUX_FUNCTIONS_DIR).
+    let build_dir = project_root.join(".flux").join("build");
+    std::fs::create_dir_all(&build_dir)
+        .with_context(|| format!("cannot create build dir: {}", build_dir.display()))?;
+
+    // 3. Load all vars from .env file (skipping DATABASE_URL which is handled below).
     //    These are injected into the dev server process so they become available
     //    in ctx.secrets / ctx.env without needing a real secrets backend.
     let dot_env_vars = load_dot_env(&project_root);
@@ -84,7 +91,7 @@ pub async fn execute() -> anyhow::Result<()> {
         );
     }
 
-    // 3. Resolve DATABASE_URL — check env var, then .env file, then embed Postgres.
+    // 4. Resolve DATABASE_URL — check env var, then .env file, then embed Postgres.
     //
     //    Priority:
     //      a) DATABASE_URL shell env var  (already set)
@@ -92,7 +99,7 @@ pub async fn execute() -> anyhow::Result<()> {
     //      c) Embedded Postgres           (zero-config default)
     let (database_url, _pg) = resolve_database(&project_root).await?;
 
-    // 4. Run all migrations
+    // 5. Run all migrations
     let migration_count = run_migrations(&database_url, &project_root).await?;
     println!(
         "  {} migrations     {} applied",
@@ -100,16 +107,36 @@ pub async fn execute() -> anyhow::Result<()> {
         migration_count.to_string().cyan(),
     );
 
-    // 5. Start Flux server
-    let mut server = start_server(DEFAULT_SERVER_PORT, &database_url, &dot_env_vars).await?;
+    // 6. Start Flux server — pass FLUX_FUNCTIONS_DIR so the runtime reads
+    //    bundles from the local build directory instead of Postgres.
+    let mut server = start_server(DEFAULT_SERVER_PORT, &database_url, &dot_env_vars, &build_dir).await?;
 
-    // 6. First-run: if no admin account exists, prompt to create one.
+    // 7. Start file watcher for hot-reload.
+    //    Watches functions/ directory; on change rebuilds the affected bundle,
+    //    writes it to .flux/build/, and invalidates the runtime cache.
+    let functions_src = project_root.join("functions");
+    if functions_src.exists() {
+        let build_dir_clone = build_dir.clone();
+        let functions_src_clone = functions_src.clone();
+        tokio::spawn(async move {
+            if let Err(e) = watch_functions(&functions_src_clone, &build_dir_clone, DEFAULT_SERVER_PORT).await {
+                eprintln!("file watcher error: {e}");
+            }
+        });
+        println!(
+            "  {} watcher         watching {}",
+            "✔".green().bold(),
+            "functions/".cyan(),
+        );
+    }
+
+    // 8. First-run: if no admin account exists, prompt to create one.
     prompt_admin_setup_if_needed(DEFAULT_SERVER_PORT).await;
 
-    // 7. Print banner
+    // 9. Print banner
     print_banner(DEFAULT_SERVER_PORT);
 
-    // 8. Wait for Ctrl+C or server exit
+    // 10. Wait for Ctrl+C or server exit
     tokio::select! {
         result = server.wait() => {
             let status = result?;
@@ -126,7 +153,7 @@ pub async fn execute() -> anyhow::Result<()> {
         }
     }
 
-    // 7. Stop embedded PostgreSQL if we started it
+    // 11. Stop embedded PostgreSQL if we started it
     println!("{}", "Stopping PostgreSQL…".dimmed());
     if let Some(mut pg) = _pg {
         let _ = pg.stop().await;
@@ -409,7 +436,7 @@ async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Res
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
-async fn start_server(port: u16, database_url: &str, extra_env: &[(String, String)]) -> anyhow::Result<tokio::process::Child> {
+async fn start_server(port: u16, database_url: &str, extra_env: &[(String, String)], build_dir: &Path) -> anyhow::Result<tokio::process::Child> {
     let binary = find_server_binary()
         .ok_or_else(|| anyhow::anyhow!(
             "Flux server binary not found.\n  Run `cargo build` first, or install Flux."
@@ -424,7 +451,9 @@ async fn start_server(port: u16, database_url: &str, extra_env: &[(String, Strin
         .env("DATABASE_URL", database_url)
         .env("FLUX_LOCAL", "true")
         .env("LOCAL_MODE", "true")
-        .env("RUST_LOG", "warn");
+        .env("RUST_LOG", "warn")
+        // Bundles live in the local build dir; runtime reads from here instead of DB.
+        .env("FLUX_FUNCTIONS_DIR", build_dir.as_os_str());
 
     // Inject all .env vars so they are available in ctx.secrets / ctx.env
     // inside functions without needing a real secrets backend.
@@ -594,7 +623,107 @@ fn find_server_binary() -> Option<PathBuf> {
     which::which("server").ok()
 }
 
-/// Poll `{base_url}{path}` until 2xx or timeout.
+/// Watch `functions/` for source file changes. On any write/create event:
+///  1. Determine which function changed (parent directory name)
+///  2. Re-bundle via the same logic used by `flux deploy`
+///  3. Write the result to `{build_dir}/{name}.js|.wasm`
+///  4. POST cache invalidation to the local dev server so the new bundle is picked up
+///
+/// Debounces events with a 200 ms window to avoid double-rebuilds on editor saves.
+async fn watch_functions(functions_dir: &Path, build_dir: &Path, port: u16) -> anyhow::Result<()> {
+    use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+    let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
+    watcher.watch(functions_dir, RecursiveMode::Recursive)?;
+
+    // Per-function debounce: track last rebuild time.
+    let mut last_built: HashMap<String, Instant> = HashMap::new();
+    let debounce = Duration::from_millis(200);
+
+    loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(event)) => {
+                let is_write = matches!(
+                    event.kind,
+                    EventKind::Modify(_) | EventKind::Create(_)
+                );
+                if !is_write { continue; }
+
+                for path in &event.paths {
+                    // Derive function name from the immediate child dir of functions_dir.
+                    let func_name = path
+                        .strip_prefix(functions_dir)
+                        .ok()
+                        .and_then(|rel| rel.components().next())
+                        .and_then(|c| c.as_os_str().to_str())
+                        .map(str::to_owned);
+
+                    let name = match func_name {
+                        Some(n) => n,
+                        None => continue,
+                    };
+
+                    // Debounce: skip if rebuilt within the last 200 ms.
+                    let now = Instant::now();
+                    if let Some(last) = last_built.get(&name) {
+                        if now.duration_since(*last) < debounce { continue; }
+                    }
+                    last_built.insert(name.clone(), now);
+
+                    let func_dir = functions_dir.join(&name);
+                    let flux_json = func_dir.join("flux.json");
+                    if !flux_json.exists() { continue; }
+
+                    let metadata: serde_json::Value = match std::fs::read_to_string(&flux_json)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                    {
+                        Some(v) => v,
+                        None => continue,
+                    };
+
+                    match crate::deploy::bundle_function(&func_dir, &metadata) {
+                        Ok(bundle) => {
+                            let ext = if bundle.runtime == "wasm" { "wasm" } else { "js" };
+                            let dest = build_dir.join(format!("{name}.{ext}"));
+                            if std::fs::write(&dest, &bundle.bytes).is_ok() {
+                                // Invalidate the runtime cache for this function.
+                                let url = format!(
+                                    "http://localhost:{port}/flux/api/internal/cache/invalidate"
+                                );
+                                let _ = reqwest::Client::new()
+                                    .post(&url)
+                                    .header("X-Service-Token", "dev-service-token")
+                                    .json(&serde_json::json!({ "function_name": name }))
+                                    .send()
+                                    .await;
+                                println!(
+                                    "  {} rebuilt         {}",
+                                    "↺".cyan().bold(),
+                                    name.cyan()
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            println!(
+                                "  {} rebuild failed  {} — {e}",
+                                "✘".red().bold(),
+                                name.red()
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(Err(e)) => eprintln!("watch error: {e}"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(())
+}
+
 async fn wait_healthy(base_url: &str, path: &str, timeout_secs: u64) -> bool {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))

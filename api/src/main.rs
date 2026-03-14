@@ -24,6 +24,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|_| "http://localhost:8081".to_string()),
         local_tenant_id,
         local_project_id,
+        functions_dir: std::env::var("FLUX_FUNCTIONS_DIR")
+            .unwrap_or_else(|_| "./flux-functions".to_string()),
     };
 
     let app = api::create_app(state);

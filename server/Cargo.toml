@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 # Internal service crates (library targets)
 api           = { path = "../api" }
+base64        = "0.22"
 runtime       = { path = "../runtime" }
 gateway       = { path = "../gateway" }
 job_contract  = { path = "../shared/job_contract" }

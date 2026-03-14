@@ -32,6 +32,12 @@ pub struct AppState {
     pub local_tenant_id:  Uuid,
     /// Default project UUID; can be overridden by FLUX_PROJECT_ID env var.
     pub local_project_id: Uuid,
+    /// Directory where function bundles live on the filesystem.
+    ///
+    /// - Dev:        `{project_root}/.flux/build`  (set by `flux dev`)
+    /// - Production: `/app/functions`              (baked into Docker image)
+    /// - Override:   `FLUX_FUNCTIONS_DIR` env var
+    pub functions_dir:    String,
 }
 
 impl axum::extract::FromRef<AppState> for sqlx::PgPool {

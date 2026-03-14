@@ -1,19 +1,23 @@
 //! Deployment routes — function bundle upload, deployment management, and
 //! the internal bundle-fetch endpoint used by the runtime.
 //!
-//! ## Deploy flow (CLI → API → DB → Runtime)
+//! ## Deploy flow (CLI → API → Filesystem + DB → Runtime)
 //! ```text
 //! flux deploy
 //!   └─ POST /functions/deploy  (multipart: name, runtime, bundle)
-//!        ├─ Upsert function record in DB
-//!        ├─ Store bundle code inline in deployments table
-//!        ├─ Insert deployment row (version++)
+//!        ├─ Upsert function record in DB (metadata only)
+//!        ├─ Write bundle bytes to FLUX_FUNCTIONS_DIR/{name}.js|.wasm
+//!        ├─ Insert deployment row (version++) — no bundle_code in DB
 //!        └─ Deactivate old deployments, activate new one
 //! ```
 //!
-//! ## SOLID note (Single Responsibility)
-//! HTTP parsing lives here.  DB queries are inline (simple enough not to
-//! warrant a separate service.rs).
+//! ## Bundle storage
+//! Bundles live on the **filesystem** at `FLUX_FUNCTIONS_DIR/{name}.{ext}`:
+//!   - Dev:        `{project_root}/.flux/build/`   (set by `flux dev`)
+//!   - Production: `/app/functions/`               (baked into Docker image)
+//!
+//! Postgres stores only metadata (name, route, runtime, schemas, bundle_hash).
+//! The `bundle_hash` column is kept for incremental-deploy detection in the CLI.
 
 use axum::{
     extract::{Extension, Path, Query, State},
@@ -284,15 +288,27 @@ pub async fn deploy_function_cli(
         }
     };
 
-    // ── Bundle storage ────────────────────────────────────────────────────
+    // ── Bundle storage: write to filesystem ──────────────────────────────
+    //
+    // The bundle lives at {FLUX_FUNCTIONS_DIR}/{name}.js|.wasm, not in Postgres.
+    // The runtime reads it from disk on every cold start (cached in memory after).
 
-    let deployment_id = Uuid::new_v4();
-    let storage_key = format!("deployments/{}/{}.js", function_id, deployment_id);
+    let ext = if runtime == "wasm" { "wasm" } else { "js" };
+    let functions_dir = std::path::Path::new(&state.functions_dir);
+    std::fs::create_dir_all(functions_dir)
+        .map_err(|e| ApiError::internal(format!("cannot create functions_dir: {e}")))?;
 
-    let bundle_code = String::from_utf8(bundle_bytes.clone())
-        .map_err(|_ | ApiError::bad_request("bundle must be valid UTF-8"))?;
+    let bundle_path = functions_dir.join(format!("{name}.{ext}"));
+    std::fs::write(&bundle_path, &bundle_bytes)
+        .map_err(|e| ApiError::internal(format!("failed to write bundle to disk: {e}")))?;
+
+    tracing::debug!(path = %bundle_path.display(), "bundle written to filesystem");
 
     // ── Deployment record ─────────────────────────────────────────────────
+
+    let deployment_id = Uuid::new_v4();
+    // storage_key records the relative bundle filename for diagnostics.
+    let storage_key = format!("{name}.{ext}");
 
     #[derive(sqlx::FromRow)]
     struct VersionRow { max: Option<i32> }
@@ -316,13 +332,12 @@ pub async fn deploy_function_cli(
 
     sqlx::query(
         "INSERT INTO deployments \
-             (id, function_id, storage_key, bundle_code, version, status, is_active, bundle_hash, project_deployment_id) \
-         VALUES ($1, $2, $3, $4, $5, 'ready', true, $6, $7)",
+             (id, function_id, storage_key, version, status, is_active, bundle_hash, project_deployment_id) \
+         VALUES ($1, $2, $3, $4, 'ready', true, $5, $6)",
     )
     .bind(deployment_id)
     .bind(function_id)
     .bind(&storage_key)
-    .bind(&bundle_code)
     .bind(next_version)
     .bind(&bundle_hash)
     .bind(project_deployment_id)
@@ -363,7 +378,7 @@ pub async fn get_internal_bundle(
     #[derive(sqlx::FromRow)]
     struct BundleRow {
         id:           Uuid,
-        bundle_code:  Option<String>,
+        name:         String,
         runtime:      String,
         input_schema: Option<serde_json::Value>,
         output_schema: Option<serde_json::Value>,
@@ -371,7 +386,7 @@ pub async fn get_internal_bundle(
 
     let row = if let Ok(fid) = params.function_id.parse::<Uuid>() {
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.id, d.bundle_code, f.runtime, \
+            "SELECT d.id, f.name, f.runtime, \
                     f.input_schema, f.output_schema \
              FROM deployments d \
              JOIN functions f ON f.id = d.function_id \
@@ -384,7 +399,7 @@ pub async fn get_internal_bundle(
         .map_err(ApiError::from)?
     } else {
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.id, d.bundle_code, f.runtime, \
+            "SELECT d.id, f.name, f.runtime, \
                     f.input_schema, f.output_schema \
              FROM deployments d \
              JOIN functions f ON f.id = d.function_id \
@@ -397,22 +412,43 @@ pub async fn get_internal_bundle(
         .map_err(ApiError::from)?
     };
 
-    match row {
-        Some(r) => {
-            if let Some(code) = r.bundle_code {
-                Ok(ApiResponse::new(serde_json::json!({
-                    "deployment_id": r.id,
-                    "runtime":       r.runtime,
-                    "code":          code,
-                    "input_schema":  r.input_schema,
-                    "output_schema": r.output_schema,
-                })))
-            } else {
-                Err(ApiError::not_found("no bundle found for this function"))
-            }
-        }
-        None => Err(ApiError::not_found("no active deployment found")),
-    }
+    let r = row.ok_or_else(|| ApiError::not_found("no active deployment found"))?;
+
+    // Read bundle from filesystem — bundles live at {FLUX_FUNCTIONS_DIR}/{name}.{ext}
+    let ext = if r.runtime == "wasm" { "wasm" } else { "js" };
+    let bundle_path = std::path::Path::new(&state.functions_dir).join(format!("{}.{}", r.name, ext));
+
+    // WASM bundles are binary — base64-encode for JSON transport.
+    // JS bundles are UTF-8 text — read directly.
+    let code = if r.runtime == "wasm" {
+        let bytes = std::fs::read(&bundle_path).map_err(|e| {
+            tracing::warn!(
+                path = %bundle_path.display(),
+                function = %r.name,
+                "bundle file not found on filesystem: {e}"
+            );
+            ApiError::not_found("bundle file not found — deploy the function first")
+        })?;
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    } else {
+        std::fs::read_to_string(&bundle_path).map_err(|e| {
+            tracing::warn!(
+                path = %bundle_path.display(),
+                function = %r.name,
+                "bundle file not found on filesystem: {e}"
+            );
+            ApiError::not_found("bundle file not found — deploy the function first")
+        })?
+    };
+
+    Ok(ApiResponse::new(serde_json::json!({
+        "deployment_id": r.id,
+        "runtime":       r.runtime,
+        "code":          code,
+        "input_schema":  r.input_schema,
+        "output_schema": r.output_schema,
+    })))
 }
 
 // ── New project-level deploy handlers ────────────────────────────────────────

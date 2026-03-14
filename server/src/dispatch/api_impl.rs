@@ -24,7 +24,7 @@ impl ApiDispatch for InProcessApiDispatch {
         #[derive(sqlx::FromRow)]
         struct BundleRow {
             id:            Uuid,
-            bundle_code:   Option<String>,
+            name:          String,
             runtime:       String,
             input_schema:  Option<Value>,
             output_schema: Option<Value>,
@@ -34,7 +34,7 @@ impl ApiDispatch for InProcessApiDispatch {
 
         let row: Option<BundleRow> = if let Ok(fid) = function_id.parse::<Uuid>() {
             sqlx::query_as::<_, BundleRow>(
-                "SELECT d.id, d.bundle_code, f.runtime, \
+                "SELECT d.id, f.name, f.runtime, \
                         f.input_schema, f.output_schema \
                  FROM deployments d \
                  JOIN functions f ON f.id = d.function_id \
@@ -47,7 +47,7 @@ impl ApiDispatch for InProcessApiDispatch {
             .map_err(|e| format!("bundle DB query failed: {}", e))?
         } else {
             sqlx::query_as::<_, BundleRow>(
-                "SELECT d.id, d.bundle_code, f.runtime, \
+                "SELECT d.id, f.name, f.runtime, \
                         f.input_schema, f.output_schema \
                  FROM deployments d \
                  JOIN functions f ON f.id = d.function_id \
@@ -60,22 +60,34 @@ impl ApiDispatch for InProcessApiDispatch {
             .map_err(|e| format!("bundle DB query failed: {}", e))?
         };
 
-        match row {
-            Some(r) => {
-                if let Some(code) = r.bundle_code {
-                    Ok(serde_json::json!({
-                        "deployment_id": r.id,
-                        "runtime":       r.runtime,
-                        "code":          code,
-                        "input_schema":  r.input_schema,
-                        "output_schema": r.output_schema,
-                    }))
-                } else {
-                    Err("HTTP 404: no bundle found for this function".to_string())
-                }
-            }
-            None => Err("HTTP 404: no active deployment found".to_string()),
-        }
+        let r = row.ok_or_else(|| "HTTP 404: no active deployment found".to_string())?;
+
+        // Read bundle from filesystem — bundles live at {FLUX_FUNCTIONS_DIR}/{name}.{ext}
+        let ext = if r.runtime == "wasm" { "wasm" } else { "js" };
+        let functions_dir = &self.state.functions_dir;
+        let bundle_path = std::path::Path::new(functions_dir).join(format!("{}.{}", r.name, ext));
+
+        // WASM bundles are binary — base64-encode for JSON transport.
+        // JS bundles are UTF-8 text — read directly.
+        let code = if r.runtime == "wasm" {
+            let bytes = std::fs::read(&bundle_path).map_err(|e| {
+                format!("HTTP 404: bundle file '{}' not found on filesystem: {}", bundle_path.display(), e)
+            })?;
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        } else {
+            std::fs::read_to_string(&bundle_path).map_err(|e| {
+                format!("HTTP 404: bundle file '{}' not found on filesystem: {}", bundle_path.display(), e)
+            })?
+        };
+
+        Ok(serde_json::json!({
+            "deployment_id": r.id,
+            "runtime":       r.runtime,
+            "code":          code,
+            "input_schema":  r.input_schema,
+            "output_schema": r.output_schema,
+        }))
     }
 
     async fn write_log(&self, entry: Value) -> Result<(), String> {

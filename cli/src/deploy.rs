@@ -41,15 +41,15 @@ pub struct FunctionResult {
 
 // ── Bundle output ─────────────────────────────────────────────────────────────
 
-enum BundleKind {
+pub enum BundleKind {
     Js  { metadata: Option<Value> },
     Wasm,
 }
 
-struct BundleOutput {
-    bytes:   Vec<u8>,
-    runtime: String,
-    kind:    BundleKind,
+pub struct BundleOutput {
+    pub bytes:   Vec<u8>,
+    pub runtime: String,
+    pub kind:    BundleKind,
 }
 
 // ── Hash ──────────────────────────────────────────────────────────────────────
@@ -152,8 +152,7 @@ fn check_wasm_toolchain(build_cmd: &str) -> Option<String> {
 
 // ── Bundle: JS/Deno ───────────────────────────────────────────────────────────
 
-fn bundle_js(dir: &Path, entry: &str) -> anyhow::Result<Vec<u8>> {
-    let out_dir = dir.join("dist");
+fn bundle_js(dir: &Path, entry: &str) -> anyhow::Result<Vec<u8>> {    let out_dir = dir.join("dist");
     if !out_dir.exists() {
         fs::create_dir_all(&out_dir)?;
     }
@@ -219,7 +218,7 @@ fn bundle_wasm(dir: &Path, entry: &str, build_cmd: Option<&str>) -> anyhow::Resu
 
 // ── Bundle dispatch ───────────────────────────────────────────────────────────
 
-fn bundle_function(dir: &Path, metadata: &Value) -> anyhow::Result<BundleOutput> {
+pub fn bundle_function(dir: &Path, metadata: &Value) -> anyhow::Result<BundleOutput> {
     let runtime = metadata["runtime"].as_str().unwrap_or("deno").to_string();
     let entry = metadata["entry"]
         .as_str()
