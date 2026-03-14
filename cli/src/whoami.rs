@@ -1,12 +1,13 @@
-//! `flux whoami` — removed in the framework CLI.
-//!
-//! The self-hosted framework has no user accounts or cloud credentials.
-//! Project context is determined by the `flux.toml` in the current directory.
+use crate::client::ApiClient;
+use serde_json::Value;
 
 pub async fn execute() -> anyhow::Result<()> {
-    anyhow::bail!(
-        "`flux whoami` has been removed.\n  \
-         The Flux framework is self-hosted — there are no user accounts.\n  \
-         Project context comes from flux.toml in the current directory."
-    )
+    let client = ApiClient::new().await?;
+    let res = client.client
+        .get(format!("{}/auth/me", client.base_url))
+        .send()
+        .await?;
+    let json: Value = res.error_for_status()?.json().await?;
+    println!("{}", serde_json::to_string_pretty(&json)?);
+    Ok(())
 }

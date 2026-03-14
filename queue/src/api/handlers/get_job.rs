@@ -21,7 +21,16 @@ pub async fn handler(
                 (job.updated_at - s).num_milliseconds()
             });
 
-            let mut val = serde_json::to_value(&job).unwrap();
+            let Ok(mut val) = serde_json::to_value(&job) else {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error":   "FUNCTION_ERROR",
+                        "message": "failed to serialize job",
+                        "code":    500,
+                    })),
+                );
+            };
             if let Some(obj) = val.as_object_mut() {
                 obj.insert("queue_time_ms".into(), queue_time_ms.into());
                 obj.insert("execution_time_ms".into(), execution_time_ms.into());
@@ -30,7 +39,11 @@ pub async fn handler(
         }
         Err(_) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Job not found" })),
+            Json(serde_json::json!({
+                "error":   "NOT_FOUND",
+                "message": "job not found",
+                "code":    404,
+            })),
         ),
     }
 }

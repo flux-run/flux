@@ -11,7 +11,6 @@ use std::env;
 /// | `INTERNAL_SERVICE_TOKEN` | —                       | yes      |
 /// | `PORT`                   | `8081`                  |          |
 /// | `RUNTIME_URL`            | `http://localhost:8083` |          |
-/// | `CONTROL_PLANE_URL`      | `http://localhost:8080` |          |
 /// | `MAX_REQUEST_SIZE_BYTES` | `10485760` (10 MB)      |          |
 /// | `RUNTIME_TIMEOUT_SECS`   | `30`                    |          |
 /// | `RATE_LIMIT_PER_SEC`     | `50`                    |          |
@@ -26,9 +25,6 @@ pub struct Config {
     pub port: u16,
     /// URL of the Runtime execution service.
     pub runtime_url: String,
-    /// URL of the API (control-plane) service.
-    #[allow(dead_code)]
-    pub control_plane_url: String,
     /// Maximum HTTP request body in bytes before returning 413.
     pub max_request_size_bytes: usize,
     /// HTTP timeout for forwarded runtime calls (seconds).
@@ -57,11 +53,6 @@ impl Config {
 
             runtime_url: env::var("RUNTIME_URL")
                 .unwrap_or_else(|_| "http://localhost:8083".to_string()),
-
-            // Accept legacy API_URL for backward compat.
-            control_plane_url: env::var("CONTROL_PLANE_URL")
-                .or_else(|_| env::var("API_URL"))
-                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
 
             max_request_size_bytes: env::var("MAX_REQUEST_SIZE_BYTES")
                 .ok().and_then(|s| s.parse().ok())

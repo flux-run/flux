@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation'
 import { Upload, CheckCircle2, Circle, ArrowLeft, Code2, Clock, Layers2 } from 'lucide-react'
 import Link from 'next/link'
 import { apiFetch } from '@/lib/api'
+import type { FunctionResponse, DeploymentResponse } from '@fluxbase/api-types'
 import { useStore } from '@/state/tenantStore'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -15,14 +16,15 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 
-interface Fn         { id: string; name: string; runtime: string }
-interface Deployment { id: string; version: number; is_active: boolean; created_at: string }
-
 const RUNTIME_COLOR: Record<string, string> = {
   deno:   'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
-  nodejs: 'text-green-400   bg-green-500/10   border-green-500/20',
   python: 'text-blue-400    bg-blue-500/10    border-blue-500/20',
-  bun:    'text-amber-400   bg-amber-500/10   border-amber-500/20',
+  go:     'text-cyan-400    bg-cyan-500/10    border-cyan-500/20',
+  java:   'text-orange-400  bg-orange-500/10  border-orange-500/20',
+  php:    'text-indigo-400  bg-indigo-500/10  border-indigo-500/20',
+  rust:   'text-amber-400   bg-amber-500/10   border-amber-500/20',
+  csharp: 'text-violet-400  bg-violet-500/10  border-violet-500/20',
+  ruby:   'text-red-400     bg-red-500/10     border-red-500/20',
 }
 
 function relTime(ts: string) {
@@ -42,12 +44,12 @@ export default function FunctionDetailPage() {
 
   const fnQuery = useQuery({
     queryKey: ['function', functionId],
-    queryFn: () => apiFetch<Fn>(`/functions/${functionId}`),
+    queryFn: () => apiFetch<FunctionResponse>(`/functions/${functionId}`),
     enabled: !!functionId,
   })
   const depQuery = useQuery({
     queryKey: ['deployments', functionId],
-    queryFn: () => apiFetch<{ deployments: Deployment[] }>(`/functions/${functionId}/deployments`),
+    queryFn: () => apiFetch<{ deployments: DeploymentResponse[] }>(`/functions/${functionId}/deployments`),
     enabled: !!functionId,
   })
 

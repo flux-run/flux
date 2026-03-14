@@ -4,7 +4,7 @@
 
 Flux is a **backend framework where every execution is a record** — think "Git for backend execution." Every function invocation automatically captures timing spans, database mutations (before/after state), external HTTP calls, and the deployed code SHA, all linked by a single `request_id`. This enables commands like `flux why <id>` (root cause in 10s) and `flux incident replay <id>` (re-run with recorded state).
 
-**Core primitives:** Function · Database · Queue · Agent. Everything else composes from these.
+**Core primitives:** Function · Database · Queue. Everything else composes from these.
 
 **Single source of truth:** All state lives in PostgreSQL. No Redis, no Kafka, no managed queues.
 
@@ -12,7 +12,7 @@ Flux is a **backend framework where every execution is a record** — think "Git
 
 Mixed Rust + TypeScript monorepo:
 
-- **Rust workspace** (`Cargo.toml`): `api`, `gateway`, `runtime`, `data-engine`, `queue`, `server` (monolith), `cli`, `agent`, `shared/job_contract`
+- **Rust workspace** (`Cargo.toml`): `api`, `gateway`, `runtime`, `data-engine`, `queue`, `server` (monolith), `cli`, `shared/job_contract`
 - **Node workspaces** (`package.json`): `frontend` (marketing site + docs), `dashboard` (management UI), `packages/functions`, `packages/sdk`, `packages/wasm-sdk`
 - **`schemas/`**: SQLx migrations split by service (`schemas/api/`, `schemas/data-engine/`)
 - **`docs/`**: Authoritative specs — read `docs/framework.md` (1742 lines) for the full design
@@ -99,7 +99,7 @@ Routes are stored as an in-memory `HashMap<(METHOD, path), function>`, refreshed
 Secrets are injected into the Deno V8 isolate at runtime via an LRU cache (30s TTL), encrypted at rest with AES-256-GCM. They never appear in execution records, logs, or error messages.
 
 ### Rust Edition Split
-- Core services: `edition = "2024"` — `api`, `gateway`, `runtime`, `cli`, `agent`, `server`
+- Core services: `edition = "2024"` — `api`, `gateway`, `runtime`, `cli`, `server`
 - Supporting crates: `edition = "2021"` — `data-engine`, `queue`, `shared/job_contract`
 
 ## User-Facing Function Authoring (TypeScript SDK)
@@ -128,7 +128,6 @@ export default defineFunction({
 | `ctx.db.<table>.<op>()` | Typed DB access (mutations are auto-recorded) |
 | `ctx.queue.push(fn, payload, opts)` | Enqueue async job |
 | `ctx.function.invoke(name, input)` | Call another function (same `request_id`) |
-| `ctx.agent.run(name, input)` | Run an LLM agent |
 | `ctx.secrets.get(key)` | Read encrypted secret |
 | `ctx.log.info/warn/error()` | Structured log |
 | `ctx.error(code, error, message)` | Throw structured error |
@@ -141,7 +140,6 @@ my-app/
 ├── functions/          # each subdir = POST /{name} endpoint
 ├── middleware/         # auth.ts, etc.
 ├── schemas/            # raw SQL files (source of truth for DB schema)
-├── agents/             # YAML agent definitions
 └── .flux/              # build output, local Postgres data
 ```
 
@@ -171,7 +169,6 @@ Automatic detections: slow spans (>500ms), N+1 queries (same table ≥3 times), 
 | `LOCAL_MODE` / `FLUX_LOCAL` | Various | Dev mode — disables JWT, tenant routing |
 | `PORT` | All services | Service listen port |
 | `WORKER_POLL_INTERVAL_MS` | Queue | Job polling interval (default 200ms) |
-| `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION` | API, Runtime | Object storage for function bundles |
 
 ## Implementation Status
 

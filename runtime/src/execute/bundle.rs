@@ -3,7 +3,7 @@
 /// Encapsulates the three-path resolution strategy:
 ///   1. Warm WASM path  — cached bytes in WasmPool (zero network calls)
 ///   2. Warm Deno path  — cached code in BundleCache (zero network calls)
-///   3. Cold path       — fetch from control plane → S3/inline → populate both caches
+///   3. Cold path       — fetch from control plane → inline code → populate both caches
 ///
 /// Separated from the HTTP handler and execution runner so each can be
 /// tested and reasoned about independently.
@@ -42,7 +42,6 @@ pub struct BundleResolver<'a> {
     pub bundle_cache:  &'a BundleCache,
     pub schema_cache:  &'a SchemaCache,
     pub wasm_pool:     &'a WasmPool,
-    /// Used for S3/R2 asset downloads only; API calls go through `api`.
     pub http_client:   &'a reqwest::Client,
     /// Control-plane dispatch — used for the bundle metadata fetch.
     pub api:           &'a dyn ApiDispatch,
@@ -69,7 +68,7 @@ impl<'a> BundleResolver<'a> {
     pub async fn cold_fetch(
         &self,
         function_id: &str,
-        tracer:      &TraceEmitter,
+        _tracer:     &TraceEmitter,
     ) -> Result<ResolvedBundle, Response> {
         // Fetch bundle metadata via the ApiDispatch trait (HTTP in multi-process
         // mode, direct call in single-binary mode).  The dispatch impl already
@@ -94,19 +93,18 @@ impl<'a> BundleResolver<'a> {
             .to_string();
 
         let deployment_id = data.get("deployment_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let url_opt       = data.get("url")          .and_then(|v| v.as_str()).map(|s| s.to_string());
         let code_opt      = data.get("code")         .and_then(|v| v.as_str()).map(|s| s.to_string());
 
         if bundle_runtime == "wasm" {
-            let bytes = self.fetch_wasm_bytes(
-                function_id, url_opt, code_opt, tracer
-            ).await?;
+            let bytes = self.resolve_wasm_bytes(code_opt).map_err(|e| {
+                internal("WasmBundleError", e)
+            })?;
             self.wasm_pool.cache_bytes(function_id.to_string(), Arc::new(bytes.clone())).await;
             return Ok(ResolvedBundle::Wasm { bytes });
         }
 
         // ── Deno cold path ────────────────────────────────────────────────
-        // Check deployment-level cache first (avoids re-downloading from S3).
+        // Check deployment-level cache first.
         if let Some(d_id) = &deployment_id {
             if let Some(cached) = self.bundle_cache.get(d_id) {
                 tracing::debug!(function_id, deployment_id = %d_id, "bundle cache hit (deployment-level)");
@@ -115,9 +113,11 @@ impl<'a> BundleResolver<'a> {
             }
         }
 
-        let code = self.fetch_js_code(
-            function_id, deployment_id.clone(), url_opt, code_opt, tracer
-        ).await?;
+        let code = code_opt.ok_or_else(|| {
+            internal("no_bundle_found",
+                "Bundle response contained no code field".to_string())
+        })?;
+        self.bundle_cache.insert_both(function_id.to_string(), deployment_id, code.clone());
         Ok(ResolvedBundle::Deno { code })
     }
 
@@ -132,65 +132,17 @@ impl<'a> BundleResolver<'a> {
         }
     }
 
-    async fn fetch_wasm_bytes(
+    fn resolve_wasm_bytes(
         &self,
-        _function_id: &str,
-        url_opt:     Option<String>,
-        code_opt:    Option<String>,
-        tracer:      &TraceEmitter,
-    ) -> Result<Vec<u8>, Response> {
-        if let Some(url) = url_opt {
-            let res = self.http_client.get(&url).send().await
-                .map_err(|e| internal("S3FetchError",
-                    format!("Failed to download wasm bundle: {}", e)))?;
-            if !res.status().is_success() {
-                let status = res.status().as_u16();
-                let body   = res.text().await.unwrap_or_default();
-                return Err(internal("S3FetchError",
-                    format!("S3 returned HTTP {}: {}", status, body)));
-            }
-            let elapsed = 0u64; // timing tracked in runner
-            tracer.post_event("info", format!("wasm bundle fetched from R2 ({}ms)", elapsed));
-            Ok(res.bytes().await.map(|b| b.to_vec()).unwrap_or_default())
-        } else if let Some(encoded) = code_opt {
+        code_opt: Option<String>,
+    ) -> Result<Vec<u8>, String> {
+        if let Some(encoded) = code_opt {
             use base64::Engine as _;
             Ok(base64::engine::general_purpose::STANDARD
                 .decode(&encoded)
                 .unwrap_or_else(|_| encoded.into_bytes()))
         } else {
-            Err(not_found("no_bundle_found", "No wasm bundle found for this function."))
-        }
-    }
-
-    async fn fetch_js_code(
-        &self,
-        function_id:   &str,
-        deployment_id: Option<String>,
-        url_opt:       Option<String>,
-        code_opt:      Option<String>,
-        tracer:        &TraceEmitter,
-    ) -> Result<String, Response> {
-        if let Some(url) = url_opt {
-            let res = self.http_client.get(&url).send().await
-                .map_err(|e| internal("S3FetchError",
-                    format!("Failed to download bundle: {}", e)))?;
-            if !res.status().is_success() {
-                let status = res.status().as_u16();
-                let body   = res.text().await.unwrap_or_default();
-                return Err(internal("S3FetchError",
-                    format!("S3 returned HTTP {}: {}", status, body)));
-            }
-            let text = res.text().await.unwrap_or_default();
-            tracer.post_event("info", "bundle fetched from R2".to_string());
-            self.bundle_cache.insert_both(function_id.to_string(), deployment_id, text.clone());
-            Ok(text)
-        } else if let Some(code) = code_opt {
-            // Inline code stored directly in the DB (local dev / small functions).
-            self.bundle_cache.insert_both(function_id.to_string(), deployment_id, code.clone());
-            Ok(code)
-        } else {
-            Err(internal("no_bundle_found",
-                "Bundle response contained neither url nor code field".to_string()))
+            Err("No wasm bundle found for this function.".to_string())
         }
     }
 }
@@ -210,4 +162,41 @@ fn not_found(code: &str, message: &str) -> Response {
 fn internal(code: &str, message: String) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR,
      Json(serde_json::json!({ "error": code, "message": message }))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── bundle_sha ────────────────────────────────────────────────────────
+
+    #[test]
+    fn bundle_sha_is_16_hex_chars() {
+        let sha = bundle_sha(b"hello world");
+        assert_eq!(sha.len(), 16, "sha must be 16 hex chars, got: {sha}");
+        assert!(sha.chars().all(|c| c.is_ascii_hexdigit()), "sha must be hex: {sha}");
+    }
+
+    #[test]
+    fn bundle_sha_same_input_same_output() {
+        assert_eq!(bundle_sha(b"stable"), bundle_sha(b"stable"));
+    }
+
+    #[test]
+    fn bundle_sha_different_inputs_different_outputs() {
+        assert_ne!(bundle_sha(b"aaa"), bundle_sha(b"bbb"));
+    }
+
+    #[test]
+    fn bundle_sha_empty_input_does_not_panic() {
+        let sha = bundle_sha(b"");
+        assert_eq!(sha.len(), 16);
+    }
+
+    #[test]
+    fn bundle_sha_large_input() {
+        let big = vec![0xABu8; 1_000_000];
+        let sha = bundle_sha(&big);
+        assert_eq!(sha.len(), 16);
+    }
 }

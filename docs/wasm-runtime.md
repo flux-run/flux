@@ -1,112 +1,80 @@
-# WASM Runtime — Deferred
+# WASM Runtime
 
-> **Status: Deferred.** WASM support is designed but not in scope for
-> Phase 0–3. The framework currently supports Deno V8 (JavaScript/TypeScript)
-> only. This document preserves the design for future implementation.
+Flux supports both JavaScript-first execution and WebAssembly for multi-language functions.
 
----
+The WASM path matters because it opens the runtime to any compiled language while preserving a consistent execution and debugging model.
 
-## Motivation
+## Why WASM Matters
 
-| Concern | Deno V8 only | With WASM |
-|---|---|---|
-| Language choice | JavaScript / TypeScript | Any WASM-capable language |
-| Performance ceiling | JIT-compiled JS | AOT-compiled native code |
-| Use cases | APIs, scripts, workflows | CPU-bound compute, ML inference |
-| Existing code reuse | Rewrite required | Compile-and-deploy |
+WebAssembly gives Flux:
 
-WASM does not replace Deno — it is a second execution target that sits
-alongside it. The Runtime selects the engine at dispatch time based on the
-`runtime` field in `flux.json`.
+- language diversity — Rust, Go, Java, Python, PHP, and AssemblyScript run alongside TypeScript
+- portable function bundles
+- tighter runtime control and sandboxing
+- a uniform deployment artifact for non-JavaScript languages
+- first-compile AOT caching so cold starts are fast on every deploy after the first
 
----
+Flux uses one runtime, not a different execution model for every language.
 
-## Two-runtime model
+## Product Stance
 
-```
-POST /execute
-       │
-       ├─ runtime = "deno"  ──► IsolatePool (Deno V8, current)
-       │
-       └─ runtime = "wasm"  ──► WasmPool   (Wasmtime, future)
-```
+JavaScript is the first-class default with the richest SDK. WASM extends the runtime to additional backend languages.
 
-Both paths share: bundle fetching, secrets injection, structured logging,
-request tracing, and resource limits.
+WASM provides:
 
----
+- a coherent packaging model
+- predictable execution
+- visibility into spans, errors, and side effects
+- deployment metadata that fits the same debugging story
 
-## Design overview
+## What Parity Means
 
-### WasmPool
+Non-JavaScript functions participate in:
 
-Mirrors `IsolatePool` but manages pre-instantiated Wasmtime `Store`s:
+- deployment versioning
+- trace generation
+- mutation attribution
+- queue and schedule execution
+- replay and diff
 
-```
-WasmPool {
-  workers: min(2 × CPU, 16)
-  cache:   compiled Module per function_id (AOT, Cranelift)
-}
-```
+Without that, WASM would be just an alternate build target, not part of the product.
 
-### FluxContext ABI
+## Packaging Model
 
-WASM functions access Flux capabilities via host imports:
+The model is:
 
-```
-flux.secret_get(key_ptr, key_len) → (val_ptr, val_len)
-flux.log(level, msg_ptr, msg_len)
-flux.http_fetch(req_ptr, req_len) → (resp_ptr, resp_len)
-flux.db_query(req_ptr, req_len) → (resp_ptr, resp_len)
-```
+- source language compiles to a WASM artifact
+- Flux stores that artifact as a function version
+- the runtime loads and executes it under the same execution record model
 
-Guest allocator: `flux_alloc(size) → ptr` / `flux_free(ptr, size)`.
+The packaging process differs by language, but the operator experience stays consistent.
 
-### Language support
+## Supported Languages
 
-| Language | Toolchain | Status |
-|---|---|---|
-| Rust | `cargo build --target wasm32-wasip1` | Designed |
-| Go | `tinygo build -target wasm` | Designed |
-| C/C++ | `clang --target=wasm32-wasi` | Designed |
-| AssemblyScript | `asc` compiler | Designed |
-| Python | `componentize-py` | Experimental |
-| Zig | `zig build -target wasm32-wasi` | Designed |
+| Language | Toolchain | Warm p50 | Notes |
+|----------|-----------|----------|-------|
+| TypeScript / JS | Native Deno V8 | < 1 ms | First-class, full SDK |
+| AssemblyScript | `asc` → wasm32-wasi | < 1 ms | TypeScript-like syntax, smallest binaries |
+| Rust | `cargo` → wasm32-wasip1 | 1 ms | Best WASM toolchain, sub-100 KB binaries |
+| Java | TeaVM → wasm32-wasi | 1 ms | No JVM warmup; compact 192 KB output |
+| Go | `go build` GOOS=wasip1 | 19 ms | Standard toolchain, no TinyGo required |
+| PHP | php-8.2-wasm (vmware-labs) | 83 ms | Full PHP 8.2, argv-embedded script |
+| Python | py2wasm (Nuitka) | 191 ms | Compiled — not interpreter-in-WASM |
+| C# (.NET) | dotnet `wasi-experimental` | — | 🚧 Coming soon — WASIP2 component model |
+| Ruby | rbwasm | — | ❌ Compilation timeout — not viable |
 
-### flux.json for WASM functions
+## Constraints
 
-```json
-{
-  "runtime": "wasm",
-  "entry": "handler.wasm",
-  "build": "cargo build --target wasm32-wasip1 --release && cp target/wasm32-wasip1/release/my_fn.wasm handler.wasm",
-  "memory_mb": 64
-}
-```
+WASM support comes with realistic constraints:
 
----
+- some language features require adapters or tooling
+- I/O and host bindings follow a stable contract
+- performance and startup characteristics differ by language
 
-## Security model
+Those constraints are acceptable because the runtime story stays coherent.
 
-- Linear memory isolation per invocation
-- No filesystem access (pure WASI subset)
-- Fuel-based CPU metering (configurable per function)
-- Memory limit enforced at instantiation
+## Product Rule
 
----
+WASM is valuable because it strengthens the complete-system story.
 
-## Implementation plan
-
-This will be implemented after Phase 3 (production readiness). Priority:
-1. Rust WASM functions (most demand)
-2. Go WASM functions
-3. Other languages
-
-The Runtime already has extension points in `runtime/src/engine/` for a
-`WasmPool` module. See the source code for the existing `IsolatePool`
-pattern to follow.
-
----
-
-*For the current runtime (Deno V8), see [runtime.md](runtime.md).
-For the overall architecture, see [framework.md §4](framework.md#4-architecture).*
+Language breadth does not weaken the debugging and deployment model.

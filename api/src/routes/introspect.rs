@@ -23,8 +23,7 @@
 ///
 /// Protected by the service-token middleware applied to the entire
 /// `/internal/*` router — no per-handler auth check required.
-use axum::extract::{Query, State};
-use serde::Deserialize;
+use axum::extract::{State};
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
@@ -34,17 +33,8 @@ use crate::{
     AppState,
 };
 
-#[derive(Deserialize)]
-pub struct IntrospectQuery {
-    /// Target project UUID.
-    pub project_id: Uuid,
-    /// Tenant UUID — required to scope the secrets lookup.
-    pub tenant_id: Uuid,
-}
-
 pub async fn get_project_introspect(
     State(state): State<AppState>,
-    Query(params): Query<IntrospectQuery>,
 ) -> Result<ApiResponse<Value>, ApiError> {
     let pool = &state.pool;
 
@@ -55,11 +45,9 @@ pub async fn get_project_introspect(
     // may be null for functions deployed before schema support was added.
     let fn_rows = sqlx::query(
         "SELECT id, name, runtime, input_schema, output_schema \
-         FROM functions \
-         WHERE project_id = $1 \
+         FROM flux.functions \
          ORDER BY name",
     )
-    .bind(params.project_id)
     .fetch_all(pool)
     .await
     .map_err(|e| {
@@ -85,13 +73,8 @@ pub async fn get_project_introspect(
     // Returns all secret keys visible to this project: project-scoped keys
     // AND tenant-scoped keys (project_id IS NULL).  Values are never returned.
     let secret_keys: Vec<String> = sqlx::query_scalar(
-        "SELECT key FROM secrets \
-         WHERE tenant_id = $1 \
-           AND (project_id = $2 OR project_id IS NULL) \
-         ORDER BY key",
+        "SELECT key FROM flux.secrets ORDER BY key",
     )
-    .bind(params.tenant_id)
-    .bind(params.project_id)
     .fetch_all(pool)
     .await
     .map_err(|e| {

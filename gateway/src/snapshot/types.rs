@@ -1,30 +1,44 @@
 //! Core data types for the in-memory route snapshot.
+//!
+//! [`RouteRecord`] is the primary type: one row per registered route, loaded
+//! from `routes JOIN functions` and held in a [`SnapshotData`] hash map.
+//! The key is `(HTTP_METHOD_UPPERCASE, /path)` — no tenant scoping because
+//! routes are globally unique within a project by (method, path).
 use std::collections::HashMap;
 use uuid::Uuid;
 use serde::Serialize;
 
 /// A single registered route as loaded from the database.
 ///
-/// Fields map directly to the `routes` table joined with `functions`.
+/// Fields map directly to the `flux.routes` table.
+/// Column sources are noted inline.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RouteRecord {
+    /// Primary key from `flux.routes.id` — used as part of the rate-limit key.
     pub id:           Uuid,
-    pub project_id:   Uuid,
-    pub function_id:  Uuid,
+    /// `flux.routes.function_name` — name of the function to invoke.
+    pub function_name: String,
+    /// `flux.routes.path` — the URL path this route matches (e.g. `/hello`).
     pub path:         String,
+    /// `flux.routes.method` — stored uppercase (GET, POST, …).
     pub method:       String,
-    /// Runtime engine: "deno" (default) or "wasm".
-    pub runtime:      String,
+    /// `flux.routes.auth_type` — one of `"none"`, `"api_key"`, `"jwt"`.
     pub auth_type:    String,
+    /// `flux.routes.cors_enabled` — when true, CORS headers are injected.
     pub cors_enabled: bool,
-    /// Per-route rate limit (req/s).  Falls back to the global default when None.
-    pub rate_limit:   Option<i32>,
+    /// `flux.routes.rate_limit_per_minute` — per-route override.
+    pub rate_limit_per_minute: Option<i32>,
+    /// `flux.routes.jwks_url` — required when `auth_type = "jwt"`.
     pub jwks_url:     Option<String>,
+    /// `flux.routes.jwt_audience` — optional `aud` claim check.
     pub jwt_audience: Option<String>,
+    /// `flux.routes.jwt_issuer` — optional `iss` claim check.
     pub jwt_issuer:   Option<String>,
-    /// Optional JSON Schema for request body validation.
+    /// `flux.routes.json_schema` — optional JSON Schema for request body validation.
     pub json_schema:  Option<serde_json::Value>,
+    /// `flux.routes.cors_origins` — allowed `Origin` values for CORS responses.
     pub cors_origins: Option<Vec<String>>,
+    /// `flux.routes.cors_headers` — allowed request headers for CORS preflight.
     pub cors_headers: Option<Vec<String>>,
 }
 

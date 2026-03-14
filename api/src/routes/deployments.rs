@@ -1,27 +1,33 @@
 //! Deployment routes — function bundle upload, deployment management, and
 //! the internal bundle-fetch endpoint used by the runtime.
 //!
-//! ## Deploy flow (CLI → API → Storage → DB → Runtime)
+//! ## Deploy flow (CLI → API → Filesystem + DB → Runtime)
 //! ```text
 //! flux deploy
 //!   └─ POST /functions/deploy  (multipart: name, runtime, bundle)
-//!        ├─ Upsert function record in DB
-//!        ├─ Upload bundle to object storage
-//!        ├─ Insert deployment row (version++)
+//!        ├─ Upsert function record in DB (metadata only)
+//!        ├─ Write bundle bytes to FLUX_FUNCTIONS_DIR/{name}.js|.wasm
+//!        ├─ Insert deployment row (version++) — no bundle_code in DB
 //!        └─ Deactivate old deployments, activate new one
 //! ```
 //!
-//! ## SOLID note (Single Responsibility)
-//! HTTP parsing lives here.  Storage interaction lives in `AppState::storage`.
-//! DB queries are inline (simple enough not to warrant a separate service.rs).
+//! ## Bundle storage
+//! Bundles live on the **filesystem** at `FLUX_FUNCTIONS_DIR/{name}.{ext}`:
+//!   - Dev:        `{project_root}/.flux/build/`   (set by `flux dev`)
+//!   - Production: `/app/functions/`               (baked into Docker image)
+//!
+//! Postgres stores only metadata (name, route, runtime, schemas, bundle_hash).
+//! The `bundle_hash` column is kept for incremental-deploy detection in the CLI.
 
 use axum::{
     extract::{Extension, Path, Query, State},
     Json,
 };
 use crate::error::{ApiError, ApiResponse, ApiResult};
-use serde::Deserialize;
+use crate::validation::validate_name;
+use api_contract::deployments::{CreateDeploymentPayload, CreateProjectDeploymentPayload};
 use sqlx::PgPool;
+use serde::Deserialize;
 use uuid::Uuid;
 use crate::types::context::RequestContext;
 use crate::AppState;
@@ -38,13 +44,6 @@ struct DeploymentRow {
     function_name: String,
 }
 
-// ── Payloads ─────────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct CreateDeploymentPayload {
-    pub storage_key: String,
-}
-
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 fn run_url(gateway_url: &str, name: &str) -> String {
@@ -55,18 +54,17 @@ fn run_url(gateway_url: &str, name: &str) -> String {
 
 pub async fn list_deployments(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path(function_name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     let records = sqlx::query_as::<_, DeploymentRow>(
         "SELECT d.id, d.version, d.is_active, d.status, d.created_at, f.name as function_name \
-         FROM deployments d \
-         JOIN functions f ON f.id = d.function_id \
-         WHERE f.name = $1 AND f.project_id = $2 \
+         FROM flux.deployments d \
+         JOIN flux.functions f ON f.id = d.function_id \
+         WHERE f.name = $1 \
          ORDER BY d.version DESC",
     )
     .bind(&function_name)
-    .bind(context.project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(ApiError::from)?;
@@ -104,7 +102,7 @@ pub async fn create_deployment(
     #[derive(sqlx::FromRow)]
     struct VersionRow { max: Option<i32> }
     let row = sqlx::query_as::<_, VersionRow>(
-        "SELECT MAX(version) as max FROM deployments WHERE function_id = $1",
+        "SELECT MAX(version) as max FROM flux.deployments WHERE function_id = $1",
     )
     .bind(function_id)
     .fetch_one(&pool)
@@ -114,7 +112,7 @@ pub async fn create_deployment(
     let next_version = row.max.unwrap_or(0) + 1;
 
     sqlx::query(
-        "INSERT INTO deployments (id, function_id, storage_key, version, status) \
+        "INSERT INTO flux.deployments (id, function_id, storage_key, version, status) \
          VALUES ($1, $2, $3, $4, 'ready')",
     )
     .bind(deployment_id)
@@ -133,7 +131,7 @@ pub async fn create_deployment(
 
 pub async fn activate_deployment(
     State(pool): State<PgPool>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Path((function_name, version)): Path<(String, i32)>,
 ) -> ApiResult<serde_json::Value> {
     #[derive(sqlx::FromRow)]
@@ -143,25 +141,24 @@ pub async fn activate_deployment(
 
     let fn_record = sqlx::query_as::<_, DeploymentFunctionRow>(
         "SELECT d.id as deployment_id, f.id as function_id \
-         FROM deployments d \
-         JOIN functions f ON f.id = d.function_id \
-         WHERE f.name = $1 AND f.project_id = $2 AND d.version = $3",
+         FROM flux.deployments d \
+         JOIN flux.functions f ON f.id = d.function_id \
+         WHERE f.name = $1 AND d.version = $2",
     )
     .bind(&function_name)
-    .bind(context.project_id)
     .bind(version)
     .fetch_optional(&mut *tx)
     .await
     .map_err(ApiError::from)?
     .ok_or_else(|| ApiError::not_found("deployment not found"))?;
 
-    sqlx::query("UPDATE deployments SET is_active = false WHERE function_id = $1")
+    sqlx::query("UPDATE flux.deployments SET is_active = false WHERE function_id = $1")
         .bind(fn_record.function_id)
         .execute(&mut *tx)
         .await
         .map_err(ApiError::from)?;
 
-    sqlx::query("UPDATE deployments SET is_active = true WHERE id = $1")
+    sqlx::query("UPDATE flux.deployments SET is_active = true WHERE id = $1")
         .bind(fn_record.deployment_id)
         .execute(&mut *tx)
         .await
@@ -186,7 +183,7 @@ pub async fn activate_deployment(
 ///   - `output_schema` — optional JSON Schema for output validation
 pub async fn deploy_function_cli(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     mut multipart: axum::extract::Multipart,
 ) -> ApiResult<serde_json::Value> {
     let mut name         = String::new();
@@ -195,24 +192,38 @@ pub async fn deploy_function_cli(
     let mut description:   Option<String> = None;
     let mut input_schema:  Option<String> = None;
     let mut output_schema: Option<String> = None;
+    let mut bundle_hash:   Option<String> = None;
+    let mut project_deployment_id: Option<Uuid> = None;
 
     while let Ok(Some(field)) = multipart.next_field().await {
         match field.name().unwrap_or("") {
-            "name"          => name         = field.text().await.unwrap_or_default(),
-            "runtime"       => runtime      = field.text().await.unwrap_or_default(),
-            "bundle"        => bundle_bytes = field.bytes().await.unwrap_or_default().to_vec(),
-            "description"   => description  = field.text().await.ok().filter(|s| !s.is_empty()),
-            "input_schema"  => input_schema  = field.text().await.ok().filter(|s| !s.is_empty()),
-            "output_schema" => output_schema = field.text().await.ok().filter(|s| !s.is_empty()),
-            _               => {}
+            "name"                   => name         = field.text().await.unwrap_or_default(),
+            "runtime"                => runtime      = field.text().await.unwrap_or_default(),
+            "bundle"                 => bundle_bytes = field.bytes().await.unwrap_or_default().to_vec(),
+            "description"            => description  = field.text().await.ok().filter(|s| !s.is_empty()),
+            "input_schema"           => input_schema  = field.text().await.ok().filter(|s| !s.is_empty()),
+            "output_schema"          => output_schema = field.text().await.ok().filter(|s| !s.is_empty()),
+            "bundle_hash"            => bundle_hash   = field.text().await.ok().filter(|s| !s.is_empty()),
+            "project_deployment_id"  => {
+                project_deployment_id = field.text().await.ok()
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| s.parse::<Uuid>().ok());
+            }
+            _                        => {}
         }
     }
 
     if name.is_empty() {
         return Err(ApiError::bad_request("name is required"));
     }
+    // Prevent path traversal: name must match [a-zA-Z0-9_-]{1,64}
+    validate_name(&name).map_err(|e| ApiError::bad_request(e))?;
     if bundle_bytes.is_empty() {
         return Err(ApiError::bad_request("bundle is required"));
+    }
+    const MAX_BUNDLE_BYTES: usize = 50 * 1024 * 1024; // 50 MB
+    if bundle_bytes.len() > MAX_BUNDLE_BYTES {
+        return Err(ApiError::bad_request("bundle exceeds 50 MB limit"));
     }
     if runtime.is_empty() {
         runtime = "deno".to_string();
@@ -224,10 +235,9 @@ pub async fn deploy_function_cli(
     struct FunctionLookup { id: Uuid }
 
     let existing = sqlx::query_as::<_, FunctionLookup>(
-        "SELECT id FROM functions WHERE name = $1 AND project_id = $2 LIMIT 1",
+        "SELECT id FROM flux.functions WHERE name = $1 LIMIT 1",
     )
     .bind(&name)
-    .bind(context.project_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(ApiError::from)?;
@@ -239,7 +249,7 @@ pub async fn deploy_function_cli(
         Some(f) => {
             // Update schema metadata on re-deploy
             sqlx::query(
-                "UPDATE functions \
+                "UPDATE flux.functions \
                  SET description = COALESCE($1, description), \
                      input_schema  = COALESCE($2::jsonb, input_schema), \
                      output_schema = COALESCE($3::jsonb, output_schema) \
@@ -257,13 +267,11 @@ pub async fn deploy_function_cli(
         None => {
             let new_id = Uuid::new_v4();
             sqlx::query(
-                "INSERT INTO functions \
-                     (id, tenant_id, project_id, name, runtime, description, input_schema, output_schema) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                "INSERT INTO flux.functions \
+                     (id, name, runtime, description, input_schema, output_schema) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(new_id)
-            .bind(context.tenant_id)
-            .bind(context.project_id)
             .bind(&name)
             .bind(&runtime)
             .bind(description.as_deref())
@@ -276,27 +284,32 @@ pub async fn deploy_function_cli(
         }
     };
 
-    // ── Bundle storage ────────────────────────────────────────────────────
+    // ── Bundle storage: write to filesystem ──────────────────────────────
+    //
+    // The bundle lives at {FLUX_FUNCTIONS_DIR}/{name}.js|.wasm, not in Postgres.
+    // The runtime reads it from disk on every cold start (cached in memory after).
 
-    let deployment_id = Uuid::new_v4();
-    let s3_key = format!("bundles/{}/{}/{}.js",
-        context.project_id, function_id, deployment_id);
+    let ext = if runtime == "wasm" { "wasm" } else { "js" };
+    let functions_dir = std::path::Path::new(&state.functions_dir);
+    std::fs::create_dir_all(functions_dir)
+        .map_err(|e| ApiError::internal(format!("cannot create functions_dir: {e}")))?;
 
-    let bundle_code = String::from_utf8(bundle_bytes.clone())
-        .map_err(|_| ApiError::bad_request("bundle must be valid UTF-8"))?;
+    let bundle_path = functions_dir.join(format!("{name}.{ext}"));
+    std::fs::write(&bundle_path, &bundle_bytes)
+        .map_err(|e| ApiError::internal(format!("failed to write bundle to disk: {e}")))?;
 
-    // Upload to object storage (minio in dev, S3/R2 in prod)
-    state.storage
-        .put_object(&s3_key, bundle_bytes, "application/javascript")
-        .await
-        .map_err(|e| ApiError::internal(format!("storage upload failed: {}", e)))?;
+    tracing::debug!(path = %bundle_path.display(), "bundle written to filesystem");
 
     // ── Deployment record ─────────────────────────────────────────────────
+
+    let deployment_id = Uuid::new_v4();
+    // storage_key records the relative bundle filename for diagnostics.
+    let storage_key = format!("{name}.{ext}");
 
     #[derive(sqlx::FromRow)]
     struct VersionRow { max: Option<i32> }
     let row = sqlx::query_as::<_, VersionRow>(
-        "SELECT MAX(version) as max FROM deployments WHERE function_id = $1",
+        "SELECT MAX(version) as max FROM flux.deployments WHERE function_id = $1",
     )
     .bind(function_id)
     .fetch_one(&state.pool)
@@ -307,23 +320,23 @@ pub async fn deploy_function_cli(
 
     let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
 
-    sqlx::query("UPDATE deployments SET is_active = false WHERE function_id = $1")
+    sqlx::query("UPDATE flux.deployments SET is_active = false WHERE function_id = $1")
         .bind(function_id)
         .execute(&mut *tx)
         .await
         .map_err(ApiError::from)?;
 
     sqlx::query(
-        "INSERT INTO deployments \
-             (id, function_id, storage_key, bundle_code, bundle_url, version, status, is_active) \
-         VALUES ($1, $2, $3, $4, $5, $6, 'ready', true)",
+        "INSERT INTO flux.deployments \
+             (id, function_id, storage_key, version, status, is_active, bundle_hash, project_deployment_id) \
+         VALUES ($1, $2, $3, $4, 'ready', true, $5, $6)",
     )
     .bind(deployment_id)
     .bind(function_id)
-    .bind(&s3_key)          // storage_key (legacy column)
-    .bind(&bundle_code)     // bundle_code  (inline fallback for runtime)
-    .bind(&s3_key)          // bundle_url   → presigned at fetch time
+    .bind(&storage_key)
     .bind(next_version)
+    .bind(&bundle_hash)
+    .bind(project_deployment_id)
     .execute(&mut *tx)
     .await
     .map_err(ApiError::from)?;
@@ -338,10 +351,32 @@ pub async fn deploy_function_cli(
         "function deployed",
     );
 
+    // Invalidate the runtime's compiled-module and bundle cache so the next
+    // invocation picks up the freshly written bundle instead of a stale one.
+    // In the monolith this is a loopback HTTP call to the runtime's internal
+    // invalidation endpoint.  Failure here is non-fatal — the content-addressed
+    // WasmPool will recompile on the next call if the fingerprint changed.
+    {
+        let service_token = std::env::var("INTERNAL_SERVICE_TOKEN")
+            .unwrap_or_else(|_| "dev-service-token".to_string());
+        let invalidate_url = format!("{}/internal/cache/invalidate", state.runtime_url);
+        let body = serde_json::json!({ "function_id": name });
+        if let Err(e) = state.http_client
+            .post(&invalidate_url)
+            .header("X-Service-Token", &service_token)
+            .json(&body)
+            .send()
+            .await
+        {
+            tracing::warn!(function = %name, error = %e, "cache invalidation request failed (non-fatal)");
+        }
+    }
+
     Ok(ApiResponse::created(serde_json::json!({
         "function_id":   function_id,
         "deployment_id": deployment_id,
         "version":       next_version,
+        "bundle_hash":   bundle_hash,
         "run_url":       run_url(&state.gateway_url, &name),
     })))
 }
@@ -360,8 +395,7 @@ pub async fn get_internal_bundle(
     #[derive(sqlx::FromRow)]
     struct BundleRow {
         id:           Uuid,
-        bundle_code:  Option<String>,
-        bundle_url:   Option<String>,
+        name:         String,
         runtime:      String,
         input_schema: Option<serde_json::Value>,
         output_schema: Option<serde_json::Value>,
@@ -369,10 +403,10 @@ pub async fn get_internal_bundle(
 
     let row = if let Ok(fid) = params.function_id.parse::<Uuid>() {
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime, \
+            "SELECT d.id, f.name, f.runtime, \
                     f.input_schema, f.output_schema \
-             FROM deployments d \
-             JOIN functions f ON f.id = d.function_id \
+             FROM flux.deployments d \
+             JOIN flux.functions f ON f.id = d.function_id \
              WHERE d.function_id = $1 AND d.is_active = true \
              ORDER BY d.version DESC LIMIT 1",
         )
@@ -382,10 +416,10 @@ pub async fn get_internal_bundle(
         .map_err(ApiError::from)?
     } else {
         sqlx::query_as::<_, BundleRow>(
-            "SELECT d.id, d.bundle_code, d.bundle_url, f.runtime, \
+            "SELECT d.id, f.name, f.runtime, \
                     f.input_schema, f.output_schema \
-             FROM deployments d \
-             JOIN functions f ON f.id = d.function_id \
+             FROM flux.deployments d \
+             JOIN flux.functions f ON f.id = d.function_id \
              WHERE f.name = $1 AND d.is_active = true \
              ORDER BY d.version DESC LIMIT 1",
         )
@@ -395,33 +429,222 @@ pub async fn get_internal_bundle(
         .map_err(ApiError::from)?
     };
 
-    match row {
-        Some(r) => {
-            if let Some(s3_key) = r.bundle_url {
-                let url = state.storage
-                    .presigned_get_object(&s3_key, std::time::Duration::from_secs(300))
-                    .await
-                    .map_err(|e| ApiError::internal(format!("presign failed: {}", e)))?;
+    let r = row.ok_or_else(|| ApiError::not_found("no active deployment found"))?;
 
-                Ok(ApiResponse::new(serde_json::json!({
-                    "deployment_id": r.id,
-                    "runtime":       r.runtime,
-                    "url":           url,
-                    "input_schema":  r.input_schema,
-                    "output_schema": r.output_schema,
-                })))
-            } else if let Some(code) = r.bundle_code {
-                Ok(ApiResponse::new(serde_json::json!({
-                    "deployment_id": r.id,
-                    "runtime":       r.runtime,
-                    "code":          code,
-                    "input_schema":  r.input_schema,
-                    "output_schema": r.output_schema,
-                })))
-            } else {
-                Err(ApiError::not_found("no bundle found for this function"))
-            }
-        }
-        None => Err(ApiError::not_found("no active deployment found")),
+    // Read bundle from filesystem — bundles live at {FLUX_FUNCTIONS_DIR}/{name}.{ext}
+    let ext = if r.runtime == "wasm" { "wasm" } else { "js" };
+    let bundle_path = std::path::Path::new(&state.functions_dir).join(format!("{}.{}", r.name, ext));
+
+    // WASM bundles are binary — base64-encode for JSON transport.
+    // JS bundles are UTF-8 text — read directly.
+    let code = if r.runtime == "wasm" {
+        let bytes = std::fs::read(&bundle_path).map_err(|e| {
+            tracing::warn!(
+                path = %bundle_path.display(),
+                function = %r.name,
+                "bundle file not found on filesystem: {e}"
+            );
+            ApiError::not_found("bundle file not found — deploy the function first")
+        })?;
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    } else {
+        std::fs::read_to_string(&bundle_path).map_err(|e| {
+            tracing::warn!(
+                path = %bundle_path.display(),
+                function = %r.name,
+                "bundle file not found on filesystem: {e}"
+            );
+            ApiError::not_found("bundle file not found — deploy the function first")
+        })?
+    };
+
+    Ok(ApiResponse::new(serde_json::json!({
+        "deployment_id": r.id,
+        "runtime":       r.runtime,
+        "code":          code,
+        "input_schema":  r.input_schema,
+        "output_schema": r.output_schema,
+    })))
+}
+
+// ── New project-level deploy handlers ────────────────────────────────────────
+
+/// `GET /deployments/hashes` — return the active bundle_hash for every
+/// function in the project so the CLI can skip unchanged functions.
+pub async fn get_deployment_hashes(
+    State(state): State<AppState>,
+    Extension(_ctx): Extension<RequestContext>,
+) -> ApiResult<serde_json::Value> {
+    #[derive(sqlx::FromRow)]
+    struct HashRow {
+        name:        String,
+        bundle_hash: Option<String>,
     }
+
+    let rows = sqlx::query_as::<_, HashRow>(
+        "SELECT f.name, d.bundle_hash \
+         FROM flux.functions f \
+         JOIN flux.deployments d ON d.function_id = f.id AND d.is_active = true",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    let hashes: serde_json::Map<String, serde_json::Value> = rows
+        .into_iter()
+        .filter_map(|r| r.bundle_hash.map(|h| (r.name, serde_json::Value::String(h))))
+        .collect();
+
+    Ok(ApiResponse::new(serde_json::json!({ "hashes": hashes })))
+}
+
+
+
+/// `POST /deployments/project` — record a project-level deployment after the
+/// CLI finishes uploading individual functions.
+pub async fn create_project_deployment(
+    State(state): State<AppState>,
+    Extension(_ctx): Extension<RequestContext>,
+    Json(payload): Json<CreateProjectDeploymentPayload>,
+) -> ApiResult<serde_json::Value> {
+    let id = Uuid::new_v4();
+    let deployed_by = payload.deployed_by.unwrap_or_else(|| "cli".into());
+    let summary_json = serde_json::to_value(&serde_json::json!({
+        "total":     payload.summary.total,
+        "deployed":  payload.summary.deployed,
+        "skipped":   payload.summary.skipped,
+        "functions": payload.summary.functions
+            .iter()
+            .map(|f| serde_json::json!({ "name": f.name, "version": f.version, "status": f.status }))
+            .collect::<Vec<_>>(),
+    }))
+    .unwrap_or_default();
+
+    #[derive(sqlx::FromRow)]
+    struct CreatedAt { created_at: chrono::DateTime<chrono::Utc> }
+
+    let row = sqlx::query_as::<_, CreatedAt>(
+        "INSERT INTO project_deployments (id, version, summary, deployed_by) \
+         VALUES ($1, $2, $3, $4) \
+         RETURNING created_at",
+    )
+    .bind(id)
+    .bind(payload.version as i32)
+    .bind(&summary_json)
+    .bind(&deployed_by)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(ApiResponse::created(serde_json::json!({
+        "id":         id,
+        "version":    payload.version,
+        "created_at": row.created_at.to_rfc3339(),
+    })))
+}
+
+/// `GET /deployments/project` — list recent project deployments (paginated).
+pub async fn list_project_deployments(
+    State(state): State<AppState>,
+    Extension(_ctx): Extension<RequestContext>,
+    Query(page): Query<crate::validation::PaginationQuery>,
+) -> ApiResult<serde_json::Value> {
+    #[derive(sqlx::FromRow)]
+    struct ProjectDepRow {
+        id:          Uuid,
+        version:     i32,
+        summary:     serde_json::Value,
+        deployed_by: String,
+        created_at:  chrono::DateTime<chrono::Utc>,
+    }
+
+    let (limit, offset) = page.clamped();
+
+    let rows = sqlx::query_as::<_, ProjectDepRow>(
+        "SELECT id, version, summary, deployed_by, created_at \
+         FROM project_deployments \
+         ORDER BY version DESC \
+         LIMIT $1 OFFSET $2",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    let deployments: Vec<_> = rows
+        .into_iter()
+        .map(|r| serde_json::json!({
+            "id":          r.id,
+            "version":     r.version,
+            "summary":     r.summary,
+            "deployed_by": r.deployed_by,
+            "created_at":  r.created_at.to_rfc3339(),
+        }))
+        .collect();
+
+    Ok(ApiResponse::new(serde_json::json!({ "deployments": deployments })))
+}
+
+/// `POST /deployments/project/:id/rollback` — re-activate all function
+/// deployments from a previous project deployment.
+pub async fn rollback_project_deployment(
+    State(state): State<AppState>,
+    Extension(_ctx): Extension<RequestContext>,
+    axum::extract::Path(project_deployment_id): axum::extract::Path<Uuid>,
+) -> ApiResult<serde_json::Value> {
+    // Verify the project deployment exists and fetch the version for the response.
+    #[derive(sqlx::FromRow)]
+    struct ProjDepRow { version: i32 }
+
+    let proj = sqlx::query_as::<_, ProjDepRow>(
+        "SELECT version FROM project_deployments WHERE id = $1",
+    )
+    .bind(project_deployment_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(ApiError::from)?
+    .ok_or_else(|| ApiError::not_found("project deployment not found"))?;
+
+    // Bulk rollback in a single pair of UPDATE statements — no per-function loop.
+    //
+    // Step 1: deactivate ALL deployments whose function_id appears in any
+    //         deployment row linked to this project deployment.
+    // Step 2: activate exactly the deployment rows linked to this project
+    //         deployment (i.e. the snapshot being restored).
+    let mut tx = state.pool.begin().await.map_err(ApiError::from)?;
+
+    // Step 1 — deactivate current active deployments for every function that
+    //           had a deployment recorded under this project deployment.
+    sqlx::query(
+        "UPDATE flux.deployments SET is_active = false \
+         WHERE function_id IN (\
+             SELECT function_id FROM flux.deployments \
+             WHERE project_deployment_id = $1\
+         )",
+    )
+    .bind(project_deployment_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Step 2 — activate the snapshot rows.
+    let result = sqlx::query(
+        "UPDATE flux.deployments SET is_active = true \
+         WHERE project_deployment_id = $1",
+    )
+    .bind(project_deployment_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    let functions_restored = result.rows_affected() as i64;
+
+    tx.commit().await.map_err(ApiError::from)?;
+
+    Ok(ApiResponse::new(serde_json::json!({
+        "rolled_back_to":    proj.version,
+        "functions_restored": functions_restored,
+    })))
 }

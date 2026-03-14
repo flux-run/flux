@@ -258,15 +258,6 @@ export default function TopologyPage() {
                 color="border-blue-500/20 bg-blue-500/[0.08] text-blue-300"
                 onClick={() => nav('data')}
               />
-              <Node
-                label="Storage"
-                sub="Object store"
-                icon={Database}
-                badge="S3-compatible"
-                badgeClass="bg-blue-500/10 text-blue-400 border-blue-500/20"
-                color="border-blue-500/20 bg-blue-500/[0.08] text-blue-300"
-                onClick={() => nav('storage')}
-              />
             </div>
           </div>
 

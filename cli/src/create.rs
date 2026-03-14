@@ -86,19 +86,19 @@ pub async fn execute(name: String, template: Option<String>) -> anyhow::Result<(
         Template::AiBackend     => scaffold_ai_backend(root, &name)?,
     }
 
+    // Every template gets a flux.toml so `flux dev` works immediately
+    // without needing a separate `flux init`.
+    write_file(&root.join("flux.toml"), &flux_toml(&name))?;
+
     // Summary
     println!("  {} Project created: {}/", "✔".green().bold(), name.bold());
     println!();
     println!("  {}", "Next steps:".bold());
     println!("    {}", format!("cd {}", name).cyan().bold());
-    println!("    {}", "flux login                          # authenticate".dimmed());
-    println!("    {}", "flux project create --name my-project   # create a project if needed".dimmed());
-    println!("    {}", "flux init --project <PROJECT_ID>    # link this directory".dimmed());
-    println!("    {}", "flux secrets set GATEWAY_URL ...    # set required secrets".dimmed());
-    println!("    {}", "flux deploy                         # deploy all functions".dimmed());
-    println!();
-    println!("  After deploy, invoke with:");
-    println!("    {}", format!("flux invoke {} --payload '{{...}}'", first_function(tpl)).cyan());
+    println!("    {}", "flux dev          # start local server + watch".cyan().bold());
+    println!("    {}", "# then in another terminal:".dimmed());
+    println!("    {}", "flux login        # create admin account".dimmed());
+    println!("    {}", format!("flux invoke {} --payload '{{...}}'", first_function(tpl)).dimmed());
     println!();
     println!("  See {} for the full setup guide.", "README.md".bold());
 
@@ -169,8 +169,8 @@ fn scaffold_todo_api(root: &Path, name: &str) -> anyhow::Result<()> {
     write_file(&root.join("functions/delete_todo/flux.json"), FLUX_JSON)?;
     write_file(&root.join("functions/delete_todo/package.json"), &fn_package_json("delete_todo"))?;
 
-    // schema SQL
-    write_file(&root.join("schema/todos.sql"), TODO_SCHEMA_SQL)?;
+    // TypeScript schema (schemas/ folder — consistent with flux init)
+    write_file(&root.join("schemas/todos.schema.ts"), TODO_SCHEMA_TS)?;
 
     // README
     write_file(&root.join("README.md"), &todo_readme(name))?;
@@ -189,7 +189,7 @@ fn scaffold_webhook_worker(root: &Path, name: &str) -> anyhow::Result<()> {
     write_file(&root.join("functions/on_webhook/flux.json"), FLUX_JSON)?;
     write_file(&root.join("functions/on_webhook/package.json"), &fn_package_json("on_webhook"))?;
 
-    write_file(&root.join("schema/webhook_events.sql"), WEBHOOK_SCHEMA_SQL)?;
+    write_file(&root.join("schemas/webhook_events.schema.ts"), WEBHOOK_SCHEMA_TS)?;
     write_file(&root.join("README.md"), &webhook_readme(name))?;
     write_file(&root.join(".env.example"), WEBHOOK_ENV_EXAMPLE)?;
     write_file(&root.join(".gitignore"), GITIGNORE)?;
@@ -206,7 +206,7 @@ fn scaffold_ai_backend(root: &Path, name: &str) -> anyhow::Result<()> {
     write_file(&root.join("functions/classify_text/flux.json"), FLUX_JSON)?;
     write_file(&root.join("functions/classify_text/package.json"), &fn_package_json("classify_text"))?;
 
-    write_file(&root.join("schema/classifications.sql"), AI_SCHEMA_SQL)?;
+    write_file(&root.join("schemas/classifications.schema.ts"), AI_SCHEMA_TS)?;
     write_file(&root.join("README.md"), &ai_readme(name))?;
     write_file(&root.join(".env.example"), AI_ENV_EXAMPLE)?;
     write_file(&root.join(".gitignore"), GITIGNORE)?;
@@ -241,6 +241,39 @@ fn fn_package_json(name: &str) -> String {
     )
 }
 
+fn flux_toml(name: &str) -> String {
+    format!(
+        r#"[project]
+name    = "{name}"
+version = "1"
+
+[dev]
+port            = 4000
+hot_reload      = true
+reload_debounce = 150    # ms
+
+[database]
+# Leave blank to use embedded Postgres (zero config).
+# Set DATABASE_URL in .env to connect to your own Postgres instance.
+url = ""
+
+[limits]
+timeout_ms = 30_000
+memory_mb  = 128
+
+[observability]
+sampling_rate  = 1.0
+slow_span_ms   = 500
+retention_days = 90
+
+[auth]
+jwt_algorithm = "HS256"
+token_expiry  = "24h"
+"#,
+        name = name
+    )
+}
+
 // ── Shared file constants ─────────────────────────────────────────────────────
 
 const FLUX_JSON: &str = r#"{
@@ -253,6 +286,7 @@ const GITIGNORE: &str = r#"node_modules/
 dist/
 *.js.map
 .env
+.flux/dev/
 "#;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -387,18 +421,23 @@ export default defineFunction({
 });
 "#;
 
-const TODO_SCHEMA_SQL: &str = r#"-- Run in your Fluxbase dashboard → Schema → SQL editor
--- or apply via: flux db:migrate (coming soon)
+const TODO_SCHEMA_TS: &str = r#"import { defineSchema, column, index } from "@fluxbase/schema"
 
-CREATE TABLE todos (
-  id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  title      TEXT        NOT NULL,
-  done       BOOLEAN     NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+export default defineSchema({
+  table:       "todos",
+  description: "Todo items",
+  timestamps:  true,  // auto-adds created_at + updated_at
 
-CREATE INDEX ON todos(done, created_at DESC);
+  columns: {
+    id:    column.uuid().primaryKey().default("gen_random_uuid()"),
+    title: column.text().notNull(),
+    done:  column.boolean().notNull().default(false),
+  },
+
+  indexes: [
+    index(["done", "created_at"]).name("idx_todos_done_created"),
+  ],
+})
 "#;
 
 const TODO_ENV_EXAMPLE: &str = r#"GATEWAY_URL=https://YOUR_GATEWAY_URL
@@ -410,7 +449,15 @@ fn todo_readme(name: &str) -> String {
     format!(
         r#"# {name} — Todo API
 
-A CRUD todo API built with Fluxbase.
+A CRUD todo API built with Flux.
+
+## Quick start
+
+```bash
+flux dev          # starts local server + embedded Postgres
+flux login        # create admin account (first run)
+flux db push      # apply schemas/ to Postgres
+```
 
 ## Functions
 
@@ -421,27 +468,7 @@ A CRUD todo API built with Fluxbase.
 | `update_todo` | Update title or mark done |
 | `delete_todo` | Delete a to-do by ID |
 
-## Setup
-
-### 1. Apply the schema
-
-Run `schema/todos.sql` in your Fluxbase dashboard → Schema → SQL Editor.
-
-### 2. Set secrets
-
-```bash
-flux secrets set GATEWAY_URL  https://YOUR_GATEWAY_URL
-flux secrets set API_KEY      YOUR_API_KEY
-flux secrets set PROJECT_ID   YOUR_PROJECT_ID
-```
-
-### 3. Deploy
-
-```bash
-flux deploy
-```
-
-### 4. Invoke
+## Invoke
 
 ```bash
 flux invoke create_todo --payload '{{"title": "Buy groceries"}}'
@@ -453,8 +480,8 @@ flux invoke delete_todo --payload '{{"id": "..."}}'
 ## Tracing
 
 ```bash
-# Copy x-request-id from any gateway response header, then:
-flux trace <request-id>
+flux trace <x-request-id>
+flux why   <x-request-id>   # root cause analysis
 ```
 "#,
         name = name
@@ -560,19 +587,27 @@ async function handleEvent(
 }
 "#;
 
-const WEBHOOK_SCHEMA_SQL: &str = r#"-- Run in your Fluxbase dashboard → Schema → SQL editor
+const WEBHOOK_SCHEMA_TS: &str = r#"import { defineSchema, column, index } from "@fluxbase/schema"
 
-CREATE TABLE webhook_events (
-  id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  source     TEXT        NOT NULL,
-  event_type TEXT        NOT NULL,
-  payload    JSONB       NOT NULL,
-  processed  BOOLEAN     NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+export default defineSchema({
+  table:       "webhook_events",
+  description: "Incoming webhook events from external providers",
+  timestamps:  false,
 
-CREATE INDEX ON webhook_events(source, event_type, processed);
-CREATE INDEX ON webhook_events(processed, created_at DESC);  -- for retry queries
+  columns: {
+    id:         column.uuid().primaryKey().default("gen_random_uuid()"),
+    source:     column.text().notNull(),
+    event_type: column.text().notNull(),
+    payload:    column.jsonb().notNull().default("{}"),
+    processed:  column.boolean().notNull().default(false),
+    created_at: column.timestamptz().notNull().default("now()"),
+  },
+
+  indexes: [
+    index(["source", "event_type", "processed"]).name("idx_webhooks_source_type"),
+    index(["processed", "created_at"]).name("idx_webhooks_retry"),
+  ],
+})
 "#;
 
 const WEBHOOK_ENV_EXAMPLE: &str = r#"GATEWAY_URL=https://YOUR_GATEWAY_URL
@@ -749,22 +784,30 @@ export default defineFunction({
 });
 "#;
 
-const AI_SCHEMA_SQL: &str = r#"-- Run in your Fluxbase dashboard → Schema → SQL editor
+const AI_SCHEMA_TS: &str = r#"import { defineSchema, column, index } from "@fluxbase/schema"
 
-CREATE TABLE classifications (
-  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  content_hash TEXT        NOT NULL UNIQUE,
-  input        TEXT        NOT NULL,
-  sentiment    TEXT        NOT NULL,
-  category     TEXT        NOT NULL,
-  summary      TEXT        NOT NULL DEFAULT '',
-  model        TEXT        NOT NULL,
-  tokens       INTEGER     NOT NULL DEFAULT 0,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+export default defineSchema({
+  table:       "classifications",
+  description: "LLM classification results — DB-backed cache",
+  timestamps:  false,
 
-CREATE INDEX ON classifications(content_hash);  -- cache lookups
-CREATE INDEX ON classifications(category, created_at DESC);
+  columns: {
+    id:           column.uuid().primaryKey().default("gen_random_uuid()"),
+    content_hash: column.text().notNull().unique(),
+    input:        column.text().notNull(),
+    sentiment:    column.text().notNull(),
+    category:     column.text().notNull(),
+    summary:      column.text().notNull().default("''"),
+    model:        column.text().notNull(),
+    tokens:       column.int().notNull().default(0),
+    created_at:   column.timestamptz().notNull().default("now()"),
+  },
+
+  indexes: [
+    index(["content_hash"]).unique().name("idx_classifications_hash"),
+    index(["category", "created_at"]).name("idx_classifications_category"),
+  ],
+})
 "#;
 
 const AI_ENV_EXAMPLE: &str = r#"GATEWAY_URL=https://YOUR_GATEWAY_URL

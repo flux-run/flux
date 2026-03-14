@@ -639,3 +639,233 @@ fn color_op(op: &str) -> colored::ColoredString {
         _        => op.normal(),
     }
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── trunc ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn trunc_short_string_unchanged() {
+        assert_eq!(trunc("hi", 10), "hi");
+    }
+
+    #[test]
+    fn trunc_exact_length_unchanged() {
+        assert_eq!(trunc("hello", 5), "hello");
+    }
+
+    #[test]
+    fn trunc_long_string_truncated_with_ellipsis() {
+        let result = trunc("hello world", 5);
+        assert!(result.starts_with("hello"));
+        assert!(result.contains('…'));
+        assert!(result.len() <= 10); // 5 chars + 3-byte '…'
+    }
+
+    #[test]
+    fn trunc_empty_string() {
+        assert_eq!(trunc("", 5), "");
+    }
+
+    // ── short_sha ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn short_sha_long_hash_truncated_to_7() {
+        assert_eq!(short_sha("abcdef1234567890"), "abcdef1");
+    }
+
+    #[test]
+    fn short_sha_exactly_7_chars_unchanged() {
+        assert_eq!(short_sha("abcdef1"), "abcdef1");
+    }
+
+    #[test]
+    fn short_sha_short_hash_returned_as_is() {
+        assert_eq!(short_sha("abc"), "abc");
+    }
+
+    // ── is_error ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_error_zero_is_error() {
+        assert!(is_error(0));
+    }
+
+    #[test]
+    fn is_error_400_is_error() {
+        assert!(is_error(400));
+    }
+
+    #[test]
+    fn is_error_500_is_error() {
+        assert!(is_error(500));
+    }
+
+    #[test]
+    fn is_error_200_not_error() {
+        assert!(!is_error(200));
+    }
+
+    #[test]
+    fn is_error_399_not_error() {
+        assert!(!is_error(399));
+    }
+
+    // ── format_status ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn format_status_zero_is_question_mark() {
+        assert_eq!(format_status(0), "?");
+    }
+
+    #[test]
+    fn format_status_200_ok() {
+        assert_eq!(format_status(200), "200 OK");
+    }
+
+    #[test]
+    fn format_status_201_ok() {
+        assert_eq!(format_status(201), "201 OK");
+    }
+
+    #[test]
+    fn format_status_400_failed() {
+        assert_eq!(format_status(400), "400 FAILED");
+    }
+
+    #[test]
+    fn format_status_500_failed() {
+        assert_eq!(format_status(500), "500 FAILED");
+    }
+
+    // ── diff_spans ────────────────────────────────────────────────────────────
+
+    fn make_span(span_type: &str, name: &str, status: &str, ms: i64) -> Value {
+        json!({
+            "span_type":   span_type,
+            "name":        name,
+            "message":     name,
+            "status":      status,
+            "duration_ms": ms
+        })
+    }
+
+    fn make_tool_span(action: &str, status: &str, ms: i64) -> Value {
+        json!({
+            "span_type":   "tool",
+            "data":        { "action": action },
+            "status":      status,
+            "duration_ms": ms
+        })
+    }
+
+    fn make_db_span(table: &str, status: &str, ms: i64) -> Value {
+        json!({
+            "span_type":   "db",
+            "data":        { "table": table },
+            "status":      status,
+            "duration_ms": ms
+        })
+    }
+
+    #[test]
+    fn diff_spans_identical_traces_not_changed() {
+        let orig = vec![make_tool_span("search", "executed", 50)];
+        let rep  = vec![make_tool_span("search", "executed", 55)];
+        let diffs = diff_spans(&orig, &rep);
+        assert_eq!(diffs.len(), 1);
+        // ~10% change — below the 20% threshold
+        assert!(!diffs[0].changed);
+    }
+
+    #[test]
+    fn diff_spans_status_change_is_changed() {
+        let orig = vec![make_tool_span("search", "executed", 50)];
+        let rep  = vec![make_tool_span("search", "error",    50)];
+        let diffs = diff_spans(&orig, &rep);
+        assert_eq!(diffs.len(), 1);
+        assert!(diffs[0].changed);
+        assert_eq!(diffs[0].orig_status.as_deref(), Some("executed"));
+        assert_eq!(diffs[0].rep_status.as_deref(),  Some("error"));
+    }
+
+    #[test]
+    fn diff_spans_missing_in_replay_is_changed() {
+        let orig = vec![make_tool_span("search", "executed", 50)];
+        let rep: Vec<Value> = vec![];
+        let diffs = diff_spans(&orig, &rep);
+        assert_eq!(diffs.len(), 1);
+        assert!(diffs[0].changed);
+        assert!(diffs[0].rep_status.is_none());
+    }
+
+    #[test]
+    fn diff_spans_new_in_replay_is_changed() {
+        let orig: Vec<Value> = vec![];
+        let rep = vec![make_tool_span("email", "executed", 100)];
+        let diffs = diff_spans(&orig, &rep);
+        assert_eq!(diffs.len(), 1);
+        assert!(diffs[0].changed);
+        assert!(diffs[0].orig_status.is_none());
+    }
+
+    #[test]
+    fn diff_spans_large_duration_change_is_flagged() {
+        // original 100ms, replay 200ms → 100% change → flagged
+        let orig = vec![make_db_span("users", "executed", 100)];
+        let rep  = vec![make_db_span("users", "executed", 200)];
+        let diffs = diff_spans(&orig, &rep);
+        assert_eq!(diffs.len(), 1);
+        assert!(diffs[0].changed);
+    }
+
+    #[test]
+    fn diff_spans_non_relevant_span_types_ignored() {
+        // "start", "end", "log" are not in the relevant set — should produce no diffs
+        let orig = vec![
+            make_span("start", "req",  "executed", 0),
+            make_span("end",   "req",  "executed", 0),
+            make_span("log",   "info", "executed", 0),
+        ];
+        let rep = orig.clone();
+        let diffs = diff_spans(&orig, &rep);
+        assert_eq!(diffs.len(), 0);
+    }
+
+    #[test]
+    fn diff_spans_multiple_spans_all_stable() {
+        let orig = vec![
+            make_tool_span("search", "executed", 50),
+            make_db_span("users",   "executed", 10),
+        ];
+        let rep = vec![
+            make_tool_span("search", "executed", 52),
+            make_db_span("users",   "executed", 11),
+        ];
+        let diffs = diff_spans(&orig, &rep);
+        assert_eq!(diffs.len(), 2);
+        assert!(diffs.iter().all(|d| !d.changed));
+    }
+
+    #[test]
+    fn diff_spans_preserves_original_ordering() {
+        let orig = vec![
+            make_tool_span("alpha", "executed", 10),
+            make_tool_span("beta",  "executed", 20),
+        ];
+        let rep = vec![
+            make_tool_span("beta",  "executed", 20),
+            make_tool_span("alpha", "executed", 10),
+        ];
+        let diffs = diff_spans(&orig, &rep);
+        // Order follows orig: alpha first, beta second
+        assert_eq!(diffs[0].name, "alpha");
+        assert_eq!(diffs[1].name, "beta");
+    }
+}
+

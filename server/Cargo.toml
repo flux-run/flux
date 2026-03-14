@@ -11,9 +11,11 @@ path = "src/main.rs"
 [dependencies]
 # Internal service crates (library targets)
 api           = { path = "../api" }
+base64        = "0.22"
 runtime       = { path = "../runtime" }
 gateway       = { path = "../gateway" }
-agent         = { path = "../agent" }
+fluxbase-queue = { path = "../queue" }
+data-engine   = { path = "../data-engine" }
 job_contract  = { path = "../shared/job_contract" }
 
 # Async runtime
@@ -21,6 +23,7 @@ tokio         = { version = "1", features = ["full"] }
 
 # HTTP server
 axum          = { version = "0.8", features = ["macros"] }
+axum-server   = { version = "0.7", features = ["tls-rustls"] }
 
 # DB
 sqlx          = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "uuid"] }
@@ -28,6 +31,9 @@ sqlx          = { version = "0.8", features = ["postgres", "runtime-tokio-rustls
 # Serialization
 serde         = { version = "1", features = ["derive"] }
 serde_json    = "1"
+
+# Date/time
+chrono        = { version = "0.4", features = ["serde"] }
 
 # UUID
 uuid          = { version = "1", features = ["v4", "serde"] }
@@ -39,7 +45,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Async trait
 async-trait   = "0.1"
 
-# HTTP client (for storage presign, etc.)
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
+
+# HTTP client (for inter-service calls)
 reqwest       = { version = "0.13", features = ["json", "rustls"], default-features = false }
 
 # Static file serving (dashboard SPA)

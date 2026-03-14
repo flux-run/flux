@@ -3,8 +3,6 @@ use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use uuid::Uuid;
 
-use crate::events::dispatcher;
-
 /// Background task: dispatch cron jobs whose `next_run_at` has passed.
 ///
 /// Runs every 30 seconds. PostgreSQL row locking (`FOR UPDATE SKIP LOCKED`)
@@ -54,18 +52,8 @@ async fn fire_due_jobs(pool: &PgPool, http: &reqwest::Client, runtime_url: &str)
             "triggered_at": triggered_at.to_rfc3339(),
         });
 
-        let result = dispatcher::dispatch(
-            pool, http, runtime_url,
-            job_id, // reused as identifier
-            &action_type,
-            &action_config,
-            &payload,
-            "cron.fired",
-            &format!("cron:{}", job_id),  // synthetic trace id for background-triggered dispatches
-        )
-        .await;
-
-        if let Err(ref e) = result {
+        let request_id = format!("cron:{}", job_id);
+        if let Err(e) = dispatch_function(http, runtime_url, &action_type, &action_config, &payload, &request_id).await {
             tracing::warn!(job_id = %job_id, name = %name, error = %e, "cron dispatch failed");
         }
 
@@ -86,8 +74,45 @@ async fn fire_due_jobs(pool: &PgPool, http: &reqwest::Client, runtime_url: &str)
     Ok(())
 }
 
+/// Dispatch a cron job to the runtime by calling `POST /internal/execute`.
+async fn dispatch_function(
+    http: &reqwest::Client,
+    runtime_url: &str,
+    action_type: &str,
+    config: &serde_json::Value,
+    payload: &serde_json::Value,
+    request_id: &str,
+) -> Result<(), String> {
+    if action_type != "function" {
+        return Err(format!("unsupported cron action_type: {}", action_type));
+    }
+    let function_id = config
+        .get("function_id")
+        .and_then(|v| v.as_str())
+        .ok_or("cron action_config missing 'function_id'")?;
+
+    let body = serde_json::json!({
+        "function_id": function_id,
+        "payload": payload,
+    });
+
+    let resp = http
+        .post(format!("{}/internal/execute", runtime_url))
+        .header("x-request-id", request_id)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("cron dispatch failed: {}", e))?;
+
+    let status = resp.status().as_u16();
+    if status < 400 {
+        Ok(())
+    } else {
+        Err(format!("runtime returned HTTP {}", status))
+    }
+}
+
 /// Compute the next run time from a 5-field cron expression.
-/// Returns None if the expression is invalid (job won't fire again until fixed).
 fn compute_next_run(schedule: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     use std::str::FromStr;
     let schedule = format!("0 {}", schedule); // cron crate uses 6-field (with seconds first)

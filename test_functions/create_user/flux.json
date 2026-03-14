@@ -1,5 +1,0 @@
-{
-  "name": "create_user",
-  "runtime": "deno",
-  "entry": "index.ts"
-}

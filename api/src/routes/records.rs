@@ -52,7 +52,8 @@ pub struct RecordsQuery {
 
 #[derive(Deserialize)]
 pub struct PruneQuery {
-    pub before: Option<String>,
+    pub before:  Option<String>,
+    pub confirm: Option<String>,
 }
 
 // ── Row type for export ───────────────────────────────────────────────────────
@@ -73,7 +74,7 @@ struct RecordRow {
 
 pub async fn records_count(
     State(pool): State<PgPool>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(params): Query<RecordsQuery>,
 ) -> ApiResult<serde_json::Value> {
     let before_ts   = params.before.as_deref().and_then(parse_age);
@@ -81,9 +82,8 @@ pub async fn records_count(
     let errors_only = params.errors_only.unwrap_or(false);
 
     let mut qb = QueryBuilder::<sqlx::Postgres>::new(
-        "SELECT COUNT(*) FROM platform_logs WHERE project_id = ",
+        "SELECT COUNT(*) FROM platform_logs WHERE true",
     );
-    qb.push_bind(ctx.project_id);
 
     if errors_only {
         qb.push(" AND level = 'error'");
@@ -114,79 +114,88 @@ pub async fn records_count(
 
 pub async fn records_export(
     State(pool): State<PgPool>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(params): Query<RecordsQuery>,
 ) -> Result<Response, ApiError> {
     let before_ts   = params.before.as_deref().and_then(parse_age);
     let after_ts    = params.after.as_deref().and_then(parse_age);
     let errors_only = params.errors_only.unwrap_or(false);
-    let format      = params.format.as_deref().unwrap_or("jsonl");
+    let format      = params.format.as_deref().unwrap_or("jsonl").to_string();
+    let fname_owned = params.function.clone();
 
-    let mut qb = QueryBuilder::<sqlx::Postgres>::new(
-        "SELECT id, level, message, timestamp, source, resource_id, request_id, metadata \
-         FROM platform_logs WHERE project_id = ",
-    );
-    qb.push_bind(ctx.project_id);
+    let content_type = if format == "csv" { "text/csv" } else { "application/x-ndjson" };
+    let is_csv = format == "csv";
 
-    if errors_only {
-        qb.push(" AND level = 'error'");
-    }
-    if let Some(fname) = &params.function {
-        qb.push(" AND source = 'function' AND resource_id = ");
-        qb.push_bind(fname.as_str());
-    }
-    if let Some(ts) = before_ts {
-        qb.push(" AND timestamp < ");
-        qb.push_bind(ts);
-    }
-    if let Some(ts) = after_ts {
-        qb.push(" AND timestamp > ");
-        qb.push_bind(ts);
-    }
-    qb.push(" ORDER BY timestamp ASC");
+    // Clone pool so the stream owns it (PgPool is a cheap Arc clone).
+    let stream_pool = pool.clone();
 
-    let rows: Vec<RecordRow> = qb
-        .build_query_as()
-        .fetch_all(&pool)
-        .await
-        .map_err(ApiError::from)?;
+    // Stream rows as they arrive from the DB — O(1) memory regardless of result size.
+    let stream = async_stream::stream! {
+        use futures::StreamExt as _;
 
-    let (content_type, body) = match format {
-        "csv" => {
-            let mut out = String::from(
-                "id,level,message,timestamp,source,resource_id,request_id\n",
-            );
-            for r in &rows {
-                // Escape commas in message by replacing with semicolon
-                let msg = r.message.replace(',', ";").replace('\n', " ");
-                out.push_str(&format!(
-                    "{},{},{},{},{},{},{}\n",
-                    r.id,
-                    r.level,
-                    msg,
-                    r.timestamp.to_rfc3339(),
-                    r.source,
-                    r.resource_id,
-                    r.request_id.as_deref().unwrap_or(""),
-                ));
-            }
-            ("text/csv", out)
+        let mut qb = QueryBuilder::<sqlx::Postgres>::new(
+            "SELECT id, level, message, timestamp, source, resource_id, request_id, metadata \
+             FROM platform_logs WHERE true",
+        );
+
+        if errors_only {
+            qb.push(" AND level = 'error'");
         }
-        _ => {
-            let body = rows
-                .iter()
-                .filter_map(|r| serde_json::to_string(r).ok())
-                .collect::<Vec<_>>()
-                .join("\n");
-            ("application/x-ndjson", body)
+        if let Some(ref fname) = fname_owned {
+            qb.push(" AND source = 'function' AND resource_id = ");
+            qb.push_bind(fname.clone());
+        }
+        if let Some(ts) = before_ts {
+            qb.push(" AND timestamp < ");
+            qb.push_bind(ts);
+        }
+        if let Some(ts) = after_ts {
+            qb.push(" AND timestamp > ");
+            qb.push_bind(ts);
+        }
+        qb.push(" ORDER BY timestamp ASC");
+
+        let built = qb.build_query_as::<RecordRow>();
+        let mut row_stream = built.fetch(&stream_pool);
+
+        if is_csv {
+            yield Ok::<_, std::convert::Infallible>(bytes::Bytes::from(
+                "id,level,message,timestamp,source,resource_id,request_id\n",
+            ));
+        }
+
+        while let Some(result) = row_stream.next().await {
+            match result {
+                Ok(r) => {
+                    let line = if is_csv {
+                        let msg = r.message.replace(',', ";").replace('\n', " ");
+                        format!(
+                            "{},{},{},{},{},{},{}\n",
+                            r.id, r.level, msg,
+                            r.timestamp.to_rfc3339(),
+                            r.source, r.resource_id,
+                            r.request_id.as_deref().unwrap_or(""),
+                        )
+                    } else {
+                        let mut s = serde_json::to_string(&r).unwrap_or_default();
+                        s.push('\n');
+                        s
+                    };
+                    yield Ok::<_, std::convert::Infallible>(bytes::Bytes::from(line));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "records_export: row fetch error");
+                    break;
+                }
+            }
         }
     };
 
     let response = Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", content_type)
-        .body(Body::from(body))
-        .unwrap();
+        .body(Body::from_stream(stream))
+        .expect("hardcoded status 200 and Content-Type header are always valid");
     Ok(response)
 }
 
@@ -194,9 +203,15 @@ pub async fn records_export(
 
 pub async fn records_prune(
     State(pool): State<PgPool>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     Query(params): Query<PruneQuery>,
 ) -> ApiResult<serde_json::Value> {
+    if params.confirm.as_deref() != Some("true") {
+        return Err(ApiError::bad_request(
+            "Destructive operation requires ?confirm=true",
+        ));
+    }
+
     let before_ts = params.before.as_deref().and_then(parse_age);
 
     if before_ts.is_none() {
@@ -206,9 +221,8 @@ pub async fn records_prune(
     }
 
     let mut qb = QueryBuilder::<sqlx::Postgres>::new(
-        "DELETE FROM platform_logs WHERE project_id = ",
+        "DELETE FROM platform_logs WHERE true",
     );
-    qb.push_bind(ctx.project_id);
 
     if let Some(ts) = before_ts {
         qb.push(" AND timestamp < ");
@@ -217,6 +231,11 @@ pub async fn records_prune(
 
     let result = qb.build().execute(&pool).await.map_err(ApiError::from)?;
     let deleted = result.rows_affected();
+
+    tracing::warn!(
+        deleted,
+        "platform_logs pruned",
+    );
 
     Ok(ApiResponse::new(serde_json::json!({ "deleted": deleted })))
 }

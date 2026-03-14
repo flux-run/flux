@@ -1,45 +1,60 @@
-//! `flux init` — create `flux.toml` and `.flux/config.json` for this project.
+//! `flux init [name]` — bootstrap a complete Flux project from the base scaffold.
 //!
 //! ```text
-//! $ flux init
-//! ✔  Created flux.toml
-//! ✔  Created .flux/config.json
+//! $ flux init my-app
+//! ◆  Initialising my-app
 //!
-//!    name    = "my-project"
-//!    runtime = "nodejs20"
+//!   ✔  flux.toml
+//!   ✔  gateway.toml
+//!   ✔  .gitignore
+//!   ✔  .env.example
+//!   ...
 //!
-//!    Commit flux.toml to version control.
-//!    .flux/ is gitignored — it contains your local server key.
-//!    Run: flux dev
+//!   Next steps:
+//!     1.  cd my-app
+//!     2.  flux dev
 //! ```
+//!
+//! Scaffold files are embedded at compile time via `include_str!()` from
+//! `scaffolds/base/`.  The only substitution token is `{name}` (project name).
 
-use std::fmt::Write as FmtWrite;
+use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
 use colored::Colorize;
-use tokio::fs;
 
-use crate::config::FluxLocalConfig;
+// ── Base scaffold (embedded at compile time) ──────────────────────────────────
+// Each tuple is (relative output path, content with {name} placeholder).
 
-// ─── Option bag ──────────────────────────────────────────────────────────────
-//
-// Grouped into a struct so the public API stays clean and adding fields later
-// doesn't require changing every call site.
+fn base_scaffold_files() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("flux.toml",                          include_str!("../../scaffolds/base/flux.toml")),
+        ("gateway.toml",                       include_str!("../../scaffolds/base/gateway.toml")),
+        (".gitignore",                         include_str!("../../scaffolds/base/.gitignore")),
+        (".env.example",                       include_str!("../../scaffolds/base/.env.example")),
+        ("README.md",                          include_str!("../../scaffolds/base/README.md")),
+        ("functions/hello/index.ts",           include_str!("../../scaffolds/base/functions/hello/index.ts")),
+        ("functions/hello/flux.json",          include_str!("../../scaffolds/base/functions/hello/flux.json")),
+        ("schemas/_types.ts",                  include_str!("../../scaffolds/base/schemas/_types.ts")),
+        ("schemas/_shared/auth.ts",            include_str!("../../scaffolds/base/schemas/_shared/auth.ts")),
+        ("schemas/_shared/jsonb.ts",           include_str!("../../scaffolds/base/schemas/_shared/jsonb.ts")),
+        ("schemas/users.schema.ts",            include_str!("../../scaffolds/base/schemas/users.schema.ts")),
+        ("middleware/auth.ts",                 include_str!("../../scaffolds/base/middleware/auth.ts")),
+        ("queues/email.queue.toml",            include_str!("../../scaffolds/base/queues/email.queue.toml")),
+    ]
+}
+
+// ── Option bag ────────────────────────────────────────────────────────────────
 
 pub struct InitOptions {
-    /// Project name written to `flux.toml`.  Defaults to cwd folder name.
+    /// Project name. Defaults to current directory name.
     pub name:         Option<String>,
-    /// Runtime identifier (e.g. `nodejs20`, `bun`, `deno`).
-    pub runtime:      Option<String>,
-    /// Override local API port in `[dev]` section.
-    pub api_port:     Option<u16>,
     /// Override local gateway port in `[dev]` section.
     pub gateway_port: Option<u16>,
-    /// Override local runtime port in `[dev]` section.
-    pub runtime_port: Option<u16>,
 }
 
 pub async fn execute(opts: InitOptions) -> anyhow::Result<()> {
-    // Resolve defaults ────────────────────────────────────────────────────────
+    // Resolve project name ─────────────────────────────────────────────────────
     let project_name = opts.name.as_deref()
         .map(str::to_owned)
         .unwrap_or_else(|| {
@@ -49,129 +64,87 @@ pub async fn execute(opts: InitOptions) -> anyhow::Result<()> {
                 .unwrap_or_else(|| "my-project".to_string())
         });
 
-    let runtime_str  = opts.runtime.as_deref().unwrap_or("nodejs20");
-    let gw_port      = opts.gateway_port.unwrap_or(4000);
-    let rt_port      = opts.runtime_port.unwrap_or(8083);
-    let api_port_val = opts.api_port.unwrap_or(8080);
-
-    // Build flux.toml ─────────────────────────────────────────────────────────
-    //
-    // Written manually with `write!` rather than `format!()` so that values
-    // containing TOML special characters are inserted safely.  Project names
-    // are double-quoted; quotes inside names are escaped.
-    let toml_content = build_flux_toml(
-        &project_name, runtime_str,
-        gw_port, rt_port, api_port_val,
-    );
-
-    let flux_toml_path = std::path::Path::new("flux.toml");
-
-    if flux_toml_path.exists() {
-        println!(
-            "{} {} already exists \u{2014} skipping (delete it first to regenerate)",
-            "⚠".yellow().bold(),
-            "flux.toml".cyan(),
-        );
+    // Determine target directory ───────────────────────────────────────────────
+    // If a name was explicitly provided, create a new subdirectory.
+    // Otherwise, initialise in the current directory.
+    let target_dir: PathBuf = if opts.name.is_some() {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(&project_name)
     } else {
-        fs::write(flux_toml_path, &toml_content).await?;
-        println!("{} Created {}", "✔".green().bold(), "flux.toml".cyan().bold());
-    }
-    // Write .flux/config.json ───────────────────────────────────────
-    //
-    // Contains the server URL and CLI key.  Gitignored — never committed.
-    // The user sets cli_key to match the server's FLUX_API_KEY env var.
-    let flux_local_path = std::path::Path::new(".flux/config.json");
-    if flux_local_path.exists() {
-        println!(
-            "{} {} already exists — skipping",
-            "⚠".yellow().bold(),
-            ".flux/config.json".cyan(),
-        );
-    } else {
-        let local_cfg = FluxLocalConfig {
-            server_url: Some(format!("http://localhost:{}/flux/api", gw_port)),
-            cli_key:    None,   // set this to match FLUX_API_KEY on the server
-        };
-        local_cfg.save().await?;
-        println!("{} Created {}", "✔".green().bold(), ".flux/config.json".cyan().bold());
-    }
-
-    // Update .gitignore to exclude .flux/ ─────────────────────────
-    let gitignore_path = std::path::Path::new(".gitignore");
-    let entry = ".flux/";
-    let should_add = if gitignore_path.exists() {
-        let contents = fs::read_to_string(gitignore_path).await.unwrap_or_default();
-        !contents.lines().any(|l| l.trim() == entry)
-    } else {
-        true
+        std::env::current_dir().unwrap_or_default()
     };
-    if should_add {
-        let mut gitignore = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(gitignore_path)
-            .await?;
-        use tokio::io::AsyncWriteExt;
-        gitignore.write_all(format!("\n# Flux local config (contains server key)\n{}\n", entry).as_bytes()).await?;
-        println!("{} Added {} to .gitignore", "✔".green().bold(), entry.cyan().bold());
+
+    if opts.name.is_some() && target_dir.exists() {
+        anyhow::bail!(
+            "Directory '{}' already exists. Choose a different name or remove it first.",
+            project_name
+        );
     }
-    // Echo key settings ───────────────────────────────────────────────────────
+
+    std::fs::create_dir_all(&target_dir)
+        .with_context(|| format!("Failed to create directory {}", target_dir.display()))?;
+
     println!();
-    println!("  {:<10}  {}", "name".bold(),    project_name.cyan());
-    println!("  {:<10}  {}", "runtime".bold(), runtime_str.cyan());
+    println!(
+        "{} Initialising {}",
+        "◆".cyan().bold(),
+        project_name.cyan().bold()
+    );
     println!();
-    println!("  {:<10}  :{}", "server".bold(), gw_port.to_string().cyan());
+
+    // Write scaffold files ─────────────────────────────────────────────────────
+    for (rel_path, content) in base_scaffold_files() {
+        let substituted = content.replace("{name}", &project_name);
+        write_file(&target_dir, rel_path, &substituted)?;
+        println!("  {}  {}", "✔".green().bold(), rel_path.cyan());
+    }
+
+    // Write .flux/config.json ─────────────────────────────────────────────────
+    let gw_port = opts.gateway_port.unwrap_or(4000);
+    write_flux_config(&target_dir, gw_port)?;
+    println!("  {}  {}", "✔".green().bold(), ".flux/config.json".cyan());
+
     println!();
-    println!("{}", "Commit flux.toml to version control.".dimmed());
-    println!("{}", ".flux/ is gitignored — edit .flux/config.json to set cli_key once you set FLUX_API_KEY on the server.".dimmed());
-    println!("Run: {}", "flux dev".cyan().bold());
+    println!("  {}  {}", "name".bold(), project_name.cyan());
+    println!();
+
+    if opts.name.is_some() {
+        println!("  {}", "Next steps:".bold());
+        println!("    1.  cd {}", project_name.cyan());
+        println!("    2.  {}", "flux dev".cyan());
+    } else {
+        println!("  {}", "Next steps:".bold());
+        println!("    1.  {}", "flux dev".cyan());
+    }
+    println!();
 
     Ok(())
 }
 
-// ─── TOML builder ────────────────────────────────────────────────────────────
-//
-// Avoids `format!()` with user-supplied data in the format string.
-// TOML strings double-quote the value; interior quotes are escaped.
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn toml_escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+fn write_file(base: &Path, rel: &str, content: &str) -> anyhow::Result<()> {
+    let path = base.join(rel);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    }
+    std::fs::write(&path, content)
+        .with_context(|| format!("Failed to write {}", path.display()))
 }
 
-fn build_flux_toml(
-    name:         &str,
-    runtime:      &str,
-    gateway_port: u16,
-    runtime_port: u16,
-    api_port:     u16,
-) -> String {
-    let mut out = String::with_capacity(512);
-
-    let _ = writeln!(out, "# Flux project configuration");
-    let _ = writeln!(out, "# Commit this file to version control.");
-    let _ = writeln!(out);
-    let _ = writeln!(out, r#"name    = "{}""#, toml_escape(name));
-    let _ = writeln!(out, r#"runtime = "{}""#, toml_escape(runtime));
-    let _ = writeln!(out);
-    let _ = writeln!(out, "[record]");
-    let _ = writeln!(out, "# 1.0 = record every execution. Values below 1.0 mean some executions");
-    let _ = writeln!(out, "# won't appear in `flux trace`. Only lower this above ~1k rps.");
-    let _ = writeln!(out, "sample_rate    = 1.0");
-    let _ = writeln!(out, "retention_days = 30");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "[limits]");
-    let _ = writeln!(out, "# Default per-function limits. Override in defineFunction() or flux.json.");
-    let _ = writeln!(out, "timeout_ms = 5000");
-    let _ = writeln!(out, "memory_mb  = 256");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "[dev]");
-    let _ = writeln!(out, "# Local port assignments used by `flux dev`. Adjust to avoid conflicts.");
-    let _ = writeln!(out, "gateway_port     = {}", gateway_port);
-    let _ = writeln!(out, "runtime_port     = {}", runtime_port);
-    let _ = writeln!(out, "api_port         = {}", api_port);
-    let _ = writeln!(out, "data_engine_port = 8082");
-    let _ = writeln!(out, "queue_port       = 8084");
-
-    out
+fn write_flux_config(base: &Path, gateway_port: u16) -> anyhow::Result<()> {
+    let content = format!(
+        r#"{{
+  "server_url": "http://localhost:{gateway_port}/flux/api",
+  "cli_key": null
+}}
+"#
+    );
+    let flux_dir = base.join(".flux");
+    std::fs::create_dir_all(&flux_dir)
+        .with_context(|| format!("Failed to create {}", flux_dir.display()))?;
+    std::fs::write(flux_dir.join("config.json"), content)
+        .with_context(|| "Failed to write .flux/config.json".to_string())
 }
-

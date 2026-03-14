@@ -1,0 +1,157 @@
+# Flux Product Spec
+
+This document defines the product shape of Flux as a backend runtime and open-source project.
+
+## Product Summary
+
+Flux is an open-source backend runtime for teams that want a complete backend system and materially better production debugging.
+
+Flux includes:
+
+- functions
+- HTTP routing and middleware
+- database execution
+- queues and schedules
+- deployments, secrets, and configuration
+- an execution record with trace, replay, diff, mutation history, and `flux why`
+
+The message stays narrower than the feature list:
+
+- Flux is the backend runtime for deterministic production debugging.
+
+## Problem
+
+When a backend fails in production, evidence is usually fragmented across:
+
+- API logs
+- function logs
+- tracing systems
+- queue systems
+- deploy metadata
+- database state
+
+Operators spend time stitching those systems together before they can even begin causal debugging.
+
+## Insight
+
+This problem is not solved by adding another SDK or another observability product.
+
+It is solved by owning enough of the execution path that the runtime can record:
+
+- how work entered the system
+- which code version handled it
+- what spans and logs were produced
+- what state changed
+- what downstream work was created
+- how the outcome differed from previous runs
+
+## Product Goals
+
+### 1. Make `flux why` Worth Reaching For
+
+`flux why` is the command people use first when something breaks.
+
+### 2. Make Replay And Diff Credible
+
+Replay and diff help teams answer whether a failure is code-dependent, data-dependent, or deployment-dependent.
+
+### 3. Make The Database Part Of Debugging
+
+Flux treats mutations, row history, and state blame as first-class debugging surfaces.
+
+### 4. Ship A Complete System
+
+Functions, gateway, database execution, and async work feel like one runtime rather than several loosely connected services.
+
+### 5. Keep Local And Production Legible
+
+The local workflow teaches the same mental model the production system uses.
+
+## Non-Goals
+
+Flux is not trying to optimize first for:
+
+- maximum configurability
+- every language having perfect parity on day one
+- hosted control-plane convenience
+- leading with workflow automation or generic platform claims
+
+Those things can matter, but they are not the center of the 0.1 story.
+
+## Product Pillars
+
+### Execution Record First
+
+Every meaningful unit of work leaves behind an inspectable record.
+
+### Database-Aware Runtime
+
+The database participates in the runtime contract so Flux can explain state changes, not just request paths.
+
+### Complete Backend Path
+
+The runtime owns enough of ingress, execution, state changes, and async work to preserve causality.
+
+### Operator-Native UX
+
+The CLI and dashboard are optimized for investigation and incident response, not just admin forms.
+
+## Intended User
+
+The initial best-fit users are:
+
+- technical founders building a serious product backend
+- small platform teams who self-host and value control
+- teams whose backend is Postgres-centric
+- engineers who spend too much time reconstructing incidents manually
+
+## Core Workflow
+
+The core workflow is:
+
+```bash
+flux init
+flux dev
+flux function create
+flux invoke --gateway
+flux trace
+flux why
+flux incident replay
+flux trace diff
+```
+
+This loop is exceptional, and the rest of the system reinforces it.
+
+## System Scope
+
+Flux feels complete enough to run a real product backend:
+
+- functions and HTTP routes
+- database schema and guarded execution
+- queue and retry mechanics
+- schedules
+- secrets and configuration
+- deployments and version history
+- tracing, mutation history, replay, diff, and explanation
+
+Completeness is important. Equal marketing weight for every subsystem is not.
+
+## Product Bar
+
+Flux delivers:
+
+1. a developer starts the full system locally without ceremony
+2. a function is created, invoked, traced, and explained immediately
+3. deployments are visible inside the debugging story
+4. one replay-plus-diff workflow is reliable enough to trust
+5. queue and schedule work preserve the same record model
+6. the CLI feels like one product, not a bag of commands
+7. the docs explain the system clearly without private context
+
+## Product Narrative Rule
+
+When deciding what to build, document, or market, use this test:
+
+> Does this make the execution record more complete, more trustworthy, or more useful during a real incident?
+
+If the answer is no, it is probably not central to Flux.

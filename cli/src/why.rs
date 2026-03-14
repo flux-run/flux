@@ -123,13 +123,32 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
         .and_then(|s| s.as_array())
         .unwrap_or(&empty_vec);
 
-    let request   = trace_body.get("request").unwrap_or(&Value::Null);
-    let method    = request["method"].as_str().unwrap_or("?");
-    let path      = request["path"].as_str().unwrap_or("?");
-    let function  = request["function"].as_str().unwrap_or("?");
-    let commit    = request["code_sha"].as_str().unwrap_or("?");
-    let status    = request["status"].as_i64().unwrap_or(0);
-    let elapsed   = trace_body["total_ms"].as_i64().unwrap_or(0);
+    // GET /traces/{id} does not return a top-level "request" object.
+    // Extract request metadata from the first gateway/http span's metadata.
+    let gw_span = spans.iter().find(|s| {
+        matches!(
+            s["span_type"].as_str(),
+            Some("request") | Some("gateway_request") | Some("http_request")
+        ) || s["source"].as_str() == Some("gateway")
+    });
+    let gw_meta   = gw_span.and_then(|s| s["metadata"].as_object());
+    let method    = gw_meta.and_then(|m| m.get("method")).and_then(|v| v.as_str()).unwrap_or("?");
+    let path      = gw_meta.and_then(|m| m.get("path")).and_then(|v| v.as_str()).unwrap_or("?");
+    let commit    = gw_meta.and_then(|m| m.get("code_sha")).and_then(|v| v.as_str()).unwrap_or("?");
+    let status    = gw_meta.and_then(|m| m.get("status"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or_else(|| gw_meta.and_then(|m| m.get("status_code")).and_then(|v| v.as_i64()).unwrap_or(0));
+    // Function name: prefer gateway metadata, fallback to first runtime span.
+    let function  = gw_meta.and_then(|m| m.get("function")).and_then(|v| v.as_str())
+        .or_else(|| {
+            spans.iter()
+                .find(|s| s["source"].as_str() == Some("runtime"))
+                .and_then(|s| s["resource"].as_str())
+        })
+        .unwrap_or("?");
+
+    // total_duration_ms is returned at the root of the trace response.
+    let elapsed   = trace_body["total_duration_ms"].as_i64().unwrap_or(0);
     let is_error  = status >= 400 || spans.iter().any(|s| s["span_type"] == "error");
 
     // ── Fetch previous request (context-aware debugging) ─────────────────────
@@ -466,4 +485,74 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
 
     println!();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{diff_json, json_scalar};
+
+    #[test]
+    fn diff_json_ignores_timestamp_only_changes_until_needed() {
+        let before = json!({
+            "id": "usr_1",
+            "email": "before@example.com",
+            "updated_at": "2026-03-13T12:00:00Z",
+        });
+        let after = json!({
+            "id": "usr_1",
+            "email": "after@example.com",
+            "updated_at": "2026-03-13T12:01:00Z",
+        });
+
+        let diffs = diff_json(&before, &after);
+
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].0, "email");
+        assert_eq!(diffs[0].1, "before@example.com");
+        assert_eq!(diffs[0].2, "after@example.com");
+    }
+
+    #[test]
+    fn diff_json_falls_back_to_timestamps_when_nothing_else_changed() {
+        let before = json!({
+            "id": "usr_1",
+            "updated_at": "2026-03-13T12:00:00Z",
+        });
+        let after = json!({
+            "id": "usr_1",
+            "updated_at": "2026-03-13T12:01:00Z",
+        });
+
+        let diffs = diff_json(&before, &after);
+
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].0, "updated_at");
+    }
+
+    #[test]
+    fn diff_json_reports_removed_keys() {
+        let before = json!({
+            "id": "usr_1",
+            "plan": "pro",
+        });
+        let after = json!({
+            "id": "usr_1",
+        });
+
+        let diffs = diff_json(&before, &after);
+
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].0, "plan");
+        assert_eq!(diffs[0].1, "pro");
+        assert_eq!(diffs[0].2, "∅");
+    }
+
+    #[test]
+    fn json_scalar_formats_compound_values_compactly() {
+        assert_eq!(json_scalar(&json!(null)), "∅");
+        assert_eq!(json_scalar(&json!(["a", "b"])), "[2]");
+        assert_eq!(json_scalar(&json!({"nested": true})), "{…}");
+    }
 }

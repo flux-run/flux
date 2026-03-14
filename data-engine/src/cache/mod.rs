@@ -32,8 +32,7 @@ use std::time::Duration;
 use moka::sync::Cache;
 
 use crate::compiler::relational::{parse_selectors, ColumnSelector, RelationshipDef};
-use crate::compiler::query_compiler::QueryRequest;
-use crate::policy::PolicyResult;
+use crate::compiler::query_compiler::{QueryRequest, PolicyResult};
 use crate::transform::ColumnMeta;
 
 /// A fully compiled SELECT query plan.
@@ -64,6 +63,15 @@ pub const PLAN_TTL: Duration = Duration::from_secs(300);
 
 const CACHE_MAX_CAPACITY: u64 = 10_000;
 
+/// Returns the configured cache max capacity.
+/// Reads `DE_CACHE_CAPACITY` env var, falls back to `CACHE_MAX_CAPACITY`.
+fn cache_capacity() -> u64 {
+    std::env::var("DE_CACHE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(CACHE_MAX_CAPACITY)
+}
+
 // ─── Schema cache ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -78,7 +86,7 @@ pub type SchemaCache = Cache<String, SchemaCacheEntry>;
 /// Construct a fresh [`SchemaCache`] with the standard TTL and capacity.
 pub fn build_schema_cache() -> SchemaCache {
     Cache::builder()
-        .max_capacity(CACHE_MAX_CAPACITY)
+        .max_capacity(cache_capacity())
         .time_to_live(SCHEMA_TTL)
         .build()
 }
@@ -131,7 +139,7 @@ pub type PlanCache = Cache<PlanKey, QueryPlan>;
 /// Construct a fresh [`PlanCache`] with the standard TTL and capacity.
 pub fn build_plan_cache() -> PlanCache {
     Cache::builder()
-        .max_capacity(CACHE_MAX_CAPACITY)
+        .max_capacity(cache_capacity())
         .time_to_live(PLAN_TTL)
         .build()
 }

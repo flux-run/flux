@@ -159,13 +159,11 @@ pub async fn ui(Query(params): Query<UiQuery>) -> impl IntoResponse {
 /// GET /openapi.json
 pub async fn spec(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let project_id = ctx.project_id;
-
     let (db_schema, func_values, schema_hash) =
-        fetch_schema_graph_pub(&state, project_id, &headers).await?;
+        fetch_schema_graph_pub(&state, &headers).await?;
 
     let spec_json = generate_openapi(&db_schema, &func_values, &schema_hash, &state.gateway_url);
 

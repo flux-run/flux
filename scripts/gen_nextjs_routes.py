@@ -10,7 +10,6 @@ pages = [
   ("dashboard/projects/[projectId]/data/page.tsx", "DatabasesPage", "@/pages/data/DatabasesPage"),
   ("dashboard/projects/[projectId]/data/[database]/page.tsx", "TablesPage", "@/pages/data/TablesPage"),
   ("dashboard/projects/[projectId]/data/[database]/[table]/page.tsx", "TableWorkspacePage", "@/pages/data/TableWorkspacePage"),
-  ("dashboard/projects/[projectId]/storage/page.tsx", "StoragePage", "@/pages/storage/StoragePage"),
   ("dashboard/projects/[projectId]/events/page.tsx", "EventsPage", "@/pages/events/EventsPage"),
   ("dashboard/projects/[projectId]/workflows/page.tsx", "WorkflowsPage", "@/pages/workflows/WorkflowsPage"),
   ("dashboard/projects/[projectId]/cron/page.tsx", "CronPage", "@/pages/cron/CronPage"),

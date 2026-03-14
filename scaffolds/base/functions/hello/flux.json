@@ -1,0 +1,18 @@
+{
+  "name": "hello",
+  "description": "Hello world function",
+  "runtime": "typescript",
+  "input": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string", "description": "Name to greet" }
+    }
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "message": { "type": "string" }
+    },
+    "required": ["message"]
+  }
+}

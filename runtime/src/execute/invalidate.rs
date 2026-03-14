@@ -6,7 +6,6 @@
 use std::sync::Arc;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::Deserialize;
-use uuid::Uuid;
 
 use crate::AppState;
 
@@ -14,7 +13,6 @@ use crate::AppState;
 pub struct InvalidateCacheRequest {
     pub function_id:   Option<String>,
     pub deployment_id: Option<String>,
-    pub project_id:    Option<Uuid>,
 }
 
 pub async fn invalidate_cache_handler(
@@ -23,9 +21,15 @@ pub async fn invalidate_cache_handler(
     Json(req): Json<InvalidateCacheRequest>,
 ) -> impl IntoResponse {
     let provided = headers.get("X-Service-Token")
+        .or_else(|| headers.get("x-service-token"))
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    if provided != state.service_token {
+    // Constant-time comparison prevents timing-based token enumeration.
+    let token_ok: bool = {
+        use subtle::ConstantTimeEq;
+        provided.as_bytes().ct_eq(state.service_token.as_bytes()).into()
+    };
+    if !token_ok {
         return (StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({ "error": "unauthorized" }))).into_response();
     }
@@ -47,7 +51,6 @@ pub async fn invalidate_cache_handler(
     tracing::info!(
         function_id   = ?req.function_id,
         deployment_id = ?req.deployment_id,
-        project_id    = ?req.project_id,
         "cache invalidated: {:?}", evicted,
     );
 

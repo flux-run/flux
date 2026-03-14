@@ -269,3 +269,52 @@ pub async fn replay(
         "count":   rows.len(),
     })))
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{parse_record_pk, HistoryParams};
+
+    #[test]
+    fn parse_record_pk_uses_id_for_simple_scalar_keys() {
+        let params = HistoryParams {
+            id: Some("42".into()),
+            pk: None,
+            limit: None,
+        };
+
+        let pk = parse_record_pk(&params).expect("id should parse");
+
+        assert_eq!(pk, json!({ "id": 42 }));
+    }
+
+    #[test]
+    fn parse_record_pk_accepts_json_for_composite_keys() {
+        let params = HistoryParams {
+            id: None,
+            pk: Some(r#"{"order_id":"ORD-9","tenant":"acme"}"#.into()),
+            limit: None,
+        };
+
+        let pk = parse_record_pk(&params).expect("pk json should parse");
+
+        assert_eq!(pk, json!({ "order_id": "ORD-9", "tenant": "acme" }));
+    }
+
+    #[test]
+    fn parse_record_pk_rejects_missing_lookup() {
+        let params = HistoryParams {
+            id: None,
+            pk: None,
+            limit: None,
+        };
+
+        let err = parse_record_pk(&params).expect_err("missing pk should fail");
+
+        assert!(
+            err.to_string().contains("provide ?id=<value> for simple pk or ?pk=<json>"),
+            "unexpected error: {err}"
+        );
+    }
+}

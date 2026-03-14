@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useStore } from '@/state/tenantStore'
 import { apiFetch } from '@/lib/api'
+import type { FunctionResponse, PlatformLogRow } from '@fluxbase/api-types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,17 +15,6 @@ import {
   ChevronRight, Activity, Cpu, Database, Zap, Globe,
 } from 'lucide-react'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface LogEntry {
-  id: string
-  level: string
-  message: string
-  timestamp: string
-  function_id?: string
-}
-
-interface Fn { id: string; name: string; runtime: string }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -37,7 +27,7 @@ function relTime(ts: string) {
 }
 
 // Parse hints from the log message to simulate a timeline entry
-function parseEntry(log: LogEntry, fnName?: string): {
+function parseEntry(log: PlatformLogRow, fnName?: string): {
   method: string; path: string; fnLabel: string; status: number; durationMs: number
 } {
   const msg = log.message ?? ''
@@ -57,7 +47,7 @@ function parseEntry(log: LogEntry, fnName?: string): {
 }
 
 // Build a fake-but-realistic span tree for a log entry
-function buildSpans(entry: ReturnType<typeof parseEntry>, log: LogEntry) {
+function buildSpans(entry: ReturnType<typeof parseEntry>, log: PlatformLogRow) {
   const isError = log.level === 'error' || entry.status >= 500
   const base = entry.durationMs
 
@@ -144,11 +134,11 @@ function TraceDrawer({
   fnMap,
   onClose,
 }: {
-  log: LogEntry
+  log: PlatformLogRow
   fnMap: Record<string, string>
   onClose: () => void
 }) {
-  const fnName = fnMap[log.function_id ?? ''] ?? log.function_id ?? 'function'
+  const fnName = fnMap[log.resource ?? ''] ?? log.resource ?? 'function'
   const entry = parseEntry(log, fnName)
   const spans = buildSpans(entry, log)
   const isError = log.level === 'error' || entry.status >= 500
@@ -236,11 +226,11 @@ export default function TracesPage() {
   const { projectId, projectName } = useStore()
   const [limit, setLimit] = useState('50')
   const [filter, setFilter] = useState('all')
-  const [selected, setSelected] = useState<LogEntry | null>(null)
+  const [selected, setSelected] = useState<PlatformLogRow | null>(null)
 
   const { data: fnData } = useQuery({
     queryKey: ['functions', projectId],
-    queryFn: () => apiFetch<{ functions: Fn[] }>('/functions'),
+    queryFn: () => apiFetch<{ functions: FunctionResponse[] }>('/functions'),
     enabled: !!projectId,
   })
   const fnMap: Record<string, string> = Object.fromEntries(
@@ -251,7 +241,7 @@ export default function TracesPage() {
     queryKey: ['traces-feed', projectId, limit],
     queryFn: () => {
       const p = new URLSearchParams({ limit })
-      return apiFetch<{ logs: LogEntry[] }>(`/logs?${p}`)
+      return apiFetch<{ logs: PlatformLogRow[] }>(`/logs?${p}`)
     },
     enabled: !!projectId,
     refetchInterval: 15_000,
@@ -260,7 +250,7 @@ export default function TracesPage() {
   const allLogs = data?.logs ?? []
 
   // Compute summary stats from parsed entries
-  const parsedAll = allLogs.map((l) => parseEntry(l, fnMap[l.function_id ?? '']))
+  const parsedAll = allLogs.map((l) => parseEntry(l, fnMap[l.resource ?? '']))
   const errorCount = allLogs.filter((l, i) => l.level === 'error' || parsedAll[i]?.status >= 500).length
   const slowCount  = parsedAll.filter((e) => e.durationMs >= 1000).length
   const avgMs      = parsedAll.length > 0
@@ -273,7 +263,7 @@ export default function TracesPage() {
     filter === 'all'    ? allLogs :
     allLogs.filter((l) => l.level === filter)
 
-  const handleSelect = useCallback((log: LogEntry) => {
+  const handleSelect = useCallback((log: PlatformLogRow) => {
     setSelected((prev) => (prev?.id === log.id ? null : log))
   }, [])
 
@@ -405,7 +395,7 @@ export default function TracesPage() {
             </div>
           )}
           {logs.map((log) => {
-            const fnName = fnMap[log.function_id ?? ''] ?? log.function_id
+            const fnName = fnMap[log.resource ?? ''] ?? log.resource
             const entry = parseEntry(log, fnName)
             const isSelected = selected?.id === log.id
             const isError = log.level === 'error' || entry.status >= 500

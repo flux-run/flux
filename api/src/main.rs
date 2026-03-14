@@ -13,23 +13,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     api::config::init();
 
     let pool = api::db::connection::init_pool().await?;
-    let (local_tenant_id, local_project_id) = api::app::init_local_mode(&pool).await?;
-
-    let storage = api::services::storage::StorageService::new().await;
 
     let state = api::AppState {
-        pool,
+        pool: pool.clone(),
         http_client: reqwest::Client::new(),
         data_engine_url: std::env::var("DATA_ENGINE_URL")
             .unwrap_or_else(|_| "http://localhost:8082".to_string()),
         gateway_url: std::env::var("GATEWAY_URL")
             .unwrap_or_else(|_| "http://localhost:8081".to_string()),
-        storage,
-        local_tenant_id,
-        local_project_id,
+        runtime_url: std::env::var("RUNTIME_URL")
+            .unwrap_or_else(|_| "http://localhost:8083".to_string()),
+        functions_dir: std::env::var("FLUX_FUNCTIONS_DIR")
+            .unwrap_or_else(|_| "./flux-functions".to_string()),
     };
 
     let app = api::create_app(state);
+
+    // ── Background workers ────────────────────────────────────────────────
+    tokio::spawn(api::routes::monitor::run_alert_evaluator(pool.clone()));
 
     let port = std::env::var("PORT")
         .unwrap_or_else(|_| "8080".to_string())

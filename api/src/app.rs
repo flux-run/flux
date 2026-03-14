@@ -12,10 +12,7 @@ use axum::{
 use tower_http::cors::{CorsLayer, AllowOrigin};
 use axum::http::{HeaderValue, Method, header};
 use tracing::info;
-use uuid::Uuid;
-
 use crate::auth;
-use crate::services;
 use crate::middleware;
 use crate::secrets;
 use crate::logs;
@@ -29,11 +26,16 @@ pub struct AppState {
     pub http_client:      reqwest::Client,
     pub data_engine_url:  String,
     pub gateway_url:      String,
-    pub storage:          services::storage::StorageService,
-    /// Fixed tenant UUID used in local / single-tenant mode.
-    pub local_tenant_id:  Uuid,
-    /// Default project UUID; can be overridden by FLUX_PROJECT_ID env var.
-    pub local_project_id: Uuid,
+    /// URL of the Runtime service — used by cache invalidation after a deployment
+    /// (`POST /internal/cache/invalidate`).  In the monolith this is the same
+    /// base URL as everything else (port 4000).
+    pub runtime_url:      String,
+    /// Directory where function bundles live on the filesystem.
+    ///
+    /// - Dev:        `{project_root}/.flux/build`  (set by `flux dev`)
+    /// - Production: `/app/functions`              (baked into Docker image)
+    /// - Override:   `FLUX_FUNCTIONS_DIR` env var
+    pub functions_dir:    String,
 }
 
 impl axum::extract::FromRef<AppState> for sqlx::PgPool {
@@ -77,8 +79,7 @@ pub fn build_cors() -> CorsLayer {
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::ACCEPT,
-            "x-flux-project".parse().unwrap(),
-            "x-request-id".parse().unwrap(),
+            "x-request-id".parse().expect("x-request-id is a valid header name"),
         ])
         .allow_credentials(true)
         .max_age(std::time::Duration::from_secs(3600))
@@ -92,9 +93,13 @@ pub fn create_app(state: AppState) -> Router {
         .route("/secrets",           get(secrets::routes::get_internal_runtime_secrets))
         .route("/bundle",            get(routes::deployments::get_internal_bundle))
         .route("/introspect",        get(routes::introspect::get_project_introspect))
+        .route("/introspect/manifest", get(routes::manifest::get_manifest))
+        .route("/db/migrate",        post(routes::db_migrate::apply_user_migration))
+        .route("/db/schema",         post(routes::schema::push_schema))
         .route("/logs",              post(logs::routes::create_log).get(logs::routes::list_logs))
         .route("/functions/resolve", get(routes::functions::resolve_function))
         .route("/cache/invalidate",  post(routes::system::cache_invalidate))
+        .route("/routes",            get(routes::gateway_config::get_routes_for_gateway))
         .layer(axum_middleware::from_fn(middleware::internal_auth::require_service_token));
 
     // ── API: optional FLUX_API_KEY guard ──────────────────────────────────
@@ -104,10 +109,14 @@ pub fn create_app(state: AppState) -> Router {
         .route("/functions/{id}",    get(routes::functions::get_function).delete(routes::functions::delete_function))
         // Deploy
         .route("/functions/deploy",  post(routes::deployments::deploy_function_cli)
-            .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)))
+            .layer(axum::extract::DefaultBodyLimit::max(60 * 1024 * 1024)))
         .route("/deployments",               post(routes::deployments::create_deployment))
         .route("/deployments/list/{id}",     get(routes::deployments::list_deployments))
         .route("/deployments/{id}/activate/{version}", post(routes::deployments::activate_deployment))
+        .route("/deployments/hashes",        get(routes::deployments::get_deployment_hashes))
+        .route("/deployments/project",       get(routes::deployments::list_project_deployments)
+                                             .post(routes::deployments::create_project_deployment))
+        .route("/deployments/project/{id}/rollback", post(routes::deployments::rollback_project_deployment))
         // Secrets
         .route("/secrets",           get(secrets::routes::list_secrets).post(secrets::routes::create_secret))
         .route("/secrets/{key}",     put(secrets::routes::update_secret).delete(secrets::routes::delete_secret))
@@ -117,65 +126,68 @@ pub fn create_app(state: AppState) -> Router {
         .route("/traces",            get(logs::routes::list_traces))
         // Gateway routes
         .route("/gateway/routes",               get(routes::gateway_routes::list_gateway_routes).post(routes::gateway_routes::create_gateway_route))
-        .route("/gateway/routes/{id}",          get(routes::stubs::get_gateway_route_by_id)
+        .route("/gateway/routes/{id}",          get(routes::gateway_routes::get_gateway_route_by_id)
                                                 .patch(routes::gateway_routes::update_gateway_route)
                                                 .delete(routes::gateway_routes::delete_gateway_route))
-        .route("/gateway/middleware",            post(routes::stubs::gateway_middleware_create))
-        .route("/gateway/middleware/{route}/{type}", delete(routes::stubs::gateway_middleware_delete))
-        .route("/gateway/routes/{id}/rate-limit", put(routes::stubs::gateway_route_rate_limit_set)
-                                                 .delete(routes::stubs::gateway_route_rate_limit_delete))
-        .route("/gateway/routes/{id}/cors",      get(routes::stubs::gateway_route_cors_get)
-                                                 .put(routes::stubs::gateway_route_cors_set))
+        .route("/gateway/middleware",            post(routes::gateway_routes::create_middleware))
+        .route("/gateway/middleware/{route}/{type}", delete(routes::gateway_routes::delete_middleware))
+        .route("/gateway/routes/{id}/rate-limit", put(routes::gateway_routes::set_rate_limit)
+                                                 .delete(routes::gateway_routes::delete_rate_limit))
+        .route("/gateway/routes/{id}/cors",      get(routes::gateway_routes::get_cors)
+                                                 .put(routes::gateway_routes::set_cors))
         // Schema / SDK / spec
         .route("/schema/graph",      get(routes::schema::graph))
         .route("/sdk/schema",        get(routes::sdk::schema))
         .route("/sdk/typescript",    get(routes::sdk::typescript))
+        .route("/sdk/manifest",      get(routes::manifest::get_manifest))
         .route("/openapi.json",      get(routes::openapi::spec))
         .route("/spec",              get(routes::spec::project_spec))
         // Data Engine + Files proxy
         .route("/db/{*path}",        any(routes::data_engine::proxy_handler))
         .route("/files/{*path}",     any(routes::data_engine::proxy_handler))
         // ── API Keys ──────────────────────────────────────────────────────────
-        .route("/api-keys",              get(routes::stubs::api_keys_list).post(routes::stubs::api_key_create))
-        .route("/api-keys/{id}",         delete(routes::stubs::api_key_delete))
-        .route("/api-keys/{id}/rotate",  post(routes::stubs::api_key_rotate))
+        .route("/api-keys",              get(routes::api_keys::list_api_keys).post(routes::api_keys::create_api_key))
+        .route("/api-keys/{id}",         delete(routes::api_keys::delete_api_key))
+        .route("/api-keys/{id}/rotate",  post(routes::api_keys::rotate_api_key))
         // ── Records ───────────────────────────────────────────────────────────
         .route("/records/export",        get(routes::records::records_export))
         .route("/records/count",         get(routes::records::records_count))
         .route("/records/prune",         delete(routes::records::records_prune))
         // ── Monitor ───────────────────────────────────────────────────────────
-        .route("/monitor/status",        get(routes::stubs::monitor_status))
-        .route("/monitor/metrics",       get(routes::stubs::monitor_metrics))
-        .route("/monitor/alerts",        get(routes::stubs::monitor_alerts_list).post(routes::stubs::monitor_alert_create))
-        .route("/monitor/alerts/{id}",   delete(routes::stubs::monitor_alert_delete))
+        .route("/monitor/status",        get(routes::monitor::monitor_status))
+        .route("/monitor/metrics",       get(routes::monitor::monitor_metrics))
+        .route("/monitor/alerts",        get(routes::monitor::monitor_alerts_list).post(routes::monitor::monitor_alert_create))
+        .route("/monitor/alerts/{id}",   delete(routes::monitor::monitor_alert_delete))
         // ── Events ────────────────────────────────────────────────────────────
-        .route("/events",                post(routes::stubs::events_publish))
-        .route("/events/subscriptions",  get(routes::stubs::events_subscriptions_list).post(routes::stubs::events_subscribe))
-        .route("/events/subscriptions/{id}", delete(routes::stubs::events_unsubscribe))
+        .route("/events",                post(routes::events::publish_event))
+        .route("/events/subscriptions",  get(routes::events::list_subscriptions).post(routes::events::create_subscription))
+        .route("/events/subscriptions/{id}", delete(routes::events::delete_subscription))
         // ── Queue management ──────────────────────────────────────────────────
-        .route("/queues",                get(routes::stubs::queues_list).post(routes::stubs::queue_create))
-        .route("/queues/{name}",         get(routes::stubs::queue_get).delete(routes::stubs::queue_delete))
-        .route("/queues/{name}/messages",post(routes::stubs::queue_publish_message))
-        .route("/queues/{name}/bindings",get(routes::stubs::queue_bindings_list).post(routes::stubs::queue_binding_create))
-        .route("/queues/{name}/purge",   post(routes::stubs::queue_purge))
-        .route("/queues/{name}/dlq",     get(routes::stubs::queue_dlq_list))
-        .route("/queues/{name}/dlq/replay", post(routes::stubs::queue_dlq_replay))
+        .route("/queues",                get(routes::queue_mgmt::list_queues).post(routes::queue_mgmt::create_queue))
+        .route("/queues/{name}",         get(routes::queue_mgmt::get_queue).delete(routes::queue_mgmt::delete_queue))
+        .route("/queues/{name}/messages",post(routes::queue_mgmt::publish_message))
+        .route("/queues/{name}/bindings",get(routes::queue_mgmt::list_bindings).post(routes::queue_mgmt::create_binding))
+        .route("/queues/{name}/purge",   post(routes::queue_mgmt::purge_queue))
+        .route("/queues/{name}/dlq",     get(routes::queue_mgmt::list_dlq))
+        .route("/queues/{name}/dlq/replay", post(routes::queue_mgmt::replay_dlq))
         // ── Schedules ─────────────────────────────────────────────────────────
-        .route("/schedules",             get(routes::stubs::schedules_list).post(routes::stubs::schedule_create))
-        .route("/schedules/{name}",      delete(routes::stubs::schedule_delete))
-        .route("/schedules/{name}/pause",   post(routes::stubs::schedule_pause))
-        .route("/schedules/{name}/resume",  post(routes::stubs::schedule_resume))
-        .route("/schedules/{name}/run",     post(routes::stubs::schedule_run_now))
-        .route("/schedules/{name}/history", get(routes::stubs::schedule_history))
-        // ── Agents ────────────────────────────────────────────────────────────
-        .route("/agents",                get(routes::agents::agents_list).post(routes::agents::agent_deploy))
-        .route("/agents/{name}",         get(routes::agents::agent_get).delete(routes::agents::agent_delete))
-        .route("/agents/{name}/run",     post(routes::agents::agent_run))
-        .route("/agents/{name}/simulate",post(routes::agents::agent_simulate))
+        .route("/schedules",             get(routes::schedules::list_schedules).post(routes::schedules::create_schedule))
+        .route("/schedules/{name}",      delete(routes::schedules::delete_schedule))
+        .route("/schedules/{name}/pause",   post(routes::schedules::pause_schedule))
+        .route("/schedules/{name}/resume",  post(routes::schedules::resume_schedule))
+        .route("/schedules/{name}/run",     post(routes::schedules::run_schedule_now))
+        .route("/schedules/{name}/history", get(routes::schedules::schedule_history))
         // ── Environments ──────────────────────────────────────────────────────
-        .route("/environments",          get(routes::stubs::environments_list).post(routes::stubs::environment_create))
-        .route("/environments/clone",    post(routes::stubs::environments_clone))
-        .route("/environments/{name}",   delete(routes::stubs::environment_delete))
+        .route("/environments",          get(routes::environments::list_environments).post(routes::environments::create_environment))
+        .route("/environments/clone",    post(routes::environments::clone_environment))
+        .route("/environments/{name}",   delete(routes::environments::delete_environment))
+        // ── Routes (gateway config) ───────────────────────────────────────────
+        .route("/routes",                get(routes::gateway_config::list_routes))
+        .route("/routes/sync",           post(routes::gateway_config::sync_routes))
+        // ── SSE live streams ──────────────────────────────────────────────────
+        .route("/stream/events",         get(routes::stream::stream_events))
+        .route("/stream/executions",     get(routes::stream::stream_executions))
+        .route("/stream/mutations",      get(routes::stream::stream_mutations))
         // Auth middleware injects RequestContext
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
@@ -184,6 +196,7 @@ pub fn create_app(state: AppState) -> Router {
 
     // ── Auth: public routes (no require_auth guard) ───────────────────────
     let auth = Router::new()
+        .route("/auth/status",         get(auth::routes::status))
         .route("/auth/setup",          post(auth::routes::setup))
         .route("/auth/login",          post(auth::routes::login))
         .route("/auth/logout",         post(auth::routes::logout))
@@ -233,42 +246,4 @@ pub fn create_app(state: AppState) -> Router {
         .with_state(state)
 }
 
-// ── Local mode seed ───────────────────────────────────────────────────────────
 
-/// Idempotently seeds the local tenant and project rows so FK constraints are
-/// satisfied even on a fresh database.  Called once at startup before the server
-/// starts accepting requests.
-pub async fn init_local_mode(pool: &sqlx::PgPool) -> Result<(Uuid, Uuid), sqlx::Error> {
-    const LOCAL_TENANT_ID: &str = "00000000-0000-0000-0000-000000000001";
-    const LOCAL_PROJECT_ID: &str = "00000000-0000-0000-0000-000000000002";
-
-    let tenant_id = Uuid::parse_str(LOCAL_TENANT_ID).unwrap();
-
-    sqlx::query(
-        "INSERT INTO tenants (id, name) VALUES ($1, 'local') ON CONFLICT (id) DO NOTHING"
-    )
-    .bind(tenant_id)
-    .execute(pool)
-    .await?;
-
-    let project_id = std::env::var("FLUX_PROJECT_ID")
-        .ok()
-        .and_then(|s| Uuid::parse_str(&s).ok())
-        .unwrap_or_else(|| Uuid::parse_str(LOCAL_PROJECT_ID).unwrap());
-
-    sqlx::query(
-        "INSERT INTO projects (id, tenant_id, name) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING"
-    )
-    .bind(project_id)
-    .bind(tenant_id)
-    .bind("default")
-    .execute(pool)
-    .await?;
-
-    info!(
-        "Local mode: tenant_id={} project_id={}",
-        tenant_id, project_id
-    );
-
-    Ok((tenant_id, project_id))
-}

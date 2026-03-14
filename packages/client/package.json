@@ -1,0 +1,27 @@
+{
+  "name": "@fluxbase/client",
+  "version": "0.1.0",
+  "description": "Fluxbase client SDK — call your deployed functions from any TypeScript or JavaScript project",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "module": "dist/index.mjs",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "dev":   "tsup src/index.ts --format esm,cjs --dts --watch",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0"
+  },
+  "files": ["dist"],
+  "license": "MIT",
+  "keywords": ["fluxbase", "flux", "serverless", "functions", "client"]
+}

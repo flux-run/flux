@@ -1,0 +1,24 @@
+# Flux project — never commit this file
+.env
+.env.local
+
+# Generated local state
+.flux/
+
+# Language build artifacts
+target/           # Rust
+dist/             # JS/TS
+__pycache__/      # Python
+*.pyc
+node_modules/
+.build/           # Swift
+.gradle/          # Kotlin/Java
+build/            # Kotlin/Java
+*.class
+*.jar
+.zig-cache/       # Zig
+zig-out/
+
+# OS
+.DS_Store
+Thumbs.db

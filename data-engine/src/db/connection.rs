@@ -1,8 +1,13 @@
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 pub async fn init_pool(database_url: &str) -> PgPool {
+    let max_connections = std::env::var("DE_DB_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(20);
+
     PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(max_connections)
         .after_connect(|conn, _meta| Box::pin(async move {
             // data-engine owns fluxbase_internal; flux holds platform tables;
             // public holds user application data.

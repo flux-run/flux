@@ -1,69 +1,620 @@
-//! `flux dev` — start the full Flux development stack locally.
+//! `flux dev` — zero-config local development server.
+//!
+//! Starts the full Flux stack with NO external dependencies:
 //!
 //! ```text
 //! $ flux dev
 //!
-//! ▶  Starting Flux dev stack …
+//! ◆ Starting Flux dev server…
 //!
-//!    db            postgres     :5432
-//!    flux          server       :4000   LOCAL_MODE=true
-//!    dashboard     spa          :5173
+//!   ↓ PostgreSQL 16  (first run: downloading ~50MB, cached forever after)
+//!   ✔ postgres       localhost:5433
+//!   ✔ migrations     52 applied
+//!   ✔ flux server    localhost:4000
 //!
-//! ✔  Flux is running.
+//!   Flux   http://localhost:4000
+//!   API    http://localhost:4000/flux/api
+//!   Dash   http://localhost:4000/flux
 //!
-//!    Flux  http://localhost:4000
-//!    API   http://localhost:4000/flux/api
-//!    Dash  http://localhost:5173/flux
+//!   flux invoke <fn>    — call a function
+//!   flux trace <id>     — inspect a request
+//!   flux why <id>       — root-cause an error
+//!   flux generate       — regenerate ctx types
 //!
-//!    flux invoke <fn>        — call a function
-//!    flux deploy             — deploy changed functions
-//!    flux trace <id>         — inspect a request
-//!
-//!    Press Ctrl+C to stop.
+//!   Press Ctrl+C to stop.
 //! ```
 //!
-//! Wraps `docker compose -f docker-compose.dev.yml up` with `LOCAL_MODE=true`
-//! so the gateway skips tenant auth in local dev.
+//! ## What happens
+//!
+//! 1. Embedded PostgreSQL is downloaded once to `~/.flux/cache/postgres/`
+//!    and reused on every subsequent `flux dev` run.
+//! 2. A per-project data directory is created at `.flux/dev/pgdata/`.
+//! 3. All migrations from `schemas/api/` and `schemas/data-engine/` are
+//!    applied in filename order (both sets are idempotent — safe to re-run).
+//! 4. The Flux server binary is found via the same resolution as `flux server`:
+//!    alongside the flux binary, then workspace target/debug, then PATH.
+//! 5. Ctrl+C stops the server process, then stops PostgreSQL.
+//!
+//! ## SOLID
+//!
+//! - SRP: `start_postgres`, `run_migrations`, `start_server`, `print_banner`
+//!   each do exactly one thing.
+//! - DIP: PostgreSQL is behind the `postgresql_embedded::PostgreSQL` type;
+//!   the server is started via `tokio::process::Command`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use anyhow::{Context, bail};
 use colored::Colorize;
+use serde::Deserialize;
 use tokio::process::Command;
 use tokio::signal;
 
-use crate::config::{FluxToml, DEFAULT_SERVER_PORT, DEFAULT_DASHBOARD_PORT, DEFAULT_DB_PORT};
+use crate::config::DEFAULT_SERVER_PORT;
 
-const COMPOSE_FILE: &str = "docker-compose.dev.yml";
-const ENV_FILE:     &str = ".env.dev";
+// Starting port when searching for a free one. 5432 is intentionally skipped
+// so a system Postgres is never accidentally used or conflicted with.
+const DEV_DB_PORT_START: u16 = 5433;
+const DEV_DB_NAME: &str = "fluxbase_dev";
+const DEV_DB_USER: &str = "flux";
+const DEV_DB_PASS: &str = "fluxdev";
 
-// ── Service descriptor ────────────────────────────────────────────────────────
+// ── Entry point ───────────────────────────────────────────────────────────────
 
-#[derive(Clone)]
-struct ServiceInfo {
-    name:       &'static str,
-    label:      &'static str,
-    port:       u16,
-    local_mode: bool,
+pub async fn execute() -> anyhow::Result<()> {
+    println!();
+    println!("{}", "◆ Starting Flux dev server…".cyan().bold());
+    println!();
+
+    // 1. Locate project root for relative paths (schemas/, .flux/)
+    let project_root = find_project_root()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    // 2. Prepare the build directory for function bundles.
+    //    The runtime reads bundles from this directory (FLUX_FUNCTIONS_DIR).
+    let build_dir = project_root.join(".flux").join("build");
+    std::fs::create_dir_all(&build_dir)
+        .with_context(|| format!("cannot create build dir: {}", build_dir.display()))?;
+
+    // 3. Load all vars from .env file (skipping DATABASE_URL which is handled below).
+    //    These are injected into the dev server process so they become available
+    //    in ctx.secrets / ctx.env without needing a real secrets backend.
+    let dot_env_vars = load_dot_env(&project_root);
+    if !dot_env_vars.is_empty() {
+        println!(
+            "  {} .env            {} var{}",
+            "✔".green().bold(),
+            dot_env_vars.len().to_string().cyan(),
+            if dot_env_vars.len() == 1 { "" } else { "s" }
+        );
+    }
+
+    // 4. Resolve DATABASE_URL — check env var, then .env file, then embed Postgres.
+    //
+    //    Priority:
+    //      a) DATABASE_URL shell env var  (already set)
+    //      b) DATABASE_URL in .env file   (dot_env_vars above)
+    //      c) Embedded Postgres           (zero-config default)
+    let (database_url, _pg) = resolve_database(&project_root).await?;
+
+    // 5. Run all migrations
+    let migration_count = run_migrations(&database_url, &project_root).await?;
+    println!(
+        "  {} migrations     {} applied",
+        "✔".green().bold(),
+        migration_count.to_string().cyan(),
+    );
+
+    // 6. Start Flux server — pass FLUX_FUNCTIONS_DIR so the runtime reads
+    //    bundles from the local build directory instead of Postgres.
+    let mut server = start_server(DEFAULT_SERVER_PORT, &database_url, &dot_env_vars, &build_dir).await?;
+
+    // 7. Start file watcher for hot-reload.
+    //    Watches functions/ directory; on change rebuilds the affected bundle,
+    //    writes it to .flux/build/, and invalidates the runtime cache.
+    let functions_src = project_root.join("functions");
+    if functions_src.exists() {
+        let build_dir_clone = build_dir.clone();
+        let functions_src_clone = functions_src.clone();
+        tokio::spawn(async move {
+            if let Err(e) = watch_functions(&functions_src_clone, &build_dir_clone, DEFAULT_SERVER_PORT).await {
+                eprintln!("file watcher error: {e}");
+            }
+        });
+        println!(
+            "  {} watcher         watching {}",
+            "✔".green().bold(),
+            "functions/".cyan(),
+        );
+    }
+
+    // 8. First-run: if no admin account exists, prompt to create one.
+    prompt_admin_setup_if_needed(DEFAULT_SERVER_PORT).await;
+
+    // 9. Print banner
+    print_banner(DEFAULT_SERVER_PORT);
+
+    // 10. Wait for Ctrl+C or server exit
+    tokio::select! {
+        result = server.wait() => {
+            let status = result?;
+            if !status.success() {
+                let code = status.code().unwrap_or(-1);
+                bail!("Flux server exited with status {}", code);
+            }
+        }
+        _ = signal::ctrl_c() => {
+            println!();
+            println!("{}", "Stopping…".dimmed());
+            // Send SIGTERM first so the server closes its DB connections
+            // gracefully; give it up to 3 s before forcing SIGKILL.
+            if let Some(pid) = server.id() {
+                #[cfg(unix)]
+                let _ = std::process::Command::new("kill")
+                    .args(["-s", "TERM", &pid.to_string()])
+                    .status();
+                tokio::select! {
+                    _ = server.wait() => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
+                        let _ = server.kill().await;
+                        let _ = server.wait().await;
+                    }
+                }
+            } else {
+                let _ = server.kill().await;
+                let _ = server.wait().await;
+            }
+        }
+    }
+
+    // 11. Stop embedded PostgreSQL if we started it.
+    // Cap the shutdown at 5 s to avoid hanging the terminal on Ctrl+C.
+    println!("{}", "Stopping PostgreSQL…".dimmed());
+    if let Some(pg) = _pg {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            pg.stop(),
+        ).await;
+    }
+    println!("{}", "✔  Stopped.".green());
+
+    Ok(())
 }
 
-fn default_services() -> Vec<ServiceInfo> {
-    vec![
-        ServiceInfo { name: "db",        label: "postgres", port: DEFAULT_DB_PORT,        local_mode: false },
-        ServiceInfo { name: "flux",      label: "server",   port: DEFAULT_SERVER_PORT,    local_mode: true  },
-        ServiceInfo { name: "dashboard", label: "spa",      port: DEFAULT_DASHBOARD_PORT, local_mode: false },
-    ]
+/// Load all key-value pairs from the `.env` file at `project_root`.
+///
+/// - Skips `DATABASE_URL` (handled separately by `resolve_database`).
+/// - Skips lines that fail to parse (malformed entries don't abort startup).
+/// - Returns an empty vec if the file doesn't exist.
+///
+/// Uses `dotenvy` for correct handling of quotes, escapes, and comments.
+fn load_dot_env(project_root: &Path) -> Vec<(String, String)> {
+    let path = project_root.join(".env");
+    if !path.exists() {
+        return vec![];
+    }
+    let Ok(iter) = dotenvy::from_path_iter(&path) else {
+        return vec![];
+    };
+    iter.flatten()
+        .filter(|(k, _)| k != "DATABASE_URL")
+        .collect()
 }
 
-// ── Filesystem helpers ────────────────────────────────────────────────────────
+// ── PostgreSQL ────────────────────────────────────────────────────────────────
 
-/// Walk upward from cwd looking for `docker-compose.dev.yml`, like git finds `.git`.
-fn find_compose_file() -> Option<PathBuf> {
+/// Resolve `DATABASE_URL` and optionally start embedded Postgres.
+///
+/// Returns `(url, Some(pg))` when embedded Postgres was started.
+/// Returns `(url, None)` when using an external DATABASE_URL.
+///
+/// Priority:
+///   1. `DATABASE_URL` shell environment variable
+///   2. `DATABASE_URL` in `.env` file at project root
+///   3. Embedded Postgres (auto-start, zero-config)
+async fn resolve_database(
+    project_root: &Path,
+) -> anyhow::Result<(String, Option<postgresql_embedded::PostgreSQL>)> {
+    // 1. Shell env var (highest priority — overrides everything)
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        if !url.is_empty() {
+            println!(
+                "  {} database        {}",
+                "✔".green().bold(),
+                "(DATABASE_URL from environment)".dimmed()
+            );
+            return Ok((url, None));
+        }
+    }
+
+    // 2. .env file at project root
+    let dot_env_path = project_root.join(".env");
+    if dot_env_path.exists() {
+        // dotenvy::from_path_iter gives us key-value pairs without mutating
+        // the process environment (we only want DATABASE_URL, not everything).
+        if let Ok(iter) = dotenvy::from_path_iter(&dot_env_path) {
+            for item in iter.flatten() {
+                if item.0 == "DATABASE_URL" && !item.1.is_empty() {
+                    println!(
+                        "  {} database        {}",
+                        "✔".green().bold(),
+                        "(.env DATABASE_URL)".dimmed()
+                    );
+                    return Ok((item.1, None));
+                }
+            }
+        }
+    }
+
+    // 3. Embedded Postgres — zero-config default
+    let (pg, port) = start_postgres(project_root).await?;
+    let url = format!(
+        "postgres://{}:{}@localhost:{}/{}",
+        DEV_DB_USER, DEV_DB_PASS, port, DEV_DB_NAME
+    );
+    Ok((url, Some(pg)))
+}
+
+async fn start_postgres(project_root: &Path) -> anyhow::Result<(postgresql_embedded::PostgreSQL, u16)> {
+    use postgresql_embedded::{PostgreSQL, Settings};
+
+    // Per-project data directory — each project has completely isolated state.
+    let data_dir = project_root.join(".flux").join("dev").join("pgdata");
+    std::fs::create_dir_all(&data_dir)
+        .context("Failed to create .flux/dev/pgdata/")?;
+
+    // Resolve a stable per-project port. Written to .flux/dev/port on first
+    // run so every subsequent `flux dev` in this project uses the same port.
+    let port = resolve_db_port(project_root)?;
+
+    // Cache directory for the downloaded Postgres binary — shared across all projects.
+    let cache_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".flux")
+        .join("cache")
+        .join("postgres");
+    std::fs::create_dir_all(&cache_dir)
+        .context("Failed to create ~/.flux/cache/postgres/")?;
+
+    print!("  {} PostgreSQL      downloading if needed… ", "↓".blue().bold());
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+
+    // postgresql_embedded uses settings.password as the postgres superuser's
+    // password (written to --pwfile during initdb). We reuse DEV_DB_PASS so
+    // bootstrap_dev_db() can always connect as postgres with a known password.
+    let settings = Settings {
+        username:         DEV_DB_USER.into(),
+        password:         DEV_DB_PASS.into(),
+        data_dir:         data_dir.clone(),
+        port,
+        temporary:        false,
+        installation_dir: cache_dir,
+        ..Default::default()
+    };
+
+    let mut pg = PostgreSQL::new(settings);
+
+    // setup() downloads the binary on first run (cached after that).
+    pg.setup().await.context("Failed to set up embedded PostgreSQL")?;
+
+    // If postgres is already listening, reuse it rather than starting a second
+    // instance (which causes postgresql_embedded to fast-shutdown the running one).
+    let already_running = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+        .await
+        .is_ok();
+
+    if already_running {
+        let pid_file = data_dir.join("postmaster.pid");
+        if !pid_file.exists() {
+            bail!(
+                "Port {} is in use by a different process (no postmaster.pid). \
+                Stop whatever is using it or delete .flux/dev/port to pick a new port.",
+                port
+            );
+        }
+        // Postgres is already healthy — skip start.
+    } else {
+        pg.start().await.context("Failed to start embedded PostgreSQL")?;
+    }
+
+    // Create the 'flux' app role and dev database (idempotent).
+    bootstrap_dev_db(port).await?;
+
+    println!("\r  {} postgres        localhost:{}         ",
+        "✔".green().bold(),
+        port.to_string().cyan(),
+    );
+
+    Ok((pg, port))
+}
+
+/// Create the `flux` role and `fluxbase_dev` database if they don't exist.
+///
+/// `postgresql_embedded` runs `initdb --auth=password --pwfile=<file>` where
+/// the file contains `DEV_DB_PASS`. This means the `postgres` superuser has
+/// `DEV_DB_PASS` as its password — no pg_hba.conf patching needed.
+async fn bootstrap_dev_db(port: u16) -> anyhow::Result<()> {
+    // Connect as the postgres superuser using its known password.
+    let su_url = format!(
+        "postgres://postgres:{}@127.0.0.1:{}/postgres",
+        DEV_DB_PASS, port,
+    );
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(&su_url)
+        .await
+        .context("Could not connect to embedded Postgres as superuser")?;
+
+    // Create app role if missing. search_path = public prevents the "$user"
+    // pattern from routing _sqlx_migrations to the flux schema.
+    sqlx::query(&format!(
+        "DO $$ BEGIN \
+           IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{user}') THEN \
+             CREATE ROLE {user} WITH LOGIN PASSWORD '{pass}' SUPERUSER; \
+           END IF; \
+           ALTER ROLE {user} SET search_path = public; \
+         END $$",
+        user = DEV_DB_USER,
+        pass = DEV_DB_PASS,
+    ))
+    .execute(&pool)
+    .await
+    .context("Failed to create dev role")?;
+
+    // Create dev database if missing.
+    let db_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)"
+    )
+    .bind(DEV_DB_NAME)
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(false);
+
+    if !db_exists {
+        sqlx::query(&format!("CREATE DATABASE {} OWNER {}", DEV_DB_NAME, DEV_DB_USER))
+            .execute(&pool)
+            .await
+            .context("Failed to create dev database")?;
+    }
+
+    Ok(())
+}
+
+// ── Migrations ────────────────────────────────────────────────────────────────
+
+// Flux system migrations embedded at compile-time — always available regardless
+// of where the CLI is installed. The three migration sets share the same
+// _sqlx_migrations tracking table; `set_ignore_missing(true)` prevents each
+// migrator from rejecting migrations it doesn't own.
+static API_MIGRATIONS: sqlx::migrate::Migrator =
+    sqlx::migrate!("../schemas/api");
+
+static DE_MIGRATIONS: sqlx::migrate::Migrator =
+    sqlx::migrate!("../schemas/data-engine");
+
+static QUEUE_MIGRATIONS: sqlx::migrate::Migrator =
+    sqlx::migrate!("../schemas/queue");
+
+async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Result<usize> {
+    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+
+    // Parse the database URL and override search_path to force public schema.
+    // The `flux` role's "$user" search_path would otherwise resolve to the
+    // `flux` schema, sending _sqlx_migrations tracking to the wrong table.
+    let opts = PgConnectOptions::from_str(database_url)
+        .context("Invalid DATABASE_URL")?
+        .options([("search_path", "public")]);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect_with(opts)
+        .await
+        .context("Failed to connect to dev PostgreSQL")?;
+
+    // If DE migrations were previously tracked in flux._sqlx_migrations (the
+    // wrong table), merge them into public._sqlx_migrations so idempotency works.
+    let _ = sqlx::query(
+        "INSERT INTO public._sqlx_migrations
+         SELECT * FROM flux._sqlx_migrations
+         WHERE EXISTS (
+             SELECT 1 FROM information_schema.tables
+             WHERE table_schema = 'flux' AND table_name = '_sqlx_migrations'
+         )
+         ON CONFLICT (version) DO NOTHING"
+    )
+    .execute(&pool)
+    .await;
+
+    // Build mutable copies of the static migrators so we can enable
+    // ignore_missing — prevents each set from rejecting migrations owned by
+    // the other set in the shared _sqlx_migrations tracking table.
+    let api_m = sqlx::migrate::Migrator {
+        migrations:      std::borrow::Cow::Borrowed(API_MIGRATIONS.migrations.as_ref()),
+        ignore_missing:  true,
+        locking:         true,
+        no_tx:           false,
+    };
+    api_m.run(&pool).await
+        .context("Failed to apply Flux API migrations")?;
+
+    let de_m = sqlx::migrate::Migrator {
+        migrations:      std::borrow::Cow::Borrowed(DE_MIGRATIONS.migrations.as_ref()),
+        ignore_missing:  true,
+        locking:         true,
+        no_tx:           false,
+    };
+    de_m.run(&pool).await
+        .context("Failed to apply Flux data-engine migrations")?;
+
+    let queue_m = sqlx::migrate::Migrator {
+        migrations:      std::borrow::Cow::Borrowed(QUEUE_MIGRATIONS.migrations.as_ref()),
+        ignore_missing:  true,
+        locking:         true,
+        no_tx:           false,
+    };
+    queue_m.run(&pool).await
+        .context("Failed to apply Flux queue migrations")?;
+
+    pool.close().await;
+    Ok(API_MIGRATIONS.migrations.len() + DE_MIGRATIONS.migrations.len() + QUEUE_MIGRATIONS.migrations.len())
+}
+
+// ── Server ────────────────────────────────────────────────────────────────────
+
+async fn start_server(port: u16, database_url: &str, extra_env: &[(String, String)], build_dir: &Path) -> anyhow::Result<tokio::process::Child> {
+    let binary = find_server_binary()
+        .ok_or_else(|| anyhow::anyhow!(
+            "Flux server binary not found.\n  Run `cargo build` first, or install Flux."
+        ))?;
+
+    print!("  {} flux server     starting… ", "◆".blue());
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+
+    let mut cmd = Command::new(&binary);
+    cmd.env("PORT", port.to_string())
+        .env("DATABASE_URL", database_url)
+        .env("FLUX_LOCAL", "true")
+        .env("LOCAL_MODE", "true")
+        .env("RUST_LOG", "warn")
+        // Bundles live in the local build dir; runtime reads from here instead of DB.
+        .env("FLUX_FUNCTIONS_DIR", build_dir.as_os_str());
+
+    // Inject all .env vars so they are available in ctx.secrets / ctx.env
+    // inside functions without needing a real secrets backend.
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+
+    let child = cmd
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .with_context(|| format!("Failed to start server binary: {:?}", binary))?;
+
+    // Health-check until the server is ready.
+    let ready = wait_healthy(&format!("http://localhost:{}", port), "/health", 30).await;
+
+    if ready {
+        println!("\r  {} flux server     localhost:{}         ",
+            "✔".green().bold(),
+            port.to_string().cyan(),
+        );
+    } else {
+        println!("\r  {} flux server     localhost:{} (still starting…)",
+            "⚠".yellow().bold(),
+            port.to_string().cyan(),
+        );
+    }
+
+    Ok(child)
+}
+
+// ── First-run admin setup ─────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AuthStatus { user_count: u64 }
+
+/// After the server starts, silently check if any admin account exists.
+/// If not, print a one-time prompt so the developer can immediately log into
+/// the dashboard without having to remember a separate CLI command.
+async fn prompt_admin_setup_if_needed(port: u16) {
+    let base = format!("http://localhost:{}/flux/api", port);
+    let Ok(res) = reqwest::get(format!("{}/auth/status", base)).await else { return };
+    let Ok(status) = res.json::<AuthStatus>().await else { return };
+    if status.user_count > 0 { return; }   // already set up
+
+    println!();
+    println!("  {} No admin account found.", "→".cyan().bold());
+    println!("  Run {} to create one and open the dashboard:", "flux login".cyan().bold());
+    println!("  Or call: {} to do it now? [y/N] ", "admin setup".cyan());
+
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_ok() && line.trim().eq_ignore_ascii_case("y") {
+        if let Err(e) = crate::auth::execute().await {
+            println!("  {} {}", "✗".red(), e);
+        }
+    } else {
+        println!("  Run {} whenever you're ready.\n", "flux login".cyan().bold());
+    }
+}
+
+// ── Banner ────────────────────────────────────────────────────────────────────
+
+fn print_banner(port: u16) {
+    println!();
+    println!("  {}  http://localhost:{}", "Flux  ".bold(), port.to_string().cyan().bold());
+    println!("  {}  http://localhost:{}/flux/api", "API   ".bold(), port.to_string().cyan());
+    println!("  {}  http://localhost:{}/flux", "Dash  ".bold(), port.to_string().cyan());
+    println!();
+    println!("  {}  — call a function",   "flux invoke <fn>  ".cyan());
+    println!("  {}  — inspect a request", "flux trace <id>   ".cyan());
+    println!("  {}  — root-cause error",  "flux why <id>     ".cyan());
+    println!("  {}  — regenerate types",  "flux generate     ".cyan());
+    println!();
+    println!("{}", "  Press Ctrl+C to stop.".dimmed());
+    println!();
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Return a stable per-project Postgres port.
+///
+/// On first run: scan for a free port starting at `DEV_DB_PORT_START`,
+/// write it to `.flux/dev/port`, return it.
+///
+/// On subsequent runs: read the stored port and return it unchanged.
+/// This guarantees DATABASE_URL is stable across restarts and that two
+/// projects running simultaneously never bind the same port.
+fn resolve_db_port(project_root: &Path) -> anyhow::Result<u16> {
+    let port_file = project_root.join(".flux").join("dev").join("port");
+
+    // If we already assigned a port for this project, reuse it.
+    if port_file.exists() {
+        let raw = std::fs::read_to_string(&port_file)
+            .context("Failed to read .flux/dev/port")?;
+        if let Ok(p) = raw.trim().parse::<u16>() {
+            return Ok(p);
+        }
+    }
+
+    // First run — find a free port.
+    let port = find_free_port(DEV_DB_PORT_START)
+        .ok_or_else(|| anyhow::anyhow!("No free port available in range 5433–5600"))?;
+
+    // Persist so every subsequent run uses the same port.
+    if let Some(parent) = port_file.parent() {
+        std::fs::create_dir_all(parent).context("Failed to create .flux/dev/")?;
+    }
+    std::fs::write(&port_file, port.to_string())
+        .context("Failed to write .flux/dev/port")?;
+
+    Ok(port)
+}
+
+/// Scan from `start` upward to find a TCP port not currently in use.
+fn find_free_port(start: u16) -> Option<u16> {
+    use std::net::TcpListener;
+    (start..5600).find(|&p| TcpListener::bind(("127.0.0.1", p)).is_ok())
+}
+
+/// Walk upward from cwd to find a directory containing `schemas/`, `.flux/`,
+/// or `flux.toml` — that's the project root.
+fn find_project_root() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
-        let candidate = dir.join(COMPOSE_FILE);
-        if candidate.exists() {
-            return Some(candidate);
+        if dir.join("schemas").exists()
+            || dir.join(".flux").exists()
+            || dir.join("flux.toml").exists()
+        {
+            return Some(dir);
         }
         if !dir.pop() {
             return None;
@@ -71,28 +622,146 @@ fn find_compose_file() -> Option<PathBuf> {
     }
 }
 
-/// Build the base `docker compose` argument list.
-fn compose_args(compose_path: &Path) -> Vec<String> {
-    let mut args = vec![
-        "compose".to_string(),
-        "-f".to_string(),
-        compose_path.to_string_lossy().into_owned(),
-    ];
-    // Inject .env.dev when it exists alongside the compose file.
-    if let Some(parent) = compose_path.parent() {
-        let env_path = parent.join(ENV_FILE);
-        if env_path.exists() {
-            args.push("--env-file".to_string());
-            args.push(env_path.to_string_lossy().into_owned());
-        }
-    }
-    args
+/// Public wrapper used by other CLI commands (e.g. `db_push`).
+pub fn find_project_root_pub() -> Option<PathBuf> {
+    find_project_root()
 }
 
-// ── Health check ──────────────────────────────────────────────────────────────
+/// Resolve the `server` binary: alongside the flux binary, then
+/// workspace target/debug or target/release, then PATH.
+fn find_server_binary() -> Option<PathBuf> {
+    // 1. Alongside the flux binary (distribution layout)
+    if let Ok(exe) = std::env::current_exe() {
+        let candidate = exe.parent()?.join(if cfg!(windows) { "server.exe" } else { "server" });
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
 
-/// Poll `base_url + path` until an HTTP 2xx arrives or `timeout_secs` elapses.
-/// Returns `true` on success, `false` on timeout.
+    // 2. Workspace target/debug or target/release
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let debug   = dir.join("target").join("debug")
+            .join(if cfg!(windows) { "server.exe" } else { "server" });
+        let release = dir.join("target").join("release")
+            .join(if cfg!(windows) { "server.exe" } else { "server" });
+        if debug.exists()   { return Some(debug);   }
+        if release.exists() { return Some(release); }
+        if dir.join("Cargo.toml").exists() { break; }
+        if !dir.pop() { break; }
+    }
+
+    // 3. PATH
+    which::which("server").ok()
+}
+
+/// Watch `functions/` for source file changes. On any write/create event:
+///  1. Determine which function changed (parent directory name)
+///  2. Re-bundle via the same logic used by `flux deploy`
+///  3. Write the result to `{build_dir}/{name}.js|.wasm`
+///  4. POST cache invalidation to the local dev server so the new bundle is picked up
+///
+/// Debounces events with a 200 ms window to avoid double-rebuilds on editor saves.
+async fn watch_functions(functions_dir: &Path, build_dir: &Path, port: u16) -> anyhow::Result<()> {
+    use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+    let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
+    watcher.watch(functions_dir, RecursiveMode::Recursive)?;
+
+    // Per-function debounce: track last rebuild time.
+    let mut last_built: HashMap<String, Instant> = HashMap::new();
+    let debounce = Duration::from_millis(200);
+
+    loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(event)) => {
+                let is_write = matches!(
+                    event.kind,
+                    EventKind::Modify(_) | EventKind::Create(_)
+                );
+                if !is_write { continue; }
+
+                for path in &event.paths {
+                    // Ignore build outputs inside functions/<name>/dist/ — those are written by
+                    // bundle_js itself and would cause an infinite rebuild loop.
+                    if path.components().any(|c| c.as_os_str() == "dist" || c.as_os_str() == "node_modules") {
+                        continue;
+                    }
+
+                    // Derive function name from the immediate child dir of functions_dir.
+                    let func_name = path
+                        .strip_prefix(functions_dir)
+                        .ok()
+                        .and_then(|rel| rel.components().next())
+                        .and_then(|c| c.as_os_str().to_str())
+                        .map(str::to_owned);
+
+                    let name = match func_name {
+                        Some(n) => n,
+                        None => continue,
+                    };
+
+                    // Debounce: skip if rebuilt within the last 200 ms.
+                    let now = Instant::now();
+                    if let Some(last) = last_built.get(&name) {
+                        if now.duration_since(*last) < debounce { continue; }
+                    }
+                    last_built.insert(name.clone(), now);
+
+                    let func_dir = functions_dir.join(&name);
+                    let flux_json = func_dir.join("flux.json");
+                    if !flux_json.exists() { continue; }
+
+                    let metadata: serde_json::Value = match std::fs::read_to_string(&flux_json)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                    {
+                        Some(v) => v,
+                        None => continue,
+                    };
+
+                    match crate::deploy::bundle_function(&func_dir, &metadata) {
+                        Ok(bundle) => {
+                            let ext = if bundle.runtime == "wasm" { "wasm" } else { "js" };
+                            let dest = build_dir.join(format!("{name}.{ext}"));
+                            if std::fs::write(&dest, &bundle.bytes).is_ok() {
+                                // Invalidate the runtime cache for this function.
+                                let url = format!(
+                                    "http://localhost:{port}/flux/api/internal/cache/invalidate"
+                                );
+                                let _ = reqwest::Client::new()
+                                    .post(&url)
+                                    .header("X-Service-Token", "dev-service-token")
+                                    .json(&serde_json::json!({ "function_id": name }))
+                                    .send()
+                                    .await;
+                                println!(
+                                    "  {} rebuilt         {}",
+                                    "↺".cyan().bold(),
+                                    name.cyan()
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            println!(
+                                "  {} rebuild failed  {} — {e}",
+                                "✘".red().bold(),
+                                name.red()
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(Err(e)) => eprintln!("watch error: {e}"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(())
+}
+
 async fn wait_healthy(base_url: &str, path: &str, timeout_secs: u64) -> bool {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
@@ -103,167 +772,11 @@ async fn wait_healthy(base_url: &str, path: &str, timeout_secs: u64) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
 
     loop {
-        if tokio::time::Instant::now() >= deadline {
-            return false;
+        if tokio::time::Instant::now() >= deadline { return false; }
+        if let Ok(r) = client.get(&url).send().await {
+            if r.status().is_success() { return true; }
         }
-        match client.get(&url).send().await {
-            Ok(r) if r.status().is_success() => return true,
-            _ => tokio::time::sleep(Duration::from_millis(500)).await,
-        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
-}
-
-// ── Main entry point ──────────────────────────────────────────────────────────
-
-pub async fn execute() -> anyhow::Result<()> {
-    // ── Prereq checks ────────────────────────────────────────────────────────
-    if which::which("docker").is_err() {
-        anyhow::bail!(
-            "'docker' not found.\n  Install Docker Desktop: https://docs.docker.com/desktop/"
-        );
-    }
-
-    let compose_path = find_compose_file().ok_or_else(|| {
-        anyhow::anyhow!(
-            "'{}' not found.\n  Run `flux dev` from your project root.",
-            COMPOSE_FILE
-        )
-    })?;
-
-    // ── Apply flux.toml [dev] port overrides ─────────────────────────────────
-    let mut services = default_services();
-    if let Some(t) = FluxToml::load_sync() {
-        for svc in services.iter_mut() {
-            let override_port = match svc.name {
-                "flux" => t.dev.gateway_port,  // single server reuses gateway_port override
-                _      => None,
-            };
-            if let Some(p) = override_port {
-                svc.port = p;
-            }
-        }
-    }
-
-    // ── Print service table ──────────────────────────────────────────────────
-    println!();
-    println!("{}", "\u{25b6}  Starting Flux dev stack \u{2026}".cyan().bold());
-    println!();
-
-    for svc in &services {
-        let badge = if svc.local_mode {
-            format!("  {}", "LOCAL_MODE=true".yellow())
-        } else {
-            String::new()
-        };
-        println!(
-            "   {:<14}  {:<12}  :{}{}",
-            svc.name.bold(),
-            svc.label.dimmed(),
-            svc.port.to_string().cyan(),
-            badge,
-        );
-    }
-    println!();
-
-    // Warn if .env.dev is missing.
-    if let Some(parent) = compose_path.parent() {
-        if !parent.join(ENV_FILE).exists() {
-            println!(
-                "{} {} not found \u{2014} copy {} to configure secrets",
-                "\u{26a0}".yellow().bold(),
-                ENV_FILE.cyan(),
-                ".env.dev.example".cyan(),
-            );
-            println!();
-        }
-    }
-
-    // ── Resolve ports for health checks and ready banner ────────────────────
-    let flux_port = port_of(&services, "flux").unwrap_or(DEFAULT_SERVER_PORT);
-    let dash_port = port_of(&services, "dashboard").unwrap_or(DEFAULT_DASHBOARD_PORT);
-
-    // ── Launch docker compose (async, non-blocking) ──────────────────────────
-    //
-    // Uses tokio::process::Command so the child process is tracked by the
-    // tokio runtime and can be killed when Ctrl+C fires.
-    let mut args = compose_args(&compose_path);
-    args.push("up".to_string());
-    args.push("--remove-orphans".to_string());
-
-    let mut child = Command::new("docker")
-        .args(&args)
-        .env("FLUX_LOCAL", "true")
-        // Inherit stdio so combined compose logs stream to the terminal.
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                anyhow::anyhow!("'docker' not found \u{2014} install Docker Desktop first")
-            } else {
-                anyhow::anyhow!("Failed to start docker compose: {}", e)
-            }
-        })?;
-
-    // Give the server a moment to initialise before health-checking.
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    // Health-check the single monolithic server.
-    let flux_url = format!("http://localhost:{}", flux_port);
-    let flux_ok = wait_healthy(&flux_url, "/health", 60).await;
-
-    println!();
-    if flux_ok {
-        println!("{}", "\u{2714}  Flux is running.".green().bold());
-    } else {
-        println!(
-            "{}", "\u{26a0}  Server is still starting — check logs above.".yellow().bold()
-        );
-    }
-    println!();
-    println!("   {}  http://localhost:{}",           "Flux ".bold(), flux_port.to_string().cyan());
-    println!("   {}  http://localhost:{}/flux/api",   "API  ".bold(), flux_port.to_string().cyan());
-    println!("   {}  http://localhost:{}/flux",       "Dash ".bold(), dash_port.to_string().cyan());
-    println!();
-    println!("   {}  \u{2014} call a function",    "flux invoke <fn>   ".cyan().bold());
-    println!("   {}  \u{2014} deploy functions",   "flux deploy        ".cyan().bold());
-    println!("   {}  \u{2014} inspect a request",  "flux trace <id>    ".cyan().bold());
-    println!("   {}  \u{2014} root-cause an error","flux why <id>      ".cyan().bold());
-    println!();
-    println!("{}", "Press Ctrl+C to stop.".dimmed());
-    println!();
-
-    // ── Wait for compose to exit or Ctrl+C ────────────────────────────────────
-    //
-    // `tokio::select!` races the child process against the interrupt signal.
-    // On Ctrl+C we send SIGTERM to the child process group so all containers
-    // are stopped cleanly (docker compose handles its own cleanup).
-    tokio::select! {
-        result = child.wait() => {
-            let status = result?;
-            if !status.success() {
-                // Non-zero exit (e.g. compose failed to start a service).
-                let code = status.code().unwrap_or(-1);
-                anyhow::bail!("docker compose exited with status {}", code);
-            }
-        }
-        _ = signal::ctrl_c() => {
-            println!();
-            println!("{}", "Stopping…".dimmed());
-            // Kill the docker compose child; the compose process will in turn
-            // stop all containers it manages.
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            println!("{}", "\u{2714}  Stack stopped.".green());
-        }
-    }
-
-    Ok(())
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn port_of(services: &[ServiceInfo], name: &str) -> Option<u16> {
-    services.iter().find(|s| s.name == name).map(|s| s.port)
 }
 

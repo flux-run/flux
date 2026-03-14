@@ -6,7 +6,6 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use uuid::Uuid;
 
 use job_contract::dispatch::QueueDispatch;
 
@@ -22,9 +21,8 @@ impl QueueDispatch for HttpQueueDispatch {
     async fn push_job(
         &self,
         function_id: &str,
-        project_id:  Option<Uuid>,
         payload:     Value,
-        delay_ms:    Option<u64>,
+        delay_seconds: Option<u64>,
         idempotency_key: Option<String>,
     ) -> Result<(), String> {
         let url = format!("{}/jobs", self.queue_url.trim_end_matches('/'));
@@ -33,11 +31,8 @@ impl QueueDispatch for HttpQueueDispatch {
             "function_id": function_id,
             "payload":     payload,
         });
-        if let Some(pid) = project_id {
-            body["project_id"] = serde_json::json!(pid.to_string());
-        }
-        if let Some(d) = delay_ms {
-            body["delay_ms"] = serde_json::json!(d);
+        if let Some(d) = delay_seconds {
+            body["delay_seconds"] = serde_json::json!(d);
         }
         if let Some(k) = idempotency_key {
             body["idempotency_key"] = serde_json::json!(k);

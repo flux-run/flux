@@ -17,7 +17,7 @@ use crate::{AppState, types::context::RequestContext};
 
 pub async fn proxy_handler(
     State(state): State<AppState>,
-    Extension(context): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     req: Request,
 ) -> Result<Response, StatusCode> {
     let method     = req.method().clone();
@@ -70,13 +70,12 @@ pub async fn proxy_handler(
     }
 
     // Internal-service token so data-engine can trust the call.
-    let token = std::env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "fluxbase_secret_token".to_string());
+    let token = crate::middleware::require_secret(
+        "INTERNAL_SERVICE_TOKEN",
+        "dev-service-token",
+        "Internal service token (INTERNAL_SERVICE_TOKEN)",
+    );
     rb = rb.header("x-service-token", token);
-
-    // Inject resolved tenant/project context headers for the data-engine.
-    rb = rb.header("x-tenant-id", context.tenant_id.to_string());
-    rb = rb.header("x-project-id", context.project_id.to_string());
 
     if !body_bytes.is_empty() {
         rb = rb.body(body_bytes.to_vec());

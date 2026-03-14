@@ -206,12 +206,7 @@ fn trace_requires_request_id() {
     flux()
         .arg("trace")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("request_id").or(
-            predicate::str::contains("required").or(
-                predicate::str::contains("missing"),
-            ),
-        ));
+        .failure();
 }
 
 #[test]

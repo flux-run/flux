@@ -1,4 +1,4 @@
-.PHONY: dev api dashboard build migrate install clean test-async-wiring test-platform deploy-with-migrate
+.PHONY: dev api dashboard server build migrate install clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types check-types
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API + dashboard in parallel, printing labelled output.
@@ -10,8 +10,14 @@ dev:
 api:
 	cd api && SQLX_OFFLINE=true cargo run
 
+# Runs the Next.js dev server (hot-reload).
+# Use `cargo build -p server` to get the *production* static export baked in.
 dashboard:
 	cd dashboard && npm run dev
+
+# Monolith — builds dashboard static export then compiles the server binary.
+server:
+	SQLX_OFFLINE=true cargo build -p server
 
 # ── Build (production artefacts) ────────────────────────────────────────────
 # Builds all services using the new build script.
@@ -68,6 +74,19 @@ clean:
 	cd api && cargo clean
 	cd dashboard && rm -rf dist node_modules/.vite
 
+# ── API Types (TypeScript codegen) ──────────────────────────────────────────
+# Generates TypeScript bindings from Rust types via ts-rs.
+# Output: shared/api_contract/bindings/*.ts  (consumed by packages/api-types)
+generate-types:
+	cargo test -p api_contract --features ts
+	@echo "TypeScript bindings written to shared/api_contract/bindings/"
+
+# Verifies the dashboard compiles against the current contract types.
+# Run this after `make generate-types` to catch dashboard type mismatches.
+check-types:
+	cd dashboard && npx tsc --noEmit
+	@echo "Dashboard type check passed"
+
 # ── Async Wiring Test ───────────────────────────────────────────────────────
 # Runs deterministic staging wiring test for Gateway -> Queue -> Worker -> Runtime.
 # Required env vars are documented in scripts/test_async_wiring.sh
@@ -75,4 +94,11 @@ test-async-wiring:
 	./scripts/test_async_wiring.sh
 
 test-platform:
+	./scripts/platform-tests/run_all.sh
+
+test-product-loop:
+	./scripts/platform-tests/execution_record_test.sh
+	./scripts/platform-tests/state_audit_test.sh
+
+test-system:
 	./scripts/platform-tests/run_all.sh

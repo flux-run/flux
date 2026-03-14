@@ -12,5 +12,5 @@ pub fn init() {
                 .unwrap_or_else(|_| "data_engine=debug,tower_http=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
-        .init();
+        .try_init().ok();
 }

@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 
-mod agent;
 mod api_key;
 mod auth;
 mod bisect;
@@ -43,7 +42,15 @@ mod trace_diff;
 mod upgrade;
 mod version_cmd;
 mod whoami;
+mod context;
+mod db_push;
+mod new_function;
 mod why;
+mod generate;
+mod toolchain;
+mod workflow;
+mod agent;
+mod tool;
 #[derive(Parser)]
 #[command(name = "flux")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -113,8 +120,12 @@ enum BugCommands {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Authenticate with Fluxbase
+    /// Login to the Flux dashboard (prompts for email + password).
+    /// On first run, creates the initial admin account.
     Login,
+    /// Create the initial admin account (alias for `flux login` on first run).
+    #[command(name = "admin-setup", visible_alias = "setup")]
+    AdminSetup,
     /// Show the current authenticated identity
     Whoami,
 
@@ -136,14 +147,31 @@ enum Commands {
         #[command(subcommand)]
         command: functions::FunctionCommands,
     },
+
+    // ── Toolchain ─────────────────────────────────────────────────────────────
+    /// Manage pinned language runtimes and compilers
+    Toolchain {
+        #[command(subcommand)]
+        command: toolchain::ToolchainCommand,
+    },
     /// Deploy to Fluxbase.
     ///
     /// In a function directory (has flux.json): deploys that single function.
     /// At the project root: discovers and deploys all function sub-directories.
     Deploy {
+        /// Override the active context (e.g. --context prod)
         #[arg(long)]
+        context: Option<String>,
+        /// Deploy only the named functions (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        only: Option<Vec<String>>,
+        /// Skip hash check and redeploy all functions
+        #[arg(long)]
+        force: bool,
+        // Kept for backward compatibility — not used in the new deploy flow.
+        #[arg(long, hide = true)]
         name: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         runtime: Option<String>,
     },
     /// Invoke a deployed function
@@ -187,24 +215,15 @@ enum Commands {
     ///
     /// Examples:
     ///   flux init
-    ///   flux init --name my-api --runtime bun
-    ///   flux init --gateway-port 4000 --api-port 8080
+    ///   flux init --name my-api
+    ///   flux init --gateway-port 4000
     Init {
-        /// Project name (written to flux.toml `name` field)
-        #[arg(long, value_name = "NAME")]
+        /// Project name — creates a new directory. Defaults to current directory name.
+        #[arg(value_name = "NAME")]
         name: Option<String>,
-        /// Runtime identifier (nodejs20 | bun | deno). Default: nodejs20
-        #[arg(long, value_name = "RUNTIME")]
-        runtime: Option<String>,
-        /// Override local API port in [dev] section
-        #[arg(long, value_name = "PORT")]
-        api_port: Option<u16>,
         /// Override local gateway port in [dev] section
         #[arg(long, value_name = "PORT")]
         gateway_port: Option<u16>,
-        /// Override local runtime port in [dev] section
-        #[arg(long, value_name = "PORT")]
-        runtime_port: Option<u16>,
     },
 
     /// Dry-run a query: show the compiler output, applied policies, complexity score, and
@@ -460,12 +479,24 @@ enum Commands {
         command: gateway::GatewayCommands,
     },
 
-    // ── Agents, Schedules ─────────────────────────────────────────────────────
-    /// AI Agent operations (create, deploy, run, simulate)
+    // ── Workflows, Agents, Tools ──────────────────────────────────────────────
+    /// Workflow management (list, create, run)
+    Workflow {
+        #[command(subcommand)]
+        command: workflow::WorkflowCommands,
+    },
+    /// Agent management (list, create, simulate)
     Agent {
         #[command(subcommand)]
         command: agent::AgentCommands,
     },
+    /// Tool management (list)
+    Tool {
+        #[command(subcommand)]
+        command: tool::ToolCommands,
+    },
+
+    // ── Schedules, Queues, Events ─────────────────────────────────────────────
     /// Scheduled job management (create, pause, resume, history)
     Schedule {
         #[command(subcommand)]
@@ -500,6 +531,18 @@ enum Commands {
         #[command(subcommand)]
         command: db::DbCommands,
     },
+    /// Apply user SQL migrations from schemas/ to the connected Flux database.
+    ///
+    /// Migrations are tracked in flux.user_migrations and applied idempotently.
+    /// Works with any context: `flux db push --context prod`
+    DbPush {
+        /// Named context to connect to (default: active context)
+        #[arg(long, short, value_name = "NAME")]
+        context: Option<String>,
+        /// Migrations directory (default: schemas/ or flux.toml db.migrations_dir)
+        #[arg(long, short, value_name = "DIR")]
+        dir: Option<String>,
+    },
 
     // ── SDK ───────────────────────────────────────────────────────────────────
     /// Pull the TypeScript SDK for the current project
@@ -519,23 +562,48 @@ enum Commands {
         #[arg(long, short, value_name = "FILE")]
         sdk: Option<String>,
     },
+    /// Generate typed ctx bindings for all languages from the live project schema.
+    ///
+    /// Writes .flux/manifest.json and generates:
+    ///   .flux/types.d.ts  (TypeScript)
+    ///   .flux/ctx.js      (JavaScript)
+    ///   .flux/ctx.rs      (Rust)
+    ///   .flux/ctx.go      (Go)
+    ///   .flux/ctx.pyi     (Python)
+    ///   .flux/ctx.h       (C)
+    ///   .flux/ctx.hpp     (C++)
+    ///   .flux/ctx.zig     (Zig)
+    ///   .flux/ctx.as.ts   (AssemblyScript)
+    ///   .flux/Ctx.cs      (C#)
+    ///   .flux/Ctx.swift   (Swift)
+    ///   .flux/Ctx.kt      (Kotlin)
+    ///   .flux/Ctx.java    (Java)
+    ///   .flux/ctx.rb      (Ruby)
+    Generate {
+        /// Output directory (default: .flux/)
+        #[arg(short, long, value_name = "DIR")]
+        output: Option<String>,
+    },
 
     // ── Local Server (native, no Docker) ────────────────────────────────────
-    /// Start all Fluxbase services natively without Docker
+    /// Start the Flux server (gateway + runtime + api + queue embedded in one process)
+    ///
+    /// Examples:
+    ///   flux serve                        # start on port 8080
+    ///   flux serve --port 3000            # custom port
+    ///   flux serve --release              # use release binary
+    #[command(alias = "serve")]
     Server {
-        /// Base port — api=<port>, gateway=<port+1>, data-engine=<port+2>, runtime=<port+3>, queue=<port+4>
+        /// Port to listen on
         #[arg(long, default_value = "8080", value_name = "PORT")]
         port: u16,
-        /// Only start a comma-separated subset of services (e.g. api,gateway)
-        #[arg(long, value_name = "SERVICES", value_delimiter = ',')]
-        only: Option<Vec<String>>,
-        /// Use release binaries instead of debug
+        /// Use release binary instead of debug
         #[arg(long)]
         release: bool,
         /// Disable coloured output
         #[arg(long)]
         no_color: bool,
-        /// Override the DATABASE_URL from the environment
+        /// Override DATABASE_URL from the environment
         #[arg(long, value_name = "URL", env = "DATABASE_URL")]
         database_url: Option<String>,
     },
@@ -565,6 +633,36 @@ enum Commands {
         check: bool,
         #[arg(long, value_name = "VERSION")]
         version: Option<String>,
+    },
+
+    // ── Context (remote connections) ─────────────────────────────────────────
+    /// Add or update a named connection to a Flux server instance.
+    ///
+    /// Example: flux link prod https://myapp.com --key sk_live_xxx
+    Link {
+        /// Context name (e.g. "prod", "staging")
+        name: String,
+        /// Base URL of the Flux server (e.g. https://myapp.com)
+        endpoint: String,
+        /// API key for authenticating against the remote server
+        #[arg(long, short, value_name = "KEY")]
+        key: Option<String>,
+    },
+    /// Switch the active context (like kubectl use-context).
+    ///
+    /// Example: flux use prod
+    Use {
+        /// Context name to activate
+        name: String,
+    },
+    /// Show the current context and all configured contexts.
+    Context,
+    /// Remove a named context.
+    ///
+    /// Example: flux unlink staging
+    Unlink {
+        /// Context name to remove
+        name: String,
     },
 }
 
@@ -616,14 +714,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        Commands::Login   => auth::execute().await?,
-        Commands::Whoami  => whoami::execute().await?,
+        Commands::Login        => auth::execute().await?,
+        Commands::AdminSetup   => auth::execute().await?,
+        Commands::Whoami       => whoami::execute().await?,
 
         Commands::Tenant  { command } => tenant::execute(command).await?,
         Commands::Project { command } => projects::execute(command).await?,
 
         Commands::Function    { command } => functions::execute(command).await?,
-        Commands::Deploy      { name, runtime } => deploy::execute(name, runtime).await?,
+        Commands::Toolchain   { command } => toolchain::execute(command).await?,
+        Commands::Deploy { context, only, force, name: _, runtime: _ } =>
+            deploy::execute(context, only, force).await?,
         Commands::Invoke      { name, payload, gateway } => invoke::execute(&name, None, payload, gateway).await?,
         Commands::Version     { command } => version_cmd::execute(command).await?,
         Commands::Deployments { command } => deployments::execute_deployments(command).await?,
@@ -632,13 +733,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::New    { name, template } |
         Commands::Create { name, template } => create::execute(name, template).await?,
 
-        Commands::Init { name, runtime, api_port, gateway_port, runtime_port } => {
+        Commands::Init { name, gateway_port } => {
             init::execute(init::InitOptions {
                 name,
-                runtime,
-                api_port,
                 gateway_port,
-                runtime_port,
             }).await?
         }
 
@@ -700,7 +798,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::ApiKey  { command } => api_key::execute(command).await?,
 
         Commands::Gateway  { command } => gateway::execute(command).await?,
+        Commands::Workflow { command } => workflow::execute(command).await?,
         Commands::Agent    { command } => agent::execute(command).await?,
+        Commands::Tool     { command } => tool::execute(command).await?,
         Commands::Schedule { command } => schedule::execute(command).await?,
         Commands::Queue    { command } => queue::execute(command).await?,
         Commands::Event    { command } => event::execute(command).await?,
@@ -708,13 +808,16 @@ async fn main() -> anyhow::Result<()> {
         Commands::Env      { command } => env_cmd::execute(command).await?,
 
         Commands::Db { command } => db::execute(command).await?,
+        Commands::DbPush { context, dir } =>
+            db_push::execute_db_push(context, dir).await?,
 
         Commands::Pull   { output }           => sdk::execute_pull(output).await?,
         Commands::Watch  { output, interval } => sdk::execute_watch(output, interval).await?,
         Commands::Status { sdk }              => sdk::execute_status(sdk).await?,
+        Commands::Generate { output }         => generate::execute_generate(output).await?,
 
-        Commands::Server { port, only, release, no_color, database_url } =>
-            server::execute(port, only, release, no_color, database_url).await?,
+        Commands::Server { port, release, no_color, database_url } =>
+            server::execute(port, release, no_color, database_url).await?,
 
         Commands::Stack { command } => match command {
             StackCommand::Up    { build, foreground } => stack::execute_up(build, !foreground).await?,
@@ -731,6 +834,11 @@ async fn main() -> anyhow::Result<()> {
             None      => open::execute_default().await?,
         },
         Commands::Upgrade { check, version } => upgrade::execute(version, check).await?,
+
+        Commands::Link    { name, endpoint, key } => context::execute_link(name, endpoint, key)?,
+        Commands::Use     { name }               => context::execute_use(name)?,
+        Commands::Context                        => context::execute_context(dev::find_project_root_pub().as_deref())?,
+        Commands::Unlink  { name }               => context::execute_unlink(name)?,
     }
 
     Ok(())

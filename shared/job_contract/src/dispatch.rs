@@ -24,7 +24,6 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecuteRequest {
     pub function_id:    String,
-    pub project_id:     Option<Uuid>,
     pub payload:        Value,
     /// Deterministic replay seed (omit for live invocations).
     pub execution_seed: Option<i64>,
@@ -72,20 +71,30 @@ pub trait RuntimeDispatch: Send + Sync {
 pub trait ApiDispatch: Send + Sync {
     /// Fetch the active deployment bundle for `function_id`.
     ///
-    /// Returns the raw JSON object the API endpoint returns — either
-    /// `{ url, runtime, ... }` (presigned S3/Minio path) or
-    /// `{ code, runtime, ... }` (inline bundle fallback).
+    /// Returns the raw JSON object the API endpoint returns:
+    /// `{ code, runtime, deployment_id, input_schema, output_schema }`.
     async fn get_bundle(&self, function_id: &str) -> Result<Value, String>;
 
     /// Ship a structured log/trace entry to the API's log ingestion endpoint.
     async fn write_log(&self, entry: Value) -> Result<(), String>;
 
-    /// Fetch decrypted secrets for `project_id` (or the default project if
-    /// `None`).  Returns a plain `key → value` map.
-    async fn get_secrets(
+    /// Fetch decrypted secrets. Returns a plain `key → value` map.
+    async fn get_secrets(&self) -> Result<HashMap<String, String>, String>;
+
+    /// Resolve a function name (or UUID string) to its function_id.
+    ///
+    /// Used by `ctx.queue.push()` in V8 ops to look up a function before
+    /// enqueuing a job.
+    async fn resolve_function(
         &self,
-        project_id: Option<Uuid>,
-    ) -> Result<HashMap<String, String>, String>;
+        name: &str,
+    ) -> Result<ResolvedFunction, String>;
+}
+
+/// Result of resolving a function name to its ID.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedFunction {
+    pub function_id: Uuid,
 }
 
 /// Runtime (inside user-function V8 op) → Queue boundary.
@@ -97,31 +106,133 @@ pub trait QueueDispatch: Send + Sync {
     async fn push_job(
         &self,
         function_id: &str,
-        project_id:  Option<Uuid>,
         payload:     Value,
-        delay_ms:    Option<u64>,
+        delay_seconds: Option<u64>,
         idempotency_key: Option<String>,
     ) -> Result<(), String>;
 }
 
-// ── AgentDispatch ─────────────────────────────────────────────────────────────
-
-/// Caller → Agent boundary.
+/// Runtime (V8 op) → Data-Engine boundary.
 ///
-/// Used by:
-///   - The API handlers (`POST /agents/{name}/run`) to trigger an agent.
-///   - The `op_agent_run` Deno op, so user JS functions can call `ctx.agent.run()`.
-///
-/// The in-process implementation (`InProcessAgentDispatch` in server) calls
-/// `agent::run()` directly.
+/// Called by `ctx.db.query()` inside JS/WASM functions to execute raw SQL
+/// against the project database. In-process dispatch replaces the HTTP POST
+/// to `/db/sql`.
 #[async_trait]
-pub trait AgentDispatch: Send + Sync {
-    async fn run(
+pub trait DataEngineDispatch: Send + Sync {
+    async fn execute_sql(
         &self,
-        name:       &str,
-        input:      Value,
-        request_id: &str,
-        project_id: Uuid,
-        secrets:    HashMap<String, String>,
+        sql:        String,
+        params:     Vec<Value>,
+        database:   String,
+        request_id: String,
     ) -> Result<Value, String>;
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── ExecuteRequest serde ──────────────────────────────────────────────
+
+    #[test]
+    fn execute_request_roundtrip() {
+        let req = ExecuteRequest {
+            function_id:    "my-fn".to_string(),
+            payload:        json!({"key": "value"}),
+            execution_seed: Some(42),
+            request_id:     Some("req-123".to_string()),
+            parent_span_id: None,
+            runtime_hint:   Some("javascript".to_string()),
+            user_id:        None,
+            jwt_claims:     None,
+        };
+        let json_str = serde_json::to_string(&req).unwrap();
+        let back: ExecuteRequest = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(back.function_id, "my-fn");
+        assert_eq!(back.execution_seed, Some(42));
+        assert_eq!(back.request_id, Some("req-123".to_string()));
+    }
+
+    #[test]
+    fn execute_request_minimal_fields() {
+        let json_str = r#"{"function_id":"fn","payload":null}"#;
+        let req: ExecuteRequest = serde_json::from_str(json_str).unwrap();
+        assert_eq!(req.function_id, "fn");
+        assert!(req.execution_seed.is_none());
+    }
+
+    #[test]
+    fn execute_request_clone() {
+        let req = ExecuteRequest {
+            function_id:    "fn".to_string(),
+            payload:        json!({}),
+            execution_seed: None,
+            request_id:     None,
+            parent_span_id: None,
+            runtime_hint:   None,
+            user_id:        None,
+            jwt_claims:     None,
+        };
+        let cloned = req.clone();
+        assert_eq!(cloned.function_id, req.function_id);
+    }
+
+    // ── ExecuteResponse serde ─────────────────────────────────────────────
+
+    #[test]
+    fn execute_response_roundtrip() {
+        let resp = ExecuteResponse {
+            body:        json!({"result": "ok"}),
+            status:      200,
+            duration_ms: 42,
+        };
+        let json_str = serde_json::to_string(&resp).unwrap();
+        let back: ExecuteResponse = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(back.status,      200);
+        assert_eq!(back.duration_ms, 42);
+        assert_eq!(back.body["result"], "ok");
+    }
+
+    #[test]
+    fn execute_response_error_status() {
+        let resp = ExecuteResponse {
+            body:        json!({"error": "not found"}),
+            status:      404,
+            duration_ms: 5,
+        };
+        assert_eq!(resp.status, 404);
+    }
+
+    // ── Trait object safety ───────────────────────────────────────────────
+
+    #[test]
+    fn runtime_dispatch_is_object_safe() {
+        fn _check(_: &dyn RuntimeDispatch) {}
+    }
+
+    #[test]
+    fn api_dispatch_is_object_safe() {
+        fn _check(_: &dyn ApiDispatch) {}
+    }
+
+    #[test]
+    fn queue_dispatch_is_object_safe() {
+        fn _check(_: &dyn QueueDispatch) {}
+    }
+
+    #[test]
+    fn data_engine_dispatch_is_object_safe() {
+        fn _check(_: &dyn DataEngineDispatch) {}
+    }
+
+    #[test]
+    fn resolved_function_roundtrip() {
+        let rf = ResolvedFunction { function_id: Uuid::new_v4() };
+        let json_str = serde_json::to_string(&rf).unwrap();
+        let back: ResolvedFunction = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(back.function_id, rf.function_id);
+    }
 }

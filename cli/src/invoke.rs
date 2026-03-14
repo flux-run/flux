@@ -40,24 +40,27 @@ async fn invoke_via_runtime(
     name: &str,
     payload: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let runtime_url = client.runtime_url.trim_end_matches('/');
-    let exec_url = format!("{}/execute", runtime_url);
+    // In the monolithic server the runtime is in-process.
+    // The /flux/dev/invoke/:name endpoint bypasses gateway routing so the
+    // function works without needing `flux deploy` first.
+    let api_url = client.base_url.trim_end_matches('/');
+    // base_url is http://localhost:4000/flux/api — step up to the server root
+    let base = api_url.trim_end_matches("/flux/api").trim_end_matches('/');
+    let exec_url = format!("{}/flux/dev/invoke/{}", base, name);
 
-    let body = serde_json::json!({
-        "function_id": name,
-        "payload":     payload,
-    });
-
-    print_invoke_header(name, runtime_url, "runtime", &payload_str(&payload));
+    print_invoke_header(name, base, "dev", &payload_str(&payload));
 
     let t0 = Instant::now();
     let res = client
         .client
         .post(&exec_url)
-        .json(&body)
+        .json(&payload)
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("Could not reach runtime at {}\n  {}", runtime_url, e))?;
+        .map_err(|e| anyhow::anyhow!(
+            "Could not reach server at {}\n  {}\n  Is `flux dev` running?",
+            base, e
+        ))?;
 
     handle_response(name, res, t0.elapsed().as_millis()).await
 }

@@ -1,12 +1,29 @@
-//! In-memory route snapshot.
+//! In-memory route snapshot — loaded once, kept current via LISTEN/NOTIFY.
 //!
-//! Loaded once at startup, then kept current via Postgres LISTEN/NOTIFY.
-//! No polling — any INSERT/UPDATE/DELETE on `routes` fires a notification
-//! (see migration `20260312000029_route_notify_trigger.sql`) and the
-//! snapshot is refreshed immediately.
+//! ## Why LISTEN/NOTIFY instead of polling?
 //!
-//! On reconnect after a dropped NOTIFY connection the snapshot is refreshed
-//! immediately to catch any changes that arrived during the gap.
+//! Polling adds unnecessary DB load and introduces a fixed staleness window.
+//! Postgres LISTEN/NOTIFY delivers a push notification within milliseconds of
+//! a route INSERT/UPDATE/DELETE.  A trigger on the `routes` table fires
+//! `pg_notify('route_changes', ...)` on every change (see migration
+//! `20260312000029_route_notify_trigger.sql`), and the listener here refreshes
+//! the in-memory snapshot immediately.
+//!
+//! ## Reconnect strategy
+//!
+//! `PgListener` uses a dedicated connection (outside the pool).  If that
+//! connection drops — network partition, Postgres restart, etc. — the
+//! background task reconnects with exponential back-off starting at 1 s,
+//! capped at 30 s.  On each *successful* reconnect the back-off resets to 1 s.
+//!
+//! ## The reconnect gap
+//!
+//! During the window between a NOTIFY connection drop and the next successful
+//! reconnect, route changes are invisible to the gateway.  This is handled by
+//! issuing a full `SELECT` snapshot refresh immediately on reconnect, *before*
+//! resuming the LISTEN loop.  Any changes that arrived during the gap are
+//! captured by that refresh, so the eventual consistency window is bounded by
+//! the reconnect back-off, not by a polling interval.
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -44,13 +61,12 @@ impl GatewaySnapshot {
     /// Pull routes from the database and atomically swap the snapshot.
     pub async fn refresh(&self) -> anyhow::Result<()> {
         let rows = sqlx::query_as::<_, RouteRecord>(
-            "SELECT r.id, r.project_id, r.function_id, r.path, r.method,
-                    COALESCE(f.runtime, 'deno') AS runtime,
-                    r.auth_type, r.cors_enabled, r.rate_limit,
+            "SELECT r.id, r.function_name, r.path, r.method,
+                    r.auth_type, r.cors_enabled, r.rate_limit_per_minute,
                     r.jwks_url, r.jwt_audience, r.jwt_issuer,
                     r.json_schema, r.cors_origins, r.cors_headers
-             FROM   routes r
-             JOIN   functions f ON f.id = r.function_id",
+             FROM   flux.routes r
+             WHERE  r.is_active = TRUE",
         )
         .fetch_all(&self.db_pool)
         .await?;

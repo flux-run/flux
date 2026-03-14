@@ -2,22 +2,29 @@
 //!
 //! ## Why a pipeline struct?
 //!
-//! The original query handler was a 380-line function that sequentially
-//! executed 14 distinct responsibilities: auth, routing, guard, policy,
-//! schema, compile, hooks, execute, transform, events… (SRP violation).
-//!
-//! `QueryPipeline` extracts those steps into one place, giving the handler a
+//! `QueryPipeline` extracts the query path into one place, giving the handler a
 //! one-liner `pipeline.run(&headers, req).await?` and making each step
 //! independently inspectable and testable.
 //!
+//! ## What the pipeline does
+//!
+//! 1. Extract auth context from headers (request_id, user_id, is_replay flag)
+//! 2. Resolve Postgres schema name
+//! 3. Guard: complexity + nesting depth
+//! 4. Assert schema + table exist
+//! 5. Load schema metadata + relationships (L1 cache)
+//! 6. Compile SQL (L2 plan cache for SELECT)
+//! 7. Execute (single or batched, wrapped in timeout) → mutation recording inside executor
+//!
 //! ## What the pipeline does NOT do
 //!
+//! * **Policy / RLS / hooks** — access control lives in function code, not here.
+//!   The function calling `ctx.db` is already the policy layer.
+//! * **Event emission** — use `ctx.queue.push()` from function code for side-effects.
+//! * **File URL transforms** — file serving is a function responsibility.
 //! * **Write `trace_requests`** — that table is the gateway's responsibility.
-//!   The gateway already records every request that passes through it.
-//!   The data-engine only writes to `state_mutations`.
 
 use axum::http::HeaderMap;
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::{
@@ -30,10 +37,7 @@ use crate::{
         CompilerOptions,
     },
     engine::{auth_context::AuthContext, error::EngineError},
-    events::EventEmitter,
     executor::{self, MutationContext},
-    hooks::{HookEngine, HookEvent},
-    policy::PolicyEngine,
     router::DbRouter,
     state::AppState,
     transform::TransformEngine,
@@ -41,8 +45,6 @@ use crate::{
 
 // ── Public output types ────────────────────────────────────────────────────────
 
-/// Metadata returned alongside the query result — surfaced in the API response
-/// `meta` field and used in observability tooling.
 pub struct QueryMeta {
     pub strategy: &'static str,
     pub complexity: u64,
@@ -54,8 +56,6 @@ pub struct QueryMeta {
 
 // ── Pipeline ──────────────────────────────────────────────────────────────────
 
-/// Stateless orchestrator: the `state` it holds is the shared `AppState` for
-/// the lifetime of the request.
 pub struct QueryPipeline<'a> {
     state: &'a AppState,
 }
@@ -65,35 +65,24 @@ impl<'a> QueryPipeline<'a> {
         Self { state }
     }
 
-    /// Execute the full query pipeline and return `(data, meta)`.
-    ///
-    /// Steps (in order):
-    ///  1. Extract auth context from headers
-    ///  2. Resolve Postgres schema name
-    ///  3. Guard: complexity + nesting depth
-    ///  4. Assert schema + table exist
-    ///  5. Evaluate row-level policy (cached)
-    ///  6. Load schema metadata + relationships (L1 cache)
-    ///  7. Compile SQL (L2 plan cache for SELECT)
-    ///  8. Before-hook (mutations only, skipped on replay)
-    ///  9. Execute (single or batched, wrapped in timeout)
-    /// 10. After-hook (non-fatal, skipped on replay)
-    /// 11. Transform: S3 file columns → presigned URLs
-    /// 12. Emit db mutation event (skipped on replay)
     pub async fn run(
         &self,
         headers: &HeaderMap,
         req: QueryRequest,
     ) -> Result<(serde_json::Value, QueryMeta), EngineError> {
-        // ── Step 1: Auth ──────────────────────────────────────────────────────
+        // ── Step 1: Auth context ──────────────────────────────────────────────
         let auth = AuthContext::from_headers(headers).map_err(EngineError::MissingField)?;
 
+        let request_id = headers
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-")
+            .to_string();
+
         // ── Step 2: Schema name ───────────────────────────────────────────────
-        let schema =
-            DbRouter::schema_name(&req.database)?;
+        let schema = DbRouter::schema_name(&req.database)?;
 
         // ── Step 3: Guards ────────────────────────────────────────────────────
-        // Fast CPU-only checks — reject before touching the DB.
         let complexity = self.state.query_guard.check_complexity(&req)?;
         let _ = self.state.query_guard.check_depth(&req)?;
 
@@ -101,19 +90,8 @@ impl<'a> QueryPipeline<'a> {
         DbRouter::assert_exists(&self.state.pool, &schema).await?;
         DbRouter::assert_table_exists(&self.state.pool, &schema, &req.table).await?;
 
-        // ── Step 5: Policy ────────────────────────────────────────────────────
-        let policy = PolicyEngine::evaluate_cached(
-            &self.state.pool,
-            &auth,
-            &req.table,
-            &req.operation,
-            &self.state.cache.policy_cache,
-        )
-        .await?;
-
-        // ── Step 6: Schema metadata (L1 cache) ───────────────────────────────
-        let sk =
-            cache::schema_key(&schema, &req.table);
+        // ── Step 5: Schema cache (column metadata + relationships) ────────────
+        let sk = cache::schema_key(&schema, &req.table);
         let (col_meta, relationships) = match self.state.cache.schema_cache.get(&sk) {
             Some(entry) => {
                 tracing::debug!(key = %sk, "schema cache hit");
@@ -126,11 +104,7 @@ impl<'a> QueryPipeline<'a> {
                     &req.table,
                 )
                 .await?;
-                let rels = load_all_relationships(
-                    &self.state.pool,
-                    &schema,
-                )
-                .await?;
+                let rels = load_all_relationships(&self.state.pool, &schema).await?;
                 self.state.cache.schema_cache.insert(
                     sk,
                     SchemaCacheEntry {
@@ -153,7 +127,7 @@ impl<'a> QueryPipeline<'a> {
             })
             .collect();
 
-        // ── Step 7: Compile (L2 plan cache for SELECT) ────────────────────────
+        // ── Step 6: Compile (L2 plan cache for SELECT) ────────────────────────
         let opts = CompilerOptions {
             default_limit: self.state.default_query_limit,
             max_limit: self.state.max_query_limit,
@@ -161,8 +135,6 @@ impl<'a> QueryPipeline<'a> {
             relationships,
         };
 
-        // Parse nested selectors once — needed for plan-cache reconstruction
-        // and the batched-path depth decision inside the compiler.
         let nested_sels_for_plan: Vec<ColumnSelector> = req
             .columns
             .as_ref()
@@ -174,15 +146,17 @@ impl<'a> QueryPipeline<'a> {
             })
             .unwrap_or_default();
 
+        // Treat policy as empty (no enforcement) — the function calling ctx.db is the policy.
+        let no_policy = Default::default();
+
         let compile_result: CompileResult = if req.operation == "select" {
-            let plan_key =
-                cache::build_plan_key(&schema, &req, &policy);
+            let plan_key = cache::build_plan_key(&schema, &req, &no_policy);
             match self.state.cache.plan_cache.get(&plan_key) {
                 Some(plan) => {
                     tracing::debug!("plan cache hit");
                     let params = cache::extract_select_params(
                         &req,
-                        &policy,
+                        &no_policy,
                         opts.default_limit,
                         opts.max_limit,
                     );
@@ -206,25 +180,22 @@ impl<'a> QueryPipeline<'a> {
                     }
                 }
                 None => {
-                    let cr = QueryCompiler::compile(&req, &policy, &schema, &opts)?;
-                    let has_file_cols = col_meta.iter().any(|c| c.fb_type == "file");
+                    let cr = QueryCompiler::compile(&req, &no_policy, &schema, &opts)?;
                     let (cache_sql, is_batched) = match &cr {
                         CompileResult::Single(cq) => (cq.sql.clone(), false),
                         CompileResult::Batched { root, .. } => (root.sql.clone(), true),
                     };
                     self.state.cache.plan_cache.insert(
                         plan_key,
-                        QueryPlan { sql: cache_sql, has_file_cols, is_batched },
+                        QueryPlan { sql: cache_sql, has_file_cols: false, is_batched },
                     );
                     cr
                 }
             }
         } else {
-            QueryCompiler::compile(&req, &policy, &schema, &opts)?
+            QueryCompiler::compile(&req, &no_policy, &schema, &opts)?
         };
 
-        // Extract meta we'll need after execution (borrow compile_result before
-        // the async block consumes it).
         let strategy: &'static str = match &compile_result {
             CompileResult::Single(_)      => "single",
             CompileResult::Batched { .. } => "batched",
@@ -234,40 +205,17 @@ impl<'a> QueryPipeline<'a> {
             CompileResult::Batched { root, .. } => root.sql.clone(),
         };
 
-        let request_id = headers
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("-")
-            .to_string();
         let span_id_owned = headers
             .get("x-span-id")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-
-        // ── Step 8: Before hook ───────────────────────────────────────────────
-        // Hooks fire before the SQL write; a failure aborts the operation.
-        // Skipped in replay mode — hooks must not re-fire on replay.
-        if !auth.is_replay {
-            if let Some(before) = Self::before_event(&req.operation) {
-                HookEngine::run(
-                    &self.state.pool,
-                    &self.state.http_client,
-                    &self.state.runtime_url,
-                    &auth,
-                    &req.table,
-                    before,
-                    &req.data.clone().unwrap_or(serde_json::Value::Null),
-                    &request_id,
-                )
-                .await?;
-            }
-        }
 
         let stmt_timeout_ms = if auth.is_replay {
             self.state.statement_timeout_ms * 6
         } else {
             self.state.statement_timeout_ms
         };
+
         let mut_ctx = MutationContext {
             schema: &schema,
             request_id: &request_id,
@@ -278,9 +226,7 @@ impl<'a> QueryPipeline<'a> {
             statement_timeout_ms: stmt_timeout_ms,
         };
 
-        // ── Step 9: Execute ───────────────────────────────────────────────────
-        // Wrapped in the query guard's timeout so runaway queries cannot hold
-        // a Postgres connection indefinitely.
+        // ── Step 7: Execute + record mutations ────────────────────────────────
         let t_exec = Instant::now();
         let result = self
             .state
@@ -315,58 +261,6 @@ impl<'a> QueryPipeline<'a> {
             "query executed",
         );
 
-        // ── Step 10: After hook (non-fatal) ───────────────────────────────────
-        if !auth.is_replay {
-            if let Some(after) = Self::after_event(&req.operation) {
-                if let Err(e) = HookEngine::run(
-                    &self.state.pool,
-                    &self.state.http_client,
-                    &self.state.runtime_url,
-                    &auth,
-                    &req.table,
-                    after,
-                    &result,
-                    &request_id,
-                )
-                .await
-                {
-                    tracing::warn!(error = %e, "after-hook failed (non-fatal)");
-                }
-            }
-        }
-
-        // ── Step 11: Transform (SELECT only) ─────────────────────────────────
-        // Replace S3 object keys with presigned URLs for file-typed columns.
-        let result = if req.operation == "select" {
-            TransformEngine::apply(
-                result,
-                &col_meta,
-                self.state.file_engine.as_deref(),
-                &auth,
-            )
-            .await?
-        } else {
-            result
-        };
-
-        // ── Step 12: Emit event ───────────────────────────────────────────────
-        // INSERT / UPDATE / DELETE → emit DB event for subscription delivery.
-        // Skipped in replay mode — would re-trigger webhooks / functions.
-        if !auth.is_replay {
-            if let Some(op) = EventEmitter::verb_for(&req.operation) {
-                let record_id = EventEmitter::extract_record_id(&result);
-                EventEmitter::emit(
-                    &self.state.pool,
-                    &req.table,
-                    op,
-                    record_id.as_deref(),
-                    &result,
-                    Some(&request_id),
-                )
-                .await;
-            }
-        }
-
         Ok((
             result,
             QueryMeta {
@@ -378,25 +272,5 @@ impl<'a> QueryPipeline<'a> {
                 request_id,
             },
         ))
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    fn before_event(op: &str) -> Option<HookEvent> {
-        match op {
-            "insert" => Some(HookEvent::BeforeInsert),
-            "update" => Some(HookEvent::BeforeUpdate),
-            "delete" => Some(HookEvent::BeforeDelete),
-            _ => None,
-        }
-    }
-
-    fn after_event(op: &str) -> Option<HookEvent> {
-        match op {
-            "insert" => Some(HookEvent::AfterInsert),
-            "update" => Some(HookEvent::AfterUpdate),
-            "delete" => Some(HookEvent::AfterDelete),
-            _ => None,
-        }
     }
 }

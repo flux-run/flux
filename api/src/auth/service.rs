@@ -12,8 +12,11 @@ use super::models::{Claims, CreateUserRequest, PlatformUser};
 // ── JWT secret ────────────────────────────────────────────────────────────────
 
 fn jwt_secret() -> String {
-    std::env::var("FLUX_JWT_SECRET")
-        .unwrap_or_else(|_| "flux-dev-jwt-secret-change-in-prod".to_string())
+    crate::middleware::require_secret(
+        "FLUX_JWT_SECRET",
+        "flux-dev-jwt-secret-change-in-prod",
+        "JWT signing secret (FLUX_JWT_SECRET)",
+    )
 }
 
 // ── Password helpers ──────────────────────────────────────────────────────────
@@ -44,12 +47,11 @@ pub fn create_token(user: &PlatformUser) -> Result<String, ApiError> {
     let now = chrono::Utc::now();
     let exp = (now + chrono::Duration::days(7)).timestamp() as usize;
     let claims = Claims {
-        sub:       user.id.to_string(),
-        email:     user.email.clone(),
-        role:      user.role.clone(),
-        tenant_id: user.tenant_id.map(|t| t.to_string()),
+        sub:   user.id.to_string(),
+        email: user.email.clone(),
+        role:  user.role.clone(),
         exp,
-        iat:       now.timestamp() as usize,
+        iat:   now.timestamp() as usize,
     };
     encode(
         &Header::default(),
@@ -85,7 +87,7 @@ pub async fn count_users(pool: &PgPool) -> Result<i64, ApiError> {
 
 pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<PlatformUser>, ApiError> {
     sqlx::query_as(
-        "SELECT id, username, email, password_hash, role, tenant_id, created_at
+        "SELECT id, username, email, password_hash, role, created_at
          FROM flux.platform_users WHERE email = $1",
     )
     .bind(email)
@@ -96,7 +98,7 @@ pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<Platform
 
 pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<PlatformUser>, ApiError> {
     sqlx::query_as(
-        "SELECT id, username, email, password_hash, role, tenant_id, created_at
+        "SELECT id, username, email, password_hash, role, created_at
          FROM flux.platform_users WHERE id = $1",
     )
     .bind(id)
@@ -114,15 +116,14 @@ pub async fn create_user(pool: &PgPool, req: CreateUserRequest) -> Result<Platfo
     }
     let password_hash = hash_password(&req.password)?;
     sqlx::query_as(
-        "INSERT INTO flux.platform_users (username, email, password_hash, role, tenant_id)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, username, email, password_hash, role, tenant_id, created_at",
+        "INSERT INTO flux.platform_users (username, email, password_hash, role)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, username, email, password_hash, role, created_at",
     )
     .bind(req.username)
     .bind(req.email)
     .bind(password_hash)
     .bind(req.role)
-    .bind(req.tenant_id)
     .fetch_one(pool)
     .await
     .map_err(|e| {
@@ -152,4 +153,111 @@ pub async fn delete_user(pool: &PgPool, id: Uuid) -> Result<bool, ApiError> {
         .await
         .map(|r| r.rows_affected() > 0)
         .map_err(|e| ApiError::internal(format!("DB error: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    // ── Password helpers ──────────────────────────────────────────────────
+
+    #[test]
+    fn hash_and_verify_password_roundtrip() {
+        let pw = "correct-horse-battery-staple";
+        let hash = hash_password(pw).expect("hash failed");
+        assert!(verify_password(pw, &hash));
+    }
+
+    #[test]
+    fn wrong_password_does_not_verify() {
+        let hash = hash_password("right").unwrap();
+        assert!(!verify_password("wrong", &hash));
+    }
+
+    #[test]
+    fn empty_password_roundtrip() {
+        let hash = hash_password("").unwrap();
+        assert!(verify_password("", &hash));
+        assert!(!verify_password("notempty", &hash));
+    }
+
+    #[test]
+    fn long_password_roundtrip() {
+        let pw = "p".repeat(256);
+        let hash = hash_password(&pw).unwrap();
+        assert!(verify_password(&pw, &hash));
+    }
+
+    #[test]
+    fn verify_with_garbage_hash_returns_false() {
+        assert!(!verify_password("any", "not_a_valid_hash_string"));
+    }
+
+    #[test]
+    fn two_hashes_of_same_password_are_different() {
+        let h1 = hash_password("pw").unwrap();
+        let h2 = hash_password("pw").unwrap();
+        assert_ne!(h1, h2, "salt must be randomised per call");
+    }
+
+    // ── JWT helpers ───────────────────────────────────────────────────────
+
+    fn dummy_user() -> PlatformUser {
+        PlatformUser {
+            id:            Uuid::new_v4(),
+            username:      "testuser".to_string(),
+            email:         "test@example.com".to_string(),
+            password_hash: "x".to_string(),
+            role:          "admin".to_string(),
+            created_at:    chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn create_and_verify_token_roundtrip() {
+        let user  = dummy_user();
+        let token = create_token(&user).expect("token creation failed");
+        let claims = verify_token(&token).expect("token verification failed");
+        assert_eq!(claims.email, user.email);
+        assert_eq!(claims.sub,   user.id.to_string());
+        assert_eq!(claims.role,  user.role);
+    }
+
+    #[test]
+    fn verify_token_returns_none_for_garbage() {
+        assert!(verify_token("this.is.not.a.jwt").is_none());
+    }
+
+    #[test]
+    fn verify_token_returns_none_for_empty_string() {
+        assert!(verify_token("").is_none());
+    }
+
+    #[test]
+    fn verify_token_returns_none_for_wrong_secret() {
+        let user  = dummy_user();
+        let token = create_token(&user).unwrap();
+        // Tamper: flip last char of the signature
+        let parts: Vec<&str> = token.rsplitn(2, '.').collect();
+        let bad = format!("{}.XXXXX", parts[1]);
+        assert!(verify_token(&bad).is_none());
+    }
+
+    #[test]
+    fn token_claims_contain_role() {
+        let user   = dummy_user();
+        let token  = create_token(&user).unwrap();
+        let claims = verify_token(&token).unwrap();
+        assert_eq!(claims.role, user.role);
+    }
+
+    #[test]
+    fn token_is_non_empty_string() {
+        let user  = dummy_user();
+        let token = create_token(&user).unwrap();
+        assert!(!token.is_empty());
+        // JWT has exactly three dot-separated segments
+        assert_eq!(token.split('.').count(), 3);
+    }
 }

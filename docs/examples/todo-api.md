@@ -1,210 +1,46 @@
-# Example — Todo API
+# Example: Todo API
 
-A CRUD API with full execution recording. Four functions, one schema, zero
-infrastructure.
+The Todo API is the simplest useful example of Flux.
 
----
+It shows that Flux is not only for advanced AI or workflow-heavy systems. It also feels great for ordinary application backends.
 
-## What you'll build
+## What The Example Covers
 
-| Endpoint | Function | Description |
-|---|---|---|
-| `POST /create_todo` | `create_todo` | Create a to-do item |
-| `POST /list_todos` | `list_todos` | List all to-dos with filtering |
-| `POST /update_todo` | `update_todo` | Update title or done status |
-| `POST /delete_todo` | `delete_todo` | Delete a to-do by ID |
+- HTTP routes through the gateway
+- simple CRUD functions
+- database schema and mutations
+- execution records for normal requests
+- row history and state blame on ordinary app data
 
----
+## Why This Example Matters
 
-## Step 1 — Create the project
+If Flux cannot make a plain CRUD backend feel better to build and debug, the rest of the product story gets weaker.
 
-```bash
-flux init todo-api && cd todo-api
-```
+The Todo API demonstrates:
 
----
+- fast local setup
+- clear function layout
+- easy schema evolution
+- request traces with linked state changes
+- useful debugging for common mistakes
 
-## Step 2 — Define the schema
-
-Create `schemas/todos.sql`:
-
-```sql
-CREATE TABLE IF NOT EXISTS todos (
-  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  title      TEXT NOT NULL,
-  done       BOOLEAN NOT NULL DEFAULT false,
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
-);
-```
-
-Push it:
+## Good Demo Flow
 
 ```bash
-flux db push
-```
-
----
-
-## Step 3 — Write the functions
-
-### create_todo
-
-`functions/create_todo/index.ts`:
-
-```typescript
-import { defineFunction } from "@flux/functions";
-import { z } from "zod";
-
-export default defineFunction({
-  name: "create_todo",
-  input:  z.object({ title: z.string().min(1).max(255) }),
-  output: z.object({ id: z.string(), title: z.string(), done: z.boolean() }),
-  handler: async ({ input, ctx }) => {
-    const todo = await ctx.db.todos.insert({ title: input.title, done: false });
-    ctx.log.info(`Created todo: ${todo.id}`);
-    return { id: todo.id, title: todo.title, done: todo.done };
-  },
-});
-```
-
-### list_todos
-
-`functions/list_todos/index.ts`:
-
-```typescript
-import { defineFunction } from "@flux/functions";
-import { z } from "zod";
-
-export default defineFunction({
-  name: "list_todos",
-  input: z.object({
-    done:   z.boolean().optional(),
-    limit:  z.number().int().min(1).max(100).default(20),
-    offset: z.number().int().min(0).default(0),
-  }),
-  handler: async ({ input, ctx }) => {
-    let todos;
-    if (input.done !== undefined) {
-      todos = await ctx.db.todos.findMany({
-        where: { done: { eq: input.done } },
-      });
-    } else {
-      todos = await ctx.db.todos.findMany();
-    }
-    return { todos };
-  },
-});
-```
-
-### update_todo
-
-`functions/update_todo/index.ts`:
-
-```typescript
-import { defineFunction } from "@flux/functions";
-import { z } from "zod";
-
-export default defineFunction({
-  name: "update_todo",
-  input: z.object({
-    id:    z.string().uuid(),
-    done:  z.boolean().optional(),
-    title: z.string().min(1).optional(),
-  }),
-  handler: async ({ input, ctx }) => {
-    const { id, ...updates } = input;
-    if (Object.keys(updates).length === 0) {
-      return ctx.error(400, "BAD_REQUEST", "Provide at least one field to update");
-    }
-    const todo = await ctx.db.todos.update(id, updates);
-    if (!todo) return ctx.error(404, "NOT_FOUND", `Todo ${id} not found`);
-    return { id: todo.id, title: todo.title, done: todo.done };
-  },
-});
-```
-
-### delete_todo
-
-`functions/delete_todo/index.ts`:
-
-```typescript
-import { defineFunction } from "@flux/functions";
-import { z } from "zod";
-
-export default defineFunction({
-  name: "delete_todo",
-  input:  z.object({ id: z.string().uuid() }),
-  output: z.object({ deleted: z.boolean() }),
-  handler: async ({ input, ctx }) => {
-    await ctx.db.todos.delete(input.id);
-    return { deleted: true };
-  },
-});
-```
-
----
-
-## Step 4 — Start the dev server
-
-```bash
+flux init todo-api
 flux dev
+flux function create create_todo
+flux function create complete_todo
+flux invoke create_todo --gateway --payload '{"title":"ship beta"}'
+flux trace
+flux why <request_id>
+flux state history todos --id <todo_id>
 ```
 
----
+## What A Reader Should Learn
 
-## Step 5 — Try it
+This example shows:
 
-```bash
-# Create
-flux invoke create_todo --data '{"title": "Learn Flux"}'
-# → { "id": "e4a9c3f1-...", "title": "Learn Flux", "done": false }
-
-# List
-flux invoke list_todos --data '{}'
-# → { "todos": [{ "id": "e4a9c3f1-...", "title": "Learn Flux", "done": false }] }
-
-# Update
-flux invoke update_todo --data '{"id": "e4a9c3f1-...", "done": true}'
-# → { "id": "e4a9c3f1-...", "title": "Learn Flux", "done": true }
-
-# Delete
-flux invoke delete_todo --data '{"id": "e4a9c3f1-..."}'
-# → { "deleted": true }
-```
-
----
-
-## Step 6 — Trace an execution
-
-```bash
-flux trace <request-id>
-```
-
-```
-Trace e4a9c3f1-...  18ms end-to-end
-
-  09:41:02.000  +0ms   ▶ [gateway/create_todo]   route matched
-  09:41:02.003  +3ms   ▶ [runtime/create_todo]   executing function
-  09:41:02.008  +5ms   · [db/todos]               INSERT 1 row (5ms)
-  09:41:02.015  +7ms   ■ [runtime/create_todo]   completed (12ms)
-
-  State changes:
-    todos  INSERT  id=e4a9c3f1  title="Learn Flux"  done=false
-```
-
-Every database mutation is visible in the trace. If something goes wrong:
-
-```bash
-flux why <request-id>
-```
-
----
-
-## Key differences from traditional CRUD
-
-1. **No HTTP client setup** — `ctx.db` is injected, no connection strings
-2. **No ORM** — schemas are raw SQL, types generated by `flux generate`
-3. **Automatic tracing** — every request has an execution record
-4. **State changes visible** — `flux trace` shows exactly what data changed
-5. **Debug in production** — `flux why` gives root cause without log diving
+- how a normal backend fits into Flux
+- how database changes become part of debugging
+- why the execution record matters even for simple product code

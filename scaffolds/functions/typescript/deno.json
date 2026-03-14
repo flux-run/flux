@@ -1,0 +1,17 @@
+{
+  "name": "{name}",
+  "version": "2.3.0",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "imports": {
+    "@fluxbase/functions": "npm:@fluxbase/functions@^0.1.0"
+  },
+  "tasks": {
+    "check": "deno check index.ts",
+    "dev":   "deno run --watch index.ts"
+  },
+  "compilerOptions": {
+    "strict": true
+  }
+}

@@ -44,9 +44,8 @@ ALTER TABLE IF EXISTS gateway_metrics       SET SCHEMA flux;
 ALTER TABLE IF EXISTS schema_versions       SET SCHEMA flux;
 ALTER TABLE IF EXISTS resource_usage        SET SCHEMA flux;
 
--- ─── Integrations & storage ───────────────────────────────────────────────
+-- ─── Integrations ─────────────────────────────────────────────────────
 ALTER TABLE IF EXISTS integrations              SET SCHEMA flux;
-ALTER TABLE IF EXISTS project_storage_providers SET SCHEMA flux;
 
 -- ─── Demo tables ──────────────────────────────────────────────────────────
 ALTER TABLE IF EXISTS demo_requests     SET SCHEMA flux;

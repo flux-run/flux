@@ -19,8 +19,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS route_change_notify ON routes;
+DROP TRIGGER IF EXISTS route_change_notify ON flux.routes;
 
 CREATE TRIGGER route_change_notify
-AFTER INSERT OR UPDATE OR DELETE ON routes
+AFTER INSERT OR UPDATE OR DELETE ON flux.routes
 FOR EACH ROW EXECUTE FUNCTION notify_route_change();

@@ -1,5 +1,0 @@
-{
-  "runtime": "wasm",
-  "entry": "handler.wasm",
-  "build": "tinygo build -o handler.wasm -target wasip1 -scheduler none -no-debug ."
-}

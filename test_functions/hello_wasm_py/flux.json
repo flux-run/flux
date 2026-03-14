@@ -1,5 +1,0 @@
-{
-  "runtime": "wasm",
-  "entry": "handler.wasm",
-  "build": "py2wasm handler.py -o handler.wasm"
-}

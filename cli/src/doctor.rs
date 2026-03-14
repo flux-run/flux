@@ -50,27 +50,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use colored::Colorize;
-use reqwest::StatusCode;
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
 use crate::config::{Config, ProjectConfig};
 use crate::sdk::parse_local_version;
 use crate::why::{diff_json, json_scalar};
-
-// ─── Helper types ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct MeResponse {
-    email: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SchemaHealthResponse {
-    schema_hash:    Option<String>,
-    schema_version: Option<i64>,
-}
 
 // ─── Row printers ─────────────────────────────────────────────────────────────
 
@@ -222,12 +207,24 @@ async fn execute_diagnosis(request_id: String, json_output: bool) -> anyhow::Res
     let spans: &Vec<Value> = trace_body.get("spans")
         .and_then(|s| s.as_array()).unwrap_or(&empty_vec);
 
-    let request  = trace_body.get("request").unwrap_or(&Value::Null);
-    let method   = request["method"].as_str().unwrap_or("?");
-    let path     = request["path"].as_str().unwrap_or("?");
-    let function = request["function"].as_str().unwrap_or("?");
-    let status   = request["status"].as_i64().unwrap_or(0);
-    let elapsed  = trace_body["total_ms"].as_i64().unwrap_or(0);
+    // Extract request metadata from the first gateway span's metadata
+    // (GET /traces/{id} does not include a top-level "request" object).
+    let gw_span  = spans.iter().find(|s| {
+        matches!(
+            s["span_type"].as_str(),
+            Some("request") | Some("gateway_request") | Some("http_request")
+        ) || s["source"].as_str() == Some("gateway")
+    });
+    let gw_meta  = gw_span.and_then(|s| s["metadata"].as_object());
+    let method   = gw_meta.and_then(|m| m.get("method")).and_then(|v| v.as_str()).unwrap_or("?");
+    let path     = gw_meta.and_then(|m| m.get("path")).and_then(|v| v.as_str()).unwrap_or("?");
+    let status   = gw_meta.and_then(|m| m.get("status"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or_else(|| gw_meta.and_then(|m| m.get("status_code")).and_then(|v| v.as_i64()).unwrap_or(0));
+    let function = gw_meta.and_then(|m| m.get("function")).and_then(|v| v.as_str())
+        .or_else(|| spans.iter().find(|s| s["source"].as_str() == Some("runtime")).and_then(|s| s["resource"].as_str()))
+        .unwrap_or("?");
+    let elapsed  = trace_body["total_duration_ms"].as_i64().unwrap_or(0);
     let is_error = status >= 400 || spans.iter().any(|s| s["span_type"] == "error");
 
     let first_span_ts = spans.first()
@@ -593,3 +590,41 @@ async fn execute_diagnosis(request_id: String, json_output: bool) -> anyhow::Res
     println!();
     Ok(())
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── trunc_d ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn trunc_d_short_string_unchanged() {
+        assert_eq!(trunc_d("hello", 10), "hello");
+    }
+
+    #[test]
+    fn trunc_d_exact_length_unchanged() {
+        assert_eq!(trunc_d("hello", 5), "hello");
+    }
+
+    #[test]
+    fn trunc_d_long_string_gets_ellipsis() {
+        let result = trunc_d("hello world", 5);
+        assert!(result.starts_with("hello"));
+        assert!(result.contains('…'));
+    }
+
+    #[test]
+    fn trunc_d_empty_string_returns_empty() {
+        assert_eq!(trunc_d("", 5), "");
+    }
+
+    #[test]
+    fn trunc_d_zero_limit_produces_ellipsis() {
+        let result = trunc_d("any", 0);
+        assert_eq!(result, "…");
+    }
+}
+

@@ -109,8 +109,8 @@ export default function LoginPage() {
 
           {/* CLI hint */}
           <div className="mt-5 rounded-lg border border-border/50 bg-muted/50 px-4 py-3">
-            <p className="text-xs text-muted-foreground mb-1.5">First time? Create the initial admin via CLI</p>
-            <code className="text-xs font-mono text-foreground/80">flux admin setup</code>
+            <p className="text-xs text-muted-foreground mb-1.5">First time? Create the initial admin account</p>
+            <code className="text-xs font-mono text-foreground/80">flux login</code>
           </div>
         </div>
       </div>

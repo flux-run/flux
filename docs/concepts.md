@@ -1,286 +1,131 @@
-# Core Concepts
+# Concepts
 
-Flux has a small number of concepts. This page covers all of them.
-For the complete spec, see [framework.md](framework.md).
-
----
-
-## What Flux Is
-
-Flux is a standalone open-source backend framework. There is no managed cloud —
-you run it locally, in Docker, or on Kubernetes.
-
-```
-flux init      → create project
-flux dev       → local dev server
-flux deploy    → push to any target (local, docker, k8s)
-flux test      → test runner
-flux trace     → execution records
-flux why       → root cause
-```
-
----
+Flux has multiple subsystems, but the product only works if they all reinforce one mental model.
 
 ## Execution Record
 
-The core primitive. Every function call automatically captures:
+The execution record is the core primitive of Flux.
 
-- **Input/output** — what went in, what came out
-- **Spans** — timing for every layer (gateway, runtime, DB, external calls)
-- **Database mutations** — before/after JSONB for every INSERT, UPDATE, DELETE
-- **External calls** — HTTP requests, tool calls, queue pushes
-- **Code SHA** — which git commit was deployed
+An execution record connects:
 
-All linked by a single `request_id`. This is what makes `flux trace`,
-`flux why`, `flux incident replay`, and `flux bug bisect` possible.
+- the trigger that started work
+- the function or job that ran
+- the code version that handled it
+- spans and logs
+- database reads and mutations
+- downstream jobs or follow-up triggers
+- the final result
 
-```typescript
-interface ExecutionRecord {
-  request_id:    string;
-  function_name: string;
-  code_sha:      string;
-  input:         JsonValue;
-  output:        JsonValue | null;
-  error:         FluxError | null;
-  duration_ms:   number;
-  spans:         ExecutionSpan[];
-  db_mutations:  DbMutation[];
-  external_calls: ExternalCall[];
-}
-```
+If a feature does not strengthen the execution record, it is not central to Flux.
 
----
+## Function
 
-## Functions
+A function is the smallest deployable unit of application logic.
 
-Every function lives in its own directory under `functions/`:
+Functions can be triggered by:
 
-```
-functions/
-├── hello/
-│   └── index.ts
-├── create_user/
-│   └── index.ts
-└── send_email/
-    └── index.ts
-```
+- an HTTP route
+- a queue worker
+- a scheduled job
+- an event
 
-Every function directory becomes a `POST` endpoint:
-- `functions/hello/` → `POST /hello`
-- `functions/create_user/` → `POST /create_user`
+Flux functions matter because they live inside one runtime and one debugging model.
 
-Functions are defined with `defineFunction()` from `@flux/functions`:
+## Gateway
 
-```typescript
-import { defineFunction } from "@flux/functions";
-import { z } from "zod";
+The gateway is the controlled entrypoint into the system.
 
-export default defineFunction({
-  name: "create_user",
-  input:  z.object({ name: z.string(), email: z.string().email() }),
-  output: z.object({ id: z.string() }),
-  handler: async ({ input, ctx }) => {
-    const user = await ctx.db.users.insert(input);
-    return { id: user.id };
-  },
-});
-```
+It gives Flux:
 
-No raw handlers, no manual routing, no decorators.
+- stable routing
+- auth and policy enforcement
+- request validation
+- middleware hooks
+- one top-level request ID and trace root
 
----
+The gateway is where an execution becomes a record.
 
-## The `ctx` Object
+## Data Engine
 
-Every handler receives `ctx` — the single interface to all Flux capabilities:
+The data engine is the database layer that Flux can reason about.
 
-| Property | What it does |
-|---|---|
-| `ctx.db` | Database access — typed from `schemas/` via `flux generate` |
-| `ctx.queue` | Push async jobs — `ctx.queue.push("send_email", payload)` |
-| `ctx.workflow` | Start workflows — `ctx.workflow.start("onboarding", input)` |
-| `ctx.function` | Call other functions — `ctx.function.invoke("validate", data)` |
-| `ctx.secrets` | Read secrets — `ctx.secrets.get("STRIPE_KEY")` |
-| `ctx.tools` | Third-party integrations (Stripe, OpenAI, etc.) |
-| `ctx.log` | Structured logging — attached to execution record |
-| `ctx.error()` | Throw structured error — stops execution |
-| `ctx.requestId` | UUID propagated through entire execution |
-| `ctx.headers` | Request headers |
-| `ctx.user` | Set by auth middleware |
+It exists so that:
 
-No imports, no client instantiation, no connection strings.
+- database access is part of the runtime contract
+- mutations can be attributed to a specific execution
+- row history, blame, replay, and diff become possible
 
----
-
-## Database
-
-Flux manages your application database. Postgres only. SQL schemas are the
-source of truth — no ORM.
-
-### Schema files
-
-```sql
--- schemas/users.sql
-CREATE TABLE IF NOT EXISTS users (
-  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name       TEXT NOT NULL,
-  email      TEXT NOT NULL UNIQUE,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-```
-
-### Commands
-
-```bash
-flux db push       # apply schemas/*.sql
-flux db diff       # preview changes (never executes)
-flux db migrate    # save diff as timestamped migration
-flux db seed       # apply tests/fixtures/*.sql
-flux db reset      # drop + recreate + push + seed
-```
-
-### ctx.db
-
-`ctx.db` is a thin typed wrapper that compiles to SQL inside the Data Engine.
-It is **not** an ORM — schemas are raw SQL, types are derived by `flux generate`
-from `information_schema`.
-
-```typescript
-// Typed accessors (compiled to SQL by Data Engine)
-const user = await ctx.db.users.insert({ name: "Ada", email: "ada@acme.com" });
-const users = await ctx.db.users.findMany({ where: { email: { eq: "ada@acme.com" } } });
-
-// Raw SQL escape hatch (also goes through Data Engine, also recorded)
-const results = await ctx.db.query("SELECT * FROM users WHERE created_at > $1", [date]);
-```
-
-Both paths go through the Data Engine, so both are recorded in execution records.
-Every write captures before/after state — that's the foundation of `flux why`.
-
----
-
-## flux.toml
-
-One config file per project:
-
-```toml
-[project]
-name = "my-app"
-version = "0.1.0"
-
-[dev]
-port = 4000
-hot_reload = true
-
-[deploy]
-target = "local"   # "local" | "docker" | "k8s"
-
-[limits]
-timeout_ms = 30000
-memory_mb = 128
-
-[observability]
-record_sample_rate = 1.0   # every execution is a record
-
-[middleware]
-global = ["middleware/auth.ts"]
-```
-
----
-
-## Secrets
-
-```bash
-flux secrets set STRIPE_KEY sk_live_...
-flux secrets list
-flux secrets delete STRIPE_KEY
-```
-
-Inside a function: `ctx.secrets.get("STRIPE_KEY")`.
-Locally stored in `.env.local` (gitignored). Never committed to version control.
-
----
+The data engine is what prevents the database from becoming a debugging blind spot.
 
 ## Queue
 
-Push async jobs from any function:
+The queue is how Flux handles async work without losing causal context.
 
-```typescript
-await ctx.queue.push("send_email", { user_id: user.id }, { delay: "5m" });
-```
+The queue preserves:
 
-Jobs execute via the Queue service → Runtime. Same execution recording, same
-`flux trace` / `flux why` debugging. See [queue.md](queue.md) for internals.
+- parent-child links between executions
+- retry history
+- timeout and dead-letter behavior
+- mutation attribution
 
----
+Async work is not outside the product. It is part of the same record model.
 
-## Workflows
+## Schedule
 
-Multi-step, long-running processes:
+A schedule is just a time-based trigger into the same runtime.
 
-```typescript
-import { defineWorkflow } from "@flux/functions";
+Cron exists in Flux so that scheduled work uses the same:
 
-export default defineWorkflow({
-  name: "onboarding",
-  trigger: { type: "function", function: "create_user" },
-  steps: [
-    {
-      name: "send_welcome_email",
-      function: "send_email",
-      input: (ctx) => ({ to: ctx.trigger.output.email, subject: "Welcome!" }),
-    },
-    {
-      name: "assign_trial_plan",
-      function: "assign_plan",
-      input: (ctx) => ({ user_id: ctx.trigger.output.id }),
-    },
-  ],
-});
-```
+- execution record
+- retry model
+- tracing
+- code versioning
+- mutation history
 
-Each step is a function call. Each step produces an execution record.
-If a step fails, the workflow pauses and can be resumed.
+## Deployment
 
----
+Deployments are part of the causal graph.
 
-## Middleware
+Useful backend debugging always asks:
 
-Request middleware runs before the handler:
+- what version ran?
+- what changed since the last good execution?
+- did the incident start after a deploy?
 
-```typescript
-import { defineMiddleware } from "@flux/functions";
+That is why deployments belong inside the product rather than in a separate CI system narrative.
 
-export default defineMiddleware(async (ctx, next) => {
-  const token = ctx.headers.get("authorization")?.replace("Bearer ", "");
-  if (!token) return ctx.error(401, "UNAUTHORIZED");
-  ctx.user = await verifyToken(token);
-  return next();
-});
-```
+## Replay
 
-Middleware is assigned in `flux.toml` or per-function in `flux.json`.
+Replay is controlled re-execution of a past request or incident.
 
----
+The value of replay is not "run it again." The value is:
 
-## Architecture
+- reproduce a failure safely
+- compare old versus new behavior
+- separate code problems from data problems
+- inspect what changed at the state level
 
-`flux dev` starts the full stack via Docker Compose (`flux stack up`):
+Replay is credible because the runtime owns enough of the execution path.
 
-| Service | Port | Responsibility |
-|---|---|---|
-| Gateway | `:8081` | Routing, auth, rate limiting, trace roots |
-| Runtime | `:8083` | Deno V8 execution, secrets, tool dispatch |
-| API | `:8080` | Function registry, logs, schema management |
-| Data Engine | `:8082` | DB queries, mutation recording, hooks, cron |
-| Queue | `:8084` | Async jobs, retries, dead letter |
+## `flux why`
 
-All services are Rust + Axum. The Runtime uses `deno_core` for V8 isolate
-execution. Database is Postgres.
+`flux why` is the product thesis in one command.
 
-Only the Gateway is exposed to the internet. All other services communicate
-internally via `x-service-token`.
+It answers:
 
----
+- what failed?
+- where did the failure start?
+- what changed?
+- what state did it mutate?
+- what does the operator do next?
 
-*For the complete specification, see [framework.md](framework.md).*
+`flux why` is a command people reach for before logs. That is the center of gravity.
+
+## Complete System, Focused Story
+
+Flux includes functions, gateway, database execution, queue, schedules, secrets, and deployment because the execution record has to span the whole backend.
+
+But the product message stays narrow:
+
+- Flux is the backend runtime for deterministic production debugging.
+- The complete system exists to make that statement true.

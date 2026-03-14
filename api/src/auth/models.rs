@@ -11,7 +11,6 @@ pub struct PlatformUser {
     #[serde(skip)]
     pub password_hash: String,
     pub role:          String,
-    pub tenant_id:     Option<Uuid>,
     pub created_at:    chrono::DateTime<chrono::Utc>,
 }
 
@@ -30,41 +29,37 @@ pub struct CreateUserRequest {
     pub password:  String,
     /// One of: "admin" | "viewer" | "readonly"
     pub role:      String,
-    pub tenant_id: Option<Uuid>,
 }
 
 /// JWT claims embedded in every session token.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     /// Subject — platform user UUID.
-    pub sub:       String,
-    pub email:     String,
-    pub role:      String,
-    pub tenant_id: Option<String>,
+    pub sub:   String,
+    pub email: String,
+    pub role:  String,
     /// Expiry (Unix timestamp).
-    pub exp:       usize,
+    pub exp:   usize,
     /// Issued-at (Unix timestamp).
-    pub iat:       usize,
+    pub iat:   usize,
 }
 
 /// Subset of user fields returned in API responses (no password hash).
 #[derive(Debug, Serialize)]
 pub struct UserInfo {
-    pub id:        Uuid,
-    pub username:  String,
-    pub email:     String,
-    pub role:      String,
-    pub tenant_id: Option<Uuid>,
+    pub id:       Uuid,
+    pub username: String,
+    pub email:    String,
+    pub role:     String,
 }
 
 impl From<PlatformUser> for UserInfo {
     fn from(u: PlatformUser) -> Self {
         UserInfo {
-            id:        u.id,
-            username:  u.username,
-            email:     u.email,
-            role:      u.role,
-            tenant_id: u.tenant_id,
+            id:       u.id,
+            username: u.username,
+            email:    u.email,
+            role:     u.role,
         }
     }
 }

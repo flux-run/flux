@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, ShieldCheck, Trash2, Eye, EyeOff } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import type { SecretResponse } from '@fluxbase/api-types'
 import { useStore } from '@/state/tenantStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,8 +14,6 @@ import {
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/layout/PageHeader'
-
-interface Secret { id: string; key: string; scope: string; created_at: string }
 
 export default function SecretsPage() {
   const { projectId, projectName } = useStore()
@@ -26,7 +25,7 @@ export default function SecretsPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['secrets', projectId],
-    queryFn: () => apiFetch<{ secrets: Secret[] }>('/secrets'),
+    queryFn: () => apiFetch<{ secrets: SecretResponse[] }>('/secrets'),
     enabled: !!projectId,
   })
 
@@ -92,14 +91,14 @@ export default function SecretsPage() {
           {/* Header */}
           <div className="grid grid-cols-[1fr_100px_1fr_48px] gap-4 px-4 py-2 bg-muted/30 border-b">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Key</p>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Scope</p>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Version</p>
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Created</p>
             <span />
           </div>
           {secrets.map((s) => (
-            <div key={s.id} className="grid grid-cols-[1fr_100px_1fr_48px] gap-4 items-center px-4 py-3 border-b last:border-0 hover:bg-muted/20 group transition-colors">
+            <div key={s.key} className="grid grid-cols-[1fr_100px_1fr_48px] gap-4 items-center px-4 py-3 border-b last:border-0 hover:bg-muted/20 group transition-colors">
               <p className="font-mono text-sm font-medium">{s.key}</p>
-              <Badge variant="outline" className="w-fit font-mono text-xs">{s.scope}</Badge>
+              <Badge variant="outline" className="w-fit font-mono text-xs">v{s.version}</Badge>
               <p className="text-xs text-muted-foreground">
                 {s.created_at ? new Date(s.created_at).toLocaleDateString() : '—'}
               </p>

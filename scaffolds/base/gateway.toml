@@ -1,0 +1,52 @@
+# gateway.toml — Flux Gateway Configuration
+# Handles all inbound HTTP: routing, CORS, rate limiting, auth, body limits.
+# Every [[routes]] entry maps a path to a function or a direct DB query.
+
+[gateway]
+port        = 4000
+max_body_kb = 256       # reject bodies larger than this
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+[cors]
+allowed_origins = ["*"]
+allowed_methods = ["GET", "POST", "OPTIONS"]
+allowed_headers = ["Content-Type", "Authorization", "X-API-Key"]
+max_age_seconds = 86400
+
+# ── Global Rate Limiting ──────────────────────────────────────────────────────
+[rate_limit]
+enabled    = true
+requests   = 100       # per window per client IP
+window_secs = 60
+strategy   = "token_bucket"    # token_bucket | sliding_window
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+# auth:  "none" | "api_key" | "jwt"
+# method: "POST" (functions, default) | "GET" (db.query only)
+#
+# Route types:
+#   function = "<name>"          → POST → calls functions/<name>/
+#   db.query = "SELECT ..."      → GET  → runs SQL, returns rows (read-only)
+
+[[routes]]
+path     = "/hello"
+function = "hello"
+auth     = "none"
+
+[[routes]]
+path     = "/users/create"
+function = "create_user"
+auth     = "jwt"
+rate_limit_override = { requests = 20, window_secs = 60 }
+
+[[routes]]
+path     = "/users/me"
+function = "get_current_user"
+auth     = "jwt"
+
+# Direct DB query route — no function needed, read-only
+[[routes]]
+path     = "/users"
+method   = "GET"
+db.query = "SELECT id, name, email, role, status, created_at FROM users ORDER BY created_at DESC LIMIT 100"
+auth     = "api_key"

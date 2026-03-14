@@ -1,6 +1,0 @@
-{
-  "name": "hello_wasm",
-  "runtime": "wasm",
-  "description": "A minimal hello-world Flux function written in Rust and compiled to WASM",
-  "entry": "hello_wasm.wasm"
-}

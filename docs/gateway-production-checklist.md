@@ -1,79 +1,55 @@
 # Gateway Production Checklist
 
-**Target audience:** DevOps, SRE, production engineers.
-Verify before exposing the gateway to real traffic.
+Use this checklist before exposing a Flux deployment to real traffic.
 
----
+## Network Exposure
 
-## Security
+- expose only the public gateway and operator surface
+- keep internal execution and worker surfaces private
+- terminate TLS at the edge or directly in front of Flux
 
-- [ ] TLS terminated at load balancer (gateway serves HTTP only)
-- [ ] `INTERNAL_SERVICE_TOKEN` set and different from any user-facing credential
-- [ ] `/internal/*` routes not exposed through public load balancer
-- [ ] Sensitive headers (`authorization`, `cookie`, `x-api-key`) redacted in logs
-- [ ] CORS configured per route (no wildcard `*` in production)
-- [ ] JWKS cache enabled (avoid network call per request)
-- [ ] API key validation returns 401 (not 500) on cache miss
+## Authentication And Secrets
 
----
+- set strong production secrets and API keys
+- remove development defaults
+- rotate credentials before beta onboarding
+- review which routes require operator versus user auth
 
-## Reliability
+## Rate Limits And Abuse Controls
 
-- [ ] `MAX_REQUEST_SIZE_BYTES` configured (default 10MB)
-- [ ] Runtime timeout configured (`RUNTIME_TIMEOUT_SECS`, default 30s)
-- [ ] Snapshot readiness: 503 during cold start (not 404)
-- [ ] Snapshot refresh: every 60s, keeps old snapshot on refresh failure
-- [ ] Circuit breaker for Runtime: open on sustained 5xx, return 503
-- [ ] Database connection pool: min 5, max 20, 5s acquire timeout
+- enable sensible per-route rate limits
+- protect expensive routes
+- test error behavior under abusive traffic
 
----
+## Execution Safety
+
+- confirm timeout and memory limits are configured
+- verify queue retry and dead-letter policies
+- verify replay and debugging actions are operator-gated
 
 ## Observability
 
-- [ ] `x-request-id` generated for every request (UUID v7)
-- [ ] `x-request-id` forwarded to Runtime and echoed in response
-- [ ] Platform logs insert is async (non-blocking)
-- [ ] Health check at `GET /health` wired to load balancer
-- [ ] Monitoring: `p99 latency`, `5xx rate`, `active connections`
+- confirm traces and mutation history are being recorded
+- confirm logs are correlated with execution records
+- verify that recent failures are visible through CLI or dashboard workflows
 
----
+## Storage And Retention
 
-## Performance
+- back up Postgres
+- back up bundle artifacts if stored externally
+- choose retention settings that still support debugging
 
-- [ ] Route snapshot in memory (O(1) lookup, <10MB total)
-- [ ] Single-flight query deduplication enabled
-- [ ] Response caching: role-aware, 30s default TTL
-- [ ] Shared `reqwest::Client` (TCP connection reuse)
-- [ ] No `.collect().await` on response bodies (stream through)
+## Deploy And Recovery
 
----
+- document the deploy path
+- verify rollback or re-deploy procedures
+- rehearse database restore and service restart steps
 
-## Load testing
+## Product Readiness Check
 
-- [ ] 1,000 rps for 5 minutes: all requests complete, p99 < 500ms
-- [ ] Spike 100 → 5,000 rps: graceful degradation (503, not crash)
-- [ ] Overload 10,000 rps for 2 minutes: gateway survives, memory < 2GB
-- [ ] Memory stable over 24h (no leaks)
+Before onboarding real beta users, make sure a failed request can be:
 
----
-
-## Deployment
-
-### Pre-deploy
-- [ ] All tests passing
-- [ ] Load test passed
-- [ ] Security audit completed (no TODOs in critical paths)
-
-### Deploy sequence
-1. Deploy to staging → smoke test → monitor 12h
-2. Canary (10% traffic) → monitor 30 min → check error rate
-3. Full rollout → monitor 2h → keep old version for rollback
-
-### Rollback
-- Detection: auto-rollback if 5xx rate > 5%
-- Manual: revert to previous container image
-
----
-
-*For Gateway architecture, see [gateway.md](gateway.md).
-For the full framework, see [framework.md](framework.md).*
+1. found quickly
+2. traced end to end
+3. explained with linked state changes
+4. tied back to a code version or deployment

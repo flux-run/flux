@@ -29,8 +29,13 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load();
 
     // Database pool.
+    let gw_pool_size = std::env::var("GW_DB_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(20);
+
     let db_pool = PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(gw_pool_size)
         .after_connect(|conn, _meta| Box::pin(async move {
             sqlx::query("SET search_path = flux, public").execute(conn).await?;
             Ok(())
@@ -39,6 +44,9 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     info!("Gateway connected to database");
+
+    // Install Prometheus recorder before any requests are served.
+    gateway::metrics::init_prometheus();
 
     // Route snapshot — warm before accepting traffic so /readiness returns 200.
     let snapshot = snapshot::GatewaySnapshot::new(
@@ -80,7 +88,36 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!("Flux Gateway listening on {}", addr);
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
+}
+
+/// Resolves on SIGTERM (Unix) or Ctrl-C — allows in-flight requests to drain.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl-C handler");
+    };
+
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::terminate(),
+        )
+        .expect("failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = ctrl_c         => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    ctrl_c.await;
+
+    info!("Gateway: shutdown signal received — draining in-flight requests");
 }

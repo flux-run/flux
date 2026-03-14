@@ -5,12 +5,55 @@ use axum::{
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
+use dashmap::DashMap;
+use std::{sync::OnceLock, time::{Duration, Instant}};
 
 use crate::{error::ApiError, AppState};
 use super::{
     models::{CreateUserRequest, LoginRequest, UserInfo},
     service,
 };
+
+// ── Login rate-limit (in-memory, per-email, resets per process) ───────────────
+
+/// 10 attempts per 15-minute window per email address.
+const RATE_LIMIT_MAX: u32     = 10;
+const RATE_LIMIT_WINDOW: u64  = 900; // seconds
+
+struct AttemptRecord {
+    count:        u32,
+    window_start: Instant,
+}
+
+static LOGIN_LIMITER: OnceLock<DashMap<String, AttemptRecord>> = OnceLock::new();
+
+/// Returns `true` if the request should be blocked (too many attempts).
+fn is_rate_limited(email: &str) -> bool {
+    let map = LOGIN_LIMITER.get_or_init(DashMap::new);
+    let now = Instant::now();
+    let window = Duration::from_secs(RATE_LIMIT_WINDOW);
+
+    let mut entry = map.entry(email.to_lowercase()).or_insert_with(|| AttemptRecord {
+        count: 0,
+        window_start: now,
+    });
+
+    if now.duration_since(entry.window_start) > window {
+        entry.count = 0;
+        entry.window_start = now;
+    }
+
+    entry.count += 1;
+    entry.count > RATE_LIMIT_MAX
+}
+
+/// Reset the attempt counter for an email on successful login (UX: legitimate
+/// users aren't locked out after they recover their password).
+fn reset_rate_limit(email: &str) {
+    if let Some(map) = LOGIN_LIMITER.get() {
+        map.remove(&email.to_lowercase());
+    }
+}
 
 // ── Helper: extract Bearer JWT from headers ───────────────────────────────────
 
@@ -56,6 +99,14 @@ pub async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if is_rate_limited(&body.email) {
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "TOO_MANY_REQUESTS",
+            "Too many login attempts. Please wait 15 minutes before trying again.",
+        ));
+    }
+
     let user = service::find_by_email(&state.pool, &body.email)
         .await?
         .ok_or_else(|| {
@@ -70,6 +121,7 @@ pub async fn login(
         ));
     }
 
+    reset_rate_limit(&body.email);
     let token = service::create_token(&user)?;
     Ok(Json(json!({
         "token": token,
@@ -163,4 +215,17 @@ fn require_admin(claims: &super::models::Claims) -> Result<(), ApiError> {
     } else {
         Ok(())
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /auth/status  — public, returns user_count so CLI can detect first-run
+// ─────────────────────────────────────────────────────────────────────────────
+pub async fn status(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, ApiError> {
+    let count = service::count_users(&state.pool).await?;
+    Ok(Json(json!({
+        "setup_complete": count > 0,
+        "user_count": count,
+    })))
 }

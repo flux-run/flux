@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
+import type { FunctionResponse, PlatformLogRow, CronJobRow } from '@fluxbase/api-types'
 import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'
@@ -18,29 +19,6 @@ import {
 import { cn } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-interface Fn {
-  id: string
-  name: string
-  runtime: string
-}
-
-interface LogEntry {
-  id: string
-  level: string
-  message: string
-  timestamp: string
-}
-
-interface CronJob {
-  id: string
-  name: string
-  schedule: string
-  action_type: string
-  enabled: boolean
-  last_run_at: string | null
-  next_run_at: string | null
-}
 
 interface Workflow {
   id: string
@@ -99,7 +77,7 @@ function FunctionLogsTab() {
 
   const { data: fnData } = useQuery({
     queryKey: ['functions', projectId],
-    queryFn: () => apiFetch<{ functions: Fn[] }>('/functions'),
+    queryFn: () => apiFetch<{ functions: FunctionResponse[] }>('/functions'),
     enabled: !!projectId,
   })
 
@@ -114,7 +92,7 @@ function FunctionLogsTab() {
       const params = new URLSearchParams({ limit })
       if (functionId && functionId !== 'all') params.set('function_id', functionId)
 
-      return apiFetch<{ logs: LogEntry[] }>(`/logs?${params.toString()}`)
+      return apiFetch<{ logs: PlatformLogRow[] }>(`/logs?${params.toString()}`)
     },
     enabled: !!projectId,
   })
@@ -232,7 +210,7 @@ function WorkflowsTab() {
 
   const { data, isFetching, refetch } = useQuery({
     queryKey: ['workflows-log', projectId],
-    queryFn: () => apiFetch<{ workflows: Workflow[] }>('/db/workflows'),
+    queryFn: () => apiFetch<{ workflows: Workflow[] }>('/db/workflows'), // eslint-disable-line @typescript-eslint/no-explicit-any
     enabled: !!projectId,
   })
 
@@ -289,7 +267,7 @@ function CronTab() {
 
   const { data, isFetching, refetch } = useQuery({
     queryKey: ['cron-log', projectId],
-    queryFn: () => apiFetch<{ cron: CronJob[] }>('/db/cron'),
+    queryFn: () => apiFetch<{ cron: CronJobRow[] }>('/db/cron'),
     enabled: !!projectId,
   })
 

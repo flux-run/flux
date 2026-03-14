@@ -38,7 +38,6 @@ fn compute_hash(data: &str) -> String {
 /// `pub` so the openapi handler can reuse it.
 pub async fn fetch_schema_graph_pub(
     state: &AppState,
-    project_id: uuid::Uuid,
     headers: &HeaderMap,
 ) -> Result<(Value, Vec<Value>, String), ApiError> {
     let de_url = format!("{}/db/schema", state.data_engine_url);
@@ -55,9 +54,8 @@ pub async fn fetch_schema_graph_pub(
 
     let funcs = sqlx::query(
         "SELECT name, description, input_schema, output_schema \
-         FROM functions WHERE project_id = $1 ORDER BY name",
+         FROM flux.functions ORDER BY name",
     )
-    .bind(project_id)
     .fetch_all(&state.pool)
     .await
     .map_err(|_| ApiError::internal("db_error"))?;
@@ -98,32 +96,29 @@ pub async fn fetch_schema_graph_pub(
 /// Suitable for IDE plugins, CLI tools, and future GraphQL gateways.
 pub async fn schema(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     headers: HeaderMap,
 ) -> ApiResult<Value> {
-    let project_id = ctx.project_id;
-
     let (db_schema, func_values, schema_hash) =
-        fetch_schema_graph_pub(&state, project_id, &headers).await?;
+        fetch_schema_graph_pub(&state, &headers).await?;
 
     // Upsert a schema version record; return (or create) the version number.
     let version_number: i32 = sqlx::query(
         "WITH ins AS ( \
-            INSERT INTO schema_versions (project_id, schema_hash, version_number) \
-            VALUES ($1, $2, \
+            INSERT INTO schema_versions (schema_hash, version_number) \
+            VALUES ($1, \
                 (SELECT COALESCE(MAX(version_number), 0) + 1 \
-                 FROM schema_versions WHERE project_id = $1) \
+                 FROM schema_versions) \
             ) \
-            ON CONFLICT (project_id, schema_hash) DO NOTHING \
+            ON CONFLICT (schema_hash) DO NOTHING \
             RETURNING version_number \
          ) \
          SELECT version_number FROM ins \
          UNION ALL \
          SELECT version_number FROM schema_versions \
-         WHERE project_id = $1 AND schema_hash = $2 \
+         WHERE schema_hash = $1 \
          LIMIT 1",
     )
-    .bind(project_id)
     .bind(&schema_hash)
     .fetch_one(&state.pool)
     .await
@@ -147,19 +142,17 @@ pub async fn schema(
 /// containing fully-typed interfaces, Insert/Update utility types, function
 /// I/O types, and a module augmentation for `@fluxbase/sdk`.
 ///
-/// The file is cached in memory keyed by `{project_id}:{schema_hash}` — if the
+/// The file is cached in memory keyed by `schema_hash` — if the
 /// schema hasn't changed since last call the response is served from memory in
 /// <1 ms.  The current `schema_hash` is echoed in the `X-Schema-Hash` header
 /// and inside the generated file as a comment, making stale-detection trivial.
 pub async fn typescript(
     State(state): State<AppState>,
-    Extension(ctx): Extension<RequestContext>,
+    Extension(_ctx): Extension<RequestContext>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let project_id = ctx.project_id;
-
     let (db_schema, func_values, schema_hash) =
-        fetch_schema_graph_pub(&state, project_id, &headers).await?;
+        fetch_schema_graph_pub(&state, &headers).await?;
 
     let sdk = generate_sdk(&db_schema, &func_values, &schema_hash);
 

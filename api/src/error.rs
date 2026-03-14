@@ -157,3 +157,117 @@ impl From<String> for ApiError {
 impl From<&str> for ApiError {
     fn from(s: &str) -> Self { Self::internal(s) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    // ── ApiError constructors ─────────────────────────────────────────────
+
+    #[test]
+    fn bad_request_has_correct_status_and_code() {
+        let e = ApiError::bad_request("missing field");
+        assert_eq!(e.status, StatusCode::BAD_REQUEST);
+        assert_eq!(e.code,   "INPUT_VALIDATION_ERROR");
+        assert_eq!(e.message, "missing field");
+    }
+
+    #[test]
+    fn unauthorized_has_correct_status() {
+        let e = ApiError::unauthorized("not logged in");
+        assert_eq!(e.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(e.code,   "UNAUTHORIZED");
+    }
+
+    #[test]
+    fn forbidden_has_correct_status() {
+        let e = ApiError::forbidden("not allowed");
+        assert_eq!(e.status, StatusCode::FORBIDDEN);
+        assert_eq!(e.code,   "FORBIDDEN");
+    }
+
+    #[test]
+    fn not_found_has_correct_status() {
+        let e = ApiError::not_found("no such resource");
+        assert_eq!(e.status, StatusCode::NOT_FOUND);
+        assert_eq!(e.code,   "NOT_FOUND");
+    }
+
+    #[test]
+    fn conflict_has_correct_status() {
+        let e = ApiError::conflict("already exists");
+        assert_eq!(e.status, StatusCode::CONFLICT);
+        assert_eq!(e.code,   "CONFLICT");
+    }
+
+    #[test]
+    fn internal_has_correct_status() {
+        let e = ApiError::internal("crash");
+        assert_eq!(e.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(e.code,   "FUNCTION_ERROR");
+    }
+
+    #[test]
+    fn rate_limited_has_429_status() {
+        let e = ApiError::rate_limited("too many requests");
+        assert_eq!(e.status, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn timeout_has_504_or_408() {
+        let e = ApiError::timeout("timed out");
+        let code = e.status.as_u16();
+        assert!(code == 408 || code == 504, "timeout should be 408 or 504, got {code}");
+    }
+
+    // ── From impls ────────────────────────────────────────────────────────
+
+    #[test]
+    fn from_string_produces_internal_error() {
+        let e: ApiError = "some message".to_string().into();
+        assert_eq!(e.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(e.message, "some message");
+    }
+
+    #[test]
+    fn from_str_produces_internal_error() {
+        let e: ApiError = "static msg".into();
+        assert_eq!(e.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(e.message, "static msg");
+    }
+
+    // ── ApiResponse ───────────────────────────────────────────────────────
+
+    #[test]
+    fn api_response_new_debug_reflects_data() {
+        let r = ApiResponse::new(42u32);
+        // We can't easily test IntoResponse without an axum runtime,
+        // but we can confirm the type compiles and Debug works.
+        let dbg = format!("{:?}", r);
+        assert!(dbg.contains("42"));
+    }
+
+    #[test]
+    fn api_result_ok_variant_compiles() {
+        let result: ApiResult<&str> = Ok(ApiResponse::new("hello"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn api_result_err_variant_has_status() {
+        let result: ApiResult<&str> = Err(ApiError::not_found("x"));
+        let e = result.unwrap_err();
+        assert_eq!(e.status, StatusCode::NOT_FOUND);
+    }
+
+    // ── ApiError::new ─────────────────────────────────────────────────────
+
+    #[test]
+    fn new_preserves_all_fields() {
+        let e = ApiError::new(StatusCode::IM_A_TEAPOT, "TEAPOT", "I'm a teapot");
+        assert_eq!(e.status, StatusCode::IM_A_TEAPOT);
+        assert_eq!(e.code,   "TEAPOT");
+        assert_eq!(e.message, "I'm a teapot");
+    }
+}
