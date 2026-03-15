@@ -24,8 +24,11 @@ pub mod events;
 pub mod functions;
 pub mod gateway;
 pub mod logs;
+pub mod monitor;
 pub mod queue;
+pub mod routes;
 pub mod schedules;
+pub mod schema;
 pub mod secrets;
 
 mod tests;

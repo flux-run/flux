@@ -1,5 +1,6 @@
 use clap::Subcommand;
 use colored::Colorize;
+use api_contract::routes;
 use crate::client::ApiClient;
 use serde_json::Value;
 
@@ -476,7 +477,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
                     body["count"] = serde_json::json!(n);
                 }
                 let res = client.client
-                    .post(format!("{}/db/migrations/apply", client.base_url))
+                    .post(routes::db::MIGRATE_APPLY.url(&client.base_url))
                     .json(&body)
                     .send()
                     .await?;
@@ -494,7 +495,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
             MigrationCommands::Rollback { database } => {
                 let res = client.client
-                    .post(format!("{}/db/migrations/rollback", client.base_url))
+                    .post(routes::db::MIGRATE_ROLLBACK.url(&client.base_url))
                     .json(&serde_json::json!({ "database": database }))
                     .send()
                     .await?;
@@ -505,7 +506,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
             MigrationCommands::Status { database } => {
                 let res = client.client
-                    .get(format!("{}/db/migrations?database={}", client.base_url, database))
+                    .get(format!("{}?database={}", routes::db::MIGRATE_STATUS.url(&client.base_url), database))
                     .send()
                     .await?;
                 let json: Value = res.error_for_status()?.json().await?;
