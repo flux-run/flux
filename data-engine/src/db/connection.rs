@@ -9,9 +9,9 @@ pub async fn init_pool(database_url: &str) -> PgPool {
     PgPoolOptions::new()
         .max_connections(max_connections)
         .after_connect(|conn, _meta| Box::pin(async move {
-            // data-engine owns fluxbase_internal; flux holds platform tables;
+            // data-engine owns flux_internal; flux holds platform tables;
             // public holds user application data.
-            sqlx::query("SET search_path = fluxbase_internal, flux, public").execute(conn).await?;
+            sqlx::query("SET search_path = flux_internal, flux, public").execute(conn).await?;
             Ok(())
         }))
         .connect(database_url)

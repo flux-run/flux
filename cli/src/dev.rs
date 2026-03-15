@@ -29,8 +29,8 @@
 //! 1. Embedded PostgreSQL is downloaded once to `~/.flux/cache/postgres/`
 //!    and reused on every subsequent `flux dev` run.
 //! 2. A per-project data directory is created at `.flux/dev/pgdata/`.
-//! 3. All migrations from `schemas/api/` and `schemas/data-engine/` are
-//!    applied in filename order (both sets are idempotent — safe to re-run).
+//! 3. The canonical `schemas/v0.1.sql` baseline is applied (idempotent — safe
+//!    to re-run on an existing database via CREATE … IF NOT EXISTS guards).
 //! 4. The Flux server binary is found via the same resolution as `flux server`:
 //!    alongside the flux binary, then workspace target/debug, then PATH.
 //! 5. Ctrl+C stops the server process, then stops PostgreSQL.
@@ -387,29 +387,18 @@ async fn bootstrap_dev_db(port: u16) -> anyhow::Result<()> {
 
 // ── Migrations ────────────────────────────────────────────────────────────────
 
-// Flux system migrations embedded at compile-time — always available regardless
-// of where the CLI is installed. The three migration sets share the same
-// _sqlx_migrations tracking table; `set_ignore_missing(true)` prevents each
-// migrator from rejecting migrations it doesn't own.
-static API_MIGRATIONS: sqlx::migrate::Migrator =
-    sqlx::migrate!("../schemas/api");
-
-static DE_MIGRATIONS: sqlx::migrate::Migrator =
-    sqlx::migrate!("../schemas/data-engine");
-
-static QUEUE_MIGRATIONS: sqlx::migrate::Migrator =
-    sqlx::migrate!("../schemas/queue");
+// Canonical schema baseline embedded at compile-time — always available
+// regardless of where the CLI is installed. All DDL uses CREATE … IF NOT EXISTS
+// and DROP … IF EXISTS guards so this is safe to run on existing databases.
+static SCHEMA_V01: &str = include_str!("../../schemas/v0.1.sql");
 
 async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Result<usize> {
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
     use std::str::FromStr;
 
-    // Parse the database URL and override search_path to force public schema.
-    // The `flux` role's "$user" search_path would otherwise resolve to the
-    // `flux` schema, sending _sqlx_migrations tracking to the wrong table.
     let opts = PgConnectOptions::from_str(database_url)
         .context("Invalid DATABASE_URL")?
-        .options([("search_path", "public")]);
+        .options([("search_path", "flux, public")]);
 
     let pool = PgPoolOptions::new()
         .max_connections(2)
@@ -418,52 +407,13 @@ async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Res
         .await
         .context("Failed to connect to dev PostgreSQL")?;
 
-    // If DE migrations were previously tracked in flux._sqlx_migrations (the
-    // wrong table), merge them into public._sqlx_migrations so idempotency works.
-    let _ = sqlx::query(
-        "INSERT INTO public._sqlx_migrations
-         SELECT * FROM flux._sqlx_migrations
-         WHERE EXISTS (
-             SELECT 1 FROM information_schema.tables
-             WHERE table_schema = 'flux' AND table_name = '_sqlx_migrations'
-         )
-         ON CONFLICT (version) DO NOTHING"
-    )
-    .execute(&pool)
-    .await;
-
-    // Build mutable copies of the static migrators so we can enable
-    // ignore_missing — prevents each set from rejecting migrations owned by
-    // the other set in the shared _sqlx_migrations tracking table.
-    let api_m = sqlx::migrate::Migrator {
-        migrations:      std::borrow::Cow::Borrowed(API_MIGRATIONS.migrations.as_ref()),
-        ignore_missing:  true,
-        locking:         true,
-        no_tx:           false,
-    };
-    api_m.run(&pool).await
-        .context("Failed to apply Flux API migrations")?;
-
-    let de_m = sqlx::migrate::Migrator {
-        migrations:      std::borrow::Cow::Borrowed(DE_MIGRATIONS.migrations.as_ref()),
-        ignore_missing:  true,
-        locking:         true,
-        no_tx:           false,
-    };
-    de_m.run(&pool).await
-        .context("Failed to apply Flux data-engine migrations")?;
-
-    let queue_m = sqlx::migrate::Migrator {
-        migrations:      std::borrow::Cow::Borrowed(QUEUE_MIGRATIONS.migrations.as_ref()),
-        ignore_missing:  true,
-        locking:         true,
-        no_tx:           false,
-    };
-    queue_m.run(&pool).await
-        .context("Failed to apply Flux queue migrations")?;
+    sqlx::raw_sql(SCHEMA_V01)
+        .execute(&pool)
+        .await
+        .context("Failed to apply Flux v0.1 schema")?;
 
     pool.close().await;
-    Ok(API_MIGRATIONS.migrations.len() + DE_MIGRATIONS.migrations.len() + QUEUE_MIGRATIONS.migrations.len())
+    Ok(1)
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────

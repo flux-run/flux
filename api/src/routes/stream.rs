@@ -97,7 +97,7 @@ pub async fn stream_events(
             let rows: Vec<EventStreamRow> = sqlx::query_as(
                 r#"
                 SELECT id, event_type, table_name, operation, record_id, created_at
-                FROM   fluxbase_internal.events
+                FROM   flux_internal.events
                 WHERE  created_at > $1
                 ORDER  BY created_at ASC
                 LIMIT  50
@@ -162,7 +162,7 @@ pub async fn stream_executions(
             let rows: Vec<ExecutionRow> = sqlx::query_as(
                 r#"
                 SELECT request_id, method, path, response_status, duration_ms, created_at
-                FROM   fluxbase_internal.trace_requests
+                FROM   flux_internal.trace_requests
                 WHERE  created_at > $1
                 ORDER  BY created_at ASC
                 LIMIT  50
@@ -229,7 +229,7 @@ pub async fn stream_mutations(
             let rows: Vec<MutationRow> = sqlx::query_as(
                 r#"
                 SELECT request_id, table_name, operation, record_pk, mutation_seq, mutation_ts
-                FROM   fluxbase_internal.state_mutations
+                FROM   flux_internal.state_mutations
                 WHERE  mutation_ts > $1
                 ORDER  BY mutation_ts ASC
                 LIMIT  100

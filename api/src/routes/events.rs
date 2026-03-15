@@ -32,7 +32,7 @@ pub async fn publish_event(
     let event_payload = payload.payload.unwrap_or(Value::Object(Default::default()));
 
     let row = sqlx::query_as::<_, EventRow>(
-        "INSERT INTO fluxbase_internal.events \
+        "INSERT INTO flux_internal.events \
          (event_type, table_name, operation, payload) \
          VALUES ($1, $2, $3, $4) RETURNING *",
     )
@@ -70,7 +70,7 @@ pub async fn publish_event(
 
         let subs = sqlx::query_as::<_, SubRow>(
             "SELECT id, target_type, target_config \
-             FROM fluxbase_internal.event_subscriptions \
+             FROM flux_internal.event_subscriptions \
              WHERE enabled = true \
                AND (event_pattern = $1 \
                     OR event_pattern = '*' \
@@ -139,7 +139,7 @@ pub async fn publish_event(
                 }
 
                 sqlx::query(
-                    "INSERT INTO fluxbase_internal.event_deliveries \
+                    "INSERT INTO flux_internal.event_deliveries \
                      (event_id, subscription_id, status, dispatched_at) \
                      VALUES ($1, $2, 'pending', now())",
                 )
@@ -176,7 +176,7 @@ pub async fn list_subscriptions(
     let rows = sqlx::query_as::<_, EventSubscriptionRow>(
         "SELECT id, event_pattern, target_type, target_config, \
          enabled, created_at, updated_at \
-         FROM fluxbase_internal.event_subscriptions \
+         FROM flux_internal.event_subscriptions \
          ORDER BY created_at DESC \
          LIMIT $1 OFFSET $2",
     )
@@ -195,7 +195,7 @@ pub async fn create_subscription(
     Json(payload): Json<CreateSubscriptionPayload>,
 ) -> ApiResult<EventSubscriptionRow> {
     let row = sqlx::query_as::<_, EventSubscriptionRow>(
-        "INSERT INTO fluxbase_internal.event_subscriptions \
+        "INSERT INTO flux_internal.event_subscriptions \
          (event_pattern, target_type, target_config) \
          VALUES ($1, $2, $3) \
          RETURNING id, event_pattern, target_type, target_config, \
@@ -217,7 +217,7 @@ pub async fn delete_subscription(
     Path(id): Path<Uuid>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
-        "DELETE FROM fluxbase_internal.event_subscriptions WHERE id = $1",
+        "DELETE FROM flux_internal.event_subscriptions WHERE id = $1",
     )
     .bind(id)
     .execute(&state.pool)

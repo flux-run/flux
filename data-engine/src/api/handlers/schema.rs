@@ -45,10 +45,10 @@ tbls AS NOT MATERIALIZED (
     ), '[]'::jsonb) AS data
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    LEFT JOIN fluxbase_internal.table_metadata m
+    LEFT JOIN flux_internal.table_metadata m
       ON m.schema_name = n.nspname AND m.table_name = c.relname
     WHERE c.relkind = 'r'
-      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'fluxbase_internal')
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'flux_internal')
       AND n.nspname NOT LIKE 'pg_%'
       AND ($1::text IS NULL OR n.nspname = $1)
 ),
@@ -64,7 +64,7 @@ cols AS NOT MATERIALIZED (
             'file_visibility', file_visibility
         ) ORDER BY schema_name, table_name, ordinal
     ), '[]'::jsonb) AS data
-    FROM fluxbase_internal.column_metadata
+    FROM flux_internal.column_metadata
     WHERE ($1::text IS NULL OR schema_name = $1)
 ),
 rels AS NOT MATERIALIZED (
@@ -80,7 +80,7 @@ rels AS NOT MATERIALIZED (
             'alias',        alias
         ) ORDER BY from_table, alias
     ), '[]'::jsonb) AS data
-    FROM fluxbase_internal.relationships
+    FROM flux_internal.relationships
     WHERE ($1::text IS NULL OR schema_name = $1)
 ),
 pols AS NOT MATERIALIZED (
@@ -94,7 +94,7 @@ pols AS NOT MATERIALIZED (
             'row_condition_sql', row_condition
         ) ORDER BY table_name, role
     ), '[]'::jsonb) AS data
-    FROM fluxbase_internal.policies
+    FROM flux_internal.policies
 )
 SELECT
     (SELECT data FROM tbls)   AS tables,

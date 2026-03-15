@@ -6,7 +6,7 @@
 //! This is non-negotiable — controlling all writes enables:
 //!
 //! - **Atomic mutation recording**: every INSERT/UPDATE/DELETE produces a
-//!   `fluxbase_internal.state_mutations` row in the same transaction.
+//!   `flux_internal.state_mutations` row in the same transaction.
 //! - **State history**: the full before/after state of every row is captured,
 //!   including `changed_fields` (sorted key list).
 //! - **Deterministic replay**: given a `request_id`, re-execute all mutations

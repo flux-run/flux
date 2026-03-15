@@ -1,3 +1,0 @@
--- 13. Secrets Refactor (Version & Updating)
-ALTER TABLE secrets ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1;
-ALTER TABLE secrets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();

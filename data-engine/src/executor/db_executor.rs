@@ -56,7 +56,7 @@ fn map_db_error(e: sqlx::Error) -> EngineError {
 /// Per-request context passed to `execute` so the executor can:
 ///   • enforce a transaction-scoped `search_path`  (Gap 5)
 ///   • prepend a trace comment to every SQL statement (Gap 3)
-///   • write a row to `fluxbase_internal.state_mutations` for mutations (Gap 1)
+///   • write a row to `flux_internal.state_mutations` for mutations (Gap 1)
 pub struct MutationContext<'a> {
     /// Postgres schema name, e.g. `main` — already validated by DbRouter.
     pub schema: &'a str,
@@ -234,7 +234,7 @@ pub async fn execute(
                 let version: i64 = sqlx::query_scalar(
                     r#"
                     SELECT COALESCE(MAX(version), 0) + 1
-                    FROM   fluxbase_internal.state_mutations
+                    FROM   flux_internal.state_mutations
                     WHERE  table_name = $1
                       AND  record_pk  = $2
                     FOR UPDATE
@@ -279,7 +279,7 @@ pub async fn execute(
 
                 sqlx::query(
                     r#"
-                    INSERT INTO fluxbase_internal.state_mutations
+                    INSERT INTO flux_internal.state_mutations
                         (schema_name, table_name, record_pk,
                          operation, before_state, after_state, changed_fields,
                          version, actor_id, request_id, span_id)

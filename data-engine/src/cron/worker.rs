@@ -22,7 +22,7 @@ pub async fn run(pool: Arc<PgPool>, http: Arc<reqwest::Client>, runtime_url: Str
 async fn fire_due_jobs(pool: &PgPool, http: &reqwest::Client, runtime_url: &str) -> Result<(), sqlx::Error> {
     let jobs = sqlx::query(
         "SELECT id, name, action_type, action_config, schedule \
-         FROM fluxbase_internal.cron_jobs \
+         FROM flux_internal.cron_jobs \
          WHERE enabled = TRUE \
            AND next_run_at IS NOT NULL \
            AND next_run_at <= now() \
@@ -61,7 +61,7 @@ async fn fire_due_jobs(pool: &PgPool, http: &reqwest::Client, runtime_url: &str)
         let next = compute_next_run(&schedule);
 
         sqlx::query(
-            "UPDATE fluxbase_internal.cron_jobs \
+            "UPDATE flux_internal.cron_jobs \
              SET last_run_at = now(), next_run_at = $1 \
              WHERE id = $2",
         )

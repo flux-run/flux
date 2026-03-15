@@ -3,7 +3,7 @@ use sqlx::PgPool;
 use crate::engine::error::EngineError;
 use crate::router::db_router::quote_ident;
 
-/// A relationship loaded from `fluxbase_internal.relationships`.
+/// A relationship loaded from `flux_internal.relationships`.
 /// Passed into `CompilerOptions` so the compiler can expand nested column selectors.
 #[derive(Debug, Clone)]
 pub struct RelationshipDef {
@@ -32,7 +32,7 @@ pub async fn load_all_relationships(
     use sqlx::Row;
     let rows = sqlx::query(
         "SELECT alias, from_table, from_column, to_table, to_column, relationship \
-         FROM fluxbase_internal.relationships \
+         FROM flux_internal.relationships \
          WHERE schema_name = $1",
     )
     .bind(schema)

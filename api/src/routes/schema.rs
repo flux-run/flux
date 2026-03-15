@@ -186,7 +186,7 @@ pub async fn push_schema(
 ) -> ApiResult<serde_json::Value> {
     // Ensure schema_rules column exists
     sqlx::query(
-        "ALTER TABLE fluxbase_internal.table_metadata \
+        "ALTER TABLE flux_internal.table_metadata \
          ADD COLUMN IF NOT EXISTS schema_rules JSONB",
     )
     .execute(&state.pool)
@@ -198,7 +198,7 @@ pub async fn push_schema(
 
     // Upsert table metadata
     sqlx::query(
-        "INSERT INTO fluxbase_internal.table_metadata \
+        "INSERT INTO flux_internal.table_metadata \
          (schema_name, table_name, columns, schema_rules, updated_at) \
          VALUES ('public', $1, $2, $3, now()) \
          ON CONFLICT (schema_name, table_name) \
@@ -226,7 +226,7 @@ pub async fn push_schema(
                             // UUID string → function hook
                             if let Ok(function_id) = uuid::Uuid::parse_str(fn_id_str) {
                                 sqlx::query(
-                                    "INSERT INTO fluxbase_internal.hooks \
+                                    "INSERT INTO flux_internal.hooks \
                                      (table_name, event, function_id) \
                                      VALUES ($1, $2, $3) \
                                      ON CONFLICT (table_name, event) \
@@ -246,7 +246,7 @@ pub async fn push_schema(
                         } else if fn_item.is_object() {
                             // JSON object → TransformExpr hook (compiled TypeScript transform)
                             sqlx::query(
-                                "INSERT INTO fluxbase_internal.hooks \
+                                "INSERT INTO flux_internal.hooks \
                                  (table_name, event, transform_expr) \
                                  VALUES ($1, $2, $3) \
                                  ON CONFLICT (table_name, event) \
@@ -283,7 +283,7 @@ pub async fn push_schema(
                     .unwrap_or(serde_json::Value::Object(Default::default()));
 
                 sqlx::query(
-                    "INSERT INTO fluxbase_internal.event_subscriptions \
+                    "INSERT INTO flux_internal.event_subscriptions \
                      (event_pattern, target_type, target_config) \
                      VALUES ($1, 'function', $2) \
                      ON CONFLICT DO NOTHING",

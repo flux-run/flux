@@ -85,7 +85,7 @@ pub async fn handler(
                 schema_name,
                 version,
                 created_at
-            FROM fluxbase_internal.state_mutations
+            FROM flux_internal.state_mutations
             WHERE request_id   = $1
               AND table_name   = $2
               AND mutation_seq > $3
@@ -115,7 +115,7 @@ pub async fn handler(
                 schema_name,
                 version,
                 created_at
-            FROM fluxbase_internal.state_mutations
+            FROM flux_internal.state_mutations
             WHERE request_id   = $1
               AND mutation_seq > $2
             ORDER BY mutation_seq

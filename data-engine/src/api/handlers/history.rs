@@ -1,9 +1,9 @@
 /// Audit-trail read endpoints — Gap 1 read surface.
 ///
 /// These three handlers expose the data collected by `db_executor::execute()`
-/// into `fluxbase_internal.state_mutations`.  They are intentionally
+/// into `flux_internal.state_mutations`.  They are intentionally
 /// read-only, tenant-scoped, and require no schema prefix because
-/// `fluxbase_internal` is a shared service schema.
+/// `flux_internal` is a shared service schema.
 ///
 ///   GET /db/history/:database/:table   — full version history for one row
 ///   GET /db/blame/:database/:table     — last writer per row in a table
@@ -138,7 +138,7 @@ pub async fn history(
         r#"
         SELECT version, operation, before_state, after_state,
                actor_id, request_id, created_at
-        FROM   fluxbase_internal.state_mutations
+        FROM   flux_internal.state_mutations
         WHERE  table_name = $1
           AND  record_pk  = $2
         ORDER  BY version DESC
@@ -187,7 +187,7 @@ pub async fn blame(
         r#"
         SELECT DISTINCT ON (record_pk)
                record_pk, actor_id, request_id, version, created_at
-        FROM   fluxbase_internal.state_mutations
+        FROM   flux_internal.state_mutations
         WHERE  table_name = $1
         ORDER  BY record_pk, version DESC
         LIMIT  $2
@@ -249,7 +249,7 @@ pub async fn replay(
         SELECT table_name, record_pk, operation,
                before_state, after_state,
                actor_id, request_id, version, created_at
-        FROM   fluxbase_internal.state_mutations
+        FROM   flux_internal.state_mutations
         WHERE  created_at BETWEEN $1 AND $2
         ORDER  BY created_at ASC
         LIMIT  $3

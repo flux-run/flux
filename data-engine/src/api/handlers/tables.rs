@@ -152,7 +152,7 @@ pub async fn create(
     let columns_json = serde_json::to_value(&body.columns)
         .map_err(|e| EngineError::Internal(anyhow::anyhow!(e)))?;
     sqlx::query(
-        "INSERT INTO fluxbase_internal.table_metadata \
+        "INSERT INTO flux_internal.table_metadata \
              (schema_name, table_name, columns) \
          VALUES ($1, $2, $3) \
          ON CONFLICT (schema_name, table_name) \
@@ -169,7 +169,7 @@ pub async fn create(
     for (ordinal, col) in body.columns.iter().enumerate() {
         let _file_accept: serde_json::Value = serde_json::Value::Null; // extended when file engine is implemented
         sqlx::query(
-            "INSERT INTO fluxbase_internal.column_metadata \
+            "INSERT INTO flux_internal.column_metadata \
                  (schema_name, table_name, column_name, \
                   pg_type, fb_type, not_null, primary_key, unique_col, \
                   default_expr, file_visibility, computed_expr, ordinal) \
@@ -225,7 +225,7 @@ pub async fn list(
     DbRouter::assert_exists(&state.pool, &schema).await?;
 
     let rows = sqlx::query(
-        "SELECT table_name, columns FROM fluxbase_internal.table_metadata \
+        "SELECT table_name, columns FROM flux_internal.table_metadata \
          WHERE schema_name = $1 \
          ORDER BY table_name",
     )
@@ -264,7 +264,7 @@ pub async fn drop_table(
     let mut tx = state.pool.begin().await.map_err(EngineError::Db)?;
     sqlx::query(&drop_sql).execute(&mut *tx).await.map_err(EngineError::Db)?;
     sqlx::query(
-        "DELETE FROM fluxbase_internal.table_metadata \
+        "DELETE FROM flux_internal.table_metadata \
          WHERE schema_name = $1 AND table_name = $2",
     )
     .bind(&schema)
@@ -274,7 +274,7 @@ pub async fn drop_table(
     .map_err(EngineError::Db)?;
 
     sqlx::query(
-        "DELETE FROM fluxbase_internal.column_metadata \
+        "DELETE FROM flux_internal.column_metadata \
          WHERE schema_name = $1 AND table_name = $2",
     )
     .bind(&schema)

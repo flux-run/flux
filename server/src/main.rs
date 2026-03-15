@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // Two pools with different search_path settings:
     //   pool    → flux, public          (API, Gateway, Queue, Runtime)
-    //   de_pool → fluxbase_internal, flux, public  (Data-Engine)
+    //   de_pool → flux_internal, flux, public  (Data-Engine)
     api::config::init();
     let pool = api::db::connection::init_pool().await?;
     info!("Server connected to database (flux pool)");
@@ -141,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or(20),
         )
         .after_connect(|conn, _meta| Box::pin(async move {
-            sqlx::query("SET search_path = fluxbase_internal, flux, public")
+            sqlx::query("SET search_path = flux_internal, flux, public")
                 .execute(conn)
                 .await?;
             Ok(())

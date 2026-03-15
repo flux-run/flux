@@ -30,7 +30,7 @@ impl DbRouter {
     pub async fn list_schemas(pool: &PgPool) -> Result<Vec<String>, EngineError> {
         let rows = sqlx::query_scalar::<_, String>(
             "SELECT nspname FROM pg_catalog.pg_namespace \
-             WHERE nspname NOT IN ('pg_catalog','information_schema','fluxbase_internal') \
+             WHERE nspname NOT IN ('pg_catalog','information_schema','flux_internal') \
                AND nspname NOT LIKE 'pg_%' \
              ORDER BY nspname",
         )

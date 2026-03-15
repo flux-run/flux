@@ -2,7 +2,7 @@ use sqlx::{PgPool, Row};
 
 use crate::engine::error::EngineError;
 
-/// Metadata for a single column, loaded from `fluxbase_internal.column_metadata`.
+/// Metadata for a single column, loaded from `flux_internal.column_metadata`.
 #[derive(Debug, Clone)]
 pub struct ColumnMeta {
     pub name: String,
@@ -27,7 +27,7 @@ impl TransformEngine {
     ) -> Result<Vec<ColumnMeta>, EngineError> {
         let rows = sqlx::query(
             "SELECT column_name, pg_type, fb_type, computed_expr \
-             FROM fluxbase_internal.column_metadata \
+             FROM flux_internal.column_metadata \
              WHERE schema_name = $1 AND table_name = $2 \
              ORDER BY ordinal",
         )

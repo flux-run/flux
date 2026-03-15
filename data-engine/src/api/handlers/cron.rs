@@ -41,7 +41,7 @@ pub async fn list(
     let rows = sqlx::query(
         "SELECT id, name, schedule, action_type, action_config, \
                 enabled, last_run_at, next_run_at \
-         FROM fluxbase_internal.cron_jobs \
+         FROM flux_internal.cron_jobs \
          ORDER BY name",
     )
     .fetch_all(&state.pool)
@@ -78,7 +78,7 @@ pub async fn create(
 
     use sqlx::Row;
     let row = sqlx::query(
-        "INSERT INTO fluxbase_internal.cron_jobs \
+        "INSERT INTO flux_internal.cron_jobs \
              (name, schedule, action_type, action_config, next_run_at) \
          VALUES ($1, $2, $3, $4, $5) \
          RETURNING id",
@@ -108,7 +108,7 @@ pub async fn update(
     if let Some(ref sched) = req.schedule {
         let next = compute_next_from_schedule(sched)?;
         sqlx::query(
-            "UPDATE fluxbase_internal.cron_jobs \
+            "UPDATE flux_internal.cron_jobs \
              SET schedule = $1, next_run_at = $2, updated_at = now() \
              WHERE id = $3",
         )
@@ -118,7 +118,7 @@ pub async fn update(
 
     if let Some(enabled) = req.enabled {
         sqlx::query(
-            "UPDATE fluxbase_internal.cron_jobs \
+            "UPDATE flux_internal.cron_jobs \
              SET enabled = $1, updated_at = now() \
              WHERE id = $2",
         )
@@ -139,7 +139,7 @@ pub async fn delete(
     let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let r = sqlx::query(
-        "DELETE FROM fluxbase_internal.cron_jobs \
+        "DELETE FROM flux_internal.cron_jobs \
          WHERE id = $1",
     )
     .bind(id)
@@ -163,7 +163,7 @@ pub async fn trigger(
     let _auth = AuthContext::from_headers(&headers).map_err(EngineError::MissingField)?;
 
     let r = sqlx::query(
-        "UPDATE fluxbase_internal.cron_jobs \
+        "UPDATE flux_internal.cron_jobs \
          SET next_run_at = NOW() \
          WHERE id = $1",
     )

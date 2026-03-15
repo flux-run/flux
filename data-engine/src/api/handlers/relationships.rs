@@ -51,7 +51,7 @@ pub async fn list(
     let rows = sqlx::query(
         "SELECT id, schema_name, from_table, from_column, to_table, to_column, \
                 relationship, alias \
-         FROM fluxbase_internal.relationships \
+         FROM flux_internal.relationships \
          ORDER BY from_table, alias",
     )
     .fetch_all(&state.pool)
@@ -88,7 +88,7 @@ pub async fn create(
 
     use sqlx::Row;
     let row = sqlx::query(
-        "INSERT INTO fluxbase_internal.relationships \
+        "INSERT INTO flux_internal.relationships \
              (schema_name, from_table, from_column, \
               to_table, to_column, relationship, alias) \
          VALUES ($1,$2,$3,$4,$5,$6,$7) \
@@ -122,7 +122,7 @@ pub async fn delete(
     // Fetch schema_name first so we can do a targeted invalidation after delete.
     use sqlx::Row as _;
     let schema_name: Option<String> = sqlx::query(
-        "SELECT schema_name FROM fluxbase_internal.relationships WHERE id = $1",
+        "SELECT schema_name FROM flux_internal.relationships WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.pool)
@@ -131,7 +131,7 @@ pub async fn delete(
     .map(|r| r.get("schema_name"));
 
     let result = sqlx::query(
-        "DELETE FROM fluxbase_internal.relationships \
+        "DELETE FROM flux_internal.relationships \
          WHERE id = $1",
     )
     .bind(id)

@@ -27,7 +27,7 @@ pub async fn list_schedules(
     let rows = sqlx::query_as::<_, CronJobRow>(
         "SELECT id, name, schedule, action_type, action_config, \
          enabled, last_run_at, next_run_at, created_at, updated_at \
-         FROM fluxbase_internal.cron_jobs ORDER BY created_at DESC \
+         FROM flux_internal.cron_jobs ORDER BY created_at DESC \
          LIMIT $1 OFFSET $2",
     )
     .bind(limit)
@@ -45,7 +45,7 @@ pub async fn create_schedule(
     Json(payload): Json<CreateSchedulePayload>,
 ) -> ApiResult<CronJobRow> {
     let row = sqlx::query_as::<_, CronJobRow>(
-        "INSERT INTO fluxbase_internal.cron_jobs \
+        "INSERT INTO flux_internal.cron_jobs \
          (name, schedule, action_type, action_config) \
          VALUES ($1, $2, $3, $4) \
          RETURNING id, name, schedule, action_type, action_config, \
@@ -68,7 +68,7 @@ pub async fn delete_schedule(
     Path(name): Path<String>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
-        "DELETE FROM fluxbase_internal.cron_jobs WHERE name = $1",
+        "DELETE FROM flux_internal.cron_jobs WHERE name = $1",
     )
     .bind(&name)
     .execute(&state.pool)
@@ -84,7 +84,7 @@ pub async fn pause_schedule(
     Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
-        "UPDATE fluxbase_internal.cron_jobs SET enabled = false, updated_at = now() \
+        "UPDATE flux_internal.cron_jobs SET enabled = false, updated_at = now() \
          WHERE name = $1",
     )
     .bind(&name)
@@ -101,7 +101,7 @@ pub async fn resume_schedule(
     Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
-        "UPDATE fluxbase_internal.cron_jobs SET enabled = true, updated_at = now() \
+        "UPDATE flux_internal.cron_jobs SET enabled = true, updated_at = now() \
          WHERE name = $1",
     )
     .bind(&name)
@@ -118,7 +118,7 @@ pub async fn run_schedule_now(
     Extension(_ctx): Extension<RequestContext>,
 ) -> ApiResult<serde_json::Value> {
     sqlx::query(
-        "UPDATE fluxbase_internal.cron_jobs SET next_run_at = now(), updated_at = now() \
+        "UPDATE flux_internal.cron_jobs SET next_run_at = now(), updated_at = now() \
          WHERE name = $1",
     )
     .bind(&name)
@@ -152,7 +152,7 @@ pub async fn schedule_history(
     let rows = sqlx::query_as::<_, RunRow>(
         "SELECT id, job_name, scheduled_at, started_at, finished_at, \
          status, error, request_id \
-         FROM fluxbase_internal.cron_job_runs \
+         FROM flux_internal.cron_job_runs \
          WHERE job_name = $1 \
          ORDER BY created_at DESC \
          LIMIT $2 OFFSET $3",
