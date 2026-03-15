@@ -1,6 +1,6 @@
 [package]
 name = "api_contract"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Shared HTTP request/response types for all Flux services and clients"
 
