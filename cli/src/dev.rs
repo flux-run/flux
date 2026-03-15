@@ -398,7 +398,10 @@ async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Res
 
     let opts = PgConnectOptions::from_str(database_url)
         .context("Invalid DATABASE_URL")?
-        .options([("search_path", "flux, public")]);
+        // No space after the comma — a space causes SQLx to format the startup
+        // option as `-c search_path=flux, public` where the space terminates
+        // the option value, leaving PostgreSQL with "flux," (invalid).
+        .options([("search_path", "flux,public")]);
 
     let pool = PgPoolOptions::new()
         .max_connections(2)

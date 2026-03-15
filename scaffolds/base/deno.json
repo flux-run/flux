@@ -1,0 +1,14 @@
+{
+  "imports": {
+    "@fluxbase/functions": "npm:@fluxbase/functions@^0.1.0"
+  },
+  "compilerOptions": {
+    "strict": true
+  },
+  "lint": {
+    "exclude": [".flux/"]
+  },
+  "fmt": {
+    "exclude": [".flux/"]
+  }
+}
