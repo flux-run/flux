@@ -74,7 +74,7 @@ export default function TablesPage() {
           <Table2 className="w-10 h-10 text-muted-foreground/40 mb-3" />
           <p className="font-medium text-sm">No tables yet</p>
           <p className="text-xs text-muted-foreground mt-1 text-balance">
-            Define tables in your <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">schemas/</code> directory and run <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">flux db push</code>
+            Define <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">.sql</code> files in your <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">schemas/</code> directory and run <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">flux db migration apply</code>
           </p>
         </div>
       ) : (

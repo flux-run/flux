@@ -142,6 +142,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/sdk/manifest",      get(routes::manifest::get_manifest))
         .route("/openapi.json",      get(routes::openapi::spec))
         .route("/spec",              get(routes::spec::project_spec))
+        // Migrations (must be before the /db/{*path} wildcard)
+        .route("/db/migrations",        get(routes::db_migrate::list_migrations))
+        .route("/db/migrations/apply",  post(routes::db_migrate::apply_migrations))
+        .route("/db/migrations/rollback", post(routes::db_migrate::rollback_migration))
         // Data Engine + Files proxy
         .route("/db/{*path}",        any(routes::data_engine::proxy_handler))
         .route("/files/{*path}",     any(routes::data_engine::proxy_handler))
