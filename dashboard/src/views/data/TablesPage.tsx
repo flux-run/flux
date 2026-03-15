@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams } from 'next/navigation'
 import { Table2, ChevronRight, FileText, Cpu } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { apiFetch } from '@/lib/api'
@@ -27,7 +27,6 @@ const FB_TYPE_META: Record<string, { label: string; className: string }> = {
 
 export default function TablesPage() {
   const { database } = useParams() as any
-  const router = useRouter()
   const isFlux = database !== 'public'
 
   const { data, isLoading } = useQuery({
@@ -85,10 +84,10 @@ export default function TablesPage() {
             const fileCols     = cols.filter((c) => c?.fb_type === 'file').length
             const computedCols = cols.filter((c) => c?.fb_type === 'computed').length
             return (
-              <div
+              <Link
                 key={t.name}
+                href={`/dashboard/data/${database}/${t.name}`}
                 className="group flex items-center justify-between px-5 py-4 hover:bg-muted/30 cursor-pointer transition-colors"
-                onClick={() => router.push(`/dashboard/data/${database}/${t.name}`)}
               >
                 <div className="flex items-center gap-3">
                   <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-muted">
@@ -114,7 +113,7 @@ export default function TablesPage() {
                   )}
                   <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
-              </div>
+              </Link>
             )
           })}
         </div>

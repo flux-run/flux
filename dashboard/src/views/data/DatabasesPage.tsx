@@ -1,8 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useParams, useRouter } from 'next/navigation'
 import { Database, Plus, Trash2, ChevronRight, Table2 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -21,7 +21,6 @@ interface DbList { databases: string[] }
 interface TablesResponse { database: string; tables: TableInfo[] }
 
 export default function DatabasesPage() {
-  const router = useRouter()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [dbName, setDbName] = useState('')
@@ -103,10 +102,10 @@ export default function DatabasesPage() {
           {dbNames.map((db) => {
             const count = tableCounts.data?.[db] ?? '…'
             return (
-              <div
+              <Link
                 key={db}
+                href={`/dashboard/data/${db}`}
                 className="group relative flex flex-col gap-3 p-5 rounded-xl border bg-card hover:border-primary/40 hover:shadow-sm transition-all cursor-pointer"
-                onClick={() => router.push(`/dashboard/data/${db}`)}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2.5">
@@ -143,7 +142,7 @@ export default function DatabasesPage() {
                 <Badge variant="secondary" className="w-fit text-[10px]">
                   {db}
                 </Badge>
-              </div>
+              </Link>
             )
           })}
         </div>

@@ -1,13 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { Zap } from 'lucide-react'
 import { signIn } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 
 export default function LoginPage() {
-  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -21,7 +19,7 @@ export default function LoginPage() {
       const result = await signIn(email, password)
       if (result.user.tenant_id) {
       }
-      router.push('/dashboard')
+      window.location.replace('/flux/dashboard/')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sign in failed')
     } finally {
