@@ -32,6 +32,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use crate::config::{DEFAULT_SERVER_PORT, local_url};
 
 use anyhow::{Context as _, bail};
 use colored::Colorize;
@@ -74,7 +75,7 @@ impl ContextStore {
         s.contexts.insert(
             "local".into(),
             FluxContext {
-                endpoint: "http://localhost:4000".into(),
+                endpoint: local_url(DEFAULT_SERVER_PORT),
                 api_key:  String::new(),
             },
         );
@@ -177,7 +178,7 @@ pub fn resolve_context(
         // 5. fallback
         .cloned()
         .unwrap_or(FluxContext {
-            endpoint: "http://localhost:4000".into(),
+            endpoint: local_url(DEFAULT_SERVER_PORT),
             api_key:  String::new(),
         });
 

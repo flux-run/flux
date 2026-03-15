@@ -818,9 +818,8 @@ fn watch_functions_sync(functions_dir: &Path, build_dir: &Path, port: u16, cance
                             let dest = build_dir.join(format!("{name}.{ext}"));
                             if std::fs::write(&dest, &bundle.bytes).is_ok() {
                                 // Invalidate the runtime cache for this function (best-effort).
-                                let url = format!(
-                                    "http://localhost:{port}/flux/api/internal/cache/invalidate"
-                                );
+                                let api_base = format!("http://localhost:{port}/flux/api");
+                                let url = R::internal::CACHE_INVALIDATE.url(&api_base);
                                 let body = serde_json::json!({ "function_id": name });
                                 let _ = reqwest::blocking::Client::new()
                                     .post(&url)
