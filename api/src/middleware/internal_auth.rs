@@ -58,17 +58,18 @@ mod tests {
     use tower::util::ServiceExt;
 
     use super::require_service_token;
+    use api_contract::routes as R;
 
     fn app() -> Router {
         Router::new()
-            .route("/ok", get(|| async { Json(serde_json::json!({ "ok": true })) }))
+            .route(R::functions::LIST.path, get(|| async { Json(serde_json::json!({ "ok": true })) }))
             .layer(from_fn(require_service_token))
     }
 
     #[tokio::test]
     async fn rejects_missing_service_token() {
         let response = app()
-            .oneshot(Request::builder().uri("/ok").body(Body::empty()).unwrap())
+            .oneshot(Request::builder().uri(R::functions::LIST.path).body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -83,7 +84,7 @@ mod tests {
         let response = app()
             .oneshot(
                 Request::builder()
-                    .uri("/ok")
+                    .uri(R::functions::LIST.path)
                     .header("x-service-token", "dev-service-token")
                     .body(Body::empty())
                     .unwrap(),
@@ -102,7 +103,7 @@ mod tests {
         let response = app()
             .oneshot(
                 Request::builder()
-                    .uri("/ok")
+                    .uri(R::functions::LIST.path)
                     .header("x-service-token", "")
                     .body(Body::empty())
                     .unwrap(),
@@ -118,7 +119,7 @@ mod tests {
         let response = app()
             .oneshot(
                 Request::builder()
-                    .uri("/ok")
+                    .uri(R::functions::LIST.path)
                     .header("x-service-token", " dev-service-token ")
                     .body(Body::empty())
                     .unwrap(),
@@ -134,7 +135,7 @@ mod tests {
         let response = app()
             .oneshot(
                 Request::builder()
-                    .uri("/ok")
+                    .uri(R::functions::LIST.path)
                     .header("x-service-token", "Dev-Service-Token")
                     .body(Body::empty())
                     .unwrap(),
@@ -150,7 +151,7 @@ mod tests {
         let response = app()
             .oneshot(
                 Request::builder()
-                    .uri("/ok")
+                    .uri(R::functions::LIST.path)
                     .header("X-Service-Token", "dev-service-token")
                     .body(Body::empty())
                     .unwrap(),
@@ -167,7 +168,7 @@ mod tests {
         let response = app()
             .oneshot(
                 Request::builder()
-                    .uri("/ok")
+                    .uri(R::functions::LIST.path)
                     .header("x-service-token", long_token)
                     .body(Body::empty())
                     .unwrap(),

@@ -85,11 +85,12 @@ mod tests {
     use tower::util::ServiceExt;
 
     use super::require_service_token;
+    use api_contract::routes as R;
 
     fn app() -> Router {
         Router::new()
-            .route("/health", get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
-            .route("/db/query", get(|| async { Json(serde_json::json!({ "ok": true })) }))
+            .route(R::health::HEALTH.path,  get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
+            .route(R::db::QUERY.path,       get(|| async { Json(serde_json::json!({ "ok": true })) }))
             .layer(from_fn(require_service_token))
     }
 
@@ -143,7 +144,7 @@ mod tests {
         // Even if not explicitly mapped in `app()`, the middleware should process it.
         // We add it to `app()` to test middleware logic bypass.
         let router = Router::new()
-            .route("/version", get(|| async { Json(serde_json::json!({ "ver": "1" })) }))
+            .route(R::health::VERSION.path, get(|| async { Json(serde_json::json!({ "ver": "1" })) }))
             .layer(from_fn(require_service_token));
 
         let response = router
@@ -174,8 +175,11 @@ mod tests {
     async fn health_case_sensitivity_is_enforced() {
         // App must have a wildcard or something to catch /HEALTH if it bypasses middleware.
         // If middleware bypasses, router might 404. If middleware catches it, it 401s.
+        // Test case sensitivity: only lowercase "/health" is exempt.
+        // Derive the wrong-case path from the constant so the source of truth stays in routes.rs.
+        let wrong_case_path = R::health::HEALTH.path.to_ascii_uppercase();
         let router = Router::new()
-            .route("/HEALTH", get(|| async { Json(serde_json::json!({ "ok": true })) }))
+            .route(&wrong_case_path, get(|| async { Json(serde_json::json!({ "ok": true })) }))
             .layer(from_fn(require_service_token));
 
         let response = router
@@ -190,7 +194,7 @@ mod tests {
     #[tokio::test]
     async fn health_with_query_params_is_exempt() {
         let router = Router::new()
-            .route("/health", get(|| async { Json(serde_json::json!({ "ok": true })) }))
+            .route(R::health::HEALTH.path, get(|| async { Json(serde_json::json!({ "ok": true })) }))
             .layer(from_fn(require_service_token));
 
         let response = router

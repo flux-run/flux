@@ -78,12 +78,13 @@ mod tests {
     use tower::util::ServiceExt;
 
     use super::require_service_token;
+    use api_contract::routes as R;
 
     fn app() -> Router {
         Router::new()
-            .route("/jobs", get(|| async { "jobs" }))
-            .route("/health", get(|| async { "ok" }))
-            .route("/version", get(|| async { "v" }))
+            .route(R::jobs::LIST.path,      get(|| async { "jobs" }))
+            .route(R::health::HEALTH.path,  get(|| async { "ok" }))
+            .route(R::health::VERSION.path, get(|| async { "v" }))
             .layer(from_fn(require_service_token))
     }
 
