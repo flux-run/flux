@@ -84,7 +84,7 @@ pub async fn execute() -> anyhow::Result<()> {
     }
 
     // 4. Resolve DATABASE_URL — check env var, then .env file, fail fast if missing.
-    let (database_url, _) = resolve_database(&project_root).await?;
+    let database_url = resolve_database(&project_root).await?;
 
     // 5. Run all migrations
     let migration_count = run_migrations(&database_url, &project_root).await?;
@@ -216,17 +216,9 @@ fn load_dot_env(project_root: &Path) -> Vec<(String, String)> {
 
 // ── PostgreSQL ────────────────────────────────────────────────────────────────
 
-/// Resolve `DATABASE_URL` from the environment or `.env` file.
-///
-/// Fails fast with a helpful message if neither is set.
-/// Embedded Postgres has been removed — users must provide their own database.
-///
-/// Priority:
-///   1. `DATABASE_URL` shell environment variable
-///   2. `DATABASE_URL` in `.env` file at project root
 async fn resolve_database(
     project_root: &Path,
-) -> anyhow::Result<(String, ())> {
+) -> anyhow::Result<String> {
     // 1. Shell env var (highest priority — overrides everything)
     if let Ok(url) = std::env::var("DATABASE_URL") {
         if !url.is_empty() {
@@ -235,7 +227,7 @@ async fn resolve_database(
                 "✔".green().bold(),
                 "(DATABASE_URL from environment)".dimmed()
             );
-            return Ok((url, ()));
+            return Ok(url);
         }
     }
 
@@ -250,7 +242,7 @@ async fn resolve_database(
                         "✔".green().bold(),
                         "(.env DATABASE_URL)".dimmed()
                     );
-                    return Ok((item.1, ()));
+                    return Ok(item.1);
                 }
             }
         }

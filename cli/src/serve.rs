@@ -308,8 +308,6 @@ fn find_server_binary() -> Option<std::path::PathBuf> {
 
 #[derive(Debug)]
 struct ExecutionRecord {
-    #[allow(dead_code)]
-    id:         uuid::Uuid,
     label:      String,
     status:     String,
     started_at: String,
@@ -318,14 +316,13 @@ struct ExecutionRecord {
 async fn fetch_execution_record(pool: &sqlx::PgPool, id: uuid::Uuid) -> anyhow::Result<ExecutionRecord> {
     #[derive(sqlx::FromRow)]
     struct Row {
-        id:         uuid::Uuid,
         label:      String,
         status:     String,
         started_at: chrono::DateTime<chrono::Utc>,
     }
 
     let row: Row = sqlx::query_as::<_, Row>(
-        "SELECT id, label, status, started_at FROM flux.execution_records WHERE id = $1"
+        "SELECT label, status, started_at FROM flux.execution_records WHERE id = $1"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -334,7 +331,6 @@ async fn fetch_execution_record(pool: &sqlx::PgPool, id: uuid::Uuid) -> anyhow::
     .ok_or_else(|| anyhow::anyhow!("Execution '{}' not found", id))?;
 
     Ok(ExecutionRecord {
-        id:         row.id,
         label:      row.label,
         status:     row.status,
         started_at: row.started_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),

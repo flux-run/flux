@@ -481,7 +481,7 @@ async fn make_real_fetch(
 
     let (client, allowed_hosts) = {
         let s = state.borrow();
-        if let Some(_ctx) = http_ctx_override {
+        if http_ctx_override.is_some() {
             // Concurrent path: use stored client, allow-list not enforced per-request
             let client = s.try_borrow::<HttpFetchOpState>()
                 .map(|c| c.client.clone())
