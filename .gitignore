@@ -47,10 +47,6 @@ Dockerfile
 docker-compose*.yml
 .dockerignore
 
-# ── Env files and examples (flux dev auto-configures; no manual setup needed) -
-.env.example
-.env.dev.example
-*/.env.example
 projects/
 
 # ── WASM build artifacts (generated; not checked in) ─────────────────────────
