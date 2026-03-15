@@ -64,12 +64,8 @@ Full Phase 0 core developer loop validated:
 | `runtime/src/engine/pool.rs` | Cast `execution_seed: i64` → `as i32` before JSON serialisation — prevents `serde_v8` from returning a JS `BigInt` for values > 2^53, which caused `Cannot mix BigInt and other types` |
 | `runtime/src/engine/bootstrap.js` | Added defensive `typeof ... === 'bigint'` guard around `execution_seed` before the XOR |
 | `server/src/dispatch/api_impl.rs` | Removed stale `tenant_id` / `project_id` columns from `INSERT INTO platform_logs` — dropped by migration `20260314000042`; the silent failure was the reason `flux records count` always returned 0 |
-| `schemas/api/20260312000029_route_notify_trigger.sql` | `ON routes` → `ON flux.routes` (table moved to flux schema in `...028`) |
-| `schemas/api/20260313000035_routes.sql` | Re-attach `route_change_notify` trigger after `DROP TABLE ... CASCADE` |
-| `schemas/api/20260314000040_drop_s3_storage.sql` | `ALTER TABLE deployments` → `flux.deployments` |
-| `schemas/api/20260314000041_fs_bundles.sql` | Same schema-qualification fix |
-| `schemas/api/20260315000045_queue_bindings.sql` | `REFERENCES functions(id)` → `flux.functions(id)` |
-| `cli/src/dev.rs` | Added `QUEUE_MIGRATIONS` static and `queue_m.run()` call — queue migrations were not being applied, causing `relation "jobs" does not exist` |
+| `schemas/v0.1.sql` (consolidated) | All schema fixes folded into the v0.1 baseline: `flux.routes` trigger, `flux.deployments` qualification, `flux.functions(id)` FK, queue tables moved to `flux` schema |
+| `cli/src/dev.rs` | Replaced 3× `sqlx::migrate!()` statics with `include_str!("../../schemas/v0.1.sql")` + `sqlx::raw_sql` — single idempotent baseline replaces 78 incremental migration files |
 
 ## Audit Run — 2026-03-15
 

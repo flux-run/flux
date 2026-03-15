@@ -14,7 +14,7 @@ Mixed Rust + TypeScript monorepo:
 
 - **Rust workspace** (`Cargo.toml`): `api`, `gateway`, `runtime`, `data-engine`, `queue`, `server` (monolith), `cli`, `shared/job_contract`
 - **Node workspaces** (`package.json`): `frontend` (marketing site + docs), `dashboard` (management UI), `packages/functions`, `packages/sdk`, `packages/wasm-sdk`
-- **`schemas/`**: SQLx migrations split by service (`schemas/api/`, `schemas/data-engine/`)
+- **`schemas/`**: Single canonical SQL baseline — `schemas/v0.1.sql` (applied idempotently via `include_str!` in `cli/src/dev.rs`)
 - **`docs/`**: Authoritative specs — read `docs/framework.md` (1742 lines) for the full design
 
 ## Services & Ports
@@ -63,16 +63,16 @@ cd api && cargo test route::functions
 ## Database Commands
 
 ```bash
-make migrate                    # Run migrations for both schemas (api + data-engine)
-make sqlx-prepare DB_URL="..."  # Regenerate SQLx offline cache (use direct, non-pooler URL)
+make migrate                    # Apply schemas/v0.1.sql to the database
 ```
 
-SQLx offline mode is enabled for development (`SQLX_OFFLINE=true`). Run `make sqlx-prepare` after adding or changing any SQL queries.
+SQLx offline mode is enabled for development (`SQLX_OFFLINE=true`). The codebase uses `sqlx::query_as(...)` runtime functions (not macros), so no `.sqlx` cache or `sqlx prepare` step is needed.
 
 ## Database Schema Architecture
 
-Two Postgres schemas:
-- **`flux.*`** — Flux system tables (platform internals), owned per service: `flux.api_*`, `flux.gateway_*`, `flux.runtime_*`, `flux.queue_*`
+Three Postgres schemas:
+- **`flux.*`** — All Flux system tables (platform internals + queue): `flux.api_*`, `flux.gateway_*`, `flux.runtime_*`, `flux.queue_*`, `flux.jobs`, `flux.job_logs`, `flux.dead_letter_jobs`
+- **`flux_internal.*`** — Data-engine introspection tables (table/column metadata, hooks, events, cron, mutations)
 - **`public.*`** — User application tables created by `flux db push`
 
 **Ownership rule:** Write to another service's tables only via that service's API endpoint. Exception: the observability tables (`execution_records`, `execution_spans`, `execution_mutations`, `execution_calls`) are append-only and can be written directly by their owning service for hot-path performance.
@@ -90,7 +90,7 @@ Every service has `src/lib.rs` + `src/main.rs`. The `server` crate composes all 
 The `queue` service polls PostgreSQL (default every 200ms). Job lifecycle: `PENDING → RUNNING → COMPLETED | FAILED → RETRY | DEAD_LETTER`. Visibility timeout: 5 minutes. Max 3 retries with exponential backoff (1s → 2s → ... → 60s). Idempotency keys prevent duplicate execution.
 
 ### SQLx for All Database Access
-All SQL is raw queries with compile-time verification. Migrations use the SQLx filename convention (`YYYYMMDDHHMMSS_description.sql`) under `schemas/<service>/`.
+All SQL uses `sqlx::query_as(...)` runtime functions (not macros — no `.sqlx` cache needed). The single schema baseline lives in `schemas/v0.1.sql` and is embedded into the CLI binary via `include_str!`.
 
 ### Gateway Routing Uses In-Memory Snapshot
 Routes are stored as an in-memory `HashMap<(METHOD, path), function>`, refreshed via Postgres `LISTEN/NOTIFY` for zero-latency updates. All user functions are `POST` endpoints — this is intentional for webhook compatibility.
@@ -185,4 +185,4 @@ make deploy-with-migrate SERVICE=api     # Migrate DB first, then deploy
 make deploy-gcp                          # Build + push to GCP Artifact Registry + deploy to Cloud Run
 ```
 
-Always use `deploy-with-migrate` when a commit includes new migration files.
+Always use `deploy-with-migrate` when `schemas/v0.1.sql` has been updated.

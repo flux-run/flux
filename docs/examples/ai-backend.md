@@ -8,9 +8,9 @@ The point is not "AI features." The point is that prompts, tool calls, database 
 
 - an HTTP endpoint for user requests
 - retrieval or database-backed context loading
-- agent or tool execution
+- function execution and external tool calls
 - queue-backed follow-up work
-- mutation recording for agent actions
+- mutation recording for AI-driven actions
 - traces and explanation for AI-driven flows
 
 ## Why This Example Matters
@@ -39,6 +39,6 @@ flux incident replay --request-id <request_id>
 
 This example shows:
 
-- why agents belong inside the same runtime
-- how tool calls become part of traces
+- why AI functions belong inside the same runtime
+- how external tool calls become part of traces
 - how stateful AI actions can still be audited and debugged

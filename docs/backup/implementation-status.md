@@ -322,7 +322,7 @@ The remaining work is **implementation** (runtime integration, CLI tools), not *
 
 ## Next Steps for User
 
-1. **Verify migrations apply cleanly**: `make migrate SERVICE=api`
+1. **Verify migrations apply cleanly**: `make migrate`
 2. **Test gateway changes compile**: `cargo check -p gateway`
 3. **Deploy gateway with trace_requests**: `make deploy-gcp SERVICE=gateway`
 4. **Implement runtime integration**: (see Phase 1 above)

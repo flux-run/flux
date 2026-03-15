@@ -2013,7 +2013,7 @@ Use `flux fix` when you are in incident mode and every character counts. Use `fl
 
 ### `flux why <request-id>` ✅
 
-**The first command to run during any production incident.** Combines trace spans, state mutations, and error logs for a single request into a one-screen root cause summary. Field-level diffs are derived from the `before_state` and `after_state` columns of `fluxbase_internal.state_mutations`.
+**The first command to run during any production incident.** Combines trace spans, state mutations, and error logs for a single request into a one-screen root cause summary. Field-level diffs are derived from the `before_state` and `after_state` columns of `flux_internal.state_mutations`.
 
 ```
 flux why <request-id> [--json]
@@ -2308,7 +2308,7 @@ FIXED
 
 Step-through debugger for a past production request. Walks the execution graph span-by-span and shows which database mutations happened at each step — reconstructing the complete backend state at every point during execution.
 
-This is possible because every mutation in `fluxbase_internal.state_mutations` now carries a `span_id` column linking it to the span that caused it. `flux trace debug` uses that column to partition mutations into execution steps.
+This is possible because every mutation in `flux_internal.state_mutations` now carries a `span_id` column linking it to the span that caused it. `flux trace debug` uses that column to partition mutations into execution steps.
 
 ```
 flux trace debug <trace-id> [--at <step>] [--json]

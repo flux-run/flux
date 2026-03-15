@@ -198,12 +198,12 @@ Response envelope fields:
 
 ## State mutation log
 
-Every write through the Fluxbase data engine is recorded in `fluxbase_internal.state_mutations`. This is the foundation for `flux why`, `flux state history`, `flux state blame`, and `flux incident replay`.
+Every write through the Fluxbase data engine is recorded in `flux_internal.state_mutations`. This is the foundation for `flux why`, `flux state history`, `flux state blame`, and `flux incident replay`.
 
 ### Schema
 
 ```sql
-CREATE TABLE fluxbase_internal.state_mutations (
+CREATE TABLE flux_internal.state_mutations (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id   uuid NOT NULL,
     project_id  uuid NOT NULL,

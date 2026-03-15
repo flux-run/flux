@@ -2,7 +2,7 @@
 
 Flux is an open-source backend runtime where every execution is a record.
 
-It combines functions, HTTP routing, database access, queues, schedules, agents, secrets, and a debugging CLI into one system. The product goal is not "more backend features." The product goal is to make production debugging deterministic because Flux owns the execution path.
+It combines functions, HTTP routing, database access, queues, schedules, secrets, and a debugging CLI into one system. The product goal is not "more backend features." The product goal is to make production debugging deterministic because Flux owns the execution path.
 
 Flux is open source under Apache 2.0. You can use, modify, self-host, and
 redistribute the software. The Flux brand, name, and logos are not part of the
@@ -17,7 +17,7 @@ Modern backends scatter evidence across logs, traces, queues, deploy history, an
 
 Flux is built around one idea:
 
-- every request, job, schedule trigger, and agent step becomes one execution record
+- every request, job, and schedule trigger becomes one execution record
 - that record connects code version, spans, logs, database mutations, queued work, and outcomes
 - debugging starts from the record, not from guesswork
 
@@ -31,7 +31,6 @@ Flux is a complete backend runtime:
 - a gateway for routing, auth, validation, and middleware
 - a data engine for guarded database access and mutation recording
 - queues and schedules for background work
-- agents and tool execution for AI-backed workflows
 - secrets, deployment, and project configuration
 - a CLI built around setup, deployment, and incident debugging
 
@@ -102,7 +101,6 @@ See [docs/single-binary-architecture.md](docs/single-binary-architecture.md) for
 - `data-engine/` - database execution, mutation logging, hooks, policies
 - `queue/` - async jobs, retries, worker execution
 - `api/` - operator-facing APIs for deployments, traces, records, admin actions
-- `agent/` - agent execution primitives
 - `dashboard/` - internal/product dashboard UI
 - `scaffolds/` - project and function templates used by `flux init` and `flux function create`
 - `docs/` - product, architecture, and component documentation

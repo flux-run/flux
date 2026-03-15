@@ -44,7 +44,7 @@ The Data Engine is Flowbase's internal data-access tier — a Rust/Axum microser
 ```
              ┌─────────────────────────┐
              │   Fluxbase Platform DB  │
-             │  (fluxbase_internal.*)  │
+             │  (flux_internal.*)  │
              └──────────┬──────────────┘
                         │
 Client / SDK            │
@@ -75,7 +75,7 @@ Fluxbase supports a **Bring Your Own Database (BYODB)** architecture. Applicatio
 
 ```
 Fluxbase Platform DB
-  └─ fluxbase_internal.*
+  └─ flux_internal.*
 
 User PostgreSQL
   └─ application tables (users, orders, etc.)
@@ -320,7 +320,7 @@ POST /db/query
   │
   ├─ 8. Schema cache (L1, Moka TTL 60 s):
   │     ├─ Hit  → (col_meta, relationships) from memory
-  │     └─ Miss → load from fluxbase_internal.column_metadata + relationships
+  │     └─ Miss → load from flux_internal.column_metadata + relationships
   │
   ├─ 9. [mutations only] Before hook:
   │     ├─ Load enabled hooks for (table, before_<op>) event
@@ -564,7 +564,7 @@ Post-query processing applied to SELECT results.
 1. **File columns (`fb_type = "file"`):** Replaces stored S3 object keys with presigned GET URLs (`private` visibility) or public CDN URLs (`public` visibility). Skipped when the file engine is not configured.
 2. **Computed columns:** Handled entirely at compile time (SQL expressions), so the transform engine does not evaluate them.
 
-Column metadata is loaded from `fluxbase_internal.column_metadata` and cached in the L1 schema cache.
+Column metadata is loaded from `flux_internal.column_metadata` and cached in the L1 schema cache.
 
 ---
 
@@ -622,12 +622,12 @@ Hook invocations reach the Runtime service via `POST {RUNTIME_URL}/internal/exec
 `events/emitter.rs` + `events/dispatcher.rs` + `events/worker.rs`
 
 **Emit phase** (synchronous, inline with mutation):
-- `EventEmitter` writes an event record to `fluxbase_internal.events` with status `pending`.
+- `EventEmitter` writes an event record to `flux_internal.events` with status `pending`.
 - Payload includes the mutated row(s) and event type (e.g. `users.insert`).
 
 **Delivery phase** (asynchronous, background worker):
-- Worker polls `fluxbase_internal.events` for `pending` records.
-- For each event, loads matching subscriptions from `fluxbase_internal.event_subscriptions`.
+- Worker polls `flux_internal.events` for `pending` records.
+- For each event, loads matching subscriptions from `flux_internal.event_subscriptions`.
 - Calls `dispatcher::dispatch` per subscription.
 
 **Dispatch targets:**
@@ -638,7 +638,7 @@ Hook invocations reach the Runtime service via `POST {RUNTIME_URL}/internal/exec
 | `function` | `POST {RUNTIME_URL}/internal/execute` with `function_id` + payload |
 | `queue_job` | Insert job into the queue service DB |
 
-**Retry:** Failed deliveries are tracked in `fluxbase_internal.event_deliveries` with exponential backoff. The worker skips events that have exhausted their retry budget.
+**Retry:** Failed deliveries are tracked in `flux_internal.event_deliveries` with exponential backoff. The worker skips events that have exhausted their retry budget.
 
 **HMAC signature:** Set `secret` in the webhook subscription config to have the engine sign each payload as `x-fluxbase-signature: sha256={hex}`.
 
@@ -678,18 +678,18 @@ Fires scheduled cron jobs on a 30-second polling interval.
 
 ## Database Schema
 
-All Fluxbase **platform metadata** lives in the **`fluxbase_internal`** schema in the Fluxbase platform database, never exposed to end users.
+All Fluxbase **platform metadata** lives in the **`flux_internal`** schema in the Fluxbase platform database, never exposed to end users.
 
 Application tables do **not** live in this database. Instead they reside in the project's configured PostgreSQL database connected via the Data Engine.
 
 ```
 Platform DB
-  fluxbase_internal.policies
-  fluxbase_internal.events
-  fluxbase_internal.state_mutations
-  fluxbase_internal.trace_requests
-  fluxbase_internal.workflows   (+ steps, executions)
-  fluxbase_internal.cron_jobs
+  flux_internal.policies
+  flux_internal.events
+  flux_internal.state_mutations
+  flux_internal.trace_requests
+  flux_internal.workflows   (+ steps, executions)
+  flux_internal.cron_jobs
   … (see table below)
 
 User DB
@@ -762,7 +762,7 @@ Every INSERT, UPDATE, and DELETE executed by the data engine is written to an ap
 - `flux incident replay` — fetch mutations for a request or time window, then re-apply them
 
 ```sql
-CREATE TABLE fluxbase_internal.state_mutations (
+CREATE TABLE flux_internal.state_mutations (
     mutation_id    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     mutation_seq   BIGSERIAL,               -- global monotonic sequence; ORDER BY mutation_seq for deterministic replay
     mutation_ts    TIMESTAMPTZ DEFAULT now(), -- wall-clock time of the mutation; powers time-windowed incident replay
@@ -788,22 +788,22 @@ CREATE TABLE fluxbase_internal.state_mutations (
 );
 
 CREATE INDEX idx_state_mutations_row
-    ON fluxbase_internal.state_mutations(tenant_id, project_id, table_name, record_pk);
+    ON flux_internal.state_mutations(tenant_id, project_id, table_name, record_pk);
 
 CREATE INDEX idx_state_mutations_request
-    ON fluxbase_internal.state_mutations(request_id)
+    ON flux_internal.state_mutations(request_id)
     WHERE request_id IS NOT NULL;
 
 -- Time-range queries: flux incident replay 2026-03-09T15:00..15:05
 -- WHERE mutation_ts BETWEEN $from AND $to ORDER BY mutation_seq
 CREATE INDEX idx_state_mutations_time
-    ON fluxbase_internal.state_mutations(mutation_ts);
+    ON flux_internal.state_mutations(mutation_ts);
 
 -- flux state blame / state history: O(log N) latest-mutation lookup per record.
 -- Composite order (tenant → project → table → record_pk → newest-first) means
 -- Postgres reads exactly one index leaf and stops for LIMIT 1 queries.
 CREATE INDEX idx_state_mutations_pk_latest
-    ON fluxbase_internal.state_mutations (
+    ON flux_internal.state_mutations (
         tenant_id,
         project_id,
         table_name,
@@ -813,12 +813,12 @@ CREATE INDEX idx_state_mutations_pk_latest
 
 -- Deterministic replay ordering within a request: ORDER BY mutation_seq replaces timestamp heuristics
 CREATE INDEX idx_state_mutations_request_seq
-    ON fluxbase_internal.state_mutations(request_id, mutation_seq)
+    ON flux_internal.state_mutations(request_id, mutation_seq)
     WHERE request_id IS NOT NULL;
 
 -- Incident replay filtered by table: flux incident replay --request-id ... --table users
 CREATE INDEX idx_state_mutations_request_table
-    ON fluxbase_internal.state_mutations(request_id, table_name)
+    ON flux_internal.state_mutations(request_id, table_name)
     WHERE request_id IS NOT NULL;
 ```
 
@@ -839,7 +839,7 @@ Within a single request that touches multiple rows across multiple tables, `crea
 
 ```sql
 -- Deterministic replay: apply mutations in the exact order they were written
-SELECT * FROM fluxbase_internal.state_mutations
+SELECT * FROM flux_internal.state_mutations
 WHERE request_id = $1
 ORDER BY mutation_seq;
 ```
@@ -875,7 +875,7 @@ Row users.id=42 modified by request 550e8400
 The `trace_requests` table stores the full request envelope for every operation processed by the data engine. This makes replay completely self-contained — the original request input is preserved locally and does not depend on gateway log retention (which may expire or be unavailable during incident investigation).
 
 ```sql
-CREATE TABLE fluxbase_internal.trace_requests (
+CREATE TABLE flux_internal.trace_requests (
     request_id      UUID        PRIMARY KEY,
     tenant_id       UUID        NOT NULL,
     project_id      UUID        NOT NULL,
@@ -893,7 +893,7 @@ CREATE TABLE fluxbase_internal.trace_requests (
 );
 
 CREATE INDEX idx_trace_requests_tenant
-    ON fluxbase_internal.trace_requests(tenant_id, project_id, created_at DESC);
+    ON flux_internal.trace_requests(tenant_id, project_id, created_at DESC);
 ```
 
 **Replay pipeline with `trace_requests`:**
@@ -981,7 +981,7 @@ All configuration is from environment variables (loaded via `dotenvy`).
 
 ## Deployment Notes
 
-- **Migrations must be applied before deploy.** Run `make migrate SERVICE=data-engine` explicitly; the service does not run migrations on startup (avoids Neon cold-start hang from `pg_advisory_lock`).
+- **Migrations must be applied before deploy.** Run `make migrate` explicitly; the service does not run migrations on startup (avoids Neon cold-start hang from `pg_advisory_lock`).
 - **Ingress:** Can run with `--ingress all` safely because `INTERNAL_SERVICE_TOKEN` gates all non-health endpoints.
 - **Multiple replicas:** Safe — all workers use `FOR UPDATE SKIP LOCKED` to avoid duplicate dispatch.
 - **Cache warm-up:** The schema and plan caches start empty and warm up on first access per table. There is no pre-warming mechanism; the first request per table pays the DB round-trip cost.
@@ -996,7 +996,7 @@ Ordered by impact. Items marked **[blocking]** must be closed before production 
 
 ### Gap 1 — State Mutation Logging `[resolved]`
 
-The `fluxbase_internal.state_mutations` table is live. Every INSERT/UPDATE/DELETE is captured within the same Postgres transaction as the user mutation in `db_executor.rs`. `before_state` and `after_state` JSONB columns are populated using `RETURNING` pre-images. `request_id` is populated from the `x-request-id` header. `version` is incremented per `(tenant, project, table, record_pk)` atomically.
+The `flux_internal.state_mutations` table is live. Every INSERT/UPDATE/DELETE is captured within the same Postgres transaction as the user mutation in `db_executor.rs`. `before_state` and `after_state` JSONB columns are populated using `RETURNING` pre-images. `request_id` is populated from the `x-request-id` header. `version` is incremented per `(tenant, project, table, record_pk)` atomically.
 
 `flux why`, `flux state history`, `flux state blame`, `flux trace diff`, and `flux incident replay` all function against live production data.
 
@@ -1137,7 +1137,7 @@ The existing Moka L2 cache infrastructure is already in place. Extending the cac
 `mutation_ts TIMESTAMPTZ DEFAULT now()` added via migration `20260311000014`. Enables time-windowed incident replay without a full table scan:
 
 ```sql
-SELECT * FROM fluxbase_internal.state_mutations
+SELECT * FROM flux_internal.state_mutations
 WHERE  mutation_ts BETWEEN $from AND $to
 ORDER  BY mutation_seq;
 ```
@@ -1155,7 +1155,7 @@ New indexes applied:
 
 ### Gap 13 — Request Envelope Table (`trace_requests`) `[resolved]`
 
-`fluxbase_internal.trace_requests` created via migration `20260311000013`. The `POST /db/query` handler writes a row at the end of every request as a fire-and-forget `tokio::spawn`. Safe headers only (no auth tokens). Response body truncated to first 100 rows. Uses `ON CONFLICT (request_id) DO NOTHING` so re-runs are idempotent.
+`flux_internal.trace_requests` created via migration `20260311000013`. The `POST /db/query` handler writes a row at the end of every request as a fire-and-forget `tokio::spawn`. Safe headers only (no auth tokens). Response body truncated to first 100 rows. Uses `ON CONFLICT (request_id) DO NOTHING` so re-runs are idempotent.
 
 `flux incident replay` is now self-contained and does not require gateway log retention.
 
@@ -1214,7 +1214,7 @@ Version sequences per row should be strictly monotonic with no gaps (`1 → 2 �
 
 ```sql
 SELECT record_pk, array_agg(version ORDER BY version) AS versions
-FROM fluxbase_internal.state_mutations
+FROM flux_internal.state_mutations
 WHERE tenant_id = $1 AND project_id = $2 AND table_name = $3
 GROUP BY record_pk
 HAVING count(*) != (max(version) - min(version) + 1);
@@ -1255,7 +1255,7 @@ pub async fn verify_db_identity(pool: &PgPool, project_id: &str, expected: &DbId
 
 `pg_control_system().system_identifier` is unique per physical cluster and survives logical replica promotion — it only changes on `initdb`. `current_database()` guards against pointing at the wrong logical database on the same host.
 
-**Stored in:** `fluxbase_internal.project_databases.expected_system_identifier` + `expected_db_name` (migration `20260311000016`).
+**Stored in:** `flux_internal.project_databases.expected_system_identifier` + `expected_db_name` (migration `20260311000016`).
 
 **Call site:** call `verify_db_identity()` once after constructing any user pool. For the platform DB, `init_pool_with_identity_log()` logs the live identity at startup without enforcing an expected value.
 
@@ -1288,7 +1288,7 @@ pub async fn verify_db_identity(pool: &PgPool, project_id: &str, expected: &DbId
 
 Latency is now constant and independent of how many schemas/tables exist in the customer's database.
 
-**Schema Snapshot Cache (migration `20260311000017`):** `fluxbase_internal.schema_snapshots` stores a pre-built JSON snapshot of `(tables, columns, relationships)` per `(tenant, project, schema)`. Written on every `CREATE TABLE` / `ALTER TABLE` / `DROP TABLE`. Intended as a future fast-path for `GET /db/schema` — serve the snapshot instead of querying `pg_catalog` at all. A `version BIGINT` column auto-increments via a trigger on every write, enabling polling for changes. The snapshot is an *optimisation*; the system is always correct without it.
+**Schema Snapshot Cache (migration `20260311000017`):** `flux_internal.schema_snapshots` stores a pre-built JSON snapshot of `(tables, columns, relationships)` per `(tenant, project, schema)`. Written on every `CREATE TABLE` / `ALTER TABLE` / `DROP TABLE`. Intended as a future fast-path for `GET /db/schema` — serve the snapshot instead of querying `pg_catalog` at all. A `version BIGINT` column auto-increments via a trigger on every write, enabling polling for changes. The snapshot is an *optimisation*; the system is always correct without it.
 
 ---
 
