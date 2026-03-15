@@ -1,21 +1,14 @@
 'use client'
 
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Code2, Trash2, ChevronRight, Terminal, ArrowRight, Clock } from 'lucide-react'
-import { useParams, useRouter } from 'next/navigation'
+import { useQuery } from '@tanstack/react-query'
+import Link from 'next/link'
+import { Code2, ChevronRight, Terminal, ArrowRight, Clock } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import type { FunctionResponse } from '@flux/api-types'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 
-const RUNTIMES = ['deno', 'python', 'go', 'java', 'php', 'rust', 'csharp', 'ruby']
 const RUNTIME_COLOR: Record<string, string> = {
   deno:   'text-emerald-400 bg-emerald-500/10',
   python: 'text-blue-400   bg-blue-500/10',
@@ -36,25 +29,9 @@ function relTime(ts: string) {
 }
 
 export default function FunctionsPage() {
-  const queryClient = useQueryClient()
-  const router = useRouter()
-  const [createOpen, setCreateOpen] = useState(false)
-  const [name, setName] = useState('')
-  const [runtime, setRuntime] = useState('deno')
-
   const { data, isLoading } = useQuery({
     queryKey: ['functions'],
     queryFn: () => apiFetch<{ functions: FunctionResponse[] }>('/functions'),
-  })
-
-  const createMutation = useMutation({
-    mutationFn: () => apiFetch('/functions', { method: 'POST', body: JSON.stringify({ name, runtime }) }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['functions'] }); setName(''); setRuntime('deno'); setCreateOpen(false) },
-  })
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => apiFetch(`/functions/${id}`, { method: 'DELETE' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['functions'] }),
   })
 
   const functions = data?.functions ?? []
@@ -64,14 +41,7 @@ export default function FunctionsPage() {
       <PageHeader
         title="Functions"
         description={functions.length > 0 ? `${functions.length} deployed` : 'Serverless runtime'}
-        breadcrumbs={[
-          { label: 'Functions' },
-        ]}
-        actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="w-3.5 h-3.5" /> New function
-          </Button>
-        }
+        breadcrumbs={[{ label: 'Functions' }]}
       />
 
       <div className="flex-1 overflow-y-auto">
@@ -96,14 +66,11 @@ export default function FunctionsPage() {
                   <div className="flex-1">
                     <h2 className="text-base font-semibold mb-1">Deploy your first function</h2>
                     <p className="text-sm text-muted-foreground leading-relaxed mb-5">
-                      Functions are sandboxed TypeScript isolates with full access to your project's data engine, secrets, and storage.
+                      Functions are sandboxed TypeScript isolates with full access to your project's data engine, secrets, and storage. Deploy from the CLI — this view shows live metrics once they're running.
                     </p>
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <Button size="sm" onClick={() => setCreateOpen(true)}><Plus className="w-3.5 h-3.5" /> Create function</Button>
-                      <a href="https://fluxbase.co/docs/runtime" target="_blank" className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
-                        Runtime docs <ArrowRight className="w-3.5 h-3.5" />
-                      </a>
-                    </div>
+                    <a href="https://fluxbase.co/docs/runtime" target="_blank" className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit">
+                      Runtime docs <ArrowRight className="w-3.5 h-3.5" />
+                    </a>
                   </div>
                 </div>
               </div>
@@ -143,10 +110,10 @@ export default function FunctionsPage() {
           ) : (
             <div className="rounded-xl border bg-card overflow-hidden divide-y divide-border/60">
               {functions.map((fn) => (
-                <div
+                <Link
                   key={fn.id}
+                  href={`/dashboard/functions/${fn.id}`}
                   className="flex items-center gap-4 px-5 py-3.5 hover:bg-muted/20 transition-colors cursor-pointer group"
-                  onClick={() => router.push(`/dashboard/functions/${fn.id}`)}
                 >
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
                   <div className="w-8 h-8 rounded-lg bg-[#6c63ff]/10 flex items-center justify-center shrink-0">
@@ -161,50 +128,14 @@ export default function FunctionsPage() {
                     <Clock className="w-3 h-3" />
                     {relTime(fn.created_at)}
                   </div>
-                  <button
-                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0"
-                    onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${fn.name}"?`)) deleteMutation.mutate(fn.id) }}
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
                   <ChevronRight className="w-4 h-4 text-muted-foreground/30 shrink-0" />
-                </div>
+                </Link>
               ))}
             </div>
           )}
         </div>
       </div>
-
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create function</DialogTitle>
-            <DialogDescription>Define a new serverless function in this project.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Function name</Label>
-              <Input placeholder="send-email" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>Runtime</Label>
-              <Select value={runtime} onValueChange={setRuntime}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {RUNTIMES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            {createMutation.isError && <p className="text-sm text-destructive">{createMutation.error.message}</p>}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onClick={() => createMutation.mutate()} disabled={!name.trim() || createMutation.isPending}>
-              {createMutation.isPending ? 'Creating…' : 'Create function'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
+
