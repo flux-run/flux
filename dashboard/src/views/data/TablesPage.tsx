@@ -1,21 +1,11 @@
 'use client'
 
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import Link from 'next/link'
+import { useQuery } from '@tanstack/react-query'
 import { useParams, useRouter } from 'next/navigation'
-import { Table2, Plus, Trash2, ChevronRight, FileText, Cpu } from 'lucide-react'
+import { Table2, ChevronRight, FileText, Cpu } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { apiFetch } from '@/lib/api'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
-} from '@/components/ui/dialog'
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface ColumnDef {
   name: string
@@ -35,22 +25,9 @@ const FB_TYPE_META: Record<string, { label: string; className: string }> = {
   relation: { label: 'relation',  className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
 }
 
-const COLUMN_TYPES = [
-  'uuid', 'text', 'varchar', 'integer', 'bigint', 'boolean',
-  'timestamptz', 'date', 'jsonb', 'float8', 'numeric',
-]
-
 export default function TablesPage() {
   const { database } = useParams() as any
   const router = useRouter()
-  const queryClient = useQueryClient()
-  const [createOpen, setCreateOpen] = useState(false)
-  const [tableName, setTableName] = useState('')
-  const [cols, setCols] = useState([
-    { name: 'id', type: 'uuid', fb_type: 'default', primary_key: true, not_null: true },
-    { name: 'created_at', type: 'timestamptz', fb_type: 'default', primary_key: false, not_null: true },
-  ])
-
   const isFlux = database !== 'public'
 
   const { data, isLoading } = useQuery({
@@ -59,31 +36,7 @@ export default function TablesPage() {
     enabled: !!database,
   })
 
-  const createMutation = useMutation({
-    mutationFn: () =>
-      apiFetch('/db/tables', {
-        method: 'POST',
-        body: JSON.stringify({ database, name: tableName, columns: cols }),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tables'] })
-      setTableName('')
-      setCreateOpen(false)
-    },
-  })
-
-  const dropMutation = useMutation({
-    mutationFn: (table: string) => apiFetch(`/db/tables/${database}/${table}`, { method: 'DELETE' }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tables'] }),
-  })
-
   const tables = data?.tables ?? []
-
-  const addCol = () =>
-    setCols((c) => [...c, { name: '', type: 'text', fb_type: 'default', primary_key: false, not_null: false }])
-
-  const updateCol = (i: number, field: string, value: string | boolean) =>
-    setCols((c) => c.map((col, idx) => (idx === i ? { ...col, [field]: value } : col)))
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
@@ -95,26 +48,19 @@ export default function TablesPage() {
             {isFlux && <span className="ml-2 text-[11px] text-amber-500/80">· read-only</span>}
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center rounded-lg border bg-muted/30 p-0.5">
-            <button
-              onClick={() => router.push('/dashboard/data/public')}
-              className={cn('px-3 py-1.5 rounded-md text-xs font-medium transition-colors', !isFlux ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
-            >
-              public
-            </button>
-            <button
-              onClick={() => router.push('/dashboard/data/flux')}
-              className={cn('px-3 py-1.5 rounded-md text-xs font-medium transition-colors', isFlux ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
-            >
-              flux
-            </button>
-          </div>
-          {!isFlux && (
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
-              <Plus className="w-4 h-4 mr-1.5" /> New table
-            </Button>
-          )}
+        <div className="flex items-center rounded-lg border bg-muted/30 p-0.5">
+          <Link
+            href="/dashboard/data/public"
+            className={cn('px-3 py-1.5 rounded-md text-xs font-medium transition-colors', !isFlux ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+          >
+            public
+          </Link>
+          <Link
+            href="/dashboard/data/flux"
+            className={cn('px-3 py-1.5 rounded-md text-xs font-medium transition-colors', isFlux ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+          >
+            flux
+          </Link>
         </div>
       </div>
 
@@ -128,10 +74,9 @@ export default function TablesPage() {
         <div className="flex flex-col items-center justify-center py-20 text-center border rounded-xl bg-card">
           <Table2 className="w-10 h-10 text-muted-foreground/40 mb-3" />
           <p className="font-medium text-sm">No tables yet</p>
-          <p className="text-xs text-muted-foreground mt-1 mb-4">Add your first table to the {database} schema</p>
-          <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
-            <Plus className="w-4 h-4 mr-1.5" /> Create table
-          </Button>
+          <p className="text-xs text-muted-foreground mt-1 text-balance">
+            Define tables in your <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">schemas/</code> directory and run <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">flux db push</code>
+          </p>
         </div>
       ) : (
         <div className="rounded-xl border divide-y overflow-hidden bg-card">
@@ -167,23 +112,6 @@ export default function TablesPage() {
                       <Cpu className="w-2.5 h-2.5" /> {computedCols} computed
                     </span>
                   )}
-                  {!isFlux && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                        <Button variant="ghost" size="icon" className="w-7 h-7 opacity-0 group-hover:opacity-100">
-                          <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          onClick={() => dropMutation.mutate(t.name)}
-                        >
-                          Drop table
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
                   <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
               </div>
@@ -191,82 +119,7 @@ export default function TablesPage() {
           })}
         </div>
       )}
-
-      {/* Create table dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>New table in <span className="font-mono text-sm">{database}</span></DialogTitle>
-            <DialogDescription>Define columns for the new table.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label>Table name</Label>
-              <Input
-                placeholder="e.g. users"
-                value={tableName}
-                onChange={(e) => setTableName(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>Columns</Label>
-                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={addCol}>
-                  <Plus className="w-3 h-3 mr-1" /> Add column
-                </Button>
-              </div>
-              <div className="rounded-lg border overflow-hidden">
-                <div className="grid grid-cols-[1fr_140px_100px_60px] gap-2 px-3 py-2 bg-muted/30 border-b">
-                  {['Name', 'Type', 'Kind', ''].map((h) => (
-                    <p key={h} className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{h}</p>
-                  ))}
-                </div>
-                {cols.map((col, i) => (
-                  <div key={i} className="grid grid-cols-[1fr_140px_100px_60px] gap-2 px-3 py-2 border-b last:border-0 items-center">
-                    <Input
-                      value={col.name}
-                      onChange={(e) => updateCol(i, 'name', e.target.value)}
-                      placeholder="column_name"
-                      className="h-7 text-xs"
-                    />
-                    <Select value={col.type} onValueChange={(v) => updateCol(i, 'type', v)}>
-                      <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {COLUMN_TYPES.map((t) => (
-                          <SelectItem key={t} value={t}>{t}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={col.fb_type} onValueChange={(v) => updateCol(i, 'fb_type', v)}>
-                      <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="default">primitive</SelectItem>
-                        <SelectItem value="file">file</SelectItem>
-                        <SelectItem value="computed">computed</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      variant="ghost" size="icon" className="h-7 w-7"
-                      onClick={() => setCols((c) => c.filter((_, idx) => idx !== i))}
-                    >
-                      <Trash2 className="w-3 h-3 text-muted-foreground" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button
-              onClick={() => createMutation.mutate()}
-              disabled={!tableName || createMutation.isPending}
-            >
-              {createMutation.isPending ? 'Creating…' : 'Create table'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
+
