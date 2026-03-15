@@ -150,12 +150,7 @@ pub async fn execute(command: ApiKeyCommands) -> anyhow::Result<()> {
                     return Ok(());
                 }
             }
-            let res = client
-                .client
-                .delete(R::api_keys::DELETE.url_with(&client.base_url, &[("id", &id)]))
-                .send()
-                .await?;
-            res.error_for_status()?;
+            let _: Value = client.delete_with(&R::api_keys::DELETE, &[("id", &id)]).await?;
             println!("{} Revoked API key {}", "✔".green().bold(), id.dimmed());
         }
 

@@ -88,23 +88,13 @@ async fn execute_history(
     json_output: bool,
 ) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
-    let mut url = format!(
-        "{}?limit={}",
-        R::db::HISTORY.url_with(&client.base_url, &[("database", &database), ("table", &table)]),
-        limit
-    );
-    if let Some(id_val) = &id {
-        url.push_str(&format!("&id={}", urlencoding::encode(id_val)));
-    }
-    if let Some(pk_val) = &pk {
-        url.push_str(&format!("&pk={}", urlencoding::encode(pk_val)));
-    }
-
-    let res = client.client.get(&url).send().await?;
-    if !res.status().is_success() {
-        anyhow::bail!("API error {}: {}", res.status(), res.text().await.unwrap_or_default());
-    }
-    let body: Value = res.json().await?;
+    let limit_s = limit.to_string();
+    let mut query = vec![("limit", limit_s.as_str())];
+    if let Some(ref v) = id { query.push(("id", v.as_str())); }
+    if let Some(ref v) = pk { query.push(("pk", v.as_str())); }
+    let body: Value = client
+        .get_with(&R::db::HISTORY, &[("database", &database), ("table", &table)], &query)
+        .await?;
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&body)?);
@@ -215,17 +205,10 @@ async fn execute_blame(
     json_output: bool,
 ) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
-    let url = format!(
-        "{}?limit={}",
-        R::db::BLAME.url_with(&client.base_url, &[("database", &database), ("table", &table)]),
-        limit
-    );
-
-    let res = client.client.get(&url).send().await?;
-    if !res.status().is_success() {
-        anyhow::bail!("API error {}: {}", res.status(), res.text().await.unwrap_or_default());
-    }
-    let body: Value = res.json().await?;
+    let limit_s = limit.to_string();
+    let body: Value = client
+        .get_with(&R::db::BLAME, &[("database", &database), ("table", &table)], &[("limit", limit_s.as_str())])
+        .await?;
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&body)?);

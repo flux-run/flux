@@ -108,12 +108,9 @@ pub async fn execute(command: MonitorCommands) -> anyhow::Result<()> {
         }
 
         MonitorCommands::Metrics { function, window } => {
-            let mut url = format!("{}?window={}", R::monitor::METRICS.url(&client.base_url), window);
-            if let Some(f) = &function {
-                url.push_str(&format!("&function={}", f));
-            }
-            let res = client.client.get(&url).send().await?;
-            let json: Value = res.error_for_status()?.json().await?;
+            let mut q = vec![("window", window.as_str())];
+            if let Some(ref f) = function { q.push(("function", f.as_str())); }
+            let json: Value = client.get_with(&R::monitor::METRICS, &[], &q).await?;
             let data = json.get("data").unwrap_or(&json);
 
             println!();

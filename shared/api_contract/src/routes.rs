@@ -199,7 +199,7 @@ pub mod logs {
     /// `GET /traces/{request_id}`
     pub const TRACE_GET:    Route<(), Value> = Route::new("GET",  "/traces/{request_id}");
     /// `POST /traces/{request_id}/replay`
-    pub const TRACE_REPLAY:    Route<(), Value> = Route::new("POST", "/traces/{request_id}/replay");
+    pub const TRACE_REPLAY:    Route<Value, Value> = Route::new("POST", "/traces/{request_id}/replay");
     /// `GET /traces/errors/summary` — per-function error summary
     pub const ERRORS_SUMMARY:  Route<(), Value> = Route::new("GET",  "/traces/errors/summary");
 }

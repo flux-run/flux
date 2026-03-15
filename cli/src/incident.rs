@@ -91,18 +91,13 @@ async fn execute_replay(
     let (from_ts, to_ts) = resolve_window(window, from, to)?;
 
     // Fetch all mutations in the window via /db/replay/:database
-    let url = format!(
-        "{}?from={}&to={}&limit=2000",
-        R::db::REPLAY.url_with(&client.base_url, &[("database", &database)]),
-        urlencoding::encode(&from_ts),
-        urlencoding::encode(&to_ts),
-    );
-
-    let res = client.client.get(&url).send().await?;
-    if !res.status().is_success() {
-        anyhow::bail!("API error {}: {}", res.status(), res.text().await.unwrap_or_default());
-    }
-    let body: Value = res.json().await?;
+    let body: Value = client
+        .get_with(&R::db::REPLAY, &[("database", &database)], &[
+            ("from",  from_ts.as_str()),
+            ("to",    to_ts.as_str()),
+            ("limit", "2000"),
+        ])
+        .await?;
 
     let empty_vec = vec![];
     let mutations: &Vec<Value> = body
@@ -269,15 +264,9 @@ async fn replay_single_request(
     json_output: bool,
 ) -> anyhow::Result<()> {
     // Fetch mutations for this request
-    let url = format!(
-        "{}?request_id={}&limit=200",
-        R::db::MUTATIONS.url(&client.base_url), request_id
-    );
-    let res = client.client.get(&url).send().await?;
-    if !res.status().is_success() {
-        anyhow::bail!("API error {}: {}", res.status(), res.text().await.unwrap_or_default());
-    }
-    let body: Value = res.json().await?;
+    let body: Value = client
+        .get_with(&R::db::MUTATIONS, &[], &[("request_id", request_id), ("limit", "200")])
+        .await?;
 
     let empty_vec = vec![];
     let mutations: &Vec<Value> = body

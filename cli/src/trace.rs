@@ -400,22 +400,11 @@ pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> an
 pub async fn execute_list(limit: u64, function: Option<String>, json_output: bool) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
-    // URL-encode the function name so names with slashes/spaces are safe.
-    let mut url = format!("{}?limit={}", R::logs::TRACES_LIST.url(&client.base_url), limit);
-    if let Some(ref fn_name) = function {
-        url.push_str("&function=");
-        url.push_str(&urlencoding::encode(fn_name));
-    }
+    let limit_s = limit.to_string();
+    let mut q: Vec<(&str, &str)> = vec![("limit", &limit_s)];
+    if let Some(ref fn_name) = function { q.push(("function", fn_name.as_str())); }
 
-    let res = client.client.get(&url).send().await?;
-
-    if !res.status().is_success() {
-        let status = res.status();
-        let body   = res.text().await.unwrap_or_default();
-        anyhow::bail!("API {}: {}", status, body.trim());
-    }
-
-    let body: Value = res.json().await?;
+    let body: Value = client.get_with(&R::logs::TRACES_LIST, &[], &q).await?;
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&body)?);

@@ -55,17 +55,10 @@ pub async fn execute(
     // ── Build commit timeline ────────────────────────────────────────────────
     eprintln!("{}", "  fetching trace history…".dimmed());
 
-    let traces_url = format!(
-        "{}?function={}&limit=500",
-        R::logs::TRACES_LIST.url(&client.base_url),
-        urlencoding::encode(&function),
-    );
-    let res = client.client.get(&traces_url).send().await?;
-    let body: Value = if res.status().is_success() {
-        res.json().await.unwrap_or_default()
-    } else {
-        Value::Null
-    };
+    let body: Value = client
+        .get_with(&R::logs::TRACES_LIST, &[], &[("function", function.as_str()), ("limit", "500")])
+        .await
+        .unwrap_or(Value::Null);
 
     let empty_arr = vec![];
     let traces: &Vec<Value> = body.get("traces")

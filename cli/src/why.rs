@@ -86,25 +86,16 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
     let client = ApiClient::new().await?;
 
     // ── Fetch trace spans ────────────────────────────────────────────────────
-    let trace_url = format!("{}?slow_ms=0", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", request_id.as_str())]));
-    let trace_res = client.client.get(&trace_url).send().await?;
-    let trace_body: Value = if trace_res.status().is_success() {
-        trace_res.json().await.unwrap_or_default()
-    } else {
-        Value::Null
-    };
+    let trace_body: Value = client
+        .get_with(&R::logs::TRACE_GET, &[("request_id", request_id.as_str())], &[("slow_ms", "0")])
+        .await
+        .unwrap_or(Value::Null);
 
     // ── Fetch state mutations ────────────────────────────────────────────────
-    let mut_url = format!(
-        "{}?request_id={}&limit=20",
-        R::db::MUTATIONS.url(&client.base_url), request_id
-    );
-    let mut_res = client.client.get(&mut_url).send().await?;
-    let mut_body: Value = if mut_res.status().is_success() {
-        mut_res.json().await.unwrap_or_default()
-    } else {
-        Value::Null
-    };
+    let mut_body: Value = client
+        .get_with(&R::db::MUTATIONS, &[], &[("request_id", request_id.as_str()), ("limit", "20")])
+        .await
+        .unwrap_or(Value::Null);
 
     if json_output {
         println!(
@@ -161,19 +152,15 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
         .to_string();
 
     let prev_req: Option<Value> = if !first_span_ts.is_empty() {
-        let prev_url = format!(
-            "{}?before={}&limit=1&exclude={}",
-            R::logs::TRACES_LIST.url(&client.base_url),
-            urlencoding::encode(&first_span_ts),
-            urlencoding::encode(&request_id),
-        );
-        let prev_res = client.client.get(&prev_url).send().await;
-        if let Ok(res) = prev_res {
-            if res.status().is_success() {
-                let body: Value = res.json().await.unwrap_or_default();
-                body["traces"].as_array().and_then(|arr| arr.first()).cloned()
-            } else { None }
-        } else { None }
+        client
+            .get_with(&R::logs::TRACES_LIST, &[], &[
+                ("before",  first_span_ts.as_str()),
+                ("limit",   "1"),
+                ("exclude", request_id.as_str()),
+            ])
+            .await
+            .ok()
+            .and_then(|body: Value| body["traces"].as_array().and_then(|arr| arr.first()).cloned())
     } else { None };
 
     // ── Find error spans ─────────────────────────────────────────────────────

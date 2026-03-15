@@ -14,7 +14,9 @@
 
 use std::time::Duration;
 
-use reqwest::{Client, header};
+use api_contract::routes::Route;
+use reqwest::{Client, StatusCode, header};
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::config::Config;
 
@@ -69,5 +71,105 @@ impl ApiClient {
             base_url:    config.api_url,
             gateway_url: config.gateway_url,
         })
+    }
+
+    // ── Internal ─────────────────────────────────────────────────────────────
+
+    /// Drive a pre-built `RequestBuilder` to completion and deserialise the
+    /// JSON response body as `Resp`.  Handles `204 No Content` by returning
+    /// `serde_json::Value::Null` (or `()`) rather than failing to parse an
+    /// empty body.
+    async fn run<Resp: DeserializeOwned>(req: reqwest::RequestBuilder) -> anyhow::Result<Resp> {
+        let res = req.send().await?.error_for_status()?;
+        if res.status() == StatusCode::NO_CONTENT {
+            Ok(serde_json::from_value(serde_json::Value::Null)?)
+        } else {
+            Ok(res.json::<Resp>().await?)
+        }
+    }
+
+    // ── GET ──────────────────────────────────────────────────────────────────
+
+    /// `GET /path` — typed response enforced by `Route<(), Resp>`.
+    pub async fn get<Resp: DeserializeOwned>(&self, route: &Route<(), Resp>) -> anyhow::Result<Resp> {
+        Self::run(self.client.get(route.url(&self.base_url))).await
+    }
+
+    /// `GET /path/{param}?key=val` — path substitution via `path_params`;
+    /// optional query parameters via `query` (any `serde::Serialize` value,
+    /// e.g. `&[("limit", "100")]` or a `Vec<(String, String)>`).
+    pub async fn get_with<Resp, Q>(&self, route: &Route<(), Resp>, path_params: &[(&str, &str)], query: &Q) -> anyhow::Result<Resp>
+    where
+        Resp: DeserializeOwned,
+        Q: Serialize + ?Sized,
+    {
+        let url = route.url_with(&self.base_url, path_params);
+        Self::run(self.client.get(url).query(query)).await
+    }
+
+    // ── POST ─────────────────────────────────────────────────────────────────
+
+    /// `POST /path` — `Req` body type enforced by `Route<Req, Resp>`.
+    pub async fn post<Req, Resp>(&self, route: &Route<Req, Resp>, body: &Req) -> anyhow::Result<Resp>
+    where
+        Req: Serialize,
+        Resp: DeserializeOwned,
+    {
+        Self::run(self.client.post(route.url(&self.base_url)).json(body)).await
+    }
+
+    /// `POST /path/{param}` — path substitution + typed body.
+    pub async fn post_with<Req, Resp>(&self, route: &Route<Req, Resp>, path_params: &[(&str, &str)], body: &Req) -> anyhow::Result<Resp>
+    where
+        Req: Serialize,
+        Resp: DeserializeOwned,
+    {
+        let url = route.url_with(&self.base_url, path_params);
+        Self::run(self.client.post(url).json(body)).await
+    }
+
+    // ── PUT ──────────────────────────────────────────────────────────────────
+
+    /// `PUT /path/{param}` — typed body.
+    pub async fn put<Req, Resp>(&self, route: &Route<Req, Resp>, path_params: &[(&str, &str)], body: &Req) -> anyhow::Result<Resp>
+    where
+        Req: Serialize,
+        Resp: DeserializeOwned,
+    {
+        let url = route.url_with(&self.base_url, path_params);
+        Self::run(self.client.put(url).json(body)).await
+    }
+
+    // ── PATCH ────────────────────────────────────────────────────────────────
+
+    /// `PATCH /path/{param}` — typed body.
+    pub async fn patch<Req, Resp>(&self, route: &Route<Req, Resp>, path_params: &[(&str, &str)], body: &Req) -> anyhow::Result<Resp>
+    where
+        Req: Serialize,
+        Resp: DeserializeOwned,
+    {
+        let url = route.url_with(&self.base_url, path_params);
+        Self::run(self.client.patch(url).json(body)).await
+    }
+
+    // ── DELETE ───────────────────────────────────────────────────────────────
+
+    /// `DELETE /path`.
+    pub async fn delete<Resp: DeserializeOwned>(&self, route: &Route<(), Resp>) -> anyhow::Result<Resp> {
+        Self::run(self.client.delete(route.url(&self.base_url))).await
+    }
+
+    /// `DELETE /path/{param}`.
+    pub async fn delete_with<Resp: DeserializeOwned>(&self, route: &Route<(), Resp>, path_params: &[(&str, &str)]) -> anyhow::Result<Resp> {
+        Self::run(self.client.delete(route.url_with(&self.base_url, path_params))).await
+    }
+
+    /// `DELETE /path?key=val` — with query params but no path substitution.
+    pub async fn delete_q<Resp, Q>(&self, route: &Route<(), Resp>, query: &Q) -> anyhow::Result<Resp>
+    where
+        Resp: DeserializeOwned,
+        Q: Serialize + ?Sized,
+    {
+        Self::run(self.client.delete(route.url(&self.base_url)).query(query)).await
     }
 }

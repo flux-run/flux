@@ -372,14 +372,12 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
         // ── flux db history <table> --id <pk> ─────────────────────────────────
         DbCommands::History { table, id, pk, database, limit } => {
-            let mut url = R::db::HISTORY.url_with(&client.base_url, &[("database", database.as_str()), ("table", table.as_str())]);
-            let mut sep = '?';
-            if let Some(ref v) = id  { url.push_str(&format!("{sep}id={v}"));  sep = '&'; }
-            if let Some(ref v) = pk  { url.push_str(&format!("{sep}pk={}", urlencoding::encode(v))); sep = '&'; }
-            url.push_str(&format!("{sep}limit={limit}"));
-
-            let res = client.client.get(&url).send().await?;
-            let json: Value = res.error_for_status()?.json().await?;
+            let limit_s = limit.to_string();
+            let mut q: Vec<(&str, &str)> = Vec::new();
+            if let Some(ref v) = id  { q.push(("id", v.as_str())); }
+            if let Some(ref v) = pk  { q.push(("pk", v.as_str())); }
+            q.push(("limit", &limit_s));
+            let json: Value = client.get_with(&R::db::HISTORY, &[("database", database.as_str()), ("table", table.as_str())], &q).await?;
             let rows = json["history"].as_array().cloned().unwrap_or_default();
             if rows.is_empty() {
                 println!("No mutations found for {} id={}", table, id.as_deref().or(pk.as_deref()).unwrap_or("?"));
@@ -406,9 +404,8 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
         // ── flux db blame <table> ─────────────────────────────────────────────
         DbCommands::Blame { table, database, limit } => {
-            let url = format!("{}?limit={}", R::db::BLAME.url_with(&client.base_url, &[("database", database.as_str()), ("table", table.as_str())]), limit);
-            let res = client.client.get(&url).send().await?;
-            let json: Value = res.error_for_status()?.json().await?;
+            let limit_s = limit.to_string();
+            let json: Value = client.get_with(&R::db::BLAME, &[("database", database.as_str()), ("table", table.as_str())], &[("limit", limit_s.as_str())]).await?;
             let rows = json["blame"].as_array().cloned().unwrap_or_default();
             if rows.is_empty() {
                 println!("No blame data found for table '{}'.", table);
@@ -429,13 +426,12 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
         // ── flux db replay --from … --to … ───────────────────────────────────
         DbCommands::Replay { from, to, database, limit } => {
-            let url = format!(
-                "{}/db/replay/{}?from={}&to={}&limit={}",
-                client.base_url, database,
-                urlencoding::encode(&from), urlencoding::encode(&to), limit
-            );
-            let res = client.client.get(&url).send().await?;
-            let json: Value = res.error_for_status()?.json().await?;
+            let limit_s = limit.to_string();
+            let json: Value = client.get_with(&R::db::REPLAY, &[("database", &database)], &[
+                ("from",  from.as_str()),
+                ("to",    to.as_str()),
+                ("limit", &limit_s),
+            ]).await?;
             let rows = json["replay"].as_array().cloned().unwrap_or_default();
             if rows.is_empty() {
                 println!("No mutations found between {} and {}.", from, to);

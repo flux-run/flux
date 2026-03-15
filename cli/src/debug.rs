@@ -40,15 +40,10 @@ async fn execute_interactive() -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
     // Fetch recent errors (traces with errors, last 10 minutes)
-    let res = client
-        .client
-        .get(format!("{}?status=error&limit=15&window=10m",
-            R::logs::TRACES_LIST.url(&client.base_url)
-        ))
-        .send()
-        .await?;
-
-    let body: Value = res.json().await.unwrap_or_default();
+    let body: Value = client
+        .get_with(&R::logs::TRACES_LIST, &[], &[("status", "error"), ("limit", "15"), ("window", "10m")])
+        .await
+        .unwrap_or_default();
     let empty = vec![];
     let errors: &Vec<Value> = body
         .get("data")
@@ -141,36 +136,24 @@ async fn execute_request(
     let client = ApiClient::new().await?;
 
     // ── 1. Fetch trace ────────────────────────────────────────────────────
-    let trace_res = client
-        .client
-        .get(R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", request_id.as_str())]))
-        .send()
-        .await?;
-
-    let trace_json: Value = trace_res.json().await.unwrap_or_default();
+    let trace_json: Value = client
+        .get_with(&R::logs::TRACE_GET, &[("request_id", request_id.as_str())], &[] as &[(&str, &str)])
+        .await
+        .unwrap_or_default();
     let trace = trace_json.get("data").unwrap_or(&trace_json);
 
     // ── 2. Fetch logs ─────────────────────────────────────────────────────
     let logs_data: Vec<Value> = if !no_logs {
-        let logs_res = client
-            .client
-            .get(format!("{}?request_id={}&limit=100",
-                R::logs::LIST.url(&client.base_url), request_id
-            ))
-            .send()
+        client
+            .get_with(&R::logs::LIST, &[], &[("request_id", request_id.as_str()), ("limit", "100")])
             .await
-            .ok();
-
-        if let Some(res) = logs_res {
-            let lj: Value = res.json().await.unwrap_or_default();
-            lj.get("data")
+            .ok()
+            .and_then(|lj: Value| lj.get("data")
                 .and_then(|d| d.get("logs"))
                 .and_then(|v| v.as_array())
                 .cloned()
-                .unwrap_or_default()
-        } else {
-            vec![]
-        }
+            )
+            .unwrap_or_default()
     } else {
         vec![]
     };
@@ -418,22 +401,16 @@ async fn do_replay(
         serde_json::json!({})
     };
 
-    let res = client
-        .client
-        .post(R::logs::TRACE_REPLAY.url_with(&client.base_url, &[("request_id", request_id)]))
-        .json(&body)
-        .send()
-        .await?;
-
-    if res.status().is_success() {
-        let rj: Value = res.json().await.unwrap_or_default();
-        let data = rj.get("data").unwrap_or(&rj);
-        let new_id = data["request_id"].as_str().unwrap_or("?");
-        println!("  new request_id: {}", new_id.cyan());
-    } else {
-        let status = res.status();
-        let body = res.text().await.unwrap_or_default();
-        eprintln!("{} Replay failed: {} — {}", "✗".red().bold(), status, body);
+    match client.post_with(&R::logs::TRACE_REPLAY, &[("request_id", request_id)], &body).await {
+        Ok(rj) => {
+            let rj: Value = rj;
+            let data = rj.get("data").unwrap_or(&rj);
+            let new_id = data["request_id"].as_str().unwrap_or("?");
+            println!("  new request_id: {}", new_id.cyan());
+        }
+        Err(e) => {
+            eprintln!("{} Replay failed: {}", "✗".red().bold(), e);
+        }
     }
 
     Ok(())

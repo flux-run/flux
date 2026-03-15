@@ -191,12 +191,7 @@ async fn route_cmd(command: RouteCommands) -> anyhow::Result<()> {
         }
 
         RouteCommands::List => {
-            let res = client
-                .client
-                .get(R::gateway::ROUTES_LIST.url(&client.base_url))
-                .send()
-                .await?;
-            let json: Value = res.error_for_status()?.json().await?;
+            let json: Value = client.client.get(R::gateway::ROUTES_LIST.url(&client.base_url)).send().await?.json().await.unwrap_or_default();
             let routes = json
                 .get("data")
                 .and_then(|d| d.get("routes").or(Some(d)))
@@ -237,12 +232,7 @@ async fn route_cmd(command: RouteCommands) -> anyhow::Result<()> {
         }
 
         RouteCommands::Get { id } => {
-            let res = client
-                .client
-                .get(R::gateway::ROUTES_GET.url_with(&client.base_url, &[("id", &id)]))
-                .send()
-                .await?;
-            let json: Value = res.error_for_status()?.json().await?;
+            let json: Value = client.client.get(R::gateway::ROUTES_GET.url_with(&client.base_url, &[("id", &id)])).send().await?.error_for_status()?.json().await?;
             let data = json.get("data").unwrap_or(&json);
             println!("{}", serde_json::to_string_pretty(data)?);
         }
@@ -260,12 +250,7 @@ async fn route_cmd(command: RouteCommands) -> anyhow::Result<()> {
                 }
             }
 
-            let res = client
-                .client
-                .delete(R::gateway::ROUTES_GET.url_with(&client.base_url, &[("id", &id)]))
-                .send()
-                .await?;
-            res.error_for_status()?;
+            let _: Value = client.delete_with(&R::gateway::ROUTES_DELETE, &[("id", &id)]).await?;
             println!("{} Deleted route {}", "✔".green().bold(), id);
         }
     }
@@ -300,12 +285,7 @@ async fn middleware_cmd(command: MiddlewareCommands) -> anyhow::Result<()> {
             println!("{} Middleware {} attached to route {}", "✔".green().bold(), r#type.cyan(), route.bold());
         }
         MiddlewareCommands::Remove { route, r#type } => {
-            let res = client
-                .client
-                .delete(R::gateway::MIDDLEWARE_DELETE.url_with(&client.base_url, &[("route", route.as_str()), ("type", r#type.as_str())]))
-                .send()
-                .await?;
-            res.error_for_status()?;
+            let _: Value = client.delete_with(&R::gateway::MIDDLEWARE_DELETE, &[("route", route.as_str()), ("type", r#type.as_str())]).await?;
             println!("{} Middleware {} removed from route {}", "✔".green().bold(), r#type.cyan(), route.bold());
         }
     }

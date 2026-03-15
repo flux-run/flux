@@ -23,16 +23,12 @@ pub async fn execute(
 ) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
-    let mut url = format!(
-        "{}?since={}",
-        R::logs::ERRORS_SUMMARY.url(&client.base_url), since
-    );
-    if let Some(f) = &function {
-        url.push_str(&format!("&function={}", f));
-    }
-
-    let res = client.client.get(&url).send().await?;
-    let body: Value = res.json().await.unwrap_or_default();
+    let mut query = vec![("since", since.as_str())];
+    if let Some(ref f) = function { query.push(("function", f.as_str())); }
+    let body: Value = client
+        .get_with(&R::logs::ERRORS_SUMMARY, &[], &query)
+        .await
+        .unwrap_or_default();
 
     let empty = vec![];
     let entries: &Vec<Value> = body

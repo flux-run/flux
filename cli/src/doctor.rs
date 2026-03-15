@@ -191,17 +191,15 @@ async fn execute_diagnosis(request_id: String, json_output: bool) -> anyhow::Res
     let client = ApiClient::new().await?;
 
     // ── Fetch trace + mutations + previous request ────────────────────────
-    let trace_url = format!("{}?slow_ms=0", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", request_id.as_str())]));
-    let trace_body: Value = match client.client.get(&trace_url).send().await {
-        Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
-        _ => Value::Null,
-    };
+    let trace_body: Value = client
+        .get_with(&R::logs::TRACE_GET, &[("request_id", request_id.as_str())], &[("slow_ms", "0")])
+        .await
+        .unwrap_or(Value::Null);
 
-    let mut_url = format!("{}?request_id={}&limit=20", R::db::MUTATIONS.url(&client.base_url), request_id);
-    let mut_body: Value = match client.client.get(&mut_url).send().await {
-        Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
-        _ => Value::Null,
-    };
+    let mut_body: Value = client
+        .get_with(&R::db::MUTATIONS, &[], &[("request_id", request_id.as_str()), ("limit", "20")])
+        .await
+        .unwrap_or(Value::Null);
 
     // ── Unpack trace fields ───────────────────────────────────────────────
     let empty_vec: Vec<Value> = vec![];
@@ -233,18 +231,15 @@ async fn execute_diagnosis(request_id: String, json_output: bool) -> anyhow::Res
 
     // previous request
     let prev_req: Option<Value> = if !first_span_ts.is_empty() {
-        let prev_url = format!(
-            "{}/traces?before={}&limit=1&exclude={}",
-            client.base_url,
-            urlencoding::encode(&first_span_ts),
-            urlencoding::encode(&request_id),
-        );
-        if let Ok(res) = client.client.get(&prev_url).send().await {
-            if res.status().is_success() {
-                let body: Value = res.json().await.unwrap_or_default();
-                body["traces"].as_array().and_then(|a| a.first()).cloned()
-            } else { None }
-        } else { None }
+        client
+            .get_with(&R::logs::TRACES_LIST, &[], &[
+                ("before",  first_span_ts.as_str()),
+                ("limit",   "1"),
+                ("exclude", request_id.as_str()),
+            ])
+            .await
+            .ok()
+            .and_then(|body: Value| body["traces"].as_array().and_then(|a| a.first()).cloned())
     } else { None };
 
     // ── Mutations ─────────────────────────────────────────────────────────

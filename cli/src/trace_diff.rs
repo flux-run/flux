@@ -59,12 +59,12 @@ pub async fn execute(
     let client = ApiClient::new().await?;
 
     // Traces are small (one JSON object per request) — fetch both eagerly.
-    let orig_trace_url = format!("{}?slow_ms=0", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", original_id.as_str())]));
-    let rep_trace_url  = format!("{}?slow_ms=0", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", replay_id.as_str())]));
-
-    let (orig_trace, rep_trace) = tokio::try_join!(
-        fetch_json(&client, &orig_trace_url),
-        fetch_json(&client, &rep_trace_url),
+    let orig_params = [("request_id", original_id.as_str())];
+    let rep_params  = [("request_id", replay_id.as_str())];
+    let query_slow  = [("slow_ms", "0")];
+    let (orig_trace, rep_trace): (Value, Value) = tokio::try_join!(
+        client.get_with(&R::logs::TRACE_GET, &orig_params, &query_slow),
+        client.get_with(&R::logs::TRACE_GET, &rep_params,  &query_slow),
     )?;
 
     if json_output {
@@ -454,17 +454,12 @@ async fn fetch_mutations_page(
     after_seq:  Option<i64>,
     table:      Option<&str>,
 ) -> anyhow::Result<Value> {
-    let mut url = format!(
-        "{}?request_id={}&limit={}",
-        R::db::MUTATIONS.url(&client.base_url), request_id, limit,
-    );
-    if let Some(seq) = after_seq {
-        url.push_str(&format!("&after_seq={seq}"));
-    }
-    if let Some(t) = table {
-        url.push_str(&format!("&table_name={t}"));
-    }
-    fetch_json(client, &url).await
+    let limit_s = limit.to_string();
+    let after_s = after_seq.map(|s| s.to_string());
+    let mut q: Vec<(&str, &str)> = vec![("request_id", request_id), ("limit", &limit_s)];
+    if let Some(ref s) = after_s { q.push(("after_seq", s)); }
+    if let Some(t) = table       { q.push(("table_name", t)); }
+    client.get_with(&R::db::MUTATIONS, &[], &q).await
 }
 
 /// Collect all mutations across pages (used only for `--json` output).
@@ -597,15 +592,6 @@ fn diff_spans(orig: &[Value], rep: &[Value]) -> Vec<SpanDiff> {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-async fn fetch_json(client: &ApiClient, url: &str) -> anyhow::Result<Value> {
-    let res = client.client.get(url).send().await?;
-    if res.status().is_success() {
-        Ok(res.json().await.unwrap_or_default())
-    } else {
-        Ok(Value::Null)
-    }
-}
 
 fn color_status_label(s: &str) -> colored::ColoredString {
     match s {

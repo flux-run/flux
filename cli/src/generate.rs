@@ -116,16 +116,7 @@ pub async fn execute_generate(output_dir: Option<String>) -> anyhow::Result<()> 
 // ── Manifest fetch ────────────────────────────────────────────────────────────
 
 async fn fetch_manifest(client: &ApiClient) -> anyhow::Result<(Manifest, serde_json::Value)> {
-    let url = R::sdk::MANIFEST.url(&client.base_url);
-    let resp = client.client.get(&url).send().await?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("server returned {}: {}", status, body);
-    }
-
-    let raw: serde_json::Value = resp.json().await?;
+    let raw: serde_json::Value = client.get(&R::sdk::MANIFEST).await?;
     let manifest: Manifest = serde_json::from_value(raw.clone())
         .map_err(|e| anyhow::anyhow!("failed to parse manifest: {}", e))?;
 

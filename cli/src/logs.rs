@@ -65,32 +65,17 @@ async fn fetch_logs(
     limit:    u64,
     since:    Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
-    let mut url = format!("{}?limit={}", R::logs::LIST.url(&client.base_url), limit);
-
+    let limit_s = limit.to_string();
+    let mut q: Vec<(&str, &str)> = vec![("limit", &limit_s)];
     match (source, resource) {
-        (Some(s), Some(r)) => {
-            url.push_str(&format!("&source={s}&resource={r}"));
-        }
-        (None, Some(r)) => {
-            // Caller provided only a name — assume "function" for backward compat
-            url.push_str(&format!("&source=function&resource={r}"));
-        }
-        (Some(s), None) => {
-            url.push_str(&format!("&source={s}"));
-        }
-        (None, None) => {}
+        (Some(s), Some(r)) => { q.push(("source", s)); q.push(("resource", r)); }
+        (None, Some(r))    => { q.push(("source", "function")); q.push(("resource", r)); }
+        (Some(s), None)    => { q.push(("source", s)); }
+        (None, None)       => {}
     }
+    if let Some(s) = since { q.push(("since", s)); }
 
-    if let Some(s) = since {
-        url.push_str(&format!("&since={}", urlencoding_simple(s)));
-    }
-
-    let res = client.client.get(&url).send().await?;
-    if !res.status().is_success() {
-        anyhow::bail!("API error: {}", res.status());
-    }
-
-    let body: Value = res.json().await?;
+    let body: Value = client.get_with(&R::logs::LIST, &[], &q).await?;
     Ok(body["data"]["logs"].as_array().cloned().unwrap_or_default())
 }
 

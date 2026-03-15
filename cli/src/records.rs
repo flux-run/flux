@@ -112,18 +112,12 @@ pub async fn execute(command: RecordsCommands) -> anyhow::Result<()> {
         }
 
         RecordsCommands::Count { before, after, function, errors_only, json } => {
-            let mut url = R::records::COUNT.url(&client.base_url);
-            let mut params: Vec<String> = Vec::new();
-            if let Some(b) = &before   { params.push(format!("before={}", b)); }
-            if let Some(a) = &after    { params.push(format!("after={}", a)); }
-            if let Some(f) = &function { params.push(format!("function={}", f)); }
-            if errors_only             { params.push("errors_only=true".to_string()); }
-            if !params.is_empty() {
-                url = format!("{}?{}", url, params.join("&"));
-            }
-
-            let res = client.client.get(&url).send().await?;
-            let resp: Value = res.error_for_status()?.json().await?;
+            let mut q: Vec<(&str, &str)> = Vec::new();
+            if let Some(ref b) = before   { q.push(("before",      b.as_str())); }
+            if let Some(ref a) = after    { q.push(("after",       a.as_str())); }
+            if let Some(ref f) = function { q.push(("function",    f.as_str())); }
+            if errors_only               { q.push(("errors_only", "true")); }
+            let resp: Value = client.get_with(&R::records::COUNT, &[], &q).await?;
             let count = resp["count"].as_u64().unwrap_or(0);
 
             if json {
@@ -136,12 +130,9 @@ pub async fn execute(command: RecordsCommands) -> anyhow::Result<()> {
         RecordsCommands::Prune { before, dry_run, yes } => {
             if dry_run {
                 // --dry-run: just count with the same filter
-                let mut url = R::records::COUNT.url(&client.base_url);
-                if let Some(b) = &before {
-                    url = format!("{}?before={}", url, b);
-                }
-                let res = client.client.get(&url).send().await?;
-                let resp: Value = res.error_for_status()?.json().await?;
+                let mut q: Vec<(&str, &str)> = Vec::new();
+                if let Some(ref b) = before { q.push(("before", b.as_str())); }
+                let resp: Value = client.get_with(&R::records::COUNT, &[], &q).await?;
                 let count = resp["count"].as_u64().unwrap_or(0);
                 println!(
                     "{} {} records would be deleted (dry run — nothing changed)",
@@ -152,12 +143,9 @@ pub async fn execute(command: RecordsCommands) -> anyhow::Result<()> {
             }
 
             // Count first, then confirm
-            let mut count_url = R::records::COUNT.url(&client.base_url);
-            if let Some(b) = &before {
-                count_url = format!("{}?before={}", count_url, b);
-            }
-            let count_res = client.client.get(&count_url).send().await?;
-            let count_resp: Value = count_res.error_for_status()?.json().await?;
+            let mut count_q: Vec<(&str, &str)> = Vec::new();
+            if let Some(ref b) = before { count_q.push(("before", b.as_str())); }
+            let count_resp: Value = client.get_with(&R::records::COUNT, &[], &count_q).await?;
             let count = count_resp["count"].as_u64().unwrap_or(0);
 
             if count == 0 {
@@ -181,26 +169,19 @@ pub async fn execute(command: RecordsCommands) -> anyhow::Result<()> {
                 }
             }
 
-            let mut url = R::records::PRUNE.url(&client.base_url);
-            let mut params: Vec<String> = Vec::new();
-            if let Some(b) = &before { params.push(format!("before={}", b)); }
-            if !params.is_empty() {
-                url = format!("{}?{}", url, params.join("&"));
-            }
-
-            let res = client.client.delete(&url).send().await?;
-            if res.status().is_success() {
-                let resp: Value = res.json().await.unwrap_or_default();
-                let deleted = resp["deleted"].as_u64().unwrap_or(count);
-                println!(
-                    "{} Pruned {} records",
-                    "✔".green().bold(),
-                    deleted.to_string().bold(),
-                );
-            } else {
-                let status = res.status();
-                let body = res.text().await.unwrap_or_default();
-                anyhow::bail!("Prune failed ({}): {}", status, body);
+            let mut del_q: Vec<(&str, &str)> = Vec::new();
+            if let Some(ref b) = before { del_q.push(("before", b.as_str())); }
+            match client.delete_q(&R::records::PRUNE, &del_q).await {
+                Ok(resp) => {
+                    let resp: Value = resp;
+                    let deleted = resp["deleted"].as_u64().unwrap_or(count);
+                    println!(
+                        "{} Pruned {} records",
+                        "✔".green().bold(),
+                        deleted.to_string().bold(),
+                    );
+                }
+                Err(e) => anyhow::bail!("Prune failed: {}", e),
             }
         }
     }
