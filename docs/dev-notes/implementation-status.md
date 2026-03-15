@@ -16,18 +16,18 @@ It is not part of the public product docs set.
 | Area | Status | Notes |
 | --- | --- | --- |
 | Product narrative | Active | The strongest product direction is clear: complete runtime, debug-first story. |
-| Documentation | Active | The docs now present a coherent public product narrative. |
+| Documentation | Active | The docs now present a coherent public product narrative. Language support matrix synced across all marketing surfaces. |
 | Single-binary direction | Active | The `server` crate is the right architectural direction even though individual crates still exist and are still used during development. |
 | CLI core loop | Active | Core loop validated end-to-end (see release gate run below). |
 | Local dev story | Active | `flux dev` is the right idea and one of the most important product surfaces. |
-| Gateway | Active | The request pipeline is strong and aligned with the product model. |
-| Runtime | Active | Execution, bundle loading, and caching are substantive. Some endpoint and auth surfaces still need cleanup. |
+| Gateway | Active | The request pipeline is strong and aligned with the product model. CORS production guard added — panics at startup if `CORS_ALLOWED_ORIGINS` is unset in production. |
+| Runtime | Active | Execution, bundle loading, and caching are substantive. WASM pool with dual-engine (speed/fast OptLevel) and AOT disk cache is production-worthy. |
 | Data engine | Active | Mutation-aware execution is a core strength of the repo. |
-| Queue and schedules | Shaping | Important to the complete-system story, but still need smoother execution-record integration and operator polish. |
+| Auth and service hardening | Active | JWT + DB-stored API keys + RBAC fully implemented. Login rate-limiting (10/15min per email). Internal service token on all internal routes. `FLUX_API_KEY` fix applied 2026-03-15. |
+| Queue and schedules | Shaping | Important to the complete-system story. Poller, retry, dead-letter, timeout recovery all work. `request_id` tracing fix applied 2026-03-15. |
 | Replay and diff | Shaping | High value, but trustworthiness matters more than breadth here. |
 | Agents | Experimental | Useful as part of the system, but not yet the headline feature. |
-| WASM and multi-language parity | Experimental | Ambitious and worth keeping, but not yet a dependable flagship capability. |
-| Auth and service hardening | Needs hardening | Safe defaults and service isolation need more work before broad beta testing. |
+| WASM and multi-language parity | Experimental | 6 languages benchmarked and working (AS, Rust, Java, Go, PHP, Python). C# pending WASIP2 component executor. |
 
 ## Internal Bar
 
@@ -37,8 +37,8 @@ These are the implementation gates that matter most:
 2. project and config resolution are easy to understand
 3. one deployment is visibly linked to one execution record  ✅ **Validated 2026-03-14** — `flux records export` returns spans linked by `request_id`
 4. one replay-plus-diff flow is believable enough to trust
-5. async work preserves the same debugging model
-6. defaults are safe enough for real beta users
+5. async work preserves the same debugging model  ✅ **Queue e2e verified 2026-03-14**
+6. defaults are safe enough for real beta users  ✅ **Auth hardened 2026-03-15**
 
 ## Release Gate Run — 2026-03-14
 
@@ -70,4 +70,32 @@ Full Phase 0 core developer loop validated:
 | `schemas/api/20260314000041_fs_bundles.sql` | Same schema-qualification fix |
 | `schemas/api/20260315000045_queue_bindings.sql` | `REFERENCES functions(id)` → `flux.functions(id)` |
 | `cli/src/dev.rs` | Added `QUEUE_MIGRATIONS` static and `queue_m.run()` call — queue migrations were not being applied, causing `relation "jobs" does not exist` |
+
+## Audit Run — 2026-03-15
+
+Comprehensive audit of all files changed since the 2026-03-14 gate run.
+
+### Bugs found and fixed
+
+| File | Bug | Fix |
+|------|-----|-----|
+| `api/src/middleware/auth.rs` | **Security/correctness:** `FLUX_API_KEY` path fell through without injecting `RequestContext` or calling `next.run()` — a valid static API key returned 401. Every production deployment using `FLUX_API_KEY` was broken. | Add `req.extensions_mut().insert(RequestContext); return next.run(req).await;` after the constant-time match succeeds. |
+| `queue/src/worker/executor.rs` | **Runtime:** `UPDATE flux.jobs SET started_at …` used the wrong schema. The `jobs` table is in the `public` schema (all migrations and code use unqualified `jobs`). The query silently failed — `started_at` / `request_id` were never stamped, breaking `flux trace <id>` for async jobs. | Change `flux.jobs` → `jobs`. |
+| `runtime/Cargo.toml` | **Build:** `wasmtime-wasi = { features = ["async"] }` — the `async` feature was removed in wasmtime v28 (async is now built-in). Build failure on `cargo build -p server`. | Remove `features = ["async"]` from wasmtime-wasi dependency. |
+
+### Areas reviewed — no issues found
+
+- `api/src/auth/routes.rs` — login rate-limiting (10/15min per email) looks correct
+- `gateway/src/router.rs` — production CORS guard is correct (panics if env is empty in production)
+- `gateway/src/handlers/dispatch.rs` — request pipeline steps 1–8 are correct
+- `gateway/src/metrics.rs` — fire-and-forget `gateway_metrics` insert correct (search_path=flux,public resolves unqualified table correctly)
+- `queue/src/worker/poller.rs` — graceful shutdown drain logic is correct
+- `queue/src/services/retry_service.rs` — unqualified `jobs` is correct for public schema
+- `runtime/src/engine/wasm_executor.rs` — AOT compile, fuel-based limits, WASI argv embedding all look correct
+- `runtime/src/engine/wasm_pool.rs` — dual-engine (per-module OptLevel), LRU cache, disk cache, semaphore all look correct
+- `runtime/src/engine/pool.rs` — backpressure guard, affinity routing, isolate pool sizing all look correct
+- `cli/src/dev.rs` — embedded Postgres, hot-reload watcher, graceful shutdown all correct
+- `cli/src/trace.rs` / `cli/src/why.rs` / `cli/src/doctor.rs` — display-only, no logical issues
+- `data-engine/src/executor/db_executor.rs` — SET LOCAL search_path correct, mutation logging atomic with data write
+- `api/src/secrets/service.rs` — AES-256-GCM encrypt/decrypt, no secrets in logs
 
