@@ -1,7 +1,7 @@
 import { getToken, clearToken } from "@/lib/auth";
 import { useStore } from "@/state/tenantStore";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 interface FetchOptions extends RequestInit {
   skipTenant?: boolean;
@@ -65,7 +65,7 @@ export async function apiFetch<T = unknown>(
 // ─── Gateway client (execution plane) ────────────────────────────────────────
 // Routes execution traffic through the gateway (same origin, different path).
 
-const GATEWAY_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:4000";
+const GATEWAY_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "";
 
 export async function gatewayFetch<T = unknown>(
   path: string,

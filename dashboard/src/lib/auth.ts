@@ -33,7 +33,7 @@ export interface LoginResult {
   user: TokenUser;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export async function signIn(email: string, password: string): Promise<LoginResult> {
   const res = await fetch(`${API_BASE}/flux/api/auth/login`, {

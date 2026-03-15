@@ -2,15 +2,13 @@
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
-// SPA entry point. When the Rust server serves index.html as a fallback for an
-// unmatched /flux/* path (e.g. after a hard refresh on a deep link), this page
-// reads window.location and navigates the App Router to the real destination.
+// SPA entry point: redirect the root URL to /dashboard.
+// Next.js App Router automatically prepends basePath ("/flux") to all
+// router.replace/push calls, so paths here must NOT include the basePath.
 export default function RootPage() {
   const router = useRouter()
   useEffect(() => {
-    const path = window.location.pathname
-    const dest = path === '/flux' || path === '/flux/' ? '/flux/dashboard' : path
-    router.replace(dest)
+    router.replace('/dashboard')
   }, [router])
   return null
 }

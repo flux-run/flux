@@ -12,7 +12,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!loading && !user) {
-      router.replace('/flux/login')
+      router.replace('/login')
     }
   }, [user, loading, router])
 

@@ -24,7 +24,7 @@ export default function LoginPage() {
       if (result.user.tenant_id) {
         setTenant(result.user.tenant_id, result.user.username)
       }
-      router.push('/flux/dashboard')
+      router.push('/dashboard')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sign in failed')
     } finally {

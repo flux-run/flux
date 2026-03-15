@@ -653,35 +653,69 @@ fn find_server_binary() -> Option<PathBuf> {
 ///   binary = {prefix}/bin/server
 ///   out    = {prefix}/share/flux/dashboard/out   (or sibling `dashboard/out`)
 ///
+/// Layout 3 — cargo install to ~/.cargo/bin or /usr/local/bin:
+///   Walk up from the CLI binary itself and from CWD to find a workspace
+///   with a `dashboard/out/index.html`.
+///
 /// Falls back gracefully — if nothing is found, returns None and the server
 /// will use its own "dashboard/out" relative-path default.
 fn find_dashboard_dir(server_binary: &Path) -> Option<PathBuf> {
-    // Layout 1: workspace — binary sits under target/{profile}/
-    if let Some(target_dir) = server_binary
-        .parent()       // target/debug  or  target/release
-        .and_then(|p| p.parent())  // target/
-        .and_then(|p| p.parent())  // workspace root
+    // Helper: check if a directory looks like a valid dashboard export.
+    let valid = |p: &PathBuf| p.join("index.html").exists();
+
+    // Layout 1: workspace — server binary sits under target/{profile}/
+    if let Some(workspace) = server_binary
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
     {
-        let candidate = target_dir.join("dashboard").join("out");
-        if candidate.join("index.html").exists() {
-            return Some(candidate);
-        }
+        let candidate = workspace.join("dashboard").join("out");
+        if valid(&candidate) { return Some(candidate); }
     }
 
     // Layout 2: distribution — look for `dashboard/out` next to the binary
     if let Some(bin_dir) = server_binary.parent() {
         let candidate = bin_dir.join("dashboard").join("out");
-        if candidate.join("index.html").exists() {
-            return Some(candidate);
+        if valid(&candidate) { return Some(candidate); }
+        // FHS-style: {prefix}/share/flux/dashboard/out
+        if let Some(prefix) = bin_dir.parent() {
+            let candidate = prefix.join("share").join("flux").join("dashboard").join("out");
+            if valid(&candidate) { return Some(candidate); }
         }
-        // share/flux/dashboard/out  (FHS-style)
-        let candidate2 = bin_dir.parent()
-            .map(|p| p.join("share").join("flux").join("dashboard").join("out"));
-        if let Some(c) = candidate2 {
-            if c.join("index.html").exists() {
-                return Some(c);
-            }
+    }
+
+    // Layout 3: cargo install layout (~/.cargo/bin/server, /usr/local/bin/server).
+    // Walk up from the CLI binary itself to find the workspace.
+    if let Ok(cli_exe) = std::env::current_exe() {
+        let mut dir = cli_exe.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        loop {
+            let candidate = dir.join("dashboard").join("out");
+            if valid(&candidate) { return Some(candidate); }
+            // Stop at a clear workspace root (has Cargo.toml + dashboard/).
+            if dir.join("Cargo.toml").exists() { break; }
+            if !dir.pop() { break; }
         }
+    }
+
+    // Layout 4: walk up from CWD (useful for `cargo run -p cli -- dev`).
+    if let Ok(mut dir) = std::env::current_dir() {
+        loop {
+            let candidate = dir.join("dashboard").join("out");
+            if valid(&candidate) { return Some(candidate); }
+            if dir.join("Cargo.toml").exists() { break; }
+            if !dir.pop() { break; }
+        }
+    }
+
+    // Layout 5: compile-time workspace path (reliable for local `cargo install`).
+    // CARGO_MANIFEST_DIR is set by cargo to the cli/ directory at compile time,
+    // so `../dashboard/out` resolves to the actual workspace dashboard export.
+    // This won't exist in distribution packages, where layouts 1-2 succeed first.
+    let compile_time_candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|workspace| workspace.join("dashboard").join("out"));
+    if let Some(c) = compile_time_candidate {
+        if valid(&c) { return Some(c); }
     }
 
     None

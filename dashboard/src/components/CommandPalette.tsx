@@ -70,7 +70,7 @@ export function CommandPalette() {
     { id: 'overview',     label: 'Overview',       group: 'Other',         icon: LayoutDashboard, action: () => router.push(p('overview')) },
     { id: 'settings',     label: 'Settings',       group: 'Other',         icon: Settings,     action: () => router.push(p('settings')) },
   ] : [
-    { id: 'projects', label: 'All Projects', group: 'Workspace', icon: LayoutDashboard, action: () => router.push('/flux/dashboard') },
+    { id: 'projects', label: 'All Projects', group: 'Workspace', icon: LayoutDashboard, action: () => router.push('/dashboard') },
   ]
 
   // Group items
