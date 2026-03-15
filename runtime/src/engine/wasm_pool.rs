@@ -368,6 +368,7 @@ mod tests {
     impl ApiDispatch for MockApi {
         async fn get_bundle(&self, _: &str) -> Result<serde_json::Value, String> { Err("mock".into()) }
         async fn write_log(&self, _: serde_json::Value) -> Result<(), String> { Ok(()) }
+        async fn write_network_call(&self, _: serde_json::Value) -> Result<(), String> { Ok(()) }
         async fn get_secrets(&self) -> Result<HashMap<String, String>, String> { Ok(Default::default()) }
         async fn resolve_function(&self, _: &str) -> Result<job_contract::dispatch::ResolvedFunction, String> { Err("mock".into()) }
     }

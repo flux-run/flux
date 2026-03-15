@@ -61,6 +61,11 @@ impl ApiDispatch for HttpApiDispatch {
         Ok(())
     }
 
+    async fn write_network_call(&self, _call: Value) -> Result<(), String> {
+        // The queue worker does not make outbound ctx.fetch() calls — no-op.
+        Ok(())
+    }
+
     async fn get_secrets(&self) -> Result<HashMap<String, String>, String> {
         let url = format!("{}/internal/secrets", self.api_url);
         let resp = self.client

@@ -60,6 +60,10 @@ mod tests {
             Ok(())
         }
 
+        async fn write_network_call(&self, _call: Value) -> Result<(), String> {
+            Ok(())
+        }
+
         async fn get_secrets(&self) -> Result<HashMap<String, String>, String> {
             Ok(HashMap::new())
         }

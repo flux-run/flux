@@ -104,6 +104,8 @@ pub mod internal {
     pub const LOGS_CREATE:       Route<Value, Value>                = Route::new("POST", "/internal/logs");
     /// `GET /internal/logs`
     pub const LOGS_LIST:         Route<(), Value>                   = Route::new("GET",  "/internal/logs");
+    /// `POST /internal/network-calls` — ingest an outbound network call recorded by the runtime
+    pub const NETWORK_CALLS_CREATE: Route<Value, Value>             = Route::new("POST", "/internal/network-calls");
     /// `GET /internal/functions/resolve`
     pub const FUNCTIONS_RESOLVE: Route<(), Value>                   = Route::new("GET",  "/internal/functions/resolve");
     /// `POST /internal/cache/invalidate`
@@ -307,6 +309,8 @@ pub mod db {
     pub const BLAME:            Route<(), Value>      = Route::new("GET",  "/db/blame/{database}/{table}");
     /// `GET /db/mutations`
     pub const MUTATIONS:        Route<(), Value>      = Route::new("GET",  "/db/mutations");
+    /// `GET /db/network-calls` — outbound HTTP calls recorded during execution
+    pub const NETWORK_CALLS:    Route<(), Value>      = Route::new("GET",  "/db/network-calls");
     /// `POST /db/explain`
     pub const EXPLAIN:          Route<Value, Value>   = Route::new("POST", "/db/explain");
     /// `POST /db/sql` — raw SQL passthrough

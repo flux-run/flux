@@ -66,6 +66,26 @@ impl ApiDispatch for HttpApiDispatch {
         Ok(())
     }
 
+    async fn write_network_call(&self, call: Value) -> Result<(), String> {
+        let url = format!("{}/internal/network-calls", self.api_url);
+
+        let resp = self.client
+            .post(&url)
+            .header("X-Service-Token", &self.token)
+            .json(&call)
+            .send()
+            .await
+            .map_err(|e| format!("network call write failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body   = resp.text().await.unwrap_or_default();
+            return Err(format!("API network_call error HTTP {}: {}", status, body));
+        }
+
+        Ok(())
+    }
+
     async fn get_secrets(&self) -> Result<HashMap<String, String>, String> {
         let url = format!("{}/internal/secrets", self.api_url);
 

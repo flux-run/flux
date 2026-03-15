@@ -4,6 +4,7 @@ pub mod debug;
 pub mod explain;
 pub mod history;
 pub mod mutations;
+pub mod network_calls;
 pub mod query;
 pub mod relationships;
 pub mod schema;

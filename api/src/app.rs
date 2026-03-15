@@ -98,6 +98,7 @@ pub fn create_app(state: AppState) -> Router {
         .route(R::internal::DB_MIGRATE.under("/internal"),        post(routes::db_migrate::apply_user_migration))
         .route(R::internal::DB_SCHEMA.under("/internal"),         post(routes::schema::push_schema))
         .route(R::internal::LOGS_CREATE.under("/internal"),       post(logs::routes::create_log).get(logs::routes::list_logs))
+        .route(R::internal::NETWORK_CALLS_CREATE.under("/internal"), post(logs::routes::create_network_call))
         .route(R::internal::FUNCTIONS_RESOLVE.under("/internal"), get(routes::functions::resolve_function))
         .route(R::internal::CACHE_INVALIDATE.under("/internal"),  post(routes::system::cache_invalidate))
         .route(R::internal::ROUTES_GET.under("/internal"),        get(routes::gateway_config::get_routes_for_gateway))

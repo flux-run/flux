@@ -652,3 +652,60 @@ pub async fn list_traces(
 
     Ok(ApiResponse::new(serde_json::json!({ "traces": traces })))
 }
+
+// ─── POST /internal/network-calls ────────────────────────────────────────────
+//
+// Called by the runtime after every ctx.fetch() completes.
+// Writes one row to flux_internal.network_calls.
+// Protected by X-Service-Token (same as /internal/logs).
+
+#[derive(Deserialize)]
+pub struct NetworkCallEntry {
+    pub request_id:       String,
+    pub span_id:          Option<String>,
+    pub call_seq:         Option<i32>,
+    pub method:           String,
+    pub url:              String,
+    pub host:             String,
+    pub request_headers:  Option<serde_json::Value>,
+    pub request_body:     Option<String>,
+    pub status:           Option<i32>,
+    pub response_headers: Option<serde_json::Value>,
+    pub response_body:    Option<String>,
+    pub duration_ms:      Option<i32>,
+    pub error:            Option<String>,
+}
+
+pub async fn create_network_call(
+    headers: HeaderMap,
+    State(pool): State<PgPool>,
+    axum::Json(entry): axum::Json<NetworkCallEntry>,
+) -> ApiResult<serde_json::Value> {
+    validate_service_token(&headers)?;
+
+    sqlx::query(
+        "INSERT INTO flux_internal.network_calls \
+         (request_id, span_id, call_seq, method, url, host, \
+          request_headers, request_body, status, response_headers, response_body, \
+          duration_ms, error) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+    )
+    .bind(&entry.request_id)
+    .bind(&entry.span_id)
+    .bind(entry.call_seq.unwrap_or(0))
+    .bind(&entry.method)
+    .bind(&entry.url)
+    .bind(&entry.host)
+    .bind(&entry.request_headers)
+    .bind(&entry.request_body)
+    .bind(entry.status)
+    .bind(&entry.response_headers)
+    .bind(&entry.response_body)
+    .bind(entry.duration_ms.unwrap_or(0))
+    .bind(&entry.error)
+    .execute(&pool)
+    .await
+    .map_err(|_| db_err())?;
+
+    Ok(ApiResponse::new(serde_json::json!({ "recorded": true })))
+}

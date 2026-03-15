@@ -67,6 +67,35 @@ What makes Flux different is that observability includes state changes:
 
 This is what turns tracing into backend debugging instead of request timing alone.
 
+## Network Call Recording
+
+Every outbound HTTP request made through `ctx.fetch()` is recorded alongside the DB mutations and function invocations in the same execution record.
+
+Each recorded network call captures:
+
+- `method` and `url` for routing context
+- `request_headers` and `request_body` (the exact payload sent)
+- `status`, `response_headers`, and `response_body` (the exact response received)
+- `duration_ms` for latency attribution
+- `error` when the connection failed before a response arrived
+- `call_seq` — a monotonic counter scoped to the request, so calls can be replayed in order
+
+Records are written to `flux_internal.network_calls` atomically and asynchronously (fire-and-forget via `spawn_local`) so they do not add latency to the live path.
+
+### Why Network Call Recording Matters
+
+Recording the outbound surface of a function enables two things that logs alone cannot:
+
+**Full replay with mocked responses.** Because the response body is stored, `flux incident replay` can re-run the exact same function and return the same data from every external API call — without hitting Stripe, SendGrid, or any other third party. The replay is deterministic.
+
+**Resume from checkpoint.** For a function such as a payment handler:
+
+1. Insert order row → recorded as a DB mutation
+2. Charge Stripe → recorded as a network call (status 200, charge ID in response body)
+3. Send confirmation email → network call fails
+
+On re-run, Flux knows step 2 already succeeded with a specific charge ID. The operator can inspect `flux_internal.network_calls` for that `request_id` and see exactly where execution stopped, which response was last received, and which side effects already committed. Replay can be configured to skip already-succeeded calls or return their cached response.
+
 ## Sampling And Retention
 
 Flux supports retention and sampling, and the defaults favor usefulness for debugging:

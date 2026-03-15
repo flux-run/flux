@@ -5,7 +5,7 @@ use api_contract::routes as R;
 
 use crate::{
     api::{
-        handlers::{cron, databases, debug, explain, history, mutations, query, relationships, schema, sql, tables},
+        handlers::{cron, databases, debug, explain, history, mutations, network_calls, query, relationships, schema, sql, tables},
         middleware::service_auth::require_service_token,
     },
     state::AppState,
@@ -35,6 +35,7 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route(R::db::BLAME.path,     get(history::blame))
         .route(R::db::REPLAY.path,    get(history::replay))
         .route(R::db::MUTATIONS.path, get(mutations::handler))
+        .route(R::db::NETWORK_CALLS.path, get(network_calls::handler))
         // ── Schema introspection ───────────────────────────────────────────────
         .route(R::db::SCHEMA.path,  get(schema::introspect))
         // ── Debug / engine introspection ────────────────────────────────────────

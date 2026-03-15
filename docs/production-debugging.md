@@ -70,6 +70,45 @@ Replay answers:
 - was the problem tied to old code?
 - was the problem tied to old state?
 
+### Replay With Mocked Network Calls
+
+Because every outbound `ctx.fetch()` call is recorded (method, URL, request body, response body, status), `flux incident replay` can re-run the function without hitting any external APIs. Stripe, SendGrid, Twilio, and every other integration are bypassed — their recorded responses are returned instead.
+
+This means replay is:
+
+- **safe** — no real charges, emails, or side effects
+- **deterministic** — the same response is returned every time
+- **complete** — the full execution path reproduces, not just the error
+
+### Inspect Recorded Network Calls
+
+To examine what external calls were made during a request:
+
+```bash
+flux trace <request_id>
+```
+
+The trace output includes network call spans in order (`call_seq`), with status codes, latencies, and error detail for failed connections.
+
+For raw data, query `flux_internal.network_calls` directly:
+
+```sql
+SELECT call_seq, method, url, status, duration_ms, error
+FROM flux_internal.network_calls
+WHERE request_id = '<request_id>'
+ORDER BY call_seq;
+```
+
+### Resume From Checkpoint
+
+When a function performs multiple side effects in order — insert DB row, charge Stripe, send email — and fails partway through, the recorded calls establish a checkpoint:
+
+1. Every completed DB mutation is in `flux_internal.state_mutations`
+2. Every completed network call is in `flux_internal.network_calls`
+3. The `call_seq` column establishes the exact order
+
+An operator can inspect these tables to see exactly which steps succeeded before the failure and craft a targeted re-run that starts from the last safe point rather than re-executing from scratch.
+
 ## 6. Diff The Outcomes
 
 Compare the original run with the replay:

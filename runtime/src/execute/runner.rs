@@ -293,6 +293,9 @@ mod tests {
         async fn write_log(&self, _: Value) -> Result<(), String> {
             Ok(())
         }
+        async fn write_network_call(&self, _: Value) -> Result<(), String> {
+            Ok(())
+        }
         async fn get_secrets(&self) -> Result<HashMap<String, String>, String> {
             Ok(HashMap::new())
         }

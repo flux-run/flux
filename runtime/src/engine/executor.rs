@@ -27,6 +27,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration};
 use job_contract::dispatch::{
@@ -304,6 +305,11 @@ pub struct HttpFetchOpState {
     pub allowed_hosts: Vec<String>, // empty = allow all (except SSRF blocked), ["*"] = allow all
 }
 
+/// Monotonic counter tracking the order of outbound network calls within a single
+/// request.  Reset to 0 at the start of each execution.  Used by the replay
+/// engine to re-issue mocked responses in the same order as the original run.
+pub struct NetworkCallSeq(pub Arc<AtomicI32>);
+
 /// ctx.fetch(url, { method, headers, body }) — SSRF-protected HTTP from user functions.
 #[deno_core::op2(async)]
 #[serde]
@@ -409,7 +415,37 @@ pub async fn op_http_fetch(
             if !host.is_empty() {
                 crate::engine::circuit_breaker::registry().record_failure(&host);
             }
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
+            // Record the failed call so replay knows it must retry this call.
+            let err_msg = e.to_string();
+            let (api, request_id, call_seq) = {
+                let s = state.borrow();
+                let api = s.try_borrow::<PoolDispatchers>().map(|d| Arc::clone(&d.api));
+                let request_id = s.try_borrow::<FunctionInvokeOpState>()
+                    .map(|f| f.request_id.clone());
+                let call_seq = s.try_borrow::<NetworkCallSeq>()
+                    .map(|seq| seq.0.fetch_add(1, AtomicOrdering::Relaxed))
+                    .unwrap_or(0);
+                (api, request_id, call_seq)
+            };
+            if let (Some(api), Some(request_id)) = (api, request_id) {
+                let url_c   = url.clone();
+                let method_c = method.clone();
+                let host_c  = host.clone();
+                let err_c   = err_msg.clone();
+                tokio::task::spawn_local(async move {
+                    let call = serde_json::json!({
+                        "request_id": request_id,
+                        "call_seq":   call_seq,
+                        "method":     method_c,
+                        "url":        url_c,
+                        "host":       host_c,
+                        "duration_ms": 0i64,
+                        "error":      err_c,
+                    });
+                    let _ = api.write_network_call(call).await;
+                });
+            }
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, err_msg));
         }
     };
 
@@ -439,7 +475,44 @@ pub async fn op_http_fetch(
 
     // Try to parse as JSON; fall back to string
     let body_value: serde_json::Value = serde_json::from_str(&body_text)
-        .unwrap_or_else(|_| serde_json::Value::String(body_text));
+        .unwrap_or_else(|_| serde_json::Value::String(body_text.clone()));
+
+    // ── Record network call (fire-and-forget) ─────────────────────────────
+    // Written to flux_internal.network_calls for replay, resume-from-checkpoint,
+    // and distributed trace enrichment.  Never blocks the function response.
+    {
+        let (api, request_id, call_seq) = {
+            let s = state.borrow();
+            let api = s.try_borrow::<PoolDispatchers>().map(|d| Arc::clone(&d.api));
+            let request_id = s.try_borrow::<FunctionInvokeOpState>()
+                .map(|f| f.request_id.clone());
+            let call_seq = s.try_borrow::<NetworkCallSeq>()
+                .map(|seq| seq.0.fetch_add(1, AtomicOrdering::Relaxed))
+                .unwrap_or(0);
+            (api, request_id, call_seq)
+        };
+        if let (Some(api), Some(request_id)) = (api, request_id) {
+            let resp_headers_clone = resp_headers.clone();
+            let body_text_clone    = body_text.clone();
+            let url_clone          = url.clone();
+            let method_clone       = method.clone();
+            let host_clone         = host.clone();
+            tokio::task::spawn_local(async move {
+                let call = serde_json::json!({
+                    "request_id":       request_id,
+                    "call_seq":         call_seq,
+                    "method":           method_clone,
+                    "url":              url_clone,
+                    "host":             host_clone,
+                    "status":           status,
+                    "response_headers": resp_headers_clone,
+                    "response_body":    body_text_clone,
+                    "duration_ms":      0i64,
+                });
+                let _ = api.write_network_call(call).await;
+            });
+        }
+    }
 
     Ok(serde_json::json!({
         "status":  status,
@@ -984,6 +1057,13 @@ pub async fn execute_with_runtime(
 
         let _ = state.try_take::<QueueOpState>();
         state.put(QueueOpState {});
+
+        // Reset network call sequence counter for this request.
+        if let Some(seq) = state.try_borrow::<NetworkCallSeq>() {
+            seq.0.store(0, AtomicOrdering::Relaxed);
+        } else {
+            state.put(NetworkCallSeq(Arc::new(AtomicI32::new(0))));
+        }
     }
 
     // ── Build + execute the IIFE wrapper ───────────────────────────────────

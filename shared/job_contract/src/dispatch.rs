@@ -78,6 +78,13 @@ pub trait ApiDispatch: Send + Sync {
     /// Ship a structured log/trace entry to the API's log ingestion endpoint.
     async fn write_log(&self, entry: Value) -> Result<(), String>;
 
+    /// Record an outbound network call made by a user function (ctx.fetch).
+    ///
+    /// Written fire-and-forget after the response is received.  Enables replay
+    /// (mock the recorded responses) and resume-from-checkpoint (know which
+    /// external calls already succeeded before the failure).
+    async fn write_network_call(&self, call: Value) -> Result<(), String>;
+
     /// Fetch decrypted secrets. Returns a plain `key → value` map.
     async fn get_secrets(&self) -> Result<HashMap<String, String>, String>;
 

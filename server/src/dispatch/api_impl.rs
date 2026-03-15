@@ -122,6 +122,50 @@ impl ApiDispatch for InProcessApiDispatch {
         Ok(())
     }
 
+    async fn write_network_call(&self, call: Value) -> Result<(), String> {
+        let pool = &self.state.pool;
+
+        let request_id       = call.get("request_id")      .and_then(|v| v.as_str()).unwrap_or("");
+        let span_id          = call.get("span_id")         .and_then(|v| v.as_str());
+        let call_seq         = call.get("call_seq")        .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let method           = call.get("method")          .and_then(|v| v.as_str()).unwrap_or("GET");
+        let url              = call.get("url")             .and_then(|v| v.as_str()).unwrap_or("");
+        let host             = call.get("host")            .and_then(|v| v.as_str()).unwrap_or("");
+        let request_headers  = call.get("request_headers") .cloned();
+        let request_body     = call.get("request_body")    .and_then(|v| v.as_str()).map(|s| s.to_string());
+        let status           = call.get("status")          .and_then(|v| v.as_i64()).map(|s| s as i32);
+        let response_headers = call.get("response_headers").cloned();
+        let response_body    = call.get("response_body")   .and_then(|v| v.as_str()).map(|s| s.to_string());
+        let duration_ms      = call.get("duration_ms")     .and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let error            = call.get("error")           .and_then(|v| v.as_str()).map(|s| s.to_string());
+
+        sqlx::query(
+            "INSERT INTO flux_internal.network_calls \
+             (request_id, span_id, call_seq, method, url, host, \
+              request_headers, request_body, status, response_headers, response_body, \
+              duration_ms, error) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+        )
+        .bind(request_id)
+        .bind(span_id)
+        .bind(call_seq)
+        .bind(method)
+        .bind(url)
+        .bind(host)
+        .bind(&request_headers)
+        .bind(&request_body)
+        .bind(status)
+        .bind(&response_headers)
+        .bind(&response_body)
+        .bind(duration_ms)
+        .bind(&error)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("network_call insert failed: {}", e))?;
+
+        Ok(())
+    }
+
     async fn get_secrets(&self) -> Result<HashMap<String, String>, String> {
         api::secrets::service::get_runtime_secrets(
             &self.state.pool,

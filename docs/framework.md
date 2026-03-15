@@ -101,6 +101,8 @@ Flux keeps a deliberate internal shape:
 - `api` for operator-facing actions
 - `server` for the single-binary deployment direction
 
+The `runtime` records every outbound `ctx.fetch()` call — method, URL, full request and response — alongside DB mutations and function invocations. Together these form a complete, replayable execution record.
+
 These are not arbitrary services. They are boundaries that support the execution record.
 
 ## Open Source Standard

@@ -815,6 +815,47 @@ CREATE INDEX IF NOT EXISTS idx_de_trace_requests_created
     ON flux_internal.trace_requests (created_at DESC);
 
 
+-- ─── Outbound network call log (runtime-owned) ───────────────────────────────
+
+-- Append-only log of every ctx.fetch() call made by a user function.
+-- Written by the runtime immediately after the response is received.
+-- Powers: flux trace <id> (http_fetch spans), flux incident replay (mock mode),
+--         resume-from-checkpoint (know exactly which external calls already ran).
+--
+-- call_seq is the strictly-ordered sequence of the call within the request —
+-- used to replay calls in the same order and to detect which calls must be
+-- re-issued vs which can be skipped because they already succeeded.
+CREATE TABLE IF NOT EXISTS flux_internal.network_calls (
+    id              BIGSERIAL    PRIMARY KEY,
+    request_id      TEXT         NOT NULL,
+    span_id         TEXT,
+    call_seq        INT          NOT NULL DEFAULT 0,  -- order within the request
+    method          TEXT         NOT NULL,
+    url             TEXT         NOT NULL,
+    host            TEXT         NOT NULL,            -- extracted from url, for grouping
+    request_headers JSONB,
+    request_body    TEXT,
+    status          INT,                              -- NULL if connection failed
+    response_headers JSONB,
+    response_body   TEXT,
+    duration_ms     INT          NOT NULL,
+    error           TEXT,                             -- non-null if the call threw
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- Primary replay/trace lookup: all calls for a request in order
+CREATE INDEX IF NOT EXISTS idx_network_calls_request
+    ON flux_internal.network_calls (request_id, call_seq);
+
+-- Host-based analysis: N+1 external calls, slow hosts, circuit breaker review
+CREATE INDEX IF NOT EXISTS idx_network_calls_host
+    ON flux_internal.network_calls (host, created_at DESC);
+
+-- Time-window analysis (incident replay window)
+CREATE INDEX IF NOT EXISTS idx_network_calls_created
+    ON flux_internal.network_calls (created_at DESC);
+
+
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- Triggers and notify functions
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
