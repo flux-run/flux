@@ -34,8 +34,8 @@ which = "6"
 toml = "0.8"
 notify = "6"
 dotenvy = "0.15"
-postgresql_embedded = { version = "0.20.2", features = ["blocking"] }
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "migrate"] }
+postgresql_embedded = { version = "0.20.2", features = ["blocking", "rustls", "theseus"], default-features = false }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "migrate", "tls-rustls"] }
 # API contract — shared request/response types
 api_contract = { path = "../shared/api_contract" }
 
