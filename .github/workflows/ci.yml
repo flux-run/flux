@@ -1,0 +1,197 @@
+# .github/workflows/ci.yml
+# Builds `cli` (flux) and `server` binaries on every push, pull request, and
+# version tag. Covers all 6 platform/architecture combinations:
+#   macOS   arm64  (native Apple Silicon runner)
+#   macOS   amd64  (cross-compiled on Apple Silicon runner)
+#   Linux   amd64  (native ubuntu runner)
+#   Linux   arm64  (Docker cross via `cross`)
+#   Windows amd64  (native windows runner)
+#   Windows arm64  (cross-compiled on Windows amd64 runner)
+#
+# On push/PR:  artifacts retained 7 days (build validation).
+# On v*.*.* tag: a GitHub Release is created with all binaries + checksums.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]*"
+  pull_request:
+
+permissions:
+  contents: write   # needed to create releases and upload assets
+
+env:
+  SQLX_OFFLINE: "true"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.os-label }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── macOS ──────────────────────────────────────────────────────────
+          - runner:    macos-14            # Apple Silicon — native ARM64
+            target:   aarch64-apple-darwin
+            os-label: macOS
+            arch:     arm64
+            cross:    false
+            ext:      ""
+
+          - runner:    macos-14            # cross-compile to AMD64 on ARM runner
+            target:   x86_64-apple-darwin
+            os-label: macOS
+            arch:     amd64
+            cross:    false
+            ext:      ""
+
+          # ── Linux ──────────────────────────────────────────────────────────
+          - runner:    ubuntu-22.04
+            target:   x86_64-unknown-linux-gnu
+            os-label: Linux
+            arch:     amd64
+            cross:    false
+            ext:      ""
+
+          - runner:    ubuntu-22.04        # Docker cross for ARM64 Linux
+            target:   aarch64-unknown-linux-gnu
+            os-label: Linux
+            arch:     arm64
+            cross:    true
+            ext:      ""
+
+          # ── Windows ────────────────────────────────────────────────────────
+          - runner:    windows-latest
+            target:   x86_64-pc-windows-msvc
+            os-label: Windows
+            arch:     amd64
+            cross:    false
+            ext:      ".exe"
+
+          - runner:    windows-latest      # cross-compile to ARM64 on AMD64 runner
+            target:   aarch64-pc-windows-msvc
+            os-label: Windows
+            arch:     arm64
+            cross:    false
+            ext:      ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-ci
+
+      - name: Install cross (Linux ARM64 only)
+        if: matrix.cross == true
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+
+      - name: Build CLI
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p cli
+          else
+            cargo build --release --target ${{ matrix.target }} -p cli
+          fi
+
+      - name: Build server
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p server
+          else
+            cargo build --release --target ${{ matrix.target }} -p server
+          fi
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          OS=$(echo "${{ matrix.os-label }}" | tr '[:upper:]' '[:lower:]')
+          ARCH="${{ matrix.arch }}"
+          EXT="${{ matrix.ext }}"
+          TARGET="${{ matrix.target }}"
+
+          mkdir -p dist
+          cp "target/${TARGET}/release/cli${EXT}"    "dist/flux-${OS}-${ARCH}${EXT}"
+          cp "target/${TARGET}/release/server${EXT}" "dist/server-${OS}-${ARCH}${EXT}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.os-label }}-${{ matrix.arch }}
+          path: dist/
+          retention-days: 7
+
+  # ─── Create GitHub Release on v*.*.* tags ─────────────────────────────────
+  release:
+    name: Create Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-assets
+          find dist -type f -exec cp {} release-assets/ \;
+          ls -lh release-assets/
+
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum * > sha256sums.txt
+
+      - name: Extract release notes from CHANGELOG (if present)
+        id: notes
+        run: |
+          if [[ -f CHANGELOG.md ]]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            NOTES=$(awk "/^## \[$VERSION\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+            echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$NOTES" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          else
+            echo "notes=No changelog entry for this release." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: flux ${{ github.ref_name }}
+          body: |
+            ## Install
+
+            ```bash
+            curl -fsSL https://fluxbase.co/install | bash
+            ```
+
+            Or download a binary directly for your platform:
+
+            | Platform | Architecture | Download |
+            |---|---|---|
+            | macOS | arm64 | [flux-macos-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-macos-arm64) |
+            | macOS | amd64 | [flux-macos-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-macos-amd64) |
+            | Linux | arm64 | [flux-linux-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-linux-arm64) |
+            | Linux | amd64 | [flux-linux-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-linux-amd64) |
+            | Windows | arm64 | [flux-windows-arm64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-windows-arm64.exe) |
+            | Windows | amd64 | [flux-windows-amd64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-windows-amd64.exe) |
+
+            ${{ steps.notes.outputs.notes }}
+          files: release-assets/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
