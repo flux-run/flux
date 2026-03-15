@@ -28,6 +28,8 @@ pub struct CreateUserRequest {
     pub email:     String,
     pub password:  String,
     /// One of: "admin" | "viewer" | "readonly"
+    /// Optional on the /auth/setup endpoint — the handler forces "admin".
+    #[serde(default)]
     pub role:      String,
 }
 

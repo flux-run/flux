@@ -44,6 +44,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
@@ -118,16 +119,21 @@ pub async fn execute() -> anyhow::Result<()> {
     // 7. Start file watcher for hot-reload.
     //    Watches functions/ directory; on change rebuilds the affected bundle,
     //    writes it to .flux/build/, and invalidates the runtime cache.
-    //    Store the JoinHandle so we can abort the task cleanly on shutdown.
-    //    (The watcher loop uses blocking recv_timeout with a 100 ms window;
-    //    without an explicit abort the tokio runtime can't shut down and the
-    //    terminal becomes unresponsive after the server exits.)
+    //
+    //    The watcher loop uses a BLOCKING std::sync::mpsc::recv_timeout — it
+    //    MUST run on a real OS thread, not a tokio::spawn task.  tokio can only
+    //    cancel tasks at .await points; a blocking recv_timeout has none, so
+    //    tokio::spawn + .abort() leaves the thread blocked and the runtime
+    //    hangs on shutdown.  We use an Arc<AtomicBool> cancel flag instead:
+    //    the loop checks it each iteration and exits within one 100 ms window.
     let functions_src = project_root.join("functions");
-    let watcher_handle: Option<tokio::task::JoinHandle<()>> = if functions_src.exists() {
+    let watcher_cancel: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let watcher_thread: Option<std::thread::JoinHandle<()>> = if functions_src.exists() {
         let build_dir_clone = build_dir.clone();
         let functions_src_clone = functions_src.clone();
-        let handle = tokio::spawn(async move {
-            if let Err(e) = watch_functions(&functions_src_clone, &build_dir_clone, server_port).await {
+        let cancel_flag = Arc::clone(&watcher_cancel);
+        let handle = std::thread::spawn(move || {
+            if let Err(e) = watch_functions_sync(&functions_src_clone, &build_dir_clone, server_port, &cancel_flag) {
                 eprintln!("file watcher error: {e}");
             }
         });
@@ -179,14 +185,12 @@ pub async fn execute() -> anyhow::Result<()> {
         }
     };
 
-    // 11. Abort the file watcher — it uses a blocking recv_timeout loop so
-    //     we must explicitly abort its task before shutting down the runtime,
-    //     otherwise the process hangs and the terminal becomes unresponsive.
-    if let Some(h) = watcher_handle {
-        h.abort();
-        // The blocking recv_timeout window is 100 ms; give it 300 ms to exit.
-        let _ = tokio::time::timeout(Duration::from_millis(300), h).await;
-    }
+    // 11. Stop the file watcher thread.
+    //     Set the cancel flag — the thread checks it each recv_timeout loop
+    //     (100 ms window) and exits promptly.  We don't join; process::exit
+    //     below will reap it along with everything else.
+    watcher_cancel.store(true, Ordering::Relaxed);
+    drop(watcher_thread); // detach — join would block up to 100 ms unnecessarily
 
     // 12. Stop embedded PostgreSQL if we started it.
     // Cap the shutdown at 5 s to avoid hanging the terminal on Ctrl+C.
@@ -201,7 +205,18 @@ pub async fn execute() -> anyhow::Result<()> {
     }
     println!("{}", "✔  Stopped.".green());
 
-    server_result
+    // Force-exit immediately. Without this, dropping the tokio runtime here
+    // would block waiting for the watcher OS thread (and any other background
+    // work), keeping the terminal unresponsive after the shutdown messages.
+    // All cleanup (server kill, postgres stop) is already done above.
+    let exit_code: i32 = match server_result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{} {e}", "error:".red().bold());
+            1
+        }
+    };
+    std::process::exit(exit_code);
 }
 
 /// Load all key-value pairs from the `.env` file at `project_root`.
@@ -728,7 +743,12 @@ fn find_dashboard_dir(server_binary: &Path) -> Option<PathBuf> {
 ///  4. POST cache invalidation to the local dev server so the new bundle is picked up
 ///
 /// Debounces events with a 200 ms window to avoid double-rebuilds on editor saves.
-async fn watch_functions(functions_dir: &Path, build_dir: &Path, port: u16) -> anyhow::Result<()> {
+///
+/// Runs on a real OS thread (NOT a tokio task) because the inner loop uses
+/// std::sync::mpsc::recv_timeout which is a blocking call with no .await points.
+/// The caller passes a cancel flag; the loop exits within one 100 ms window of
+/// the flag being set.
+fn watch_functions_sync(functions_dir: &Path, build_dir: &Path, port: u16, cancel: &AtomicBool) -> anyhow::Result<()> {
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
     use std::sync::mpsc;
 
@@ -741,6 +761,9 @@ async fn watch_functions(functions_dir: &Path, build_dir: &Path, port: u16) -> a
     let debounce = Duration::from_millis(200);
 
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
                 let is_write = matches!(
@@ -793,16 +816,16 @@ async fn watch_functions(functions_dir: &Path, build_dir: &Path, port: u16) -> a
                             let ext = if bundle.runtime == "wasm" { "wasm" } else { "js" };
                             let dest = build_dir.join(format!("{name}.{ext}"));
                             if std::fs::write(&dest, &bundle.bytes).is_ok() {
-                                // Invalidate the runtime cache for this function.
+                                // Invalidate the runtime cache for this function (best-effort).
                                 let url = format!(
                                     "http://localhost:{port}/flux/api/internal/cache/invalidate"
                                 );
-                                let _ = reqwest::Client::new()
+                                let body = serde_json::json!({ "function_id": name });
+                                let _ = reqwest::blocking::Client::new()
                                     .post(&url)
                                     .header("X-Service-Token", "dev-service-token")
-                                    .json(&serde_json::json!({ "function_id": name }))
-                                    .send()
-                                    .await;
+                                    .json(&body)
+                                    .send();
                                 println!(
                                     "  {} rebuilt         {}",
                                     "↺".cyan().bold(),

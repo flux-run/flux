@@ -15,7 +15,7 @@ clap = { version = "4.5.60", features = ["derive", "env"] }
 colored = "2"
 directories = "5"
 dirs = "6.0.0"
-reqwest = { version = "0.13.2", features = ["json", "multipart", "stream", "rustls"], default-features = false }
+reqwest = { version = "0.13.2", features = ["json", "multipart", "stream", "rustls", "blocking"], default-features = false }
 sha2 = "0.10"
 hex = "0.4"
 rpassword = "7.4.0"
