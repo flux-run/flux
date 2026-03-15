@@ -76,12 +76,16 @@ jobs:
             cross:    false
             ext:      ".exe"
 
-          - runner:    windows-latest      # cross-compile to ARM64 on AMD64 runner
-            target:   aarch64-pc-windows-msvc
-            os-label: Windows
-            arch:     arm64
-            cross:    false
-            ext:      ".exe"
+          # Windows ARM64 disabled: rusty_v8 (pulled in by deno_core/runtime)
+          # does not publish a prebuilt aarch64-pc-windows-msvc artifact for
+          # the pinned version, causing a 404 / build failure. Re-enable once
+          # upstream support lands.
+          # - runner:    windows-latest
+          #   target:   aarch64-pc-windows-msvc
+          #   os-label: Windows
+          #   arch:     arm64
+          #   cross:    false
+          #   ext:      ".exe"
 
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +97,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}-ci
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Build dashboard
+        # Pre-build dashboard/out/ so server/build.rs can embed it.
+        # Runs on the host runner — cross containers inherit the built assets
+        # via the mounted workspace, and build.rs skips npm when out/ exists.
+        working-directory: dashboard
+        shell: bash
+        run: npm ci && npm run build
 
       - name: Install cross (Linux ARM64 only)
         if: matrix.cross == true
@@ -125,7 +144,7 @@ jobs:
           TARGET="${{ matrix.target }}"
 
           mkdir -p dist
-          cp "target/${TARGET}/release/cli${EXT}"    "dist/flux-${OS}-${ARCH}${EXT}"
+          cp "target/${TARGET}/release/flux${EXT}"   "dist/flux-${OS}-${ARCH}${EXT}"
           cp "target/${TARGET}/release/server${EXT}" "dist/server-${OS}-${ARCH}${EXT}"
 
       - uses: actions/upload-artifact@v4
@@ -191,7 +210,6 @@ jobs:
             | macOS | amd64 | [flux-macos-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-macos-amd64) |
             | Linux | arm64 | [flux-linux-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-linux-arm64) |
             | Linux | amd64 | [flux-linux-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-linux-amd64) |
-            | Windows | arm64 | [flux-windows-arm64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-windows-arm64.exe) |
             | Windows | amd64 | [flux-windows-amd64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-windows-amd64.exe) |
 
             ${{ steps.notes.outputs.notes }}
