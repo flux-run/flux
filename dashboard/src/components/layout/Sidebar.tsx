@@ -7,8 +7,8 @@ import { cn } from '@/lib/utils'
 import {
   Settings, LayoutDashboard,
   Code2, KeyRound, ShieldCheck, ScrollText, Globe,
-  Database, Bell, GitBranch, Clock, Terminal, Share2, Puzzle,
-  Activity, Network, Brain, ChevronDown, ListChecks, BarChart2, Search,
+  Database, Clock,
+  Activity, ChevronDown, ListChecks, BarChart2, Search,
 } from 'lucide-react'
 import { FluxLogo } from '@/components/FluxLogo'
 import { useAuth } from '@/hooks/useAuth'
@@ -134,22 +134,13 @@ export function Sidebar() {
         <NavGroup label="Runtime" accent="bg-emerald-400">
           <NavItem href="/dashboard/functions"  Icon={Code2}       label="Functions"  indent />
           <NavItem href="/dashboard/routes"     Icon={Globe}       label="Routes"     indent />
-          <NavItem href="/dashboard/events"     Icon={Bell}        label="Events"     indent />
-          <NavItem href="/dashboard/workflows"  Icon={GitBranch}   label="Workflows"  indent />
           <NavItem href="/dashboard/cron"       Icon={Clock}       label="Cron"       indent />
-          <NavItem href="/dashboard/queue"      Icon={ListChecks}  label="Queues"     indent />
+          <NavItem href="/dashboard/queue"      Icon={ListChecks}  label="Queue"      indent />
         </NavGroup>
 
         {/* Data */}
         <NavGroup label="Data" accent="bg-blue-400">
-          <NavItem href="/dashboard/data"    Icon={Database}  label="Tables"          indent />
-          <NavItem href="/dashboard/query"   Icon={Terminal}  label="Query Explorer"  indent />
-          <NavItem href="/dashboard/schema"  Icon={Share2}    label="Schema Graph"    indent />
-        </NavGroup>
-
-        {/* Integrations */}
-        <NavGroup label="Integrations" accent="bg-amber-400" defaultOpen={true}>
-          <NavItem href="/dashboard/integrations" Icon={Puzzle} label="Integrations" />
+          <NavItem href="/dashboard/data"  Icon={Database}  label="Tables"  indent />
         </NavGroup>
 
         {/* Security */}
@@ -160,11 +151,9 @@ export function Sidebar() {
 
         {/* Observability */}
         <NavGroup label="Observability" accent="bg-[#a78bfa]">
-          <NavItem href="/dashboard/logs"     Icon={ScrollText} label="Logs"        indent />
-          <NavItem href="/dashboard/traces"   Icon={Activity}   label="Traces"      indent />
-          <NavItem href="/dashboard/monitor"  Icon={BarChart2}  label="Monitor"     indent />
-          <NavItem href="/dashboard/agents"   Icon={Brain}      label="Agent Runs"  indent />
-          <NavItem href="/dashboard/topology" Icon={Network}    label="Topology"    indent />
+          <NavItem href="/dashboard/logs"     Icon={ScrollText} label="Logs"     indent />
+          <NavItem href="/dashboard/traces"   Icon={Activity}   label="Traces"   indent />
+          <NavItem href="/dashboard/monitor"  Icon={BarChart2}  label="Monitor"  indent />
         </NavGroup>
 
         {/* Settings */}
