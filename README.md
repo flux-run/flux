@@ -36,6 +36,16 @@ Flux is a complete backend runtime:
 
 The completeness matters because the debugging model only works if Flux can see the whole execution path.
 
+## Install
+
+```bash
+# macOS / Linux
+curl -fsSL https://fluxbase.co/install | bash
+
+# Windows (PowerShell)
+irm https://fluxbase.co/install.ps1 | iex
+```
+
 ## Core Developer Loop
 
 The developer loop looks like this:
