@@ -1,2 +1,2 @@
-import DatabasesPage from '@/views/data/DatabasesPage'
-export default function Page() { return <DatabasesPage /> }
+import { redirect } from 'next/navigation'
+export default function Page() { redirect('/dashboard/data/public') }

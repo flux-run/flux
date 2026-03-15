@@ -3,8 +3,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useRouter } from 'next/navigation'
-import Link from 'next/link'
-import { Database, Table2, Plus, Trash2, ChevronRight, ChevronLeft, FileText, Cpu } from 'lucide-react'
+import { Table2, Plus, Trash2, ChevronRight, FileText, Cpu } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -51,6 +51,8 @@ export default function TablesPage() {
     { name: 'created_at', type: 'timestamptz', fb_type: 'default', primary_key: false, not_null: true },
   ])
 
+  const isFlux = database !== 'public'
+
   const { data, isLoading } = useQuery({
     queryKey: ['tables', database],
     queryFn: () => apiFetch<TablesResponse>(`/db/tables/${database}`),
@@ -85,30 +87,35 @@ export default function TablesPage() {
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-6">
-        <Link href={`/dashboard/data`} className="flex items-center gap-1 hover:text-foreground transition-colors">
-          <Database className="w-3 h-3" /> Data
-        </Link>
-        <ChevronRight className="w-3 h-3" />
-        <span className="text-foreground font-medium">{database}</span>
-      </div>
-
       <div className="flex items-center justify-between mb-8">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Button variant="ghost" size="icon" className="w-7 h-7" onClick={() => router.push(`/dashboard/data`)}>
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-            <h1 className="text-2xl font-bold">{database}</h1>
-          </div>
-          <p className="text-sm text-muted-foreground pl-9">
-            {tables.length} {tables.length === 1 ? 'table' : 'tables'}
+          <h1 className="text-2xl font-bold">Tables</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {tables.length} {tables.length === 1 ? 'table' : 'tables'} in <span className="font-medium text-foreground">{database}</span> schema
+            {isFlux && <span className="ml-2 text-[11px] text-amber-500/80">· read-only</span>}
           </p>
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="w-4 h-4 mr-1.5" /> New table
-        </Button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center rounded-lg border bg-muted/30 p-0.5">
+            <button
+              onClick={() => router.push('/dashboard/data/public')}
+              className={cn('px-3 py-1.5 rounded-md text-xs font-medium transition-colors', !isFlux ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+            >
+              public
+            </button>
+            <button
+              onClick={() => router.push('/dashboard/data/flux')}
+              className={cn('px-3 py-1.5 rounded-md text-xs font-medium transition-colors', isFlux ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+            >
+              flux
+            </button>
+          </div>
+          {!isFlux && (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="w-4 h-4 mr-1.5" /> New table
+            </Button>
+          )}
+        </div>
       </div>
 
       {isLoading ? (
@@ -121,7 +128,7 @@ export default function TablesPage() {
         <div className="flex flex-col items-center justify-center py-20 text-center border rounded-xl bg-card">
           <Table2 className="w-10 h-10 text-muted-foreground/40 mb-3" />
           <p className="font-medium text-sm">No tables yet</p>
-          <p className="text-xs text-muted-foreground mt-1 mb-4">Add your first table to this database</p>
+          <p className="text-xs text-muted-foreground mt-1 mb-4">Add your first table to the {database} schema</p>
           <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
             <Plus className="w-4 h-4 mr-1.5" /> Create table
           </Button>
@@ -160,21 +167,23 @@ export default function TablesPage() {
                       <Cpu className="w-2.5 h-2.5" /> {computedCols} computed
                     </span>
                   )}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="icon" className="w-7 h-7 opacity-0 group-hover:opacity-100">
-                        <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={() => dropMutation.mutate(t.name)}
-                      >
-                        Drop table
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  {!isFlux && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                        <Button variant="ghost" size="icon" className="w-7 h-7 opacity-0 group-hover:opacity-100">
+                          <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => dropMutation.mutate(t.name)}
+                        >
+                          Drop table
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
                   <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
               </div>
@@ -187,7 +196,7 @@ export default function TablesPage() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>New table in {database}</DialogTitle>
+            <DialogTitle>New table in <span className="font-mono text-sm">{database}</span></DialogTitle>
             <DialogDescription>Define columns for the new table.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
