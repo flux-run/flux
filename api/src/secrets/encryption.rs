@@ -17,18 +17,18 @@ impl std::fmt::Display for EncryptionError {
 
 // Ensure the secret key is 32 bytes for AES-256. If missing, panic at init.
 fn get_cipher() -> Result<Aes256Gcm, EncryptionError> {
-    let key_str = match env::var("FLUXBASE_SECRET_KEY") {
+    let key_str = match env::var("FLUX_SECRET_KEY") {
         Ok(v) if !v.is_empty() => v,
         _ => {
             if env::var("FLUX_ENV").as_deref() == Ok("production") {
                 panic!(
-                    "[Flux] FLUXBASE_SECRET_KEY must be set in production. \
+                    "[Flux] FLUX_SECRET_KEY must be set in production. \
                      Generate a 32-byte random key with: openssl rand -hex 16"
                 );
             }
             tracing::warn!(
-                "[Flux] FLUXBASE_SECRET_KEY not configured — using insecure default AES key. \
-                 Set FLUXBASE_SECRET_KEY (exactly 32 bytes) before deploying to production."
+                "[Flux] FLUX_SECRET_KEY not configured — using insecure default AES key. \
+                 Set FLUX_SECRET_KEY (exactly 32 bytes) before deploying to production."
             );
             "01234567890123456789012345678901".to_string()
         }
@@ -37,7 +37,7 @@ fn get_cipher() -> Result<Aes256Gcm, EncryptionError> {
     let key_bytes = key_str.as_bytes();
     
     if key_bytes.len() != 32 {
-        return Err(EncryptionError("FLUXBASE_SECRET_KEY must be exactly 32 bytes".into()));
+        return Err(EncryptionError("FLUX_SECRET_KEY must be exactly 32 bytes".into()));
     }
     
     let key = aes_gcm::Key::<Aes256Gcm>::from_slice(key_bytes);
@@ -104,11 +104,11 @@ mod tests {
     use std::env;
     use std::sync::Mutex;
 
-    // Serialize all encryption tests — they all set FLUXBASE_SECRET_KEY.
+    // Serialize all encryption tests — they all set FLUX_SECRET_KEY.
     static ENCRYPT_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn set_key(key: &str) {
-        unsafe { env::set_var("FLUXBASE_SECRET_KEY", key) };
+        unsafe { env::set_var("FLUX_SECRET_KEY", key) };
     }
 
     fn valid_32_byte_key() -> &'static str {
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn wrong_key_length_returns_error() {
         let _lock = ENCRYPT_ENV_LOCK.lock().unwrap();
-        unsafe { env::set_var("FLUXBASE_SECRET_KEY", "tooshort") };
+        unsafe { env::set_var("FLUX_SECRET_KEY", "tooshort") };
         assert!(encrypt_secret("value").is_err());
         // Restore valid key for other tests.
         set_key(valid_32_byte_key());

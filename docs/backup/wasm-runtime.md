@@ -123,15 +123,15 @@ instantiate from cached `Module` in ~1 ms.
 The ABI is the contract between the WASM module and the Flux host.  It is
 intentionally minimal — JSON in, JSON out — so that any language can implement it.
 
-### Host imports (`fluxbase` namespace)
+### Host imports (`flux` namespace)
 
 The host provides these imports to every WASM module:
 
 | Import | Signature | Description |
 |---|---|---|
-| `fluxbase.secrets_get` | `(key_ptr, key_len, out_ptr, out_max) → i32` | Read a secret by name; returns bytes written or -1 |
-| `fluxbase.log` | `(level: i32, msg_ptr, msg_len) → ()` | Emit a structured log line (0=debug … 3=error) |
-| `fluxbase.http_fetch` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Outbound HTTP gated by `WASM_HTTP_ALLOWED_HOSTS`; req/resp are JSON (`{"method","url","headers","body":<b64>}`) |
+| `flux.secrets_get` | `(key_ptr, key_len, out_ptr, out_max) → i32` | Read a secret by name; returns bytes written or -1 |
+| `flux.log` | `(level: i32, msg_ptr, msg_len) → ()` | Emit a structured log line (0=debug … 3=error) |
+| `flux.http_fetch` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Outbound HTTP gated by `WASM_HTTP_ALLOWED_HOSTS`; req/resp are JSON (`{"method","url","headers","body":<b64>}`) |
 
 Both pointer arguments point into the module's linear memory.  The host reads
 from / writes to that memory region using the module's exported
@@ -166,7 +166,7 @@ Identical to the Deno runtime — a JSON object:
 }
 ```
 
-Logs are emitted via `fluxbase.log` during execution, not in the return value.
+Logs are emitted via `flux.log` during execution, not in the return value.
 
 ### WIT interface (future — WASI 0.2 Component Model)
 
@@ -174,8 +174,8 @@ Once Wasmtime's Component Model support stabilises, the low-level pointer ABI
 will be replaced by a typed WIT interface:
 
 ```wit
-// fluxbase:context/types  (wit/fluxbase.wit)
-package fluxbase:context;
+// flux:context/types  (wit/flux.wit)
+package flux:context;
 
 interface types {
   record invocation {
@@ -205,11 +205,11 @@ Go via `wasm-tools`) auto-generate the ABI glue from this interface.
 
 | Language | Toolchain | SDK | Status | Build command |
 |---|---|---|---|---|
-| **TypeScript / JS** | Deno (no WASM) | `@fluxbase/functions` | ✅ Production | _(bundled by Deno)_ |
+| **TypeScript / JS** | Deno (no WASM) | `@flux/functions` | ✅ Production | _(bundled by Deno)_ |
 | **Rust** | `cargo` + `wasm32-wasip1` | `packages/wasm-sdk/rust` | ✅ Production | `cargo build --target wasm32-wasip1 --release` |
 | **Go** | TinyGo ≥ 0.30 | `packages/wasm-sdk/go` | ✅ Supported | `tinygo build -o handler.wasm -target wasip1 -scheduler none .` |
 | **AssemblyScript** | `asc` (npm) | `packages/wasm-sdk/assemblyscript` | ✅ Supported | `npx asc assembly/index.ts --outFile build/handler.wasm --exportRuntime` |
-| **C / C++** | wasi-sdk `clang` or `emcc` | `packages/wasm-sdk/c/fluxbase.h` | ✅ Supported | `make` (see SDK Makefile template) |
+| **C / C++** | wasi-sdk `clang` or `emcc` | `packages/wasm-sdk/c/flux.h` | ✅ Supported | `make` (see SDK Makefile template) |
 | **Zig** | `zig build` | `packages/wasm-sdk/zig` | ✅ Supported | `zig build -Dtarget=wasm32-wasip1 -Doptimize=ReleaseSmall` |
 | **Python** | py2wasm | `packages/wasm-sdk/python` | 🧪 Experimental | `py2wasm handler.py -o handler.wasm` |
 | **Kotlin/Wasm** | Kotlin 2.0+ | _(no SDK yet)_ | 🔮 Planned | `./gradlew wasmJsBrowserDistribution` |
@@ -367,7 +367,7 @@ level:
 |---|---|
 | **Linear memory isolation** | The module can only read/write its own linear memory slab |
 | **No ambient authority** | File system, network, clocks are all unavailable unless explicitly imported |
-| **Host-gated HTTP** | `fluxbase.http_fetch` validates the target URL against `allow_http` before forwarding |
+| **Host-gated HTTP** | `flux.http_fetch` validates the target URL against `allow_http` before forwarding |
 | **No FFI** | WASM cannot call native code or shared libraries |
 | **Deterministic by default** | No access to `Date.now`, `Math.random` unless host injects them |
 
@@ -385,7 +385,7 @@ others (a buggy WASM module can corrupt its own heap but cannot affect the host)
 | Linear memory | 64 MB (`memory_mb`) | `wasmtime::MemoryType::new(…, max_pages)` |
 | Worker slots | `min(2×CPU, 16)` | `WasmPool` channel backpressure |
 | Compiled module cache | 256 entries | `LruCache` eviction |
-| Outbound HTTP hosts | Per-function allow-list | `fluxbase.http_fetch` host import guard |
+| Outbound HTTP hosts | Per-function allow-list | `flux.http_fetch` host import guard |
 
 ---
 
@@ -395,7 +395,7 @@ others (a buggy WASM module can corrupt its own heap but cannot affect the host)
 
 - [x] Add `wasmtime` dependency to `runtime/Cargo.toml`
 - [x] Implement `WasmPool` + `WasmExecutor` in `runtime/src/engine/`
-- [x] Implement host imports: `fluxbase.secrets_get`, `fluxbase.log`
+- [x] Implement host imports: `flux.secrets_get`, `flux.log`
 - [x] Add `runtime` field to `BundleMeta` (api + runtime)
 - [x] Route `POST /execute` to `WasmPool` when `bundle_meta.runtime == "wasm"`
 - [x] Validate WASM exports on upload (`flux deploy`) — magic-bytes + export check
@@ -406,9 +406,9 @@ others (a buggy WASM module can corrupt its own heap but cannot affect the host)
 
 ### Phase 2 — HTTP + Component Model (v0.2)
 
-- [x] `fluxbase.http_fetch` host import with allow-list enforcement (`WASM_HTTP_ALLOWED_HOSTS`)
+- [x] `flux.http_fetch` host import with allow-list enforcement (`WASM_HTTP_ALLOWED_HOSTS`)
 - [ ] Integrate Wasmtime Component Model (`wit-bindgen` generated ABI)
-- [ ] Write WIT interface file (`wit/fluxbase.wit`)
+- [ ] Write WIT interface file (`wit/flux.wit`)
 - [ ] Go (TinyGo) SDK + example
 - [ ] AssemblyScript SDK + example
 - [ ] Dashboard: show `runtime: wasm` badge on function cards
@@ -518,7 +518,7 @@ The `#[flux_handler]` macro generates the `handle`, `__flux_alloc`, and
 package main
 
 import (
-    flux "github.com/fluxbase/wasm-sdk-go"
+    flux "github.com/flux/wasm-sdk-go"
     "encoding/json"
 )
 

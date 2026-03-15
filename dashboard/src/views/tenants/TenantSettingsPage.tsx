@@ -173,7 +173,7 @@ export default function TenantSettingsPage() {
           <DialogHeader>
             <DialogTitle>Invite member</DialogTitle>
             <DialogDescription>
-              Invite an existing Fluxbase user to this tenant.
+              Invite an existing Flux user to this tenant.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

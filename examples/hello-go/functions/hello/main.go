@@ -10,27 +10,27 @@
 //
 // Host imports (available to WASM modules compiled with wasip1):
 // ──────────────────────────────────────────────────────────────
-// The runtime exposes the following functions under the "fluxbase" module.
+// The runtime exposes the following functions under the "flux" module.
 // In Go, wasip1 host imports use the //go:wasmimport directive (Go 1.21+):
 //
-//   //go:wasmimport fluxbase db_query
+//   //go:wasmimport flux db_query
 //   func db_query(sqlPtr, sqlLen, paramsPtr, paramsLen, outPtr, outMax uint32) int32
 //
-//   //go:wasmimport fluxbase queue_push
+//   //go:wasmimport flux queue_push
 //   func queue_push(reqPtr, reqLen, outPtr, outMax uint32) int32
 //
-//   //go:wasmimport fluxbase http_fetch
+//   //go:wasmimport flux http_fetch
 //   func http_fetch(reqPtr, reqLen, outPtr, outMax uint32) int32
 //
-//   //go:wasmimport fluxbase secrets_get
+//   //go:wasmimport flux secrets_get
 //   func secrets_get(keyPtr, keyLen, outPtr, outMax uint32) int32
 //
-//   //go:wasmimport fluxbase log
+//   //go:wasmimport flux log
 //   func log(level int32, msgPtr, msgLen uint32)
 //
 // See examples/hello-rust/functions/hello/src/lib.rs for the memory convention.
 // A higher-level Go helper package is available at:
-//   https://github.com/fluxbase/fluxbase-go
+//   https://github.com/flux/flux-go
 
 package main
 
@@ -61,9 +61,9 @@ func main() {
 	}
 
 	// ── Database example (requires Go 1.21+ for //go:wasmimport) ─────────────
-	// Uncomment and adapt once you import the fluxbase-go helper:
+	// Uncomment and adapt once you import the flux-go helper:
 	//
-	//   rows, err := fluxbase.DBQuery("SELECT id FROM users WHERE active = $1", true)
+	//   rows, err := flux.DBQuery("SELECT id FROM users WHERE active = $1", true)
 	//   if err != nil { ... }
 	//
 	// Or call the host function directly (advanced):

@@ -69,7 +69,7 @@ fn extract_bundle_metadata(bundle_path: &Path) -> Option<Value> {
         r#"
 import('file://{bundle}').then(m => {{
   const fn = m.default;
-  if (fn && fn.__fluxbase) {{
+  if (fn && fn.__flux) {{
     console.log(JSON.stringify(fn.metadata));
   }} else {{
     console.log('null');
@@ -79,7 +79,7 @@ import('file://{bundle}').then(m => {{
         bundle = bundle_path.display()
     );
 
-    let tmp = std::env::temp_dir().join("fluxbase_meta_extract.mjs");
+    let tmp = std::env::temp_dir().join("flux_meta_extract.mjs");
     std::fs::write(&tmp, script).ok()?;
 
     let out = Command::new("node").arg(&tmp).output().ok()?;
@@ -91,7 +91,7 @@ import('file://{bundle}').then(m => {{
         }
     }
 
-    if bundle_content.contains("__fluxbase") {
+    if bundle_content.contains("__flux") {
         return Some(serde_json::json!({
             "name": null, "description": null,
             "input_schema": null, "output_schema": null
@@ -165,7 +165,7 @@ fn bundle_js(dir: &Path, entry: &str) -> anyhow::Result<Vec<u8>> {    let out_di
             "--bundle",
             "--platform=neutral",
             "--format=iife",
-            "--global-name=__fluxbase_fn",
+            "--global-name=__flux_fn",
             &format!("--outfile={}", bundle_path.display()),
         ])
         .current_dir(dir)

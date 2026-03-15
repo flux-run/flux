@@ -1,10 +1,10 @@
 [package]
-name = "fluxbase-queue"
+name = "flux-queue"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "fluxbase_queue"
+name = "flux_queue"
 path = "src/lib.rs"
 
 [[bin]]

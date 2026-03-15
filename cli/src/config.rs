@@ -6,7 +6,7 @@ use tokio::fs;
 //
 // These are the ONLY place port numbers live.  Everything else — Config::default(),
 // FluxToml URL helpers, dev.rs service table — reads from here.
-// Override at runtime via flux.toml [dev] or FLUXBASE_*_URL env vars.
+// Override at runtime via flux.toml [dev] or FLUX_*_URL env vars.
 
 pub const DEFAULT_RUNTIME_PORT:     u16 = 8083;
 pub const DEFAULT_DATA_ENGINE_PORT: u16 = 8082;
@@ -155,7 +155,7 @@ impl FluxToml {
 //   }
 //
 // URL precedence (highest → lowest):
-//   FLUX_URL env var → .flux/config.json → FLUXBASE_API_URL → ~/.flux/config.json → default
+//   FLUX_URL env var → .flux/config.json → FLUX_API_URL → ~/.flux/config.json → default
 //   FLUX_CLI_KEY env var → .flux/config.json → default (empty = no auth)
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -194,8 +194,8 @@ impl FluxLocalConfig {
 
 //
 // Loaded from `~/.flux/config.json`.  Override individual fields with:
-//   FLUXBASE_API_URL   FLUXBASE_GATEWAY_URL   FLUXBASE_RUNTIME_URL
-//   FLUXBASE_DATA_ENGINE_URL
+//   FLUX_API_URL   FLUX_GATEWAY_URL   FLUX_RUNTIME_URL
+//   FLUX_DATA_ENGINE_URL
 // `flux.toml [dev]` takes highest precedence for local port assignments.
 //
 // No authentication fields — local services accept all traffic.
@@ -209,7 +209,7 @@ impl FluxLocalConfig {
 /// **URL precedence** (highest → lowest):
 ///   1. `FLUX_URL` env var          → api_url
 ///   2. `.flux/config.json`  (cwd)  → server_url + cli_key
-///   3. `FLUXBASE_API_URL` env var  → api_url
+///   3. `FLUX_API_URL` env var  → api_url
 ///   4. `~/.flux/config.json`       → stored config
 ///   5. Compiled-in defaults        → http://localhost:4000/flux/api
 #[derive(Debug, Serialize, Deserialize)]
@@ -286,19 +286,19 @@ impl Config {
         }
 
         // ── Legacy env vars ───────────────────────────────────────────────
-        if let Ok(url) = std::env::var("FLUXBASE_API_URL") {
+        if let Ok(url) = std::env::var("FLUX_API_URL") {
             config.api_url = url;
         }
-        if let Ok(url) = std::env::var("FLUXBASE_GATEWAY_URL") {
+        if let Ok(url) = std::env::var("FLUX_GATEWAY_URL") {
             config.gateway_url = url;
         }
-        if let Ok(url) = std::env::var("FLUXBASE_RUNTIME_URL") {
+        if let Ok(url) = std::env::var("FLUX_RUNTIME_URL") {
             config.runtime_url = url;
         }
-        if let Ok(url) = std::env::var("FLUXBASE_DATA_ENGINE_URL") {
+        if let Ok(url) = std::env::var("FLUX_DATA_ENGINE_URL") {
             config.data_engine_url = url;
         }
-        if let Ok(url) = std::env::var("FLUXBASE_QUEUE_URL") {
+        if let Ok(url) = std::env::var("FLUX_QUEUE_URL") {
             config.queue_url = url;
         }
 
@@ -338,44 +338,44 @@ impl Config {
     }
 }
 
-// ─── Per-project config (.fluxbase/config.json in cwd) ───────────────────────
+// ─── Per-project config (.flux/config.json in cwd) ───────────────────────
 //
 // Developers commit this file to version control so the whole team uses the
 // same project ID and SDK output path without needing extra CLI flags.
 //
-// Example .fluxbase/config.json:
+// Example .flux/config.json:
 //
 //   {
 //     "project_id":     "proj_abc123",
-//     "sdk_output":     "src/fluxbase.generated.ts",
+//     "sdk_output":     "src/flux.generated.ts",
 //     "watch_interval": 5
 //   }
 
-/// Per-project settings read from `.fluxbase/config.json` in the current
+/// Per-project settings read from `.flux/config.json` in the current
 /// working directory (or any parent directory, walking up like git does).
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct ProjectConfig {
-    /// Fluxbase project ID — overrides the global config when present.
+    /// Flux project ID — overrides the global config when present.
     pub project_id: Option<String>,
     /// Default output path for `flux pull` / `flux watch` / `flux status`.
     pub sdk_output: Option<String>,
     /// Default polling interval (seconds) for `flux watch`.
     pub watch_interval: Option<u64>,
-    /// Override the Fluxbase API URL for this project (e.g. local dev instance).
-    /// Takes precedence over `FLUXBASE_API_URL` env var and global config.
+    /// Override the Flux API URL for this project (e.g. local dev instance).
+    /// Takes precedence over `FLUX_API_URL` env var and global config.
     pub api_url: Option<String>,
-    /// Override the Fluxbase Gateway URL for this project (e.g. local dev instance).
+    /// Override the Flux Gateway URL for this project (e.g. local dev instance).
     /// Used by SDK `subscribe()` for SSE streams.
     pub gateway_url: Option<String>,
-    /// Override the Fluxbase Runtime URL for this project (e.g. local dev instance).
+    /// Override the Flux Runtime URL for this project (e.g. local dev instance).
     /// Used by `flux invoke` to call the function execution engine.
     pub runtime_url: Option<String>,
 }
 
 impl ProjectConfig {
-    const FILE: &'static str = ".fluxbase/config.json";
+    const FILE: &'static str = ".flux/config.json";
 
-    /// Walk from `cwd` toward the root looking for `.fluxbase/config.json`,
+    /// Walk from `cwd` toward the root looking for `.flux/config.json`,
     /// exactly like git finds `.git/`.  Returns the first file found.
     fn find_path() -> Option<PathBuf> {
         let mut dir = std::env::current_dir().ok()?;
@@ -408,7 +408,7 @@ impl ProjectConfig {
     pub fn resolve_sdk_output(flag: Option<String>, proj: Option<&ProjectConfig>) -> String {
         flag
             .or_else(|| proj.and_then(|p| p.sdk_output.clone()))
-            .unwrap_or_else(|| "fluxbase.generated.ts".into())
+            .unwrap_or_else(|| "flux.generated.ts".into())
     }
 
     /// Effective watch interval: flag value → project config → 5s.

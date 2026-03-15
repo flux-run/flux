@@ -77,7 +77,7 @@ def generate_slug(name: str) -> str:
     return f"{trimmed}-{suffix}-org"
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("=== Fluxbase Demo Setup ===\n")
+print("=== Flux Demo Setup ===\n")
 
 # 1. Tenant
 row = pg1("SELECT id, slug FROM tenants WHERE name = 'Demo Org' LIMIT 1")
@@ -174,7 +174,7 @@ print(f"Tenant ID:   {tenant_id}")
 print(f"Project ID:  {project_id}")
 print(f"Function ID: {function_id}")
 print(f"\nNext steps:")
-print(f"  1. Connect Outlook in Composio dashboard → entity: fluxbase-demo")
+print(f"  1. Connect Outlook in Composio dashboard → entity: flux-demo")
 print(f"  2. Deploy api:  make deploy-gcp SERVICE=api")
 print(f"  3. Set COMPOSIO_API_KEY on Cloud Run if not already set")
 print(f"  4. Test: curl -s -X POST https://api.fluxbase.co/demo/signup \\")

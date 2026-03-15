@@ -1630,7 +1630,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fluxbase-queue"
+name = "flux-queue"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -4326,7 +4326,7 @@ dependencies = [
  "chrono",
  "data-engine",
  "dotenvy",
- "fluxbase-queue",
+ "flux-queue",
  "gateway",
  "job_contract",
  "metrics",

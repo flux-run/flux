@@ -1,6 +1,6 @@
 # Example — Todo API
 
-A classic CRUD API backed by Fluxbase's managed database.  Four functions,
+A classic CRUD API backed by Flux's managed database.  Four functions,
 one schema, zero infrastructure to manage.
 
 ---
@@ -18,7 +18,7 @@ one schema, zero infrastructure to manage.
 
 ## Step 1 — Define the schema
 
-In the [Fluxbase dashboard](https://dashboard.fluxbase.co), create a table
+In the [Flux dashboard](https://dashboard.fluxbase.co), create a table
 `todos` with the following columns:
 
 | Column | Type | Notes |
@@ -41,9 +41,9 @@ flux init
 Create `create_todo/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 
 export default defineFunction({
   name: "create_todo",
@@ -71,9 +71,9 @@ export default defineFunction({
 Create `list_todos/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 
 export default defineFunction({
   name: "list_todos",
@@ -108,9 +108,9 @@ export default defineFunction({
 Create `update_todo/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 
 export default defineFunction({
   name: "update_todo",
@@ -147,9 +147,9 @@ export default defineFunction({
 Create `delete_todo/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 
 export default defineFunction({
   name: "delete_todo",

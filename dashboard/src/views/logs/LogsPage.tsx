@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
-import type { FunctionResponse, PlatformLogRow, CronJobRow } from '@fluxbase/api-types'
+import type { FunctionResponse, PlatformLogRow, CronJobRow } from '@flux/api-types'
 import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'

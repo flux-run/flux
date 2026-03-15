@@ -1,7 +1,7 @@
 {
-  "name": "@fluxbase/functions",
+  "name": "@flux/functions",
   "version": "0.1.0",
-  "description": "Fluxbase serverless function framework",
+  "description": "Flux serverless function framework",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "module": "dist/index.mjs",

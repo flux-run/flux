@@ -1,5 +1,5 @@
 /**
- * Type definitions for the @fluxbase/functions SDK.
+ * Type definitions for the @flux/functions SDK.
  *
  * This file mirrors the ctx surface exposed by the Flux runtime (both V8/Deno
  * and WASM execution paths). Every method listed here has a corresponding op
@@ -105,12 +105,12 @@ export interface FluxFetch {
 }
 
 /**
- * Tools — 900+ app integrations powered by Fluxbase.
+ * Tools — 900+ app integrations powered by Flux.
  *
  * Every tool call is automatically traced:
  *   ▸ tool:slack.send_message  45ms
  *
- * Setup: flux secrets set FLUXBASE_COMPOSIO_KEY <key>
+ * Setup: flux secrets set FLUX_COMPOSIO_KEY <key>
  *
  * @example
  * await ctx.tools.run("slack.send_message", {
@@ -306,7 +306,7 @@ export interface DefineFunctionOptions<TInput = unknown, TOutput = unknown> {
 /** The standardized function definition object returned by defineFunction() */
 export interface FunctionDefinition<TInput = unknown, TOutput = unknown> {
   /** Marker so the runtime can detect a proper framework-wrapped function */
-  readonly __fluxbase: true;
+  readonly __flux: true;
   /** Function metadata */
   readonly metadata: {
     name: string;

@@ -53,7 +53,7 @@ pub async fn ui(Query(params): Query<UiQuery>) -> impl IntoResponse {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Fluxbase API Explorer</title>
+  <title>Flux API Explorer</title>
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -95,7 +95,7 @@ pub async fn ui(Query(params): Query<UiQuery>) -> impl IntoResponse {
 </head>
 <body>
   <div id="top-bar">
-    <span class="logo">Fluxbase</span>
+    <span class="logo">Flux</span>
     <span class="badge">API Explorer</span>
     {project_badge}
     <span class="auth-status">{auth_label}</span>
@@ -121,8 +121,8 @@ pub async fn ui(Query(params): Query<UiQuery>) -> impl IntoResponse {
       // Inject auth headers into every request, including the spec load itself.
       requestInterceptor: (req) => {{
         if (TOKEN)   req.headers['Authorization']       = 'Bearer ' + TOKEN;
-        if (TENANT)  req.headers['X-Fluxbase-Tenant']  = TENANT;
-        if (PROJECT) req.headers['X-Fluxbase-Project'] = PROJECT;
+        if (TENANT)  req.headers['X-Flux-Tenant']  = TENANT;
+        if (PROJECT) req.headers['X-Flux-Project'] = PROJECT;
         return req;
       }},
 
@@ -481,12 +481,12 @@ fn generate_openapi(
     json!({
         "openapi": "3.0.3",
         "info": {
-            "title":   "Fluxbase Data API",
+            "title":   "Flux Data API",
             "version": schema_hash.get(..8).unwrap_or(schema_hash),
             "description": "Auto-generated from live schema. Regenerate with GET /openapi.json",
             "x-schema-hash": schema_hash,
         },
-        "servers": [{ "url": gateway_url, "description": "Fluxbase Gateway" }],
+        "servers": [{ "url": gateway_url, "description": "Flux Gateway" }],
         "security": [{ "bearerAuth": [] }],
         "components": {
             "securitySchemes": {

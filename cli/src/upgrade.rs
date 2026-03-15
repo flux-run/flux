@@ -9,7 +9,7 @@
 use colored::Colorize;
 
 const RELEASES_URL: &str =
-    "https://api.github.com/repos/fluxbase-io/cli/releases/latest";
+    "https://api.github.com/repos/flux-run/cli/releases/latest";
 
 pub async fn execute(version: Option<String>, check_only: bool) -> anyhow::Result<()> {
     let current = env!("CARGO_PKG_VERSION");

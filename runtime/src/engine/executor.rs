@@ -9,7 +9,7 @@
 //! ## LogLine
 //!
 //! `ctx.log(level, message, opts)` inside user JS emits a `LogLine` into a
-//! `__fluxbase_logs` array declared inside the IIFE wrapper. After the function
+//! `__flux_logs` array declared inside the IIFE wrapper. After the function
 //! returns, `execute_with_runtime` extracts the logs from V8 memory and returns them
 //! as `ExecutionResult::logs`. The caller (`ExecutionRunner`) ships them to
 //! `flux.platform_logs` via `TraceEmitter::emit_logs` (fire-and-forget).
@@ -17,7 +17,7 @@
 //! ## Security hardening
 //!
 //! - Deterministic random seeding (`Math.random` → seeded PRNG) for replay.
-//! - `globalThis.__fluxbase_logs` and `globalThis.__ctx` are re-declared as `const`
+//! - `globalThis.__flux_logs` and `globalThis.__ctx` are re-declared as `const`
 //!   inside the IIFE on every call, so user code cannot persist state across
 //!   invocations via globals.
 //! - V8 heap and stack are not shared between workers (each thread owns its runtime).
@@ -34,10 +34,10 @@ use job_contract::dispatch::{
 };
 
 
-/// Build the Fluxbase runtime extension — queue ops + db ops + http + sleep + function invoke.
-pub fn build_fluxbase_extension() -> Extension {
+/// Build the Flux runtime extension — queue ops + db ops + http + sleep + function invoke.
+pub fn build_flux_extension() -> Extension {
     Extension {
-        name: "fluxbase",
+        name: "flux",
         ops: Cow::Owned(vec![
             op_queue_push(), op_next_task(), op_task_complete(), op_task_error(),
             op_db_query(), op_http_fetch(), op_sleep(), op_function_invoke(),
@@ -536,16 +536,16 @@ pub async fn op_function_invoke(
 ///    Cost: ~20 µs at startup; no per-request overhead.
 ///
 /// 2. **Global baseline snapshot** — captures all current `globalThis` key
-///    names into `__fluxbase_allowed_globals` immediately after freezing.
+///    names into `__flux_allowed_globals` immediately after freezing.
 ///    `build_wrapper` sweeps any new keys added by a previous bundle before
 ///    the next request runs, eliminating cross-request `globalThis` leakage.
 pub fn create_js_runtime() -> JsRuntime {
     let mut rt = JsRuntime::new(RuntimeOptions {
-        extensions: vec![build_fluxbase_extension()],
+        extensions: vec![build_flux_extension()],
         ..Default::default()
     });
     rt.execute_script(
-        "<fluxbase-init>",
+        "<flux-init>",
         // 1. Freeze built-in prototypes to prevent cross-tenant prototype poisoning.
         //    e.g. user code cannot do: Array.prototype.map = () => []
         "const __protos = [\
@@ -559,7 +559,7 @@ pub fn create_js_runtime() -> JsRuntime {
         Object.freeze(__protos);\
         \
         // 2. Snapshot baseline globals for the per-request sweep in build_wrapper.\
-        globalThis.__fluxbase_allowed_globals =\
+        globalThis.__flux_allowed_globals =\
             new Set(Object.getOwnPropertyNames(globalThis));",
     ).expect("failed to initialise worker sandbox");
     rt
@@ -574,7 +574,7 @@ pub fn create_concurrent_js_runtime(
     dispatchers: PoolDispatchers,
 ) -> JsRuntime {
     let mut rt = JsRuntime::new(RuntimeOptions {
-        extensions: vec![build_fluxbase_extension()],
+        extensions: vec![build_flux_extension()],
         ..Default::default()
     });
 
@@ -587,12 +587,12 @@ pub fn create_concurrent_js_runtime(
     }
 
     rt.execute_script(
-        "<fluxbase-init>",
-        "const __protos = [Object, Array, Function, String, Number, Boolean, RegExp, Promise, Map, Set, WeakMap, WeakSet, Error, TypeError, RangeError, SyntaxError, ReferenceError]; for (const C of __protos) { if (C && C.prototype) Object.freeze(C.prototype); } Object.freeze(__protos); globalThis.__fluxbase_allowed_globals = new Set(Object.getOwnPropertyNames(globalThis));",
+        "<flux-init>",
+        "const __protos = [Object, Array, Function, String, Number, Boolean, RegExp, Promise, Map, Set, WeakMap, WeakSet, Error, TypeError, RangeError, SyntaxError, ReferenceError]; for (const C of __protos) { if (C && C.prototype) Object.freeze(C.prototype); } Object.freeze(__protos); globalThis.__flux_allowed_globals = new Set(Object.getOwnPropertyNames(globalThis));",
     ).expect("failed to initialise worker sandbox");
 
     rt.execute_script(
-        "<fluxbase-bootstrap>",
+        "<flux-bootstrap>",
         include_str!("bootstrap.js"),
     ).expect("failed to start bootstrap loop");
 
@@ -607,16 +607,16 @@ fn build_wrapper(
     execution_seed:   i64,
 ) -> String {
     format!(r#"
-        var __fluxbase_fn;
+        var __flux_fn;
 
         // ── Global scope sweep ──────────────────────────────────────────────
         // Delete any key set by a previous invocation on this warm isolate.
-        // __fluxbase_allowed_globals is frozen at worker startup and contains
+        // __flux_allowed_globals is frozen at worker startup and contains
         // only V8/Deno built-ins — nothing a user bundle could have added.
         // Cost: O(n) over user-added keys only; typically 0–2 keys in practice.
-        if (typeof __fluxbase_allowed_globals !== "undefined") {{
+        if (typeof __flux_allowed_globals !== "undefined") {{
             for (const __k of Object.getOwnPropertyNames(globalThis)) {{
-                if (!__fluxbase_allowed_globals.has(__k)) {{
+                if (!__flux_allowed_globals.has(__k)) {{
                     try {{ delete globalThis[__k]; }} catch (_) {{}}
                 }}
             }}
@@ -630,18 +630,18 @@ fn build_wrapper(
         (function() {{
             let __t = ({execution_seed} ^ 0xDEADBEEF) >>> 0;
             if (__t === 0) __t = 0x1;
-            globalThis.__fluxbase_rand = function() {{
+            globalThis.__flux_rand = function() {{
                 __t += 0x6D2B79F5;
                 let r = Math.imul(__t ^ (__t >>> 15), 1 | __t);
                 r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
                 return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
             }};
         }})();
-        Math.random = globalThis.__fluxbase_rand;
+        Math.random = globalThis.__flux_rand;
         if (typeof crypto === "undefined") globalThis.crypto = {{}};
         crypto.randomUUID = () => {{
             const b = new Uint8Array(16);
-            for (let i = 0; i < 16; i++) b[i] = Math.floor(globalThis.__fluxbase_rand() * 256);
+            for (let i = 0; i < 16; i++) b[i] = Math.floor(globalThis.__flux_rand() * 256);
             b[6] = (b[6] & 0x0f) | 0x40;
             b[8] = (b[8] & 0x3f) | 0x80;
             const h = x => (x + 256).toString(16).slice(1);
@@ -652,12 +652,12 @@ fn build_wrapper(
         globalThis.nanoid = (size = 21) => {{
             const abc = "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
             let id = "";
-            for (let i = 0; i < size; i++) id += abc[Math.floor(globalThis.__fluxbase_rand() * abc.length)];
+            for (let i = 0; i < size; i++) id += abc[Math.floor(globalThis.__flux_rand() * abc.length)];
             return id;
         }};
 
         (async () => {{
-            const __fluxbase_logs = [];
+            const __flux_logs = [];
 
             const __secrets = {secrets_json};
             const __payload = {payload_json};
@@ -680,7 +680,7 @@ fn build_wrapper(
 
                 // Structured logger
                 log: (message, level) => {{
-                    __fluxbase_logs.push({{
+                    __flux_logs.push({{
                         level:     level || "info",
                         message:   String(message),
                         span_type: "event",
@@ -708,7 +708,7 @@ fn build_wrapper(
                             try {{
                                 const result = await step.fn(__ctx, outputs);
                                 const duration = Date.now() - _start;
-                                __fluxbase_logs.push({{
+                                __flux_logs.push({{
                                     level:     "info",
                                     message:   "workflow:" + name + "  " + duration + "ms",
                                     span_type: "workflow_step",
@@ -717,7 +717,7 @@ fn build_wrapper(
                                 outputs[name] = result;
                             }} catch (e) {{
                                 const duration = Date.now() - _start;
-                                __fluxbase_logs.push({{
+                                __flux_logs.push({{
                                     level:     "error",
                                     message:   "workflow:" + name + "  failed (" + duration + "ms): " + (e && e.message),
                                     span_type: "workflow_step",
@@ -738,7 +738,7 @@ fn build_wrapper(
                             const _start = Date.now();
                             return step.fn(__ctx).then(function(result) {{
                                 const duration = Date.now() - _start;
-                                __fluxbase_logs.push({{
+                                __flux_logs.push({{
                                     level:     "info",
                                     message:   "workflow:" + name + "  " + duration + "ms (parallel)",
                                     span_type: "workflow_step",
@@ -783,7 +783,7 @@ fn build_wrapper(
                             }},
                             null
                         );
-                        __fluxbase_logs.push({{
+                        __flux_logs.push({{
                             level:     "info",
                             message:   "queue_push:" + functionName + "  job_id=" + (result && result.job_id),
                             span_type: "queue_push",
@@ -804,7 +804,7 @@ fn build_wrapper(
                             Array.isArray(params) ? params : [],
                             null
                         );
-                        __fluxbase_logs.push({{
+                        __flux_logs.push({{
                             level:       "info",
                             message:     "db:query  " + (Date.now() - _start) + "ms  " + (result && result.meta ? result.meta.rows + " rows" : ""),
                             span_type:   "db_query",
@@ -827,7 +827,7 @@ fn build_wrapper(
                         opts || {{}},
                         null
                     );
-                    __fluxbase_logs.push({{
+                    __flux_logs.push({{
                         level:       "info",
                         message:     "http:" + (opts && opts.method || "GET") + "  " + url + "  " + result.status + "  " + (Date.now() - _start) + "ms",
                         span_type:   "http_fetch",
@@ -856,7 +856,7 @@ fn build_wrapper(
                             payload !== undefined ? payload : {{}},
                             null
                         );
-                        __fluxbase_logs.push({{
+                        __flux_logs.push({{
                             level:       "info",
                             message:     "invoke:" + name + "  " + (Date.now() - _start) + "ms",
                             span_type:   "function_invoke",
@@ -872,14 +872,14 @@ fn build_wrapper(
             {transformed_code}
 
             let __result;
-            let target_fn = __fluxbase_fn;
+            let target_fn = __flux_fn;
 
             // esbuild wraps the default export under .default
             if (target_fn && target_fn.default) {{
                 target_fn = target_fn.default;
             }}
 
-            if (typeof target_fn === 'object' && target_fn !== null && target_fn.__fluxbase === true) {{
+            if (typeof target_fn === 'object' && target_fn !== null && target_fn.__flux === true) {{
                 try {{
                     __result = await target_fn.execute(__payload, __ctx);
                 }} catch (e) {{
@@ -892,7 +892,7 @@ fn build_wrapper(
                 throw new Error("Bundle must export a defineFunction() result or an async function. Got: " + typeof target_fn);
             }}
 
-            return {{ result: __result, logs: __fluxbase_logs }};
+            return {{ result: __result, logs: __flux_logs }};
         }})()
     "#,
         secrets_json     = secrets_json,
@@ -918,7 +918,7 @@ pub struct ExecutionResult {
 /// - `span_id`           — unique ID for this span; generated JS-side or server-side on ship
 /// - `duration_ms`       — set by tool/workflow spans; propagated to log sink
 /// - `execution_state`   — lifecycle state: "started" | "running" | "completed" | "error"
-/// - `tool_name`         — the Fluxbase tool name for `span_type == "tool"` spans
+/// - `tool_name`         — the Flux tool name for `span_type == "tool"` spans
 #[derive(Debug, serde::Deserialize)]
 pub struct LogLine {
     pub level:   String,
@@ -958,11 +958,11 @@ pub struct LogLine {
 /// - `tokio::Runtime::build` (single-thread runtime): ~0.5 ms
 ///
 /// # Safety / state isolation
-/// - `__fluxbase_logs` is declared inside the IIFE — fresh per call.
+/// - `__flux_logs` is declared inside the IIFE — fresh per call.
 /// - `__ctx` is declared inside the IIFE — fresh per call, holds secrets/payload.
-/// - `__fluxbase_fn` is a global `var` — re-assigned by the bundle on every call.
+/// - `__flux_fn` is a global `var` — re-assigned by the bundle on every call.
 /// - User globals (`globalThis.*`) are swept at the start of each IIFE using the
-///   `__fluxbase_allowed_globals` snapshot taken at worker startup. Any key added
+///   `__flux_allowed_globals` snapshot taken at worker startup. Any key added
 ///   by a previous bundle is deleted before the next bundle runs, ensuring no
 ///   cross-request data leakage on a warm isolate.
 /// - On timeout the caller (`IsolatePool`) marks the runtime for recreation so
@@ -1083,7 +1083,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn returns_simple_value() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => 42;
+            __flux_fn = async (ctx) => 42;
         "#;
         let res = run_js(code, serde_json::Value::Null).await.unwrap();
         assert_eq!(res.output, serde_json::json!(42));
@@ -1092,7 +1092,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn returns_object() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => ({ hello: "world" });
+            __flux_fn = async (ctx) => ({ hello: "world" });
         "#;
         let res = run_js(code, serde_json::Value::Null).await.unwrap();
         assert_eq!(res.output, serde_json::json!({"hello": "world"}));
@@ -1101,7 +1101,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn returns_null_result() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => null;
+            __flux_fn = async (ctx) => null;
         "#;
         let res = run_js(code, serde_json::Value::Null).await.unwrap();
         assert!(res.output.is_null());
@@ -1110,7 +1110,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn payload_available_in_ctx() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => ctx.payload.name;
+            __flux_fn = async (ctx) => ctx.payload.name;
         "#;
         let res = run_js(code, serde_json::json!({"name": "alice"})).await.unwrap();
         assert_eq!(res.output, serde_json::json!("alice"));
@@ -1119,7 +1119,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn nested_payload_fields() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => ctx.payload.a.b.c;
+            __flux_fn = async (ctx) => ctx.payload.a.b.c;
         "#;
         let res = run_js(code, serde_json::json!({"a":{"b":{"c":99}}})).await.unwrap();
         assert_eq!(res.output, serde_json::json!(99));
@@ -1132,7 +1132,7 @@ mod tests {
         let mut secrets = HashMap::new();
         secrets.insert("MY_KEY".to_string(), "super-secret".to_string());
         let code = r#"
-            __fluxbase_fn = async (ctx) => ctx.env.MY_KEY;
+            __flux_fn = async (ctx) => ctx.env.MY_KEY;
         "#;
         let res = run_js_with_secrets(code, secrets).await.unwrap();
         assert_eq!(res.output, serde_json::json!("super-secret"));
@@ -1141,7 +1141,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn missing_secret_is_undefined() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => (ctx.env.NONEXISTENT ?? "fallback");
+            __flux_fn = async (ctx) => (ctx.env.NONEXISTENT ?? "fallback");
         "#;
         let res = run_js(code, serde_json::Value::Null).await.unwrap();
         assert_eq!(res.output, serde_json::json!("fallback"));
@@ -1152,7 +1152,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn ctx_log_emits_log_lines() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 ctx.log("hello from function", "info");
                 return { result: "ok" };
             };
@@ -1166,7 +1166,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn multiple_log_levels_captured() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 ctx.log("info msg",  "info");
                 ctx.log("warn msg",  "warn");
                 ctx.log("error msg", "error");
@@ -1186,7 +1186,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn crypto_random_uuid_returns_uuid_shaped_string() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 const id = crypto.randomUUID();
                 return id;
             };
@@ -1201,7 +1201,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn math_random_returns_number_in_range() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 const r = Math.random();
                 return (r >= 0 && r < 1);
             };
@@ -1214,7 +1214,7 @@ mod tests {
     async fn deterministic_seed_produces_same_uuid() {
         // Same seed → same UUID on both calls
         let code = r#"
-            __fluxbase_fn = async (ctx) => crypto.randomUUID();
+            __flux_fn = async (ctx) => crypto.randomUUID();
         "#;
         let seed = 42i64;
 
@@ -1232,7 +1232,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn different_seeds_produce_different_uuids() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => crypto.randomUUID();
+            __flux_fn = async (ctx) => crypto.randomUUID();
         "#;
         let mut rt1 = create_js_runtime();
         let r1 = execute_with_runtime(&mut rt1, code.to_string(), HashMap::new(),
@@ -1257,7 +1257,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn runtime_throw_returns_err() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => { throw new Error("exploded"); };
+            __flux_fn = async (ctx) => { throw new Error("exploded"); };
         "#;
         let res = run_js(code, serde_json::Value::Null).await;
         assert!(res.is_err());
@@ -1267,7 +1267,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn undefined_variable_reference_returns_err() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => undeclaredVar;
+            __flux_fn = async (ctx) => undeclaredVar;
         "#;
         let res = run_js(code, serde_json::Value::Null).await;
         assert!(res.is_err());
@@ -1279,12 +1279,12 @@ mod tests {
     async fn globals_are_cleaned_between_invocations() {
         // First invocation sets a local IIFE-scoped fn and runs cleanly.
         let code1 = r#"
-            __fluxbase_fn = async (ctx) => "first";
+            __flux_fn = async (ctx) => "first";
         "#;
         // Second invocation on the SAME runtime must still work correctly
         // (even if some globals leak between calls, execution must not fail).
         let code2 = r#"
-            __fluxbase_fn = async (ctx) => "second";
+            __flux_fn = async (ctx) => "second";
         "#;
         let mut rt = create_js_runtime();
         let r1 = execute_with_runtime(&mut rt, code1.to_string(), HashMap::new(),
@@ -1301,7 +1301,7 @@ mod tests {
         // Object.freeze prevents modification — in sloppy mode the assignment
         // silently fails (no throw); the property retains its original value.
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 const orig = Array.prototype.map;
                 Array.prototype.map = () => "poisoned";
                 // If frozen, the assignment is a no-op and map is unchanged.
@@ -1318,7 +1318,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn awaited_promise_resolves() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 const val = await Promise.resolve(99);
                 return val;
             };
@@ -1331,7 +1331,7 @@ mod tests {
     async fn setTimeout_is_not_required_for_basic_execution() {
         // Functions don't need setTimeout — just test it doesn't error.
         let code = r#"
-            __fluxbase_fn = async (ctx) => "no timers needed";
+            __flux_fn = async (ctx) => "no timers needed";
         "#;
         let res = run_js(code, serde_json::Value::Null).await.unwrap();
         assert_eq!(res.output, serde_json::json!("no timers needed"));
@@ -1390,7 +1390,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn ctx_fetch_rejects_ssrf_loopback() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 try {
                     await ctx.fetch("http://127.0.0.1/secret");
                     return "should_not_reach";
@@ -1406,7 +1406,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn ctx_fetch_rejects_ssrf_private_range() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 try {
                     await ctx.fetch("http://10.0.0.1/internal");
                     return "should_not_reach";
@@ -1422,7 +1422,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn ctx_fetch_rejects_metadata_endpoint() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 try {
                     await ctx.fetch("http://169.254.169.254/latest/meta-data/");
                     return "should_not_reach";
@@ -1440,7 +1440,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn ctx_sleep_returns_after_delay() {
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 const before = Date.now();
                 await ctx.sleep(50);
                 const elapsed = Date.now() - before;
@@ -1453,7 +1453,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn ctx_sleep_zero_is_safe() {
-        let code = r#"__fluxbase_fn = async (ctx) => { await ctx.sleep(0); return "ok"; };"#;
+        let code = r#"__flux_fn = async (ctx) => { await ctx.sleep(0); return "ok"; };"#;
         let res = run_js(code, serde_json::Value::Null).await.unwrap();
         assert_eq!(res.output, serde_json::json!("ok"));
     }
@@ -1465,7 +1465,7 @@ mod tests {
         // On the serial path FunctionInvokeOpState is not in OpState,
         // so the op returns "no invoke context available".
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 try {
                     await ctx.function.invoke("other_fn", { x: 1 });
                     return "should_not_reach";

@@ -56,7 +56,7 @@ pub struct ColumnDef {
     #[serde(default)]
     pub unique: bool,
     pub default: Option<String>,
-    /// Extended Fluxbase type: "default" | "file" | "computed" | "relation".
+    /// Extended Flux type: "default" | "file" | "computed" | "relation".
     /// Defaults to "default" (plain Postgres column).
     #[serde(default = "default_fb_type")]
     pub fb_type: String,

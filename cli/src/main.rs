@@ -52,18 +52,18 @@ mod toolchain;
 #[derive(Parser)]
 #[command(name = "flux")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(about = "Fluxbase CLI — deploy backends in minutes", long_about = None)]
+#[command(about = "Flux CLI — deploy backends in minutes", long_about = None)]
 struct Cli {
     /// Override the active tenant
-    #[arg(long, global = true, value_name = "SLUG", env = "FLUXBASE_TENANT")]
+    #[arg(long, global = true, value_name = "SLUG", env = "FLUX_TENANT")]
     tenant: Option<String>,
 
     /// Override the active project
-    #[arg(long, global = true, value_name = "SLUG", env = "FLUXBASE_PROJECT")]
+    #[arg(long, global = true, value_name = "SLUG", env = "FLUX_PROJECT")]
     project: Option<String>,
 
     /// Target environment (default: production)
-    #[arg(long, global = true, value_name = "ENV", env = "FLUXBASE_ENV", default_value = "production")]
+    #[arg(long, global = true, value_name = "ENV", env = "FLUX_ENV", default_value = "production")]
     env: String,
 
     /// Output raw JSON (machine-readable)
@@ -152,7 +152,7 @@ enum Commands {
         #[command(subcommand)]
         command: toolchain::ToolchainCommand,
     },
-    /// Deploy to Fluxbase.
+    /// Deploy to Flux.
     ///
     /// In a function directory (has flux.json): deploys that single function.
     /// At the project root: discovers and deploys all function sub-directories.
@@ -590,7 +590,7 @@ enum Commands {
     },
 
     // ── Local Stack ───────────────────────────────────────────────────────────
-    /// Manage the local Fluxbase development stack (Docker Compose)
+    /// Manage the local Flux development stack (Docker Compose)
     Stack {
         #[command(subcommand)]
         command: StackCommand,
@@ -603,7 +603,7 @@ enum Commands {
         #[arg(value_name = "REQUEST_ID")]
         request_id: Option<String>,
     },
-    /// Open the Fluxbase dashboard (or a specific resource) in the browser
+    /// Open the Flux dashboard (or a specific resource) in the browser
     Open {
         #[command(subcommand)]
         command: Option<open::OpenCommands>,
@@ -688,10 +688,10 @@ async fn main() -> anyhow::Result<()> {
         unsafe { std::env::set_var("NO_COLOR", "1"); }
     }
     if let Some(t) = &cli.tenant {
-        unsafe { std::env::set_var("FLUXBASE_TENANT", t); }
+        unsafe { std::env::set_var("FLUX_TENANT", t); }
     }
     if let Some(p) = &cli.project {
-        unsafe { std::env::set_var("FLUXBASE_PROJECT", p); }
+        unsafe { std::env::set_var("FLUX_PROJECT", p); }
     }
 
     match cli.command {

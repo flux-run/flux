@@ -1,11 +1,11 @@
 // @ts-check
-import { defineFunction } from "@fluxbase/functions"
+import { defineFunction } from "@flux/functions"
 
 export default defineFunction({
   name: "{name}",
   description: "TODO: describe what {name} does",
 
-  /** @param {{ input: unknown, ctx: import("@fluxbase/functions").FluxContext }} args */
+  /** @param {{ input: unknown, ctx: import("@flux/functions").FluxContext }} args */
   handler: async ({ input, ctx }) => {
     ctx.log("{name} invoked")
 

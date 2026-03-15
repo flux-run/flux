@@ -34,14 +34,14 @@
 //! ```text
 //! $ flux doctor
 //!
-//! Fluxbase CLI doctor
+//! Flux CLI doctor
 //! ───────────────────────────────────
 //! ✔ CLI version:      0.1.0
 //! ✔ API reachable:    https://api.fluxbase.co  (62 ms)
 //! ✔ Authenticated:    user@example.com
 //! ✔ Tenant:           my-org  (tid_abc123)
-//! ✔ Project:          proj_abc123  (from .fluxbase/config.json)
-//! ✔ SDK file:         src/fluxbase.generated.ts
+//! ✔ Project:          proj_abc123  (from .flux/config.json)
+//! ✔ SDK file:         src/flux.generated.ts
 //!   └─ Schema:        v4  (hash: a3f8c1d2)  generated 2026-03-09T10:02:41Z
 //! ⚠  SDK outdated:    local v4 → remote v5 — run: flux pull
 //! ```
@@ -82,7 +82,7 @@ pub async fn execute(request_id: Option<String>, json_output: bool) -> anyhow::R
         return execute_diagnosis(rid, json_output).await;
     }
     println!();
-    println!("{}", "Fluxbase CLI doctor".bold());
+    println!("{}", "Flux CLI doctor".bold());
     println!("{}", "─".repeat(50).dimmed());
 
     // ── 1. CLI version ─────────────────────────────────────────────────────

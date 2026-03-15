@@ -8,7 +8,7 @@ pub struct ColumnMeta {
     pub name: String,
     /// Postgres base type.
     pub pg_type: String,
-    /// Extended Fluxbase type: "default" | "computed".
+    /// Extended Flux type: "default" | "computed".
     pub fb_type: String,
     pub computed_expr: Option<String>,
 }
@@ -19,7 +19,7 @@ impl TransformEngine {
     /// Load column metadata for a given table from the registry.
     ///
     /// Returns an empty vec when no metadata is registered (e.g. the table was
-    /// created outside the Fluxbase API and has no extended type information).
+    /// created outside the Flux API and has no extended type information).
     pub async fn load_columns(
         pool: &PgPool,
         schema: &str,

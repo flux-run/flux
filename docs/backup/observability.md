@@ -1,6 +1,6 @@
 # Observability
 
-Fluxbase automatically instruments every request end-to-end. No code changes
+Flux automatically instruments every request end-to-end. No code changes
 required — just run `flux trace <request-id>`.
 
 ---
@@ -72,7 +72,7 @@ flux trace <id> --slow-threshold 200   # flag spans >200ms
 
 ## N+1 query detection
 
-If the same table is queried **≥ 3 times** within a single request, Fluxbase
+If the same table is queried **≥ 3 times** within a single request, Flux
 flags it as a probable N+1 pattern.  Affected spans are tagged with `⚠ N+1`
 in the trace view, and the summary lists each table with a fix hint.
 
@@ -122,7 +122,7 @@ trace.  The span includes:
 
 ## Automatic index suggestions
 
-When Fluxbase detects the same `(table, filter_column)` pair in **≥ 2 slow spans**
+When Flux detects the same `(table, filter_column)` pair in **≥ 2 slow spans**
 within a single request, it automatically emits a `CREATE INDEX` suggestion in
 the trace envelope:
 
@@ -180,7 +180,7 @@ Traces are accessible via the API for integrations:
 ```bash
 curl https://api.fluxbase.co/logs/trace/<request-id> \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Fluxbase-Tenant: $TENANT_ID"
+  -H "X-Flux-Tenant: $TENANT_ID"
 ```
 
 Response envelope fields:
@@ -198,7 +198,7 @@ Response envelope fields:
 
 ## State mutation log
 
-Every write through the Fluxbase data engine is recorded in `flux_internal.state_mutations`. This is the foundation for `flux why`, `flux state history`, `flux state blame`, and `flux incident replay`.
+Every write through the Flux data engine is recorded in `flux_internal.state_mutations`. This is the foundation for `flux why`, `flux state history`, `flux state blame`, and `flux incident replay`.
 
 ### Schema
 
@@ -236,8 +236,8 @@ Rows are immutable: every write appends a new version. `version` is incremented 
 # All state mutations caused by one request
 curl https://api.fluxbase.co/db/mutations?request_id=9624a58d \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Fluxbase-Tenant: $TENANT_ID" \
-  -H "X-Fluxbase-Project: $PROJECT_ID"
+  -H "X-Flux-Tenant: $TENANT_ID" \
+  -H "X-Flux-Project: $PROJECT_ID"
 
 # Response
 {
@@ -304,7 +304,7 @@ This means a single `flux trace <id>` or `flux why <id>` call can recover the fu
 
 ## Replay mode (`x-flux-replay: true`)
 
-When the `x-flux-replay: true` header is present on a request, Fluxbase suppresses all side effects while still applying state mutations. This enables deterministic replay of past incidents without re-triggering emails, webhooks, or external API calls.
+When the `x-flux-replay: true` header is present on a request, Flux suppresses all side effects while still applying state mutations. This enables deterministic replay of past incidents without re-triggering emails, webhooks, or external API calls.
 
 ### What is suppressed in replay mode
 
@@ -328,8 +328,8 @@ curl -X POST https://api.fluxbase.co/db/query \
   -H "x-flux-replay: true" \
   -H "x-request-id: replay:9624a58d-57e7-..." \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Fluxbase-Tenant: $TENANT_ID" \
-  -H "X-Fluxbase-Project: $PROJECT_ID" \
+  -H "X-Flux-Tenant: $TENANT_ID" \
+  -H "X-Flux-Project: $PROJECT_ID" \
   -d '{"database": "default", "table": "users", "operation": "update", ...}'
 ```
 

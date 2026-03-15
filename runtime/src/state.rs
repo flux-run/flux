@@ -7,7 +7,7 @@
 //!   on warm invocations.
 //!
 //! - **`http_client`** — Shared reqwest client for user-facing outbound calls:
-//!   WASM `fluxbase.http_fetch`, agent LLM calls.
+//!   WASM `flux.http_fetch`, agent LLM calls.
 //!   Connection pooling is critical here — user functions can be invoked at high
 //!   concurrency and each must not open a new TCP connection.
 //!
@@ -31,7 +31,7 @@
 //!   `ExecutionRunner` to validate the `payload` before dispatching to V8/WASM.
 //!
 //! - **`isolate_pool`** — Fixed pool of OS threads each owning a warm `JsRuntime`
-//!   (V8 heap + Fluxbase extension loaded once). Eliminates per-request V8 init
+//!   (V8 heap + Flux extension loaded once). Eliminates per-request V8 init
 //!   overhead (~3–5 ms). Sized by `ISOLATE_WORKERS` env var.
 //!
 //! - **`wasm_pool`** — Pool of pre-compiled Wasmtime `Module` instances. Amortises

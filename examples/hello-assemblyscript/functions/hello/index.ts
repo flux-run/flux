@@ -1,7 +1,7 @@
 // hello — Flux function (AssemblyScript → WASM)
 //
 // ABI contract:
-//   Host provides: fluxbase.log(level: i32, msg_ptr: i32, msg_len: i32)
+//   Host provides: flux.log(level: i32, msg_ptr: i32, msg_len: i32)
 //   Module exports:
 //     memory          — linear memory
 //     __flux_alloc(size: i32) → i32   — allocate `size` bytes, return pointer
@@ -15,12 +15,12 @@
 
 // ── Host import ──────────────────────────────────────────────────────────────
 
-@external("fluxbase", "log")
-declare function fluxbase_log(level: i32, msg_ptr: i32, msg_len: i32): void;
+@external("flux", "log")
+declare function flux_log(level: i32, msg_ptr: i32, msg_len: i32): void;
 
 function log_info(msg: string): void {
   const encoded = String.UTF8.encode(msg);
-  fluxbase_log(1, changetype<i32>(encoded), encoded.byteLength);
+  flux_log(1, changetype<i32>(encoded), encoded.byteLength);
 }
 
 // ── Allocator ────────────────────────────────────────────────────────────────

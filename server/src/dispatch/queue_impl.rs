@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use job_contract::dispatch::QueueDispatch;
-use fluxbase_queue::services::job_service::{self, CreateJobInput};
+use flux_queue::services::job_service::{self, CreateJobInput};
 
 /// Pushes jobs directly into the `flux.jobs` table — used by the monolithic
 /// server binary so V8 `ctx.queue.push()` never makes an HTTP call.

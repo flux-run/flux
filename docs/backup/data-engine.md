@@ -43,7 +43,7 @@ The Data Engine is Flowbase's internal data-access tier — a Rust/Axum microser
 
 ```
              ┌─────────────────────────┐
-             │   Fluxbase Platform DB  │
+             │   Flux Platform DB  │
              │  (flux_internal.*)  │
              └──────────┬──────────────┘
                         │
@@ -56,7 +56,7 @@ Client / SDK            │
 [ Gateway ]  ───▶ [ Data Engine ] ──▶ [ User PostgreSQL ]
 ```
 
-The Data Engine reads and writes platform metadata from the Fluxbase platform database while executing user queries against the project's configured PostgreSQL database.
+The Data Engine reads and writes platform metadata from the Flux platform database while executing user queries against the project's configured PostgreSQL database.
 
 The Data Engine is responsible for:
 
@@ -71,10 +71,10 @@ The Data Engine is responsible for:
 
 ### External Database Model (BYODB)
 
-Fluxbase supports a **Bring Your Own Database (BYODB)** architecture. Application data is stored in a user-provided PostgreSQL database, while Fluxbase platform metadata is stored in the Fluxbase platform database.
+Flux supports a **Bring Your Own Database (BYODB)** architecture. Application data is stored in a user-provided PostgreSQL database, while Flux platform metadata is stored in the Flux platform database.
 
 ```
-Fluxbase Platform DB
+Flux Platform DB
   └─ flux_internal.*
 
 User PostgreSQL
@@ -88,7 +88,7 @@ The Data Engine coordinates both databases:
 | Platform DB | policies, hooks, events, workflows, `state_mutations`, `trace_requests` |
 | User DB | application tables and business data |
 
-This model allows Fluxbase to operate as an execution and observability layer for existing Postgres databases without requiring data migration.
+This model allows Flux to operate as an execution and observability layer for existing Postgres databases without requiring data migration.
 
 All queries must pass through the Data Engine so that:
 - policies are enforced
@@ -640,7 +640,7 @@ Hook invocations reach the Runtime service via `POST {RUNTIME_URL}/internal/exec
 
 **Retry:** Failed deliveries are tracked in `flux_internal.event_deliveries` with exponential backoff. The worker skips events that have exhausted their retry budget.
 
-**HMAC signature:** Set `secret` in the webhook subscription config to have the engine sign each payload as `x-fluxbase-signature: sha256={hex}`.
+**HMAC signature:** Set `secret` in the webhook subscription config to have the engine sign each payload as `x-flux-signature: sha256={hex}`.
 
 ---
 
@@ -678,7 +678,7 @@ Fires scheduled cron jobs on a 30-second polling interval.
 
 ## Database Schema
 
-All Fluxbase **platform metadata** lives in the **`flux_internal`** schema in the Fluxbase platform database, never exposed to end users.
+All Flux **platform metadata** lives in the **`flux_internal`** schema in the Flux platform database, never exposed to end users.
 
 Application tables do **not** live in this database. Instead they reside in the project's configured PostgreSQL database connected via the Data Engine.
 
@@ -722,7 +722,7 @@ User tables live in **project-scoped schemas** named `t_{tenant_slug}_{project_s
 
 ## Deterministic Execution & Replay
 
-This section documents how Fluxbase supports `flux why`, `flux trace replay`, `flux incident replay`, `flux state blame`, `flux trace diff`, `flux trace debug`, and `flux bug bisect`. The `state_mutations` table is live and records every INSERT/UPDATE/DELETE within the same transaction as the user-facing operation. The `span_id` column (migration `20260309000011_span_id`) links each mutation to the runtime span that caused it, enabling intra-request time-travel.
+This section documents how Flux supports `flux why`, `flux trace replay`, `flux incident replay`, `flux state blame`, `flux trace diff`, `flux trace debug`, and `flux bug bisect`. The `state_mutations` table is live and records every INSERT/UPDATE/DELETE within the same transaction as the user-facing operation. The `span_id` column (migration `20260309000011_span_id`) links each mutation to the runtime span that caused it, enabling intra-request time-travel.
 
 ---
 
@@ -967,7 +967,7 @@ All configuration is from environment variables (loaded via `dotenvy`).
 | `DEFAULT_QUERY_LIMIT` | `100` | Rows returned when LIMIT is omitted |
 | `MAX_QUERY_LIMIT` | `5000` | Hard ceiling on LIMIT |
 | `RUNTIME_URL` | `http://localhost:8082` | Base URL of the runtime service for hook/function dispatch |
-| `INTERNAL_SERVICE_TOKEN` | `fluxbase_secret_token` | Shared token required on every request |
+| `INTERNAL_SERVICE_TOKEN` | `flux_secret_token` | Shared token required on every request |
 | `MAX_QUERY_COMPLEXITY` | `1000` | Complexity score ceiling; `0` disables the check |
 | `QUERY_TIMEOUT_MS` | `30000` | Execution timeout in milliseconds |
 | `MAX_NEST_DEPTH` | `6` | Maximum relationship nesting depth; `0` disables |
@@ -1265,7 +1265,7 @@ pub async fn verify_db_identity(pool: &PgPool, project_id: &str, expected: &DbId
 
 ### Gap 17 — Schema Introspection on Large BYODB Databases `[resolved]`
 
-**Problem:** `information_schema` views (`information_schema.tables`, `information_schema.schemata`) evaluate row-level visibility and ACL checks for every object in the entire cluster before filtering. On a BYODB database with 500–2000 tables, this costs 20–200 ms per introspection call regardless of how many tables Fluxbase manages. Under concurrent load it creates unexpected CPU pressure on the customer's database.
+**Problem:** `information_schema` views (`information_schema.tables`, `information_schema.schemata`) evaluate row-level visibility and ACL checks for every object in the entire cluster before filtering. On a BYODB database with 500–2000 tables, this costs 20–200 ms per introspection call regardless of how many tables Flux manages. Under concurrent load it creates unexpected CPU pressure on the customer's database.
 
 **Root cause:** `information_schema` is an ANSI-SQL compatibility layer implemented as Postgres views. Each view joins `pg_class`, `pg_namespace`, `pg_attribute`, and `has_*_privilege()` functions across all visible objects. The `WHERE table_schema = $1` predicate is applied _after_ the full view expansion.
 

@@ -1,5 +1,5 @@
 /**
- * @fluxbase/schema — Type definitions for Flux schema definitions.
+ * @flux/schema — Type definitions for Flux schema definitions.
  *
  * One `*.schema.ts` file per DB table. Contains columns, indexes, foreign keys,
  * and optional validation all in one place.

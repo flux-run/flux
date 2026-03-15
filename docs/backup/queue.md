@@ -1,8 +1,8 @@
 # Queue Service
 
-The Fluxbase Queue service is a **deterministic async execution engine**. It accepts job submissions from any Fluxbase service, persists them durably in PostgreSQL, and dispatches them to the Runtime for execution — with retries, timeout recovery, idempotency, distributed tracing, and replay built in.
+The Flux Queue service is a **deterministic async execution engine**. It accepts job submissions from any Flux service, persists them durably in PostgreSQL, and dispatches them to the Runtime for execution — with retries, timeout recovery, idempotency, distributed tracing, and replay built in.
 
-Unlike a simple task queue, the Queue is integrated with the Fluxbase tracing and state-mutation systems. This means every async job is fully observable, replayable, and debuggable using the same `flux trace` / `flux why` / `flux replay` commands that work on synchronous requests.
+Unlike a simple task queue, the Queue is integrated with the Flux tracing and state-mutation systems. This means every async job is fully observable, replayable, and debuggable using the same `flux trace` / `flux why` / `flux replay` commands that work on synchronous requests.
 
 ### Use cases
 
@@ -19,7 +19,7 @@ Unlike a simple task queue, the Queue is integrated with the Fluxbase tracing an
 
 ## Platform Integration
 
-The Queue is the async execution layer in the Fluxbase service pipeline:
+The Queue is the async execution layer in the Flux service pipeline:
 
 ```
 User request
@@ -323,7 +323,7 @@ Add a `queue_name TEXT DEFAULT 'default'` column. Run separate pollers per queue
 
 **Option C — Per-tenant worker pools (long term)**
 
-Allocate a dedicated semaphore (or worker process) per tenant tier. Enterprise tenants get isolated capacity. This mirrors Temporal's task queue model and is the right architecture once Fluxbase has tiered billing.
+Allocate a dedicated semaphore (or worker process) per tenant tier. Enterprise tenants get isolated capacity. This mirrors Temporal's task queue model and is the right architecture once Flux has tiered billing.
 
 **Recommended now:** Option A. It is a one-line change that eliminates the worst-case starvation scenario with no migration.
 
@@ -733,7 +733,7 @@ Without heartbeats a job running close to the `max_runtime_seconds` boundary is 
 
 **Crash detection:** a separate sweep catches `heartbeat_at IS NULL AND started_at < now() - interval '2 minutes'` — workers that crashed before writing their first heartbeat.
 
-**7. `flux queue replay` (Fluxbase-specific)**
+**7. `flux queue replay` (Flux-specific)**
 
 Because each job will carry `code_sha`, `payload`, `request_id`, and `parent_span_id`, the CLI can re-execute a failed or past job deterministically:
 
@@ -774,11 +774,11 @@ Without this, `flux queue replay` may diverge — the same function produces dif
 - `flux incident replay` — simulate a past failure with confidence
 - `flux bisect` — narrow down which code version introduced a bug
 
-This is the column that separates Fluxbase from every other queue system. SQS, BullMQ, and Temporal store payload and retry count. Fluxbase stores execution state.
+This is the column that separates Flux from every other queue system. SQS, BullMQ, and Temporal store payload and retry count. Flux stores execution state.
 
 **Requires:** trace columns (P0) to be fully effective.
 
-**9. State mutation log (Fluxbase-specific)**
+**9. State mutation log (Flux-specific)**
 
 For time-travel debugging (`flux state blame`, `flux incident replay`) async jobs must also record state mutations:
 

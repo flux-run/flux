@@ -57,7 +57,7 @@ use crate::config::DEFAULT_SERVER_PORT;
 // Starting port when searching for a free one. 5432 is intentionally skipped
 // so a system Postgres is never accidentally used or conflicted with.
 const DEV_DB_PORT_START: u16 = 5433;
-const DEV_DB_NAME: &str = "fluxbase_dev";
+const DEV_DB_NAME: &str = "flux_dev";
 const DEV_DB_USER: &str = "flux";
 const DEV_DB_PASS: &str = "fluxdev";
 
@@ -331,7 +331,7 @@ async fn start_postgres(project_root: &Path) -> anyhow::Result<(postgresql_embed
     Ok((pg, port))
 }
 
-/// Create the `flux` role and `fluxbase_dev` database if they don't exist.
+/// Create the `flux` role and `flux_dev` database if they don't exist.
 ///
 /// `postgresql_embedded` runs `initdb --auth=password --pwfile=<file>` where
 /// the file contains `DEV_DB_PASS`. This means the `postgres` superuser has

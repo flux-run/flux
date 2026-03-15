@@ -2,12 +2,12 @@
 //!
 //! ## ABI contract with the WASM module
 //!
-//! ### Host imports the module must accept (`fluxbase` namespace):
+//! ### Host imports the module must accept (`flux` namespace):
 //!
 //! | Function | Signature | Behaviour |
 //! |---|---|---|
-//! | `fluxbase.log` | `(level: i32, msg_ptr: i32, msg_len: i32)` | Emit a structured log line |
-//! | `fluxbase.secrets_get` | `(key_ptr: i32, key_len: i32, out_ptr: i32, out_max: i32) → i32` | Read a secret; returns actual byte length or -1 if missing |
+//! | `flux.log` | `(level: i32, msg_ptr: i32, msg_len: i32)` | Emit a structured log line |
+//! | `flux.secrets_get` | `(key_ptr: i32, key_len: i32, out_ptr: i32, out_max: i32) → i32` | Read a secret; returns actual byte length or -1 if missing |
 //!
 //! ### Module exports the host calls:
 //!
@@ -22,7 +22,7 @@
 //! [ u32 LE length ][ <length> bytes of UTF-8 JSON ]
 //! ```
 //! The JSON must have either `"output"` or `"error"` keys at the top level.
-//! Logs are emitted via `fluxbase.log` during execution, not in the result.
+//! Logs are emitted via `flux.log` during execution, not in the result.
 
 //! WASM execution engine — runs `.wasm` modules compiled by Wasmtime (Cranelift AOT).
 //!
@@ -38,15 +38,15 @@
 //! hundred ms of CPU). When fuel is exhausted Wasmtime traps with `OutOfFuel`, preventing
 //! runaway WASM loops from consuming a worker thread indefinitely.
 //!
-//! ## Host imports (`fluxbase` namespace)
+//! ## Host imports (`flux` namespace)
 //!
 //! WASM modules may call the following host functions via linear memory pointers:
 //!
 //! | Import | Purpose |
 //! |---|---|
-//! | `fluxbase.log(level, ptr, len)` | Append a `LogLine` to `HostState::logs` |
-//! | `fluxbase.secrets_get(key_ptr, key_len, out_ptr, out_max) → i32` | Copy a secret value into WASM memory; returns byte length or -1 |
-//! | `fluxbase.http_fetch(...)` | Outbound HTTP (allow-listed hosts only) |
+//! | `flux.log(level, ptr, len)` | Append a `LogLine` to `HostState::logs` |
+//! | `flux.secrets_get(key_ptr, key_len, out_ptr, out_max) → i32` | Copy a secret value into WASM memory; returns byte length or -1 |
+//! | `flux.http_fetch(...)` | Outbound HTTP (allow-listed hosts only) |
 //!
 //! ## Memory safety
 //!
@@ -68,7 +68,7 @@ pub struct HostState {
     pub logs:               Vec<LogLine>,
     /// `http_fetch` allow-list.  Empty vec = deny all.  Contains `"*"` = allow all.
     pub allowed_http_hosts: Vec<String>,
-    /// Shared reqwest client for outbound HTTP from `fluxbase.http_fetch`.
+    /// Shared reqwest client for outbound HTTP from `flux.http_fetch`.
     pub http_client:        reqwest::Client,
     /// Project Postgres schema name (e.g. `project_abc123`).
     pub database:           String,
@@ -100,7 +100,7 @@ pub struct WasmExecutionParams {
     pub payload:      serde_json::Value,
     /// Maximum WASM CPU fuel (instructions).  1 billion ≈ a few hundred ms.
     pub fuel_limit:   u64,
-    /// Hosts the WASM function is allowed to call via `fluxbase.http_fetch`.
+    /// Hosts the WASM function is allowed to call via `flux.http_fetch`.
     /// Empty = deny all.  `["*"]` = allow all (use with caution).
     pub allowed_http_hosts: Vec<String>,
     /// Shared HTTP client passed through for outbound calls.
@@ -137,7 +137,7 @@ impl WasmExecutionParams {
 /// Build a shared Wasmtime `Engine` with Cranelift AOT + fuel interruption + async support.
 ///
 /// `async_support(true)` enables fiber-based suspension of WASM execution during
-/// host I/O calls. When a WASM module calls `fluxbase.http_fetch`, the fiber is
+/// host I/O calls. When a WASM module calls `flux.http_fetch`, the fiber is
 /// suspended and tokio can drive other pending Futures (DB queries, HTTP calls from
 /// other concurrent WASM executions) until the response arrives.
 pub fn build_engine() -> Engine {
@@ -899,8 +899,8 @@ async fn execute_wasm_async(
 
     // ── Flux host imports ────────────────────────────────────────────────────
 
-    // fluxbase.log(level: i32, msg_ptr: i32, msg_len: i32)
-    linker.func_wrap("fluxbase", "log", |mut caller: Caller<HostState>, level: i32, msg_ptr: i32, msg_len: i32| {
+    // flux.log(level: i32, msg_ptr: i32, msg_len: i32)
+    linker.func_wrap("flux", "log", |mut caller: Caller<HostState>, level: i32, msg_ptr: i32, msg_len: i32| {
         let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
             Some(m) => m,
             None    => return,
@@ -928,12 +928,12 @@ async fn execute_wasm_async(
         });
     }).map_err(|e| e.to_string())?;
 
-    // fluxbase.http_fetch(req_ptr, req_len, out_ptr, out_max) → actual_resp_len or -1
+    // flux.http_fetch(req_ptr, req_len, out_ptr, out_max) → actual_resp_len or -1
     //
     // Uses func_wrap_async so the WASM fiber is suspended during the HTTP call,
     // freeing the tokio thread to drive other concurrent WASM executions.
     // Previously used block_on() which blocked the OS thread for the full HTTP duration.
-    linker.func_wrap_async("fluxbase", "http_fetch", |mut caller: Caller<HostState>, args: (i32, i32, i32, i32)| {
+    linker.func_wrap_async("flux", "http_fetch", |mut caller: Caller<HostState>, args: (i32, i32, i32, i32)| {
         let (req_ptr, req_len, out_ptr, out_max) = args;
         Box::new(async move {
         let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
@@ -1070,8 +1070,8 @@ async fn execute_wasm_async(
         })
     }).map_err(|e| e.to_string())?;
 
-    // fluxbase.secrets_get(key_ptr, key_len, out_ptr, out_max) → actual_len or -1
-    linker.func_wrap("fluxbase", "secrets_get", |mut caller: Caller<HostState>, key_ptr: i32, key_len: i32, out_ptr: i32, out_max: i32| -> i32 {
+    // flux.secrets_get(key_ptr, key_len, out_ptr, out_max) → actual_len or -1
+    linker.func_wrap("flux", "secrets_get", |mut caller: Caller<HostState>, key_ptr: i32, key_len: i32, out_ptr: i32, out_max: i32| -> i32 {
         let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
             Some(m) => m,
             None    => return -1,
@@ -1105,11 +1105,11 @@ async fn execute_wasm_async(
 
     // ── Instantiate (async with async_support engine) ──────────────────────
 
-    // fluxbase.db_query(sql_ptr: i32, sql_len: i32, params_ptr: i32, params_len: i32,
+    // flux.db_query(sql_ptr: i32, sql_len: i32, params_ptr: i32, params_len: i32,
     //                   out_ptr: i32, out_max: i32) → i32 (bytes written, or -1 on error)
     // Sends a raw SQL request to the data-engine /db/sql endpoint and writes the
     // JSON result (array of rows or {rows_affected: N}) into WASM linear memory.
-    linker.func_wrap_async("fluxbase", "db_query", |mut caller: Caller<HostState>, args: (i32, i32, i32, i32, i32, i32)| {
+    linker.func_wrap_async("flux", "db_query", |mut caller: Caller<HostState>, args: (i32, i32, i32, i32, i32, i32)| {
         let (sql_ptr, sql_len, params_ptr, params_len, out_ptr, out_max) = args;
         Box::new(async move {
             let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
@@ -1165,10 +1165,10 @@ async fn execute_wasm_async(
         })
     }).map_err(|e| e.to_string())?;
 
-    // fluxbase.queue_push(req_ptr: i32, req_len: i32, out_ptr: i32, out_max: i32) → i32
+    // flux.queue_push(req_ptr: i32, req_len: i32, out_ptr: i32, out_max: i32) → i32
     // Enqueues a job via the Flux queue service. `req_ptr` points to a JSON object
     // `{function: string, payload: any, delay_secs?: number}`.
-    linker.func_wrap_async("fluxbase", "queue_push", |mut caller: Caller<HostState>, args: (i32, i32, i32, i32)| {
+    linker.func_wrap_async("flux", "queue_push", |mut caller: Caller<HostState>, args: (i32, i32, i32, i32)| {
         let (req_ptr, req_len, out_ptr, out_max) = args;
         Box::new(async move {
             let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
@@ -1551,7 +1551,7 @@ mod tests {
         }
     }
 
-    /// Minimal WAT module satisfying the fluxbase WASM ABI.
+    /// Minimal WAT module satisfying the flux WASM ABI.
     ///
     /// Memory layout at result pointer 4:
     ///   bytes 4-7  : u32 LE = 15  (length of JSON below)
@@ -1560,9 +1560,9 @@ mod tests {
     /// handle() returns 4 (non-zero) so the executor can read the header.
     /// __flux_alloc() returns 65536 (page boundary) as the payload write buffer.
     const MINIMAL_WAT: &str = r#"(module
-        (import "fluxbase" "log"         (func (param i32 i32 i32)))
-        (import "fluxbase" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
-        (import "fluxbase" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
+        (import "flux" "log"         (func (param i32 i32 i32)))
+        (import "flux" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
+        (import "flux" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
         (memory (export "memory") 2)
         (data (i32.const 4) "\0f\00\00\00{\"output\":\"ok\"}")
         (func (export "__flux_alloc") (param i32) (result i32) i32.const 65536)
@@ -1571,9 +1571,9 @@ mod tests {
 
     /// WAT module that returns an error in the result JSON.
     const ERROR_WAT: &str = r#"(module
-        (import "fluxbase" "log"         (func (param i32 i32 i32)))
-        (import "fluxbase" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
-        (import "fluxbase" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
+        (import "flux" "log"         (func (param i32 i32 i32)))
+        (import "flux" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
+        (import "flux" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
         (memory (export "memory") 2)
         (data (i32.const 4) "\16\00\00\00{\"error\":\"test_error\"}")
         (func (export "__flux_alloc") (param i32) (result i32) i32.const 65536)
@@ -1582,9 +1582,9 @@ mod tests {
 
     /// WAT module missing the `handle` export — should fail instantiation.
     const MISSING_HANDLE_WAT: &str = r#"(module
-        (import "fluxbase" "log"         (func (param i32 i32 i32)))
-        (import "fluxbase" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
-        (import "fluxbase" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
+        (import "flux" "log"         (func (param i32 i32 i32)))
+        (import "flux" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
+        (import "flux" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
         (memory (export "memory") 2)
         (func (export "__flux_alloc") (param i32) (result i32) i32.const 65536)
     )"#;

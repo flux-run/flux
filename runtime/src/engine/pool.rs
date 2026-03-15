@@ -333,7 +333,7 @@ mod tests {
     #[tokio::test]
     async fn execute_simple_js_returns_value() {
         let pool = IsolatePool::new(1, 30, test_dispatchers());
-        let code = r#"__fluxbase_fn = async (ctx) => "hello";"#;
+        let code = r#"__flux_fn = async (ctx) => "hello";"#;
 
         let res = pool.execute(
             code.to_string(), HashMap::new(), serde_json::Value::Null, 0,
@@ -347,7 +347,7 @@ mod tests {
     #[tokio::test]
     async fn execute_passes_payload() {
         let pool = IsolatePool::new(1, 30, test_dispatchers());
-        let code = r#"__fluxbase_fn = async (ctx) => ctx.payload.x * 2;"#;
+        let code = r#"__flux_fn = async (ctx) => ctx.payload.x * 2;"#;
 
         let res = pool.execute(
             code.to_string(), HashMap::new(), serde_json::json!({"x": 21}), 0,
@@ -361,7 +361,7 @@ mod tests {
     async fn execute_captures_logs() {
         let pool = IsolatePool::new(1, 30, test_dispatchers());
         let code = r#"
-            __fluxbase_fn = async (ctx) => {
+            __flux_fn = async (ctx) => {
                 ctx.log("pool log test", "warn");
                 return { result: true };
             };
@@ -379,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn execute_js_error_returns_err() {
         let pool = IsolatePool::new(1, 30, test_dispatchers());
-        let code = r#"__fluxbase_fn = async (ctx) => { throw new Error("pool err"); };"#;
+        let code = r#"__flux_fn = async (ctx) => { throw new Error("pool err"); };"#;
 
         let res = pool.execute(
             code.to_string(), HashMap::new(), serde_json::Value::Null, 0,
@@ -395,7 +395,7 @@ mod tests {
     #[tokio::test]
     async fn execute_multiple_concurrent_tasks() {
         let pool = IsolatePool::new(2, 30, test_dispatchers());
-        let code = r#"__fluxbase_fn = async (ctx) => ctx.payload.n;"#;
+        let code = r#"__flux_fn = async (ctx) => ctx.payload.n;"#;
 
         let mut handles = vec![];
         for n in 0u32..8 {
@@ -420,7 +420,7 @@ mod tests {
     async fn pool_is_clone_and_send() {
         let pool = IsolatePool::new(1, 30, test_dispatchers());
         let clone = pool.clone();
-        let code = r#"__fluxbase_fn = async (ctx) => 1;"#;
+        let code = r#"__flux_fn = async (ctx) => 1;"#;
         let _r = clone.execute(code.to_string(), HashMap::new(),
             serde_json::Value::Null, 0, test_queue_ctx(), test_db_ctx(), None).await;
     }
@@ -430,7 +430,7 @@ mod tests {
     #[tokio::test]
     async fn same_seed_produces_same_output() {
         let pool = IsolatePool::new(1, 30, test_dispatchers());
-        let code = r#"__fluxbase_fn = async (ctx) => ctx.uuid();"#;
+        let code = r#"__flux_fn = async (ctx) => ctx.uuid();"#;
 
         let r1 = pool.execute(code.to_string(), HashMap::new(),
             serde_json::Value::Null, 42, test_queue_ctx(), test_db_ctx(), None).await.unwrap();
@@ -446,7 +446,7 @@ mod tests {
     #[tokio::test]
     async fn affinity_key_is_recorded_on_worker() {
         let pool = IsolatePool::new(2, 30, test_dispatchers());
-        let code = r#"__fluxbase_fn = async (ctx) => 1;"#;
+        let code = r#"__flux_fn = async (ctx) => 1;"#;
 
         let _r = pool.execute(
             code.to_string(), HashMap::new(), serde_json::Value::Null, 0,
@@ -462,7 +462,7 @@ mod tests {
     #[tokio::test]
     async fn affinity_routes_same_key_to_same_worker() {
         let pool = IsolatePool::new(3, 30, test_dispatchers());
-        let code = r#"__fluxbase_fn = async (ctx) => 42;"#;
+        let code = r#"__flux_fn = async (ctx) => 42;"#;
 
         for _ in 0..6 {
             let r = pool.execute(

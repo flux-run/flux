@@ -1,6 +1,6 @@
 //! `flux create <name> [--template <template>]`
 //!
-//! Scaffold a full Fluxbase project from an official template so a developer
+//! Scaffold a full Flux project from an official template so a developer
 //! can go from zero to a deployed backend in under five minutes.
 //!
 //! Usage:
@@ -225,7 +225,7 @@ fn fn_package_json(name: &str) -> String {
   "version": "1.0.0",
   "type": "module",
   "dependencies": {{
-    "@fluxbase/functions": "^0.1.0",
+    "@flux/functions": "^0.1.0",
     "zod": "^3.22.0"
   }},
   "devDependencies": {{
@@ -233,7 +233,7 @@ fn fn_package_json(name: &str) -> String {
     "typescript": "^5.0.0"
   }},
   "scripts": {{
-    "build": "esbuild index.ts --bundle --format=iife --global-name=__fluxbase_fn --outfile=dist/index.js"
+    "build": "esbuild index.ts --bundle --format=iife --global-name=__flux_fn --outfile=dist/index.js"
   }}
 }}
 "#,
@@ -293,9 +293,9 @@ dist/
 // todo-api — source files
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CREATE_TODO_TS: &str = r#"import { defineFunction } from "@fluxbase/functions";
+const CREATE_TODO_TS: &str = r#"import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 
 export default defineFunction({
   name: "create_todo",
@@ -321,9 +321,9 @@ export default defineFunction({
 });
 "#;
 
-const LIST_TODOS_TS: &str = r#"import { defineFunction } from "@fluxbase/functions";
+const LIST_TODOS_TS: &str = r#"import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 
 export default defineFunction({
   name: "list_todos",
@@ -357,9 +357,9 @@ export default defineFunction({
 });
 "#;
 
-const UPDATE_TODO_TS: &str = r#"import { defineFunction } from "@fluxbase/functions";
+const UPDATE_TODO_TS: &str = r#"import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 
 export default defineFunction({
   name: "update_todo",
@@ -393,9 +393,9 @@ export default defineFunction({
 });
 "#;
 
-const DELETE_TODO_TS: &str = r#"import { defineFunction } from "@fluxbase/functions";
+const DELETE_TODO_TS: &str = r#"import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 
 export default defineFunction({
   name: "delete_todo",
@@ -421,7 +421,7 @@ export default defineFunction({
 });
 "#;
 
-const TODO_SCHEMA_TS: &str = r#"import { defineSchema, column, index } from "@fluxbase/schema"
+const TODO_SCHEMA_TS: &str = r#"import { defineSchema, column, index } from "@flux/schema"
 
 export default defineSchema({
   table:       "todos",
@@ -492,9 +492,9 @@ flux why   <x-request-id>   # root cause analysis
 // webhook-worker — source files
 // ─────────────────────────────────────────────────────────────────────────────
 
-const WEBHOOK_TS: &str = r#"import { defineFunction, type FluxContext } from "@fluxbase/functions";
+const WEBHOOK_TS: &str = r#"import { defineFunction, type FluxContext } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /** Verify HMAC-SHA256 signature (Stripe, GitHub, and most providers). */
@@ -587,7 +587,7 @@ async function handleEvent(
 }
 "#;
 
-const WEBHOOK_SCHEMA_TS: &str = r#"import { defineSchema, column, index } from "@fluxbase/schema"
+const WEBHOOK_SCHEMA_TS: &str = r#"import { defineSchema, column, index } from "@flux/schema"
 
 export default defineSchema({
   table:       "webhook_events",
@@ -623,7 +623,7 @@ fn webhook_readme(name: &str) -> String {
     format!(
         r#"# {name} — Webhook Worker
 
-Receive and process webhooks with signature verification backed by Fluxbase.
+Receive and process webhooks with signature verification backed by Flux.
 
 ## Function
 
@@ -635,7 +635,7 @@ Receive and process webhooks with signature verification backed by Fluxbase.
 
 ### 1. Apply the schema
 
-Run `schema/webhook_events.sql` in your Fluxbase dashboard → Schema → SQL Editor.
+Run `schema/webhook_events.sql` in your Flux dashboard → Schema → SQL Editor.
 
 ### 2. Set secrets
 
@@ -687,9 +687,9 @@ flux trace <x-request-id>
 // ai-backend — source files
 // ─────────────────────────────────────────────────────────────────────────────
 
-const AI_TS: &str = r#"import { defineFunction } from "@fluxbase/functions";
+const AI_TS: &str = r#"import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 import { createHash } from "node:crypto";
 
 const SentimentEnum  = z.enum(["positive", "negative", "neutral"]);
@@ -784,7 +784,7 @@ export default defineFunction({
 });
 "#;
 
-const AI_SCHEMA_TS: &str = r#"import { defineSchema, column, index } from "@fluxbase/schema"
+const AI_SCHEMA_TS: &str = r#"import { defineSchema, column, index } from "@flux/schema"
 
 export default defineSchema({
   table:       "classifications",
@@ -833,7 +833,7 @@ Identical inputs never hit the LLM twice.
 
 ### 1. Apply the schema
 
-Run `schema/classifications.sql` in your Fluxbase dashboard → Schema → SQL Editor.
+Run `schema/classifications.sql` in your Flux dashboard → Schema → SQL Editor.
 
 ### 2. Set secrets
 

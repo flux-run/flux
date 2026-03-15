@@ -14,7 +14,7 @@ api           = { path = "../api" }
 base64        = "0.22"
 runtime       = { path = "../runtime" }
 gateway       = { path = "../gateway" }
-fluxbase-queue = { path = "../queue" }
+flux-queue = { path = "../queue" }
 data-engine   = { path = "../data-engine" }
 job_contract  = { path = "../shared/job_contract" }
 

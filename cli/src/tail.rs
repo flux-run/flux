@@ -71,7 +71,7 @@ pub async fn execute(
 
     if !json_output {
         println!();
-        println!("{}", "Fluxbase · Live Request Stream".bold());
+        println!("{}", "Flux · Live Request Stream".bold());
         let filter = match (&function, errors_only, slow_threshold, auto_debug) {
             (Some(f), _, _, _) => format!("function: {}", f.cyan()),
             (None, true, _, _) => "errors only".red().to_string(),

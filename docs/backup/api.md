@@ -1,6 +1,6 @@
 # API Service — Architecture & Reference
 
-> **Service name:** `fluxbase-api`  
+> **Service name:** `flux-api`  
 > **Role:** Control Plane — the single HTTP surface used by the dashboard, CLI, and external API consumers  
 > **Tech:** Rust · Axum · SQLx · PostgreSQL (Neon) · S3/R2 (Cloudflare R2 or MinIO)  
 > **Default port:** `8080`
@@ -44,7 +44,7 @@
 
 ## 1. Overview
 
-The API service is the **control plane** for Fluxbase. Every action on the platform
+The API service is the **control plane** for Flux. Every action on the platform
 (create a function, deploy code, manage secrets, configure gateway routes, browse logs)
 passes through this service. It is intentionally **not** the hot-path execution layer — that
 belongs to the Gateway and Runtime services.
@@ -85,7 +85,7 @@ Key responsibilities:
 
 > **This is a core architecture invariant. It must never be violated.**
 
-Fluxbase uses a strict two-plane model. Mixing these planes leads to scaling
+Flux uses a strict two-plane model. Mixing these planes leads to scaling
 problems, security boundary confusion, and operational complexity.
 
 ### Control Plane — `api.fluxbase.co`
@@ -93,7 +93,7 @@ problems, security boundary confusion, and operational complexity.
 | Attribute     | Value                                                                  |
 |---------------|------------------------------------------------------------------------|
 | Domain        | `api.fluxbase.co`                                                      |
-| Service       | `fluxbase-api`                                                         |
+| Service       | `flux-api`                                                         |
 | Traffic volume| **Low** — management operations only                                   |
 | Callers       | CLI, dashboard, SDK setup, CI/CD pipelines                             |
 
@@ -120,7 +120,7 @@ problems, security boundary confusion, and operational complexity.
 | Attribute     | Value                                                                  |
 |---------------|------------------------------------------------------------------------|
 | Domain        | `{tenant_slug}.fluxbase.co` (e.g. `acme.fluxbase.co`)                 |
-| Services      | `fluxbase-gateway` → `fluxbase-runtime`                               |
+| Services      | `flux-gateway` → `flux-runtime`                               |
 | Traffic volume| **Very high** — 1,000s–100,000s rps                                   |
 | Callers       | End users, webhooks, external systems, SDKs at runtime                 |
 
@@ -140,7 +140,7 @@ problems, security boundary confusion, and operational complexity.
 | Vercel      | `vercel.com/api`   | Edge runtime          |
 | Supabase    | `api.supabase.com` | `*.supabase.co`       |
 | Stripe      | Dashboard API      | Payment network       |
-| **Fluxbase**| `api.fluxbase.co`  | `{slug}.fluxbase.co`  |
+| **Flux**| `api.fluxbase.co`  | `{slug}.fluxbase.co`  |
 
 ### Architectural Rule — Enforcement at the Code Level
 
@@ -306,9 +306,9 @@ Request
 - On success, inserts `RequestContext` into request extensions.
 
 ### `resolve_context`
-- Reads `X-Fluxbase-Tenant` header → validates UUID → checks `tenant_members`
+- Reads `X-Flux-Tenant` header → validates UUID → checks `tenant_members`
   → populates `context.tenant_id`, `context.role`, `context.tenant_slug`.
-- If tenant valid and `X-Fluxbase-Project` header present → validates UUID → checks
+- If tenant valid and `X-Flux-Project` header present → validates UUID → checks
   `projects WHERE tenant_id = $tenant` → populates `context.project_id`,
   `context.project_slug`.
 - API key requests skip this step (already populated by `verify_auth`).
@@ -339,8 +339,8 @@ Three scopes, enforced at the middleware layer:
 | Scope    | Required headers                                     | DB checks                                               |
 |----------|------------------------------------------------------|---------------------------------------------------------|
 | Platform | `Authorization: Bearer <token>`                      | Firebase JWT valid / API key valid                      |
-| Tenant   | + `X-Fluxbase-Tenant: <uuid>`                        | Row in `tenant_members` for (tenant_id, user_id)        |
-| Project  | + `X-Fluxbase-Project: <uuid>`                       | Row in `projects` WHERE tenant_id matches               |
+| Tenant   | + `X-Flux-Tenant: <uuid>`                        | Row in `tenant_members` for (tenant_id, user_id)        |
+| Project  | + `X-Flux-Project: <uuid>`                       | Row in `projects` WHERE tenant_id matches               |
 
 Role is preserved in `context.role` (`owner` / `member` / `viewer`).
 
@@ -383,7 +383,7 @@ Require `Authorization` only (Platform scope).
 
 ### 7.2 Tenant Routes
 
-Require `Authorization` + `X-Fluxbase-Tenant` (Tenant scope).
+Require `Authorization` + `X-Flux-Tenant` (Tenant scope).
 
 | Method | Path                            | Handler                       | Description                          |
 |--------|---------------------------------|-------------------------------|--------------------------------------|
@@ -398,7 +398,7 @@ Require `Authorization` + `X-Fluxbase-Tenant` (Tenant scope).
 
 ### 7.3 Project Routes
 
-Require `Authorization` + `X-Fluxbase-Tenant` + `X-Fluxbase-Project` (Project scope).
+Require `Authorization` + `X-Flux-Tenant` + `X-Flux-Project` (Project scope).
 
 #### Functions & Deployments
 
@@ -543,7 +543,7 @@ Returns `401 { error: "invalid_service_token" }` on mismatch.
 
 ## 9. Functions
 
-A **Function** is the unit of deployable logic on Fluxbase.
+A **Function** is the unit of deployable logic on Flux.
 
 ### Schema
 
@@ -716,7 +716,7 @@ scope) separately from full admin credentials.
 ### Schema Graph (`GET /schema/graph`)
 
 Proxied to the Data Engine service. The API:
-1. Forwards `X-Fluxbase-Tenant-Slug` and `X-Fluxbase-Project-Slug` headers.
+1. Forwards `X-Flux-Tenant-Slug` and `X-Flux-Project-Slug` headers.
 2. Also forwards `x-request-id` for distributed tracing.
 3. Guards the response: checks HTTP status before attempting JSON parse; surfaces
    upstream errors as `data_engine_error(<status>): <body>`.
@@ -1012,10 +1012,10 @@ proxied** to `DATA_ENGINE_URL`.
 | Header                        | Source                              |
 |-------------------------------|-------------------------------------|
 | `Authorization`               | Forwarded as-is from client         |
-| `X-Fluxbase-Tenant`           | Forwarded as-is                     |
-| `X-Fluxbase-Project`          | Forwarded as-is                     |
-| `X-Fluxbase-Tenant-Slug`      | Injected from `context.tenant_slug` |
-| `X-Fluxbase-Project-Slug`     | Injected from `context.project_slug`|
+| `X-Flux-Tenant`           | Forwarded as-is                     |
+| `X-Flux-Project`          | Forwarded as-is                     |
+| `X-Flux-Tenant-Slug`      | Injected from `context.tenant_slug` |
+| `X-Flux-Project-Slug`     | Injected from `context.project_slug`|
 | `x-request-id`                | Propagated for distributed tracing  |
 | `Content-Type`                | Forwarded                           |
 
@@ -1069,8 +1069,8 @@ Additional implicit allowlist:
 - `https://fluxbase.co`
 
 Allowed methods: `GET POST PUT PATCH DELETE OPTIONS`  
-Allowed headers: `Authorization`, `Content-Type`, `Accept`, `X-Fluxbase-Tenant`,
-`X-Fluxbase-Project`  
+Allowed headers: `Authorization`, `Content-Type`, `Accept`, `X-Flux-Tenant`,
+`X-Flux-Project`  
 `allow_credentials: true` — required for dashboard cookie-based sessions.  
 CORS cache (`max_age`): 1 hour.
 
@@ -1105,7 +1105,7 @@ A warning is logged at `WARN` level.
 | `R2_ENDPOINT` / `S3_ENDPOINT`     | `http://127.0.0.1:9000`        |          | Object store endpoint                         |
 | `R2_ACCESS_KEY_ID` / `S3_ACCESS_KEY_ID` | `minioadmin`            |          | Object store credentials                      |
 | `R2_SECRET_ACCESS_KEY` / `S3_SECRET_ACCESS_KEY` | `minioadmin`    |          | Object store secret                           |
-| `LOG_BUCKET`                      | `fluxbase-logs`                |          | Bucket for archived log files                 |
+| `LOG_BUCKET`                      | `flux-logs`                |          | Bucket for archived log files                 |
 | `LOG_HOT_DAYS`                    | `7`                            |          | Days to keep logs in Postgres                 |
 | `LOG_ARCHIVE_BATCH`               | `5000`                         |          | Max log rows per archival cycle               |
 | `COMPOSIO_API_KEY`                | —                              |          | Composio key for tool connectivity            |

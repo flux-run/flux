@@ -1,6 +1,6 @@
 # Quickstart — Build a backend in 5 minutes
 
-Fluxbase gives you serverless functions, a managed database, built-in secrets,
+Flux gives you serverless functions, a managed database, built-in secrets,
 and end-to-end distributed tracing — all driven from a single CLI.
 
 ---
@@ -8,11 +8,11 @@ and end-to-end distributed tracing — all driven from a single CLI.
 ## Prerequisites
 
 - Node.js 18+
-- A Fluxbase account at [fluxbase.co](https://fluxbase.co)
-- The Fluxbase CLI installed and authenticated:
+- A Flux account at [fluxbase.co](https://fluxbase.co)
+- The Flux CLI installed and authenticated:
 
 ```bash
-npm install -g @fluxbase/cli
+npm install -g @flux/cli
 flux auth login
 ```
 
@@ -35,7 +35,7 @@ your tenant.
 Create `index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
 
 export default defineFunction({

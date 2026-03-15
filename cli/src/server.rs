@@ -83,7 +83,7 @@ pub async fn execute(
                 "{} {} is not set.\n  {}",
                 "✗".red().bold(),
                 "DATABASE_URL".cyan(),
-                "export DATABASE_URL=postgres://user:pass@localhost:5432/fluxbase".dimmed(),
+                "export DATABASE_URL=postgres://user:pass@localhost:5432/flux".dimmed(),
             );
             std::process::exit(1);
         });

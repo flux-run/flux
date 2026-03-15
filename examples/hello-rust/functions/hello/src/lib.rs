@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// ── Fluxbase host imports ─────────────────────────────────────────────────────
+// ── Flux host imports ─────────────────────────────────────────────────────
 //
 // The Flux runtime exposes these functions to every WASM module.
 // All I/O is async at the OS level: the WASM fiber suspends while the runtime
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 //   2. Host calls handle(ptr, len) -> result_ptr.
 //   3. Result at result_ptr: [ u32 LE byte-length ][ <length> bytes of UTF-8 JSON ].
 //      JSON must be {"output": ...} on success or {"error": "..."} on failure.
-#[link(wasm_import_module = "fluxbase")]
+#[link(wasm_import_module = "flux")]
 extern "C" {
     /// Emit a structured log line.
     /// level: 0=debug, 1=info, 2=warn, 3=error

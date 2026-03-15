@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Fluxbase has reached **code verification phase** after 8 distinct architectural revelation phases. The platform now has:
+Flux has reached **code verification phase** after 8 distinct architectural revelation phases. The platform now has:
 
 - ✅ **Complete database schema** for deterministic replay infrastructure
 - ✅ **Gateway proof-of-concept** implementing all critical tracing pieces
@@ -330,17 +330,17 @@ The remaining work is **implementation** (runtime integration, CLI tools), not *
 
 ---
 
-## Key Insight: Why Fluxbase Can Do This
+## Key Insight: Why Flux Can Do This
 
 Most platforms **cannot** build deterministic replay because they don't control:
 - Full stack (AWS Lambda can't see load balancer decisions)
 - Request envelope (Vercel proxies abstract request details)
 - Deployment metadata (Cloudflare doesn't own the runtime)
 
-**Fluxbase controls everything:**
+**Flux controls everything:**
 - 🟢 Gateway captures complete request
 - 🟢 Runtime executes function
 - 🟢 Data engine logs state changes
 - 🟢 Queue persists async work
 
-This is why **only Fluxbase can offer production debugging faster than local debugging**.
+This is why **only Flux can offer production debugging faster than local debugging**.

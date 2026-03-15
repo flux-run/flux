@@ -158,7 +158,7 @@ $ flux incident simulate --window 2026-03-10T14:00..14:30 --patch fix.js
 
 ---
 
-## Why This Is Only Possible on Fluxbase
+## Why This Is Only Possible on Flux
 
 ### Other Platforms Can't Do This
 
@@ -168,9 +168,9 @@ $ flux incident simulate --window 2026-03-10T14:00..14:30 --patch fix.js
 | Vercel | ⚠️ | ❌ | ❌ | ❌ | 0.5/4 |
 | Cloudflare Workers | ⚠️ | ❌ | ❌ | ❌ | 0.5/4 |
 | Temporal | ⚠️ | ⚠️ | ❌ | ❌ | 1/4 |
-| **Fluxbase** | ✅ | ✅ | ✅ | ✅ | **4/4** |
+| **Flux** | ✅ | ✅ | ✅ | ✅ | **4/4** |
 
-**Why?** Fluxbase owns the **entire stack**:
+**Why?** Flux owns the **entire stack**:
 
 ```
 Request → [Gateway] → [Runtime] → [Data Engine] → [Database]
@@ -182,7 +182,7 @@ AWS Lambda doesn't see load balancer decisions.
 Vercel doesn't control the database.  
 Cloudflare doesn't control the runtime.
 
-**Only Fluxbase controls all layers.** So only Fluxbase can offer:
+**Only Flux controls all layers.** So only Flux can offer:
 - Request envelope capture (Gateway)
 - Deterministic replay (Runtime)
 - State reconstruction (Database)
@@ -193,11 +193,11 @@ Cloudflare doesn't control the runtime.
 ## Marketing Narrative
 
 **The Tagline:**
-> *Fluxbase: Production debugging faster than local debugging*
+> *Flux: Production debugging faster than local debugging*
 
 **The Story:**
 ```
-Before Fluxbase:
+Before Flux:
 
   Local Development          Production
   ✅ Test works              ❌ Fails
@@ -206,7 +206,7 @@ Before Fluxbase:
   ✅ Can reproduce           ❌ Can't reproduce scenario
   ✅ Fix takes 5 min         ❌ Fix takes 2 hours
 
-After Fluxbase:
+After Flux:
 
   $ flux why <request-id>
   
@@ -222,18 +222,18 @@ After Fluxbase:
 **The Competition Response:**
 
 - AWS Lambda: "We can do CloudWatch logs"
-  - **Fluxbase:** We do better with deterministic replay
+  - **Flux:** We do better with deterministic replay
   
 - Vercel: "We have edge middleware"
-  - **Fluxbase:** We capture the full request-to-database journey
+  - **Flux:** We capture the full request-to-database journey
   
 - Databricks: "We have MLflow tracing"
-  - **Fluxbase:** We trace every function call in production
+  - **Flux:** We trace every function call in production
 
 **The Positioning:**
 
-Fluxbase is not just another serverless platform.  
-Fluxbase is **"Git for Backend Execution"** — you can time-travel, bisect, blame, and replay.
+Flux is not just another serverless platform.  
+Flux is **"Git for Backend Execution"** — you can time-travel, bisect, blame, and replay.
 
 ---
 
@@ -310,7 +310,7 @@ flux incident simulate --patch fix.js      # validate fix on real traffic
 2. **Time-to-resolution:** Average bug fix time drops 50% (2 hours → 1 hour)
 3. **Production confidence:** Deploy frequency increases 3x
 4. **Support reduction:** Debug-related support tickets drop 40%
-5. **Word-of-mouth:** Developers recommend Fluxbase for this feature
+5. **Word-of-mouth:** Developers recommend Flux for this feature
 
 ---
 
@@ -364,7 +364,7 @@ If you ever need to debug, you have:
 
 Nothing is lost. Nothing is uncertain. Everything is queryable.
 
-This is why Fluxbase can promise: **"Production debugging faster than local debugging."**
+This is why Flux can promise: **"Production debugging faster than local debugging."**
 
 Because in production, you have MORE information than local.
 

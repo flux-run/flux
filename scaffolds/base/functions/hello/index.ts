@@ -1,4 +1,4 @@
-import { defineFunction } from "@fluxbase/functions"
+import { defineFunction } from "@flux/functions"
 
 export default defineFunction({
   name: "hello",

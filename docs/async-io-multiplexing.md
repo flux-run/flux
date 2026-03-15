@@ -314,13 +314,13 @@ This is strictly stronger isolation than V8. No request can observe another requ
 
 | Import | Signature | Behavior |
 |--------|-----------|----------|
-| `fluxbase.db_query` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — SQLx query via data-engine + span |
-| `fluxbase.http_fetch` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — reqwest + SSRF check + span |
-| `fluxbase.queue_push` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — resolve function → POST to queue |
-| `fluxbase.function_invoke` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — recursive dispatch with lineage |
-| `fluxbase.sleep` | `(ms: i64)` | Async — `tokio::time::sleep().await` (fiber suspends) |
-| `fluxbase.secrets_get` | `(key_ptr, key_len, out_ptr, out_max) → i32` | Sync — LRU cache + AES decrypt |
-| `fluxbase.log` | `(level, msg_ptr, msg_len)` | Sync — append to `HostState::logs` |
+| `flux.db_query` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — SQLx query via data-engine + span |
+| `flux.http_fetch` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — reqwest + SSRF check + span |
+| `flux.queue_push` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — resolve function → POST to queue |
+| `flux.function_invoke` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — recursive dispatch with lineage |
+| `flux.sleep` | `(ms: i64)` | Async — `tokio::time::sleep().await` (fiber suspends) |
+| `flux.secrets_get` | `(key_ptr, key_len, out_ptr, out_max) → i32` | Sync — LRU cache + AES decrypt |
+| `flux.log` | `(level, msg_ptr, msg_len)` | Sync — append to `HostState::logs` |
 
 All async host imports use `func_wrap_async` so the fiber suspends and frees the thread:
 
@@ -330,7 +330,7 @@ config.async_support(true);
 config.consume_fuel(true);
 
 // Async host import — fiber suspends during I/O
-linker.func_wrap_async("fluxbase", "http_fetch",
+linker.func_wrap_async("flux", "http_fetch",
     |mut caller: Caller<HostState>, req_ptr: i32, req_len: i32, out_ptr: i32, out_max: i32| {
         Box::new(async move {
             let request = read_from_memory(&caller, req_ptr, req_len)?;
@@ -372,13 +372,13 @@ Both V8 and WASM expose the same logical ops. The user-facing API is identical r
 
 | Effect | JS (V8) | WASM | Async | Traced | Replayable |
 |--------|---------|------|-------|--------|------------|
-| DB query | `ctx.db.query()` / `ctx.db.<table>.*` | `fluxbase.db_query` | Yes | Yes | Yes |
-| HTTP fetch | `ctx.http.fetch()` | `fluxbase.http_fetch` | Yes | Yes | Yes |
-| Queue push | `ctx.queue.push()` | `fluxbase.queue_push` | Yes | Yes | Yes |
-| Function invoke | `ctx.function.invoke()` | `fluxbase.function_invoke` | Yes | Yes | Yes |
-| Sleep / timer | `setTimeout()` | `fluxbase.sleep` / `poll_oneoff` | Yes | Yes | Yes |
-| Secrets | `ctx.secrets.get()` | `fluxbase.secrets_get` | No | No | N/A |
-| Logging | `ctx.log.*()` | `fluxbase.log` | No | Yes | N/A |
+| DB query | `ctx.db.query()` / `ctx.db.<table>.*` | `flux.db_query` | Yes | Yes | Yes |
+| HTTP fetch | `ctx.http.fetch()` | `flux.http_fetch` | Yes | Yes | Yes |
+| Queue push | `ctx.queue.push()` | `flux.queue_push` | Yes | Yes | Yes |
+| Function invoke | `ctx.function.invoke()` | `flux.function_invoke` | Yes | Yes | Yes |
+| Sleep / timer | `setTimeout()` | `flux.sleep` / `poll_oneoff` | Yes | Yes | Yes |
+| Secrets | `ctx.secrets.get()` | `flux.secrets_get` | No | No | N/A |
+| Logging | `ctx.log.*()` | `flux.log` | No | Yes | N/A |
 
 Every async op:
 1. Resolves per-request context via `request_id`
@@ -460,7 +460,7 @@ V8 worker-wide reset is the correct trade-off: a `while(true)` in JS monopolizes
 
 | Concern | How it is handled |
 |---------|-------------------|
-| SSRF | Every outbound connection (V8 `op_http_fetch`, WASM `fluxbase.http_fetch`, raw socket connect) is validated against SSRF rules: deny private IPs (10.x, 172.16.x, 192.168.x, 169.254.x, localhost, [::1]), deny internal service URLs, configurable allow-list. |
+| SSRF | Every outbound connection (V8 `op_http_fetch`, WASM `flux.http_fetch`, raw socket connect) is validated against SSRF rules: deny private IPs (10.x, 172.16.x, 192.168.x, 169.254.x, localhost, [::1]), deny internal service URLs, configurable allow-list. |
 | DNS rebinding | DNS resolution goes through Flux. Resolved IP is checked against SSRF deny-list before connecting. |
 | TLS verification | Default `reqwest::Client` enforces TLS certificate verification. No `danger_accept_invalid_certs`. |
 
@@ -737,11 +737,11 @@ npm packages like `ioredis`, `pg`, `mysql2`, `kafkajs`, `amqplib` work natively 
 │  Typed DB helpers, HTTP wrapper, queue wrapper, logging         │
 ├───────────────────────────────────────────────────────────────┤
 │  Deno Async Ops (V8)        │ WASI Host Imports (WASM)         │
-│  op_db_query                │ fluxbase.db_query                │
-│  op_http_fetch              │ fluxbase.http_fetch              │
-│  op_queue_push              │ fluxbase.queue_push              │
-│  op_function_invoke         │ fluxbase.function_invoke         │
-│  op_sleep                   │ fluxbase.sleep / poll_oneoff     │
+│  op_db_query                │ flux.db_query                │
+│  op_http_fetch              │ flux.http_fetch              │
+│  op_queue_push              │ flux.queue_push              │
+│  op_function_invoke         │ flux.function_invoke         │
+│  op_sleep                   │ flux.sleep / poll_oneoff     │
 ├─────────────────────────────┴─────────────────────────────────┤
 │  Flux I/O Layer (Rust, async)                                  │
 │                                                                │

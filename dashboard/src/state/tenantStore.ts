@@ -37,7 +37,7 @@ export const useStore = create<TenantStore>()(
         }),
     }),
     {
-      name: "fluxbase-workspace",
+      name: "flux-workspace",
       partialize: (state) => ({
         tenantId: state.tenantId,
         tenantName: state.tenantName,

@@ -488,7 +488,7 @@ fn install_manual_hint(lang: &str) -> anyhow::Result<()> {
         "kotlin"         => "sdk install kotlin  # https://sdkman.io",
         "java"           => "sdk install java 21-tem  # https://sdkman.io",
         "ruby"           => "rbenv install 3.3.0  # https://github.com/rbenv/rbenv",
-        _                => "See https://fluxbase.dev/docs/toolchains",
+        _                => "See https://flux.dev/docs/toolchains",
     };
     println!("  {} {} requires manual install:", "ℹ".yellow().bold(), lang.bold());
     println!("    {}", hint.cyan());

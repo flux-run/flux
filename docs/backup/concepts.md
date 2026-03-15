@@ -4,7 +4,7 @@
 
 ## Functions
 
-A **function** is the primary compute unit in Fluxbase.  Functions are
+A **function** is the primary compute unit in Flux.  Functions are
 language-independent compute units: write them in JavaScript, TypeScript, Rust,
 Go, or any language that compiles to WebAssembly.  Each function is deployed as
 an isolated bundle and executed inside one of two sandboxed runtimes:
@@ -33,7 +33,7 @@ export default async function(ctx) {
 
 ```typescript
 // index.ts
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
 
 export default defineFunction({
@@ -92,7 +92,7 @@ export default defineFunction({
 
 ## Database
 
-Fluxbase provides a fully managed Postgres database accessed through a
+Flux provides a fully managed Postgres database accessed through a
 structured query API.  You never write SQL directly.
 
 ### Query format
@@ -120,7 +120,7 @@ Queries are JSON objects submitted to the gateway's `/db/query` endpoint:
 Use the generated SDK for a type-safe experience:
 
 ```typescript
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 
 const flux = createClient({
   url:       ctx.env.GATEWAY_URL,
@@ -142,7 +142,7 @@ Generate the typed SDK for your schema:
 flux sdk generate
 ```
 
-This writes `fluxbase.d.ts` to your project directory.
+This writes `flux.d.ts` to your project directory.
 
 ### Edge query cache
 

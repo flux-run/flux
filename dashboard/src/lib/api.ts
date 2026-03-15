@@ -29,10 +29,10 @@ export async function apiFetch<T = unknown>(
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(!options.skipTenant && state.tenantId
-      ? { "X-Fluxbase-Tenant": state.tenantId }
+      ? { "X-Flux-Tenant": state.tenantId }
       : {}),
     ...(!options.skipProject && finalProjectId
-      ? { "X-Fluxbase-Project": finalProjectId }
+      ? { "X-Flux-Project": finalProjectId }
       : {}),
     ...(options.headers as Record<string, string>),
   };
@@ -79,10 +79,10 @@ export async function gatewayFetch<T = unknown>(
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(!options.skipTenant && state.tenantId
-      ? { "X-Fluxbase-Tenant": state.tenantId }
+      ? { "X-Flux-Tenant": state.tenantId }
       : {}),
     ...(!options.skipProject && finalProjectId
-      ? { "X-Fluxbase-Project": finalProjectId }
+      ? { "X-Flux-Project": finalProjectId }
       : {}),
     ...(options.headers as Record<string, string>),
   };

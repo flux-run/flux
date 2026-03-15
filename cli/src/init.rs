@@ -34,7 +34,7 @@ fn base_scaffold_files() -> Vec<(&'static str, &'static str)> {
         (".env.example",                       include_str!("../../scaffolds/base/.env.example")),
         ("README.md",                          include_str!("../../scaffolds/base/README.md")),
         // deno.json — root import map so VS Code / Deno extension resolves
-        // @fluxbase/functions without needing node_modules.
+        // @flux/functions without needing node_modules.
         ("deno.json",                          include_str!("../../scaffolds/base/deno.json")),
         ("functions/hello/index.ts",           include_str!("../../scaffolds/base/functions/hello/index.ts")),
         ("functions/hello/flux.json",          include_str!("../../scaffolds/base/functions/hello/flux.json")),

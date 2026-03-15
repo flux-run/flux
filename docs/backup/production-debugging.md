@@ -1,6 +1,6 @@
 # Production Debugging: Deterministic Replay & Retrospective Bisect
 
-**Fluxbase transforms production incidents into a searchable audit trail with automatic regression detection and deterministic replay.**
+**Flux transforms production incidents into a searchable audit trail with automatic regression detection and deterministic replay.**
 
 This document covers the complete production debugging workflow:
 
@@ -24,7 +24,7 @@ Table of Contents:
 
 ### The Missing Piece
 
-Fluxbase already captures:
+Flux already captures:
 
 | Component | Captures | Example |
 |-----------|----------|---------|
@@ -186,7 +186,7 @@ Bug detected in production
 
 ### The Solution: Automatic Bisect
 
-Fluxbase automates the classification using signature comparison.
+Flux automates the classification using signature comparison.
 
 Instead of human judgment:
 
@@ -322,7 +322,7 @@ flux bug bisect \
 
 ### Why This is Better Than Git Bisect
 
-| Git Bisect | Fluxbase Bisect |
+| Git Bisect | Flux Bisect |
 |-----------|-----------------|
 | Manual testing | Automatic replay |
 | Local environment | Production request |
@@ -422,7 +422,7 @@ Developer pushes code
 
 Tests don't catch regressions because they're not based on real traffic.
 
-### Fluxbase Guard Deploy
+### Flux Guard Deploy
 
 ```bash
 flux deploy --guard
@@ -508,7 +508,7 @@ flux deploy --guard [--sample-count 100] [--baseline <commit_sha>]
 
 ### The Complete Stack
 
-| Feature | Fluxbase | AWS Lambda | Vercel | Cloudflare |
+| Feature | Flux | AWS Lambda | Vercel | Cloudflare |
 |---------|----------|-----------|--------|-----------|
 | Request envelope | ✓ trace_requests | ✗ | ✗ | ✗ |
 | Execution trace | ✓ platform_logs | ✗ | ✗ | ✗ |
@@ -521,7 +521,7 @@ flux deploy --guard [--sample-count 100] [--baseline <commit_sha>]
 
 ### Automatic vs Manual
 
-| Workflow | Manual Process | Fluxbase Automatic |
+| Workflow | Manual Process | Flux Automatic |
 |----------|----------------|-------------------|
 | Find regression | Check logs, check metrics, correlate | `flux trace blame` link to commit |
 | Bisect commits | Checkout, build, test locally | `flux bug bisect --good --bad` |
@@ -530,7 +530,7 @@ flux deploy --guard [--sample-count 100] [--baseline <commit_sha>]
 
 ### Real Data, Not Synthetic
 
-Fluxbase regression detection is based on:
+Flux regression detection is based on:
 
 - **Real production requests** (not synthetic test cases)
 - **Real user data** (not mocks)
@@ -544,7 +544,7 @@ Example: Email regex change that breaks international domains
 Synthetic test: alice+bob@example.com ✓ (passes)
 Real traffic: josé@españa.es ✗ (fails)
 
-Fluxbase guard shows: "15 requests failed after regex change"
+Flux guard shows: "15 requests failed after regex change"
 → Blocks deploy before users see errors
 ```
 
@@ -674,7 +674,7 @@ Snapshots captured at each logical checkpoint during execution:
       "locals": {
         "template": "welcome.html",
         "recipient": "alice@example.com",
-        "subject": "Welcome to Fluxbase"
+        "subject": "Welcome to Flux"
       }
     },
     {
@@ -765,7 +765,7 @@ Breakpoints: 5 (function_entry, db_call, tool_call, tool_result, function_exit)
       composio.gmail.send_email({
         template: "welcome.html",
         recipient: "alice@example.com",
-        subject: "Welcome to Fluxbase"
+        subject: "Welcome to Flux"
       })
 
     > next
@@ -801,7 +801,7 @@ Breakpoints: 5 (function_entry, db_call, tool_call, tool_result, function_exit)
 
 ### Why This Works
 
-`execution_timeline` + `platform_logs` allow Fluxbase to reconstruct execution **exactly as it occurred**, then let developers step through it like they're debugging locally — but they're actually inspecting a production request from hours ago.
+`execution_timeline` + `platform_logs` allow Flux to reconstruct execution **exactly as it occurred**, then let developers step through it like they're debugging locally — but they're actually inspecting a production request from hours ago.
 
 No reproduction steps. No staging environment. No data export. **Pure replay debugging.**
 

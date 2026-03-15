@@ -13,7 +13,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { apiFetch } from '@/lib/api'
-import type { RouteRow, FunctionResponse } from '@fluxbase/api-types'
+import type { RouteRow, FunctionResponse } from '@flux/api-types'
 import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 

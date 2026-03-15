@@ -7,7 +7,7 @@
     "skipLibCheck": true,
     "lib": ["ESNext"],
     "paths": {
-      "@fluxbase/functions": ["./@fluxbase-functions"]
+      "@flux/functions": ["./@flux-functions"]
     }
   },
   "files": ["assembly.d.ts", "index.ts"]

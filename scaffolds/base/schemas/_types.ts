@@ -1,4 +1,4 @@
-import { defineEnum } from "@fluxbase/schema"
+import { defineEnum } from "@flux/schema"
 
 // Shared Postgres enum types — referenced in *.schema.ts as column.enum(userRole)
 // `flux db push` creates these as native Postgres enum types.

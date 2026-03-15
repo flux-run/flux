@@ -46,7 +46,7 @@ export default function LoginPage() {
           <div className="flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/15 border border-primary/30 mb-4 shadow-lg shadow-primary/10">
             <Zap className="w-7 h-7 text-primary" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight">Fluxbase</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Flux</h1>
           <p className="text-sm text-muted-foreground mt-1">Control Plane</p>
           <p className="text-xs text-muted-foreground/70 mt-2 text-center leading-relaxed">
             Deploy functions. Query data. Ship faster.

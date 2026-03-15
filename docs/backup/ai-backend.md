@@ -1,6 +1,6 @@
 # Example — AI Backend
 
-Call an external LLM (OpenAI), cache the result via Fluxbase's edge cache, and
+Call an external LLM (OpenAI), cache the result via Flux's edge cache, and
 log everything end-to-end — without managing any infrastructure.
 
 ---
@@ -38,9 +38,9 @@ Create a `classifications` table to persist results:
 Create `classify_text/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 import { createHash } from "node:crypto";
 
 // Output shape from GPT
@@ -240,5 +240,5 @@ Trace 9b3e1a22-...  18ms end-to-end
 ## Cost efficiency note
 
 The `classifications` table acts as a semantic cache: identical inputs never
-hit the LLM.  For high-traffic workloads, combine with Fluxbase's edge query
+hit the LLM.  For high-traffic workloads, combine with Flux's edge query
 cache (30 s TTL by default) for even faster repeated lookups.

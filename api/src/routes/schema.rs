@@ -36,8 +36,8 @@ pub fn forward_headers(headers: &HeaderMap) -> reqwest::header::HeaderMap {
     let mut map = reqwest::header::HeaderMap::new();
     for key in &[
         "authorization",
-        "x-fluxbase-tenant",
-        "x-fluxbase-project",
+        "x-flux-tenant",
+        "x-flux-project",
         "x-tenant-id",
         "x-project-id",
         "x-tenant-slug",
@@ -58,16 +58,16 @@ pub fn forward_headers(headers: &HeaderMap) -> reqwest::header::HeaderMap {
     }
 
     // Data Engine contract requires x-tenant-id / x-project-id.
-    // API clients send x-fluxbase-tenant / x-fluxbase-project, so mirror them.
+    // API clients send x-flux-tenant / x-flux-project, so mirror them.
     if !map.contains_key("x-tenant-id") {
-        if let Some(v) = headers.get("x-fluxbase-tenant") {
+        if let Some(v) = headers.get("x-flux-tenant") {
             if let Ok(val) = reqwest::header::HeaderValue::from_bytes(v.as_bytes()) {
                 map.insert("x-tenant-id", val);
             }
         }
     }
     if !map.contains_key("x-project-id") {
-        if let Some(v) = headers.get("x-fluxbase-project") {
+        if let Some(v) = headers.get("x-flux-project") {
             if let Ok(val) = reqwest::header::HeaderValue::from_bytes(v.as_bytes()) {
                 map.insert("x-project-id", val);
             }

@@ -1,8 +1,8 @@
-# Fluxbase Gateway Module
+# Flux Gateway Module
 
 ## Overview
 
-The **Gateway** is the **edge runtime orchestrator** and primary control plane entry point for Fluxbase. It is far more than a reverse proxy — it is the system responsible for:
+The **Gateway** is the **edge runtime orchestrator** and primary control plane entry point for Flux. It is far more than a reverse proxy — it is the system responsible for:
 
 - **Trace Root Creation** — Every incoming request creates an observable trace tree
 - **Multi-Tenant Routing** — Resolves client requests to the correct tenant + function based on subdomain
@@ -36,7 +36,7 @@ The gateway achieves low-latency, high-reliability request handling through:
 
 ## Why the Gateway Exists
 
-Fluxbase's core promise is **observability by construction**. The gateway is the architectural component that makes this possible. Here's why it exists:
+Flux's core promise is **observability by construction**. The gateway is the architectural component that makes this possible. Here's why it exists:
 
 ### 1. **Trace Root Authority**
 The gateway is the **only component that sees the original client request**. It has the authority to:
@@ -105,7 +105,7 @@ The gateway validates these headers to reconstruct the original client request:
 |--------|---------|----------|
 | `X-Forwarded-Proto` | Original protocol (must be "https") | `https` |
 | `X-Forwarded-For` | Client IP address (for logging/rate limiting) | `192.0.2.1` |
-| `X-Forwarded-Host` | Original host from client request | `acme-org.fluxbase.dev` |
+| `X-Forwarded-Host` | Original host from client request | `acme-org.flux.dev` |
 
 **Validation**:
 
@@ -386,7 +386,7 @@ This prevents replay from breaking after schema changes.
 
 ## Request Lifecycle
 
-Understanding the complete lifecycle of a single HTTP request is key to understanding Fluxbase:
+Understanding the complete lifecycle of a single HTTP request is key to understanding Flux:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -396,7 +396,7 @@ Understanding the complete lifecycle of a single HTTP request is key to understa
 │   1. CLIENT SENDS REQUEST                                                  │
 │      ─────────────────────                                                  │
 │      POST /api/users/create                                                │
-│      Host: acme-org.fluxbase.dev                                          │
+│      Host: acme-org.flux.dev                                          │
 │      Authorization: Bearer <jwt>                                           │
 │      Content-Type: application/json                                        │
 │      { "name": "Alice", ... }                                             │
@@ -550,7 +550,7 @@ Understanding the complete lifecycle of a single HTTP request is key to understa
 
 ## Trace Root Architecture
 
-Fluxbase's observability is **built on trace roots, not log aggregation**. The gateway creates and manages these roots.
+Flux's observability is **built on trace roots, not log aggregation**. The gateway creates and manages these roots.
 
 ### Root Span Creation
 
@@ -627,7 +627,7 @@ Runtime (receives same x-request-id)
 - "Did my function fail?" requires correlating 5+ independent log sources
 - Debugging multi-step workflows becomes detective work
 
-**With trace roots (Fluxbase approach):**
+**With trace roots (Flux approach):**
 - Single request_id stitches all logs together
 - Dashboard shows complete execution tree with timing
 - Bottlenecks visible instantly (which step took 100ms?)
@@ -681,7 +681,7 @@ Request IDs are the golden thread of observability. The gateway enforces a stric
 
 #### Trace Context Compatibility (W3C Standard)
 
-Fluxbase currently propagates tracing using internal headers (`x-request-id`, `x-parent-span-id`). To ensure compatibility with industry-standard observability tools, the gateway should also support the **W3C Trace Context** specification.
+Flux currently propagates tracing using internal headers (`x-request-id`, `x-parent-span-id`). To ensure compatibility with industry-standard observability tools, the gateway should also support the **W3C Trace Context** specification.
 
 **Standard W3C Headers**:
 ```
@@ -693,7 +693,7 @@ tracestate: vendor=value
 
 **Mapping Strategy**:
 
-| W3C Field | Fluxbase Field | Purpose |
+| W3C Field | Flux Field | Purpose |
 |-----------|----------------|---------|
 | trace-id (128-bit) | request_id (UUID) | Root trace identifier |
 | parent-id (64-bit) | parent_span_id (UUID) | Parent span identifier |
@@ -724,7 +724,7 @@ Runtime receives same trace-id, can create its own child spans.
 
 **External Tool Integration**:
 
-This enables Fluxbase to integrate with industry-standard observability systems:
+This enables Flux to integrate with industry-standard observability systems:
 - **OpenTelemetry** — Parse W3C traceparent natively
 - **Jaeger** — Ingest traces with standard context propagation
 - **Datadog APM** — Inject Datadog trace context alongside W3C
@@ -734,7 +734,7 @@ This enables Fluxbase to integrate with industry-standard observability systems:
 
 ### Trace Reconstruction & Query
 
-Fluxbase traces are not streamed—they are reconstructed from storage on-demand.
+Flux traces are not streamed—they are reconstructed from storage on-demand.
 
 **Storage Model**: All spans (gateway, runtime, data-engine, tools) are persisted to a single `platform_logs` table:
 
@@ -744,7 +744,7 @@ WHERE request_id = '550e8400-e29b-41d4-a716-446655440000'
 ORDER BY created_at ASC
 ```
 
-**Reconstruction**: The **Fluxbase API** service rebuilds trace trees by:
+**Reconstruction**: The **Flux API** service rebuilds trace trees by:
 1. Querying all spans for a request_id
 2. Finding the root span (where `parent_span_id IS NULL`)
 3. Building a tree by following `parent_span_id` pointers (child spans reference parent via this ID)
@@ -883,14 +883,14 @@ trace tree (async path):
 **Identity Resolution** — Extract tenant from subdomain, validate against reserved names.
 
 ```rust
-// Example: acme-org.fluxbase.dev
-// Headers: Host: acme-org.fluxbase.dev
+// Example: acme-org.flux.dev
+// Headers: Host: acme-org.flux.dev
 // ↓
 // Resolved: tenant_slug="acme-org", tenant_id=<uuid>
 ```
 
 **Reserved Subdomain Blocking** — Prevents hijacking of platform-critical names:
-- Exact matches: `api`, `auth`, `dashboard`, `admin`, `flux`, `fluxbase`, etc.
+- Exact matches: `api`, `auth`, `dashboard`, `admin`, `flux`, `flux`, etc.
 - Prefix blocks: `api-*`, `auth-*`, `admin-*` (prevent `api-test-org`)
 - Response: **421 Misdirected Request** (signals intentional platform claim)
 
@@ -998,7 +998,7 @@ RouteRecord {
 
 **Passthrough Proxy**:
 - Client: `GET /events/stream?table=users&conditions=...`
-- Gateway: Extract auth headers + Fluxbase scope headers, forward to API
+- Gateway: Extract auth headers + Flux scope headers, forward to API
 - Response: Transparent SSE stream (events streamed directly to client)
 
 **Benefits**:
@@ -1147,7 +1147,7 @@ This ensures the trace tree is accurately reconstructed in `platform_logs` even 
 
 > **Only the Gateway is exposed to the public internet.**
 
-All other Fluxbase services — Runtime, Data-Engine, Queue, API — **must only accept traffic from the internal network**. They are not configured with TLS termination for public traffic and do not perform their own client-identity validation.
+All other Flux services — Runtime, Data-Engine, Queue, API — **must only accept traffic from the internal network**. They are not configured with TLS termination for public traffic and do not perform their own client-identity validation.
 
 | Service | Network exposure | Traffic source |
 |---------|----------------|----------------|
@@ -1168,11 +1168,11 @@ The gateway validates all incoming requests to prevent host header injection att
 **Policy**:
 1. Extract `Host` header (or `X-Forwarded-Host` from load balancer)
 2. Validate format: must be `{tenant-slug}.{base-domain}`
-3. Base domain must match configured value (e.g., `fluxbase.dev`)
+3. Base domain must match configured value (e.g., `flux.dev`)
 4. Reject non-matching hosts with **400 Bad Request**
 
 **Examples**:
-- ✓ `acme-org.fluxbase.dev` — valid
+- ✓ `acme-org.flux.dev` — valid
 - ✗ `acme-org.attacker.com` — rejected (wrong base domain)
 - ✗ `localhost` — rejected (missing tenant slug)
 
@@ -1484,7 +1484,7 @@ GET /metrics
 gateway_requests_total{route="/api/users",method="POST",status="200"} 1024
 ```
 
-**Why**: Without metrics, operating Fluxbase is blind. When p95 latency rises, you need to know if it's:
+**Why**: Without metrics, operating Flux is blind. When p95 latency rises, you need to know if it's:
 - Slow auth (JWKS timeout)?
 - Cache misses (thundering herd)?
 - DB pool exhaustion?
@@ -1503,7 +1503,7 @@ gateway_requests_total{route="/api/users",method="POST",status="200"} 1024
 ```
 1. Client Request
    POST /api/users/create
-   Host: acme-org.fluxbase.dev
+   Host: acme-org.flux.dev
    Authorization: Bearer <jwt>
    
 2. Gateway Identity Resolver
@@ -1550,7 +1550,7 @@ gateway_requests_total{route="/api/users",method="POST",status="200"} 1024
 ```
 1. Client Request
    POST /db/query
-   Host: acme-org.fluxbase.dev
+   Host: acme-org.flux.dev
    Authorization: Bearer <jwt>
    Content-Type: application/json
    {"table": "users", "where": {"id": "123"}}
@@ -1643,7 +1643,7 @@ Result:
 | `DATA_ENGINE_URL` | `http://localhost:8082` | Structured query + file ops |
 | `GATEWAY_PORT` or `PORT` | `8081` | HTTP listen port |
 | `INTERNAL_SERVICE_TOKEN` | Required | Secret for internal endpoints (`/internal/*`) |
-| `API_URL` | `http://localhost:8080` | Fluxbase API (for SSE proxy) |
+| `API_URL` | `http://localhost:8080` | Flux API (for SSE proxy) |
 | `QUERY_CACHE_TTL_SECS` | `30` | Cache entry lifetime in seconds |
 | `QUERY_CACHE_MAX_ENTRIES` | `4096` | Maximum cached query responses |
 | `QUERY_CACHE_MAX_RESPONSE_SIZE` | `1MB` | **Max response size to cache** (prevents bloat; responses > 1MB bypass cache) |
@@ -1757,7 +1757,7 @@ Response:
 ```
 POST /db/query
 Prerequisites:
-  - Valid project scope (X-Fluxbase-Project header)
+  - Valid project scope (X-Flux-Project header)
   - Read-only query
 
 Response:
@@ -1782,7 +1782,7 @@ Response:
 GET /events/stream?table={table}&conditions={conditions}
 Prerequisites:
   - Valid auth headers (Authorization / X-API-Key)
-  - Fluxbase scope headers (X-Fluxbase-Tenant, X-Fluxbase-Project)
+  - Flux scope headers (X-Flux-Tenant, X-Flux-Project)
 
 Response:
   - Content-Type: text/event-stream
@@ -1961,7 +1961,7 @@ The revolutionary piece that enables true time-travel debugging for entire backe
 
 **Record every state mutation as an append-only event linked to request_id.**
 
-This automatically transforms Fluxbase into an event-sourced system, without forcing developers to design around it.
+This automatically transforms Flux into an event-sourced system, without forcing developers to design around it.
 
 > **Ownership note**: The full `state_mutations` schema, mutation capture middleware, and query API are documented in [`data-engine.md`](./data-engine.md). The gateway's role is narrow: it writes the **request envelope** to `trace_requests` before dispatch (replay source of truth), and the **Data Engine** writes `state_mutations` rows as SQL operations execute. The gateway never writes directly to `state_mutations`.
 
@@ -2298,7 +2298,7 @@ Event-sourced systems capture:
 - State changes
 - But require developer design
 
-Fluxbase captures both automatically:
+Flux captures both automatically:
 1. **Execution** (trace + checkpoints) — what happened
 2. **State mutations** (append-only log) — what changed
 3. **Code provenance** (code_sha) — which code caused it
@@ -2373,7 +2373,7 @@ This is enabled **entirely at the gateway** — no code changes needed, no funct
 
 ## Time-Travel Debugging: Replay & Trace Diffing
 
-Fluxbase's trace architecture enables a unique capability: **replay any past request** and **compare execution traces** — similar to `git log` and `git diff` but for backend execution.
+Flux's trace architecture enables a unique capability: **replay any past request** and **compare execution traces** — similar to `git log` and `git diff` but for backend execution.
 
 This transforms debugging from "what happened?" to "what would happen if I run it again?" and "why did this change?"
 
@@ -2904,7 +2904,7 @@ But they cannot:
 - Replay with same inputs
 - Link to source code commits
 
-Fluxbase can do all of these because:
+Flux can do all of these because:
 
 1. You control the **gateway** (entry point, creates tracing root)
 2. You control the **runtime** (can instrument checkpoint emission)
@@ -3287,7 +3287,7 @@ Click [Diff] → Shows: email_send latency 95ms → 40ms (3x faster now)
 
 **The killer feature: reproduce production incidents in an isolated sandbox.**
 
-This is the capstone of the entire architecture. Because Fluxbase captures request envelopes, execution traces, code versions, state mutations, and execution checkpoints, it can replay an entire production incident deterministically — including all concurrency, timing, and state interactions.
+This is the capstone of the entire architecture. Because Flux captures request envelopes, execution traces, code versions, state mutations, and execution checkpoints, it can replay an entire production incident deterministically — including all concurrency, timing, and state interactions.
 
 ### The Command
 
@@ -3325,7 +3325,7 @@ You now have the exact production traffic: sequence, timing, and payloads.
 
 #### Phase 2: Create Isolated Sandbox
 
-Fluxbase launches a dedicated sandbox environment:
+Flux launches a dedicated sandbox environment:
 
 ```bash
 Sandbox: incident-replay-9382-v1
@@ -3598,7 +3598,7 @@ Result: **Branching backend histories** — you can see exactly how different co
 
 Deterministic replay requires three things:
 
-| Requirement | How Fluxbase Provides It |
+| Requirement | How Flux Provides It |
 |------------|--------------------------|
 | **Input** | `trace_requests` (request envelope: method, path, headers, body, query, tenant, project) |
 | **Execution** | `platform_logs` (complete trace with spans, timings, errors, tool calls) |
@@ -3613,7 +3613,7 @@ This is the same principle used in:
 - `rr` (Record & Replay) — Linux kernel-level debugging
 - Temporal / Durable Execution — replay workflow steps
 
-Fluxbase applies this pattern to **entire backend systems**.
+Flux applies this pattern to **entire backend systems**.
 
 ### Why Other Platforms Can't Do This
 
@@ -3644,7 +3644,7 @@ Temporal:
   ✗ No network request envelopes
   ✗ No execution checkpoints
 
-Fluxbase:
+Flux:
   ✓ Request envelopes (trace_requests)
   ✓ State mutations (state_mutations)
   ✓ Code version (code_sha)
@@ -3668,10 +3668,10 @@ Archived incidents older than 90 days can be compressed (~80% reduction) or dele
 
 ### The Backend Time-Travel Stack
 
-This transforms Fluxbase into the ultimate debugging platform:
+This transforms Flux into the ultimate debugging platform:
 
 ```
-Git CLI                 Fluxbase Equivalent
+Git CLI                 Flux Equivalent
 ──────────————————────────────────────────
 git log                 flux trace
 git blame               flux trace blame
@@ -3739,7 +3739,7 @@ No staging environment needed. No data export required. No reproduction steps ne
 6. **Metrics Export** — Prometheus `/metrics` endpoint for real-time p50/p95/p99 latencies per route
 7. **Webhook Retry** — Built-in retry logic with exponential backoff and jitter for webhook failures
 8. **Request Deduplication** — Idempotency key support (prevent duplicate writes on automatic retries)
-9. **Custom Header Injection** — Per-route custom headers (e.g., X-Fluxbase-Tenant-Tier for multi-tiered SLAs)
+9. **Custom Header Injection** — Per-route custom headers (e.g., X-Flux-Tenant-Tier for multi-tiered SLAs)
 10. **Readiness Probe** — Full dependency health check (DB, snapshot, JWKS) on GET /readiness
 11. **Event-Driven Snapshot Refresh** — Listen to platform_logs for route mutations instead of pure polling
 12. **Request Rate Bucketing** — Per-tenant and per-IP rate limits in addition to per-route
@@ -3793,7 +3793,7 @@ cargo test -p gateway --test integration
 # Benchmark cache hit latency
 wrk -t4 -c100 -d30s \
   -s script.lua \
-  http://acme-org.fluxbase.dev:8081/db/query
+  http://acme-org.flux.dev:8081/db/query
 
 # Expected: >1000 req/s on cache hits
 # Expected: <100ms p95 latency
@@ -3844,7 +3844,7 @@ gateway/
 
 ## Summary
 
-The **Gateway** is the **edge runtime orchestrator** and primary control plane entry point for Fluxbase. It implements a complete request lifecycle:
+The **Gateway** is the **edge runtime orchestrator** and primary control plane entry point for Flux. It implements a complete request lifecycle:
 
 **Request Lifecycle**:
 ```
@@ -3887,6 +3887,6 @@ Client Request
 - **Role-aware caching prevents leaks** — Cache key includes JWT role claim
 - **Timeouts are strict** — Runtime: 30s, Data-Engine: 15s, Queue: 5s (prevent hangs)
 
-Fluxbase gateways are perfect for building **trace-first, observable serverless platforms** where every request is automatically woven into a distributed trace tree and sampling prevents log bloat at scale.
+Flux gateways are perfect for building **trace-first, observable serverless platforms** where every request is automatically woven into a distributed trace tree and sampling prevents log bloat at scale.
 
 Perfect for building **trace-first, observable serverless platforms** where every request is automatically woven into a distributed trace.

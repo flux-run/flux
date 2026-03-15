@@ -6,7 +6,7 @@
 //! Tests are grouped into:
 //!   - `parsing` – verify that commands/flags parse correctly (offline, no HTTP)
 //!   - `auth`    – login command validation
-//!   - `api`     – mock-HTTP tests that set FLUXBASE_API_URL → mockito server
+//!   - `api`     – mock-HTTP tests that set FLUX_API_URL → mockito server
 
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
@@ -27,7 +27,7 @@ fn help_shows_usage() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Fluxbase CLI"))
+        .stdout(predicate::str::contains("Flux CLI"))
         .stdout(predicate::str::contains("USAGE").or(predicate::str::contains("Usage")));
 }
 
@@ -274,7 +274,7 @@ fn errors_command_parses_since_flag() {
         .success();
 }
 
-// ─── API mock tests (require FLUXBASE_API_URL override) ──────────────────────
+// ─── API mock tests (require FLUX_API_URL override) ──────────────────────
 
 #[cfg(test)]
 mod api_mock {
@@ -292,16 +292,16 @@ mod api_mock {
     /// (server, home_tmpdir, workspace_tmpdir, api_url).
     ///
     /// The `flux` subprocess is run with:
-    ///   HOME=home_tmp  (so ~/.fluxbase/config.json points to our fake config)
+    ///   HOME=home_tmp  (so ~/.flux/config.json points to our fake config)
     ///   cwd=workspace  (an empty dir with no project config, so it won't override)
     async fn setup_mock_server() -> (mockito::ServerGuard, TempDir, TempDir, String) {
         let server = Server::new_async().await;
         let api_url = server.url();
 
-        // Home dir: contains .fluxbase/config.json pointing at the mock
+        // Home dir: contains .flux/config.json pointing at the mock
         let home_tmp = tempfile::tempdir().unwrap();
-        let dot_fluxbase = home_tmp.path().join(".fluxbase");
-        std::fs::create_dir_all(&dot_fluxbase).unwrap();
+        let dot_flux = home_tmp.path().join(".flux");
+        std::fs::create_dir_all(&dot_flux).unwrap();
         let cfg = serde_json::json!({
             "api_url": api_url,
             "token": "flux_test_token_abc123",
@@ -312,7 +312,7 @@ mod api_mock {
             "runtime_url": api_url,
         });
         std::fs::write(
-            dot_fluxbase.join("config.json"),
+            dot_flux.join("config.json"),
             serde_json::to_string_pretty(&cfg).unwrap(),
         ).unwrap();
 
@@ -334,8 +334,8 @@ mod api_mock {
             .await;
 
         let _out = flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .arg("whoami")
@@ -357,8 +357,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["tenant", "list"])
@@ -381,8 +381,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["secrets", "list"])
@@ -405,8 +405,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["function", "list"])
@@ -429,8 +429,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["gateway", "route", "list"])
@@ -453,8 +453,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["secrets", "set", "MY_KEY", "my_value"])
@@ -476,8 +476,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["db", "list"])
@@ -500,8 +500,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["version", "list", "echo"])
@@ -524,8 +524,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["monitor", "status"])
@@ -548,8 +548,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["workflow", "list"])
@@ -572,8 +572,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["agent", "list"])
@@ -596,8 +596,8 @@ mod api_mock {
             .await;
 
         flux()
-            .env("FLUXBASE_API_URL", &api_url)
-            .env("FLUXBASE_TOKEN", "flux_test_token_abc123")
+            .env("FLUX_API_URL", &api_url)
+            .env("FLUX_TOKEN", "flux_test_token_abc123")
             .env("HOME", home_tmp.path())
             .current_dir(workspace_tmp.path())
             .args(["api-key", "list"])

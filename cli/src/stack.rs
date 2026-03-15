@@ -1,7 +1,7 @@
-//! `flux stack` — local Fluxbase development stack manager.
+//! `flux stack` — local Flux development stack manager.
 //!
 //! Wraps `docker compose` to start, stop, inspect, and tail logs for the full
-//! Fluxbase development stack defined in `docker-compose.dev.yml`.
+//! Flux development stack defined in `docker-compose.dev.yml`.
 //!
 //! ```text
 //! $ flux stack up            — build and start all services (detached)
@@ -94,7 +94,7 @@ fn run(args: Vec<String>) -> anyhow::Result<()> {
 pub async fn execute_up(build: bool, detach: bool) -> anyhow::Result<()> {
     let compose = find_compose_file().ok_or_else(|| {
         anyhow::anyhow!(
-            "{} not found.\n  Run from the Fluxbase project root or a subdirectory.",
+            "{} not found.\n  Run from the Flux project root or a subdirectory.",
             COMPOSE_FILE
         )
     })?;
@@ -105,7 +105,7 @@ pub async fn execute_up(build: bool, detach: bool) -> anyhow::Result<()> {
     if detach  { args.push("-d".to_string()); }
 
     println!(
-        "{} Starting Fluxbase stack  {}",
+        "{} Starting Flux stack  {}",
         "▶".green().bold(),
         compose.display().to_string().dimmed(),
     );
@@ -124,7 +124,7 @@ pub async fn execute_down(volumes: bool) -> anyhow::Result<()> {
     args.push("down".to_string());
     if volumes { args.push("-v".to_string()); }
 
-    println!("{} Stopping Fluxbase stack…", "■".red().bold());
+    println!("{} Stopping Flux stack…", "■".red().bold());
     run(args)
 }
 
@@ -182,7 +182,7 @@ pub async fn execute_reset() -> anyhow::Result<()> {
     down_args.extend(["down".to_string(), "-v".to_string()]);
     run(down_args)?;
 
-    println!("{} Restarting Fluxbase stack…", "▶".green().bold());
+    println!("{} Restarting Flux stack…", "▶".green().bold());
     let mut up_args = base_args(&compose);
     up_args.extend(["up".to_string(), "--build".to_string(), "-d".to_string()]);
     run(up_args)

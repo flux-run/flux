@@ -2,7 +2,7 @@
 //!
 //! # Pull
 //!
-//! Fetches the live schema from your Fluxbase project and writes a fully-typed
+//! Fetches the live schema from your Flux project and writes a fully-typed
 //! TypeScript SDK file:
 //!
 //! ```text
@@ -10,7 +10,7 @@
 //! ✔ Connected to project  proj_abc123
 //! ✔ Schema  v4  (hash: a3f8c1d2)
 //! ✔ Tables  8   Functions  3
-//! ✔ SDK written → src/fluxbase.generated.ts
+//! ✔ SDK written → src/flux.generated.ts
 //! ```
 //!
 //! # Watch
@@ -20,10 +20,10 @@
 //!
 //! ```text
 //! $ flux watch --interval 10
-//! ◉ Watching schema (every 10s) → fluxbase.generated.ts
+//! ◉ Watching schema (every 10s) → flux.generated.ts
 //!   [10:02:31] ✔ v4  unchanged
 //!   [10:02:41] ↻ v5  schema changed – regenerating…
-//!   [10:02:41] ✔ SDK written → fluxbase.generated.ts
+//!   [10:02:41] ✔ SDK written → flux.generated.ts
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -51,7 +51,7 @@ struct SchemaResponse {
 async fn fetch_schema(client: &ApiClient) -> anyhow::Result<SchemaResponse> {
     let url = format!("{}/sdk/schema", client.base_url);
     let res = client.client.get(&url).send().await
-        .context("Failed to reach Fluxbase API")?;
+        .context("Failed to reach Flux API")?;
 
     if !res.status().is_success() {
         let status = res.status();
@@ -70,7 +70,7 @@ async fn fetch_schema(client: &ApiClient) -> anyhow::Result<SchemaResponse> {
 async fn fetch_typescript_sdk(client: &ApiClient) -> anyhow::Result<String> {
     let url = format!("{}/sdk/typescript", client.base_url);
     let res = client.client.get(&url).send().await
-        .context("Failed to reach Fluxbase API")?;
+        .context("Failed to reach Flux API")?;
 
     if !res.status().is_success() {
         let status = res.status();
@@ -95,7 +95,7 @@ fn prepend_header(
     let ts = iso_now();
     format!(
         "/**\n\
-         * @generated Fluxbase SDK\n\
+         * @generated Flux SDK\n\
          * Project:        {project_id}\n\
          * Schema version: v{version}\n\
          * Schema hash:    {hash}\n\
@@ -194,7 +194,7 @@ fn epoch_to_ymd_hms(mut t: u64) -> (u64, u64, u64, u64, u64, u64) {
 
 /// Execute `flux pull`.
 ///
-/// `output` — destination file path (defaults to `fluxbase.generated.ts`).
+/// `output` — destination file path (defaults to `flux.generated.ts`).
 pub async fn execute_pull(output: Option<String>) -> anyhow::Result<()> {
     let proj = ProjectConfig::load().await;
     let output_path = PathBuf::from(ProjectConfig::resolve_sdk_output(output, proj.as_ref()));
@@ -267,7 +267,7 @@ pub async fn execute_pull(output: Option<String>) -> anyhow::Result<()> {
 
 /// Execute `flux watch`.
 ///
-/// `output`   — destination file path (defaults to `fluxbase.generated.ts`).
+/// `output`   — destination file path (defaults to `flux.generated.ts`).
 /// `interval` — polling interval in seconds (defaults to 5).
 pub async fn execute_watch(output: Option<String>, interval: u64) -> anyhow::Result<()> {
     let proj = ProjectConfig::load().await;
@@ -354,7 +354,7 @@ pub async fn execute_watch(output: Option<String>, interval: u64) -> anyhow::Res
 /// Compares the schema version embedded in the local SDK file against the
 /// live remote schema, and reports whether the file is up-to-date.
 ///
-/// `sdk_path` — path to the generated file (defaults to `fluxbase.generated.ts`).
+/// `sdk_path` — path to the generated file (defaults to `flux.generated.ts`).
 pub async fn execute_status(sdk_path: Option<String>) -> anyhow::Result<()> {
     let proj = ProjectConfig::load().await;
     let path = PathBuf::from(ProjectConfig::resolve_sdk_output(sdk_path, proj.as_ref()));

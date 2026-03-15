@@ -1,8 +1,8 @@
-# flux — Fluxbase CLI Reference
+# flux — Flux CLI Reference
 
-`flux` is the terminal interface for Fluxbase. It gives developers full control over every layer of the platform — from deploying a function and wiring a gateway route to managing database schema, running AI agents, and inspecting end-to-end traces — all without leaving the terminal.
+`flux` is the terminal interface for Flux. It gives developers full control over every layer of the platform — from deploying a function and wiring a gateway route to managing database schema, running AI agents, and inspecting end-to-end traces — all without leaving the terminal.
 
-**Every request in Fluxbase receives a unique request ID.** This ID links logs, traces, tool calls, database operations, and workflows together into a fully navigable execution graph — enabling one-command root cause analysis.
+**Every request in Flux receives a unique request ID.** This ID links logs, traces, tool calls, database operations, and workflows together into a fully navigable execution graph — enabling one-command root cause analysis.
 
 **Production debugging commands:**
 - `flux why <request-id>` — 10-second root cause: error message, commit SHA, field-level state changes, and suggested fix. **The first command to run during any incident.**
@@ -27,13 +27,13 @@
 - Flags over positional args
 - Every command is scriptable (`--output json`, `--confirm`, `--dry-run`)
 - Destructive commands require confirmation unless `--confirm` is passed
-- Context (tenant + project) is stored in `~/.fluxbase/config.json` and overridable per project via `.fluxbase/config.json`
+- Context (tenant + project) is stored in `~/.flux/config.json` and overridable per project via `.flux/config.json`
 
 ---
 
 ## 30-second quickstart
 
-New to Fluxbase? This shows the full flow from zero to a deployed, debuggable backend function.
+New to Flux? This shows the full flow from zero to a deployed, debuggable backend function.
 
 ```bash
 # 1. Authenticate
@@ -77,9 +77,9 @@ flux debug <request-id>            # or jump directly to a known request
 
 ## Git-like debugging for backend execution
 
-Fluxbase gives every backend developer the same tools that Git gives every code developer — but for production requests instead of source commits.
+Flux gives every backend developer the same tools that Git gives every code developer — but for production requests instead of source commits.
 
-| Git | Fluxbase | What it does |
+| Git | Flux | What it does |
 |-----|----------|--------------| 
 | `git blame` | `flux state blame` | Last writer per row, linked to the request that wrote it |
 | `git log` | `flux state history` | Full version history for a single row with field-level before→after diffs |
@@ -115,11 +115,11 @@ Apply to every command.
 
 | Env var | Overrides |
 |---------|-----------|
-| `FLUXBASE_API_URL` | API base URL |
-| `FLUXBASE_GATEWAY_URL` | Gateway base URL |
-| `FLUXBASE_RUNTIME_URL` | Runtime base URL |
-| `FLUXBASE_TENANT_ID` | Active tenant |
-| `FLUXBASE_PROJECT_ID` | Active project |
+| `FLUX_API_URL` | API base URL |
+| `FLUX_GATEWAY_URL` | Gateway base URL |
+| `FLUX_RUNTIME_URL` | Runtime base URL |
+| `FLUX_TENANT_ID` | Active tenant |
+| `FLUX_PROJECT_ID` | Active project |
 
 ---
 
@@ -131,7 +131,7 @@ All `flux` commands use consistent exit codes. Scripts and CI/CD pipelines can r
 |------|---------|
 | `0` | Success |
 | `1` | CLI error (bad flags, missing argument, local I/O) |
-| `2` | API error (non-2xx response from Fluxbase API) |
+| `2` | API error (non-2xx response from Flux API) |
 | `3` | Authentication failure (missing or expired token) |
 | `4` | Resource not found (function, tenant, project, trace) |
 | `5` | Conflict (e.g. resource already exists) |
@@ -176,14 +176,14 @@ For CI/CD scripts prefer the full names so scripts remain readable.
 
 ## Configuration files
 
-### `~/.fluxbase/config.json` — global auth context
+### `~/.flux/config.json` — global auth context
 
 Stored after `flux login`. Never committed to version control.
 
 ```json
 {
   "api_url": "https://api.fluxbase.co",
-  "gateway_url": "https://fluxbase-gateway-658415624069.asia-south1.run.app",
+  "gateway_url": "https://flux-gateway-658415624069.asia-south1.run.app",
   "runtime_url": "http://localhost:8083",
   "token": "flux_live_...",
   "tenant_id": "5b5f77d1-ce22-4439-8d81-b35c9ecb292e",
@@ -192,7 +192,7 @@ Stored after `flux login`. Never committed to version control.
 }
 ```
 
-### `.fluxbase/config.json` — per-project overrides
+### `.flux/config.json` — per-project overrides
 
 Committed to version control. Overrides global config for URL and project context.
 
@@ -202,7 +202,7 @@ Committed to version control. Overrides global config for URL and project contex
   "api_url": "http://localhost:8080",
   "gateway_url": "http://localhost:8081",
   "runtime_url": "http://localhost:8083",
-  "sdk_output": "src/fluxbase.generated.ts",
+  "sdk_output": "src/flux.generated.ts",
   "watch_interval": 5
 }
 ```
@@ -229,7 +229,7 @@ flux
 ├── (no subcommand)                📋 launch interactive REPL shell
 ├── login                          ✅ authenticate with an API key
 ├── status                         📋 show active context + platform health
-├── init                           ✅ initialise .fluxbase/config.json
+├── init                           ✅ initialise .flux/config.json
 ├── new <name>                     ✅ scaffold a new project from a template
 ├── dev                            ✅ run local dev server
 ├── deploy                         ✅ deploy current function / all functions
@@ -488,13 +488,13 @@ flux
 
 ### `flux login` ✅
 
-Authenticate the CLI with a Fluxbase API key. Keys are issued from the dashboard under **Settings → API Keys**.
+Authenticate the CLI with a Flux API key. Keys are issued from the dashboard under **Settings → API Keys**.
 
 ```
 flux login
 ```
 
-Prompts for an API key (input hidden). Verifies against `/auth/me`, stores token + tenant/project context in `~/.fluxbase/config.json`.
+Prompts for an API key (input hidden). Verifies against `/auth/me`, stores token + tenant/project context in `~/.flux/config.json`.
 
 **API key format:** must begin with `flux_`
 
@@ -511,7 +511,7 @@ Login successful!
 
 ### `flux init` ✅
 
-Initialise `.fluxbase/config.json` for the current project directory. Run once after cloning a repo.
+Initialise `.flux/config.json` for the current project directory. Run once after cloning a repo.
 
 ```
 flux init [flags]
@@ -519,8 +519,8 @@ flux init [flags]
 
 | Flag | Description |
 |------|-------------|
-| `--project <id>` | Fluxbase project ID |
-| `--output <file>` | Default SDK output path (default: `fluxbase.generated.ts`) |
+| `--project <id>` | Flux project ID |
+| `--output <file>` | Default SDK output path (default: `flux.generated.ts`) |
 | `--interval <secs>` | Watch interval for `flux watch` (default: `5`) |
 | `--api-url <url>` | Override API URL (e.g. `http://localhost:8080` for local dev) |
 | `--gateway-url <url>` | Override gateway URL |
@@ -528,14 +528,14 @@ flux init [flags]
 
 ```
 $ flux init --project 3787e1fa
-✔ Created .fluxbase/config.json
+✔ Created .flux/config.json
 ```
 
 ---
 
 ### `flux new <name>` ✅
 
-Scaffold a new Fluxbase project from an official template.
+Scaffold a new Flux project from an official template.
 
 > Renamed from `flux create` to follow the convention of `cargo new`, `npm create`,
 > and `next create`. The name `create` is reserved as a generic subcommand verb
@@ -619,7 +619,7 @@ Deploy the current directory. Behaviour depends on context:
 - **At project root**: discovers all subdirectories with `flux.json` and deploys all
 
 During deployment Flux automatically bundles your function and its dependencies,
-compiles runtime-compatible JavaScript, and uploads the bundle to the Fluxbase
+compiles runtime-compatible JavaScript, and uploads the bundle to the Flux
 runtime. This ensures deterministic deployments regardless of the developer's
 local environment.
 
@@ -765,7 +765,7 @@ $ flux function create send_email
 
 **Generated `index.ts`:**
 ```typescript
-import { defineFunction } from "@fluxbase/functions"
+import { defineFunction } from "@flux/functions"
 import { z } from "zod"
 
 const Input = z.object({ name: z.string() })
@@ -1260,7 +1260,7 @@ evt_abc123   user.signed_up   2026-03-10 14:01       1
 
 Show the full cross-service execution trace for a request.
 
-Every request in Fluxbase generates a trace automatically — no instrumentation
+Every request in Flux generates a trace automatically — no instrumentation
 or manual span creation is required.
 
 ```
@@ -1535,9 +1535,9 @@ Platform observability: health checks, metrics, and alerts.
 ```
 $ flux monitor status
 Service           Status    Latency (p50/p95)   Error Rate (1h)
-fluxbase-api      healthy   45ms / 210ms        0.1%
-fluxbase-runtime  healthy   320ms / 1800ms      0.3%
-fluxbase-gateway  healthy   8ms / 42ms          0.0%
+flux-api      healthy   45ms / 210ms        0.1%
+flux-runtime  healthy   320ms / 1800ms      0.3%
+flux-gateway  healthy   8ms / 42ms          0.0%
 ```
 
 #### `flux monitor metrics`
@@ -1578,16 +1578,16 @@ flux sdk generate [--lang <lang>]    # 📋 multi-language generation
 
 ```
 $ flux pull
-✔ Generated src/fluxbase.generated.ts  (schema v5)
+✔ Generated src/flux.generated.ts  (schema v5)
 
-$ flux sdk generate --lang python --output ./sdk/fluxbase.py
+$ flux sdk generate --lang python --output ./sdk/flux.py
 ```
 
 ---
 
 ### `flux open [resource]` 📋
 
-Open the Fluxbase dashboard in the default browser.
+Open the Flux dashboard in the default browser.
 
 ```
 flux open                          # dashboard home
@@ -1606,20 +1606,20 @@ Diagnose the developer environment.
 ```
 $ flux doctor
 
-Fluxbase CLI doctor
+Flux CLI doctor
 ────────────────────────────────────────────────
 ✔  CLI version:       0.2.0
 ✔  API reachable:     https://api.fluxbase.co  (62ms)
 ✔  Authenticated:     user@example.com
 ✔  Tenant:            acme-org  (5b5f77d1-...)
 ✔  Project:           backend   (3787e1fa-...)
-✔  SDK file:          src/fluxbase.generated.ts
+✔  SDK file:          src/flux.generated.ts
      Schema:          v4  (hash: a3f8c1d2)  generated 2026-03-09T10:02:41Z
 ⚠  SDK outdated:      local v4 → remote v5  →  run: flux pull
 ```
 
 Checks: CLI version, API reachability, authentication, active tenant/project,
-`.fluxbase/config.json`, SDK version drift, Node.js availability.
+`.flux/config.json`, SDK version drift, Node.js availability.
 
 ---
 
@@ -1736,8 +1736,8 @@ descriptions include an **Examples** block.
 ### `flux config` 📋
 
 Inspect and modify the active configuration without editing JSON files manually.
-Operates on the nearest config file: `.fluxbase/config.json` if present,
-otherwise `~/.fluxbase/config.json`.
+Operates on the nearest config file: `.flux/config.json` if present,
+otherwise `~/.flux/config.json`.
 
 ```
 flux config list
@@ -1748,23 +1748,23 @@ flux config reset
 ```
 $ flux config list
 
-  Source: ~/.fluxbase/config.json
+  Source: ~/.flux/config.json
 
   KEY             VALUE
   api_url         https://api.fluxbase.co
-  gateway_url     https://fluxbase-gateway-658415624069.asia-south1.run.app
+  gateway_url     https://flux-gateway-658415624069.asia-south1.run.app
   runtime_url     http://localhost:8083
   tenant_id       5b5f77d1-...
   tenant_slug     acme-org
   project_id      3787e1fa-...
 
 $ flux config set api_url http://localhost:8080
-✔ Set api_url = http://localhost:8080 in .fluxbase/config.json
+✔ Set api_url = http://localhost:8080 in .flux/config.json
 
 $ flux config reset
   This will restore all values to platform defaults.
   Confirm? [y/N]: y
-✔ Reset .fluxbase/config.json
+✔ Reset .flux/config.json
 ```
 
 | Key | Default |
@@ -1788,7 +1788,7 @@ Inspired by `redis-cli`, `terraform console`, and `psql`.
 ```
 $ flux
 
-  Fluxbase CLI  v0.2.0
+  Flux CLI  v0.2.0
   tenant: acme-org  project: backend
   Type 'help' or '?' for commands, 'exit' to quit.
 
@@ -1812,7 +1812,7 @@ supports tab completion for subcommands and flags.
 
 ### `flux debug [request-id]` ✅
 
-The **signature command** of Fluxbase. Two modes:
+The **signature command** of Flux. Two modes:
 
 **Interactive mode** (`flux debug` — no args):  
 Lists recent production errors. You select one. The CLI automatically runs trace + logs + suggests a fix.
@@ -1894,7 +1894,7 @@ Replay this request? [y/N]: y
   new request_id: c2d3e4f5a6b7
 ```
 
-This is the first thing a developer should reach for when something goes wrong in production. The 5-command story for Fluxbase is:
+This is the first thing a developer should reach for when something goes wrong in production. The 5-command story for Flux is:
 
 ```bash
 flux deploy           # ship your backend
@@ -1926,7 +1926,7 @@ flux tail [function] [flags]
 ```
 $ flux tail
 
-Fluxbase · Live Request Stream
+Flux · Live Request Stream
 Watching: all requests
 ────────────────────────────────────────────────────────────────────────────
 METHOD   ROUTE                         FUNCTION                DURATION   STATUS
@@ -2245,7 +2245,7 @@ Run 'flux incident replay --request-id 9624a58d' to apply.
 
 Compare two executions of the same request field-by-field: runtime metrics, per-span execution graph diff, and state mutation diffs. Typical use: compare a production failure against a replay to confirm a fix or spot a behavior change.
 
-Because Fluxbase owns the entire execution stack (gateway → runtime → tools → db → workflows), the diff can show _why_ behavior changed — not just _what_ changed. `stripe.charge` timing out vs. succeeding is a fact you can read directly from the Execution Graph section.
+Because Flux owns the entire execution stack (gateway → runtime → tools → db → workflows), the diff can show _why_ behavior changed — not just _what_ changed. `stripe.charge` timing out vs. succeeding is a fact you can read directly from the Execution Graph section.
 
 ```
 flux trace diff <original-id> <replay-id> [--json]
@@ -2571,7 +2571,7 @@ flux schedule history nightly-cleanup
 
 ```yaml
 # .github/workflows/deploy.yml
-name: Deploy to Fluxbase
+name: Deploy to Flux
 on:
   push:
     branches: [main]
@@ -2583,9 +2583,9 @@ jobs:
       - run: cargo install flux-cli
       - run: flux login && flux deploy --confirm
         env:
-          FLUXBASE_API_KEY: ${{ secrets.FLUXBASE_API_KEY }}
-          FLUXBASE_TENANT_ID: ${{ secrets.FLUXBASE_TENANT_ID }}
-          FLUXBASE_PROJECT_ID: ${{ secrets.FLUXBASE_PROJECT_ID }}
+          FLUX_API_KEY: ${{ secrets.FLUX_API_KEY }}
+          FLUX_TENANT_ID: ${{ secrets.FLUX_TENANT_ID }}
+          FLUX_PROJECT_ID: ${{ secrets.FLUX_PROJECT_ID }}
 ```
 
 ---

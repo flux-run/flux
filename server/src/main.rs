@@ -246,7 +246,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Queue AppState ────────────────────────────────────────────────────
     let queue_state = Arc::new(
-        fluxbase_queue::state::AppState::new(
+        flux_queue::state::AppState::new(
             pool.clone(),
             api_dispatch_for_queue,
         ),
@@ -279,7 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Queue worker — polls for pending jobs and dispatches them to the runtime.
     let runtime_dispatch_for_worker: Arc<dyn job_contract::dispatch::RuntimeDispatch> =
         Arc::clone(&runtime_dispatch_ref);
-    tokio::spawn(fluxbase_queue::worker::worker::start(
+    tokio::spawn(flux_queue::worker::worker::start(
         pool.clone(),
         api_dispatch_for_worker,
         runtime_dispatch_for_worker,
@@ -291,7 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Queue worker started (concurrency={})", queue_worker_concurrency);
 
     // Queue timeout recovery — rescues stuck jobs.
-    tokio::spawn(fluxbase_queue::worker::timeout_recovery::run(
+    tokio::spawn(flux_queue::worker::timeout_recovery::run(
         pool.clone(),
         queue_timeout_check_ms,
         shutdown_rx.clone(),
@@ -350,7 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = axum::Router::new()
         .nest("/flux/api", api::create_app((*api_state).clone()))
         .nest("/flux/data-engine", data_engine::api::routes::build(de_state))
-        .nest("/flux/queue", fluxbase_queue::api::routes::routes(queue_state))
+        .nest("/flux/queue", flux_queue::api::routes::routes(queue_state))
         .merge(runtime_execute_router)
         .merge(dev_invoke_router)
         .nest_service(

@@ -8,7 +8,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::info;
 
-use fluxbase_queue::{api, config, db, dispatch, state, worker};
+use flux_queue::{api, config, db, dispatch, state, worker};
 
 /// Minimal HTTP implementation of [`RuntimeDispatch`] for the queue standalone binary.
 struct HttpRuntimeDispatch {
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
     let app = api::routes::routes(app_state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
-    info!("Starting Fluxbase Queue on {}", addr);
+    info!("Starting Flux Queue on {}", addr);
     let listener = TcpListener::bind(addr).await?;
 
     // Serve until SIGTERM or Ctrl-C.

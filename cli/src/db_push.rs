@@ -288,7 +288,7 @@ async fn push_schemas(
     std::fs::write(&compiler_path, SCHEMA_COMPILER)
         .context("Failed to write schema compiler script")?;
 
-    // Build an import map that resolves @fluxbase/schema to the local package.
+    // Build an import map that resolves @flux/schema to the local package.
     // Look for packages/schema/src/index.ts relative to the project root.
     let schema_pkg = root.join("packages").join("schema").join("src").join("runtime.ts");
     let import_map_path = tmp_dir.join("flux-schema-compiler-importmap.json");
@@ -296,7 +296,7 @@ async fn push_schemas(
         let schema_url = format!("file://{}", schema_pkg.display());
         serde_json::json!({
             "imports": {
-                "@fluxbase/schema": schema_url,
+                "@flux/schema": schema_url,
             }
         })
     } else {

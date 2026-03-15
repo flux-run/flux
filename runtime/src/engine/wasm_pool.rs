@@ -214,7 +214,7 @@ impl WasmPool {
     ///
     /// - `function_id` is the cache key; same value as used in `IsolatePool`
     /// - `bytes` is the raw `.wasm` binary (fetched from BundleCache / control plane)
-    /// - `allowed_http_hosts`: per-function HTTP allow-list for `fluxbase.http_fetch`
+    /// - `allowed_http_hosts`: per-function HTTP allow-list for `flux.http_fetch`
     ///
     /// Returns an `ExecutionResult` with `output` (JSON) and `logs`.
     pub async fn execute(
@@ -391,11 +391,11 @@ mod tests {
     }
 
     const MINIMAL_WAT: &str = r#"(module
-        (import "fluxbase" "log"         (func (param i32 i32 i32)))
-        (import "fluxbase" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
-        (import "fluxbase" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
-        (import "fluxbase" "db_query"    (func (param i32 i32 i32 i32 i32 i32) (result i32)))
-        (import "fluxbase" "queue_push"  (func (param i32 i32 i32 i32) (result i32)))
+        (import "flux" "log"         (func (param i32 i32 i32)))
+        (import "flux" "secrets_get" (func (param i32 i32 i32 i32) (result i32)))
+        (import "flux" "http_fetch"  (func (param i32 i32 i32 i32) (result i32)))
+        (import "flux" "db_query"    (func (param i32 i32 i32 i32 i32 i32) (result i32)))
+        (import "flux" "queue_push"  (func (param i32 i32 i32 i32) (result i32)))
         (memory (export "memory") 2)
         (data (i32.const 4) "\0f\00\00\00{\"output\":\"ok\"}")
         (func (export "__flux_alloc") (param i32) (result i32) i32.const 65536)

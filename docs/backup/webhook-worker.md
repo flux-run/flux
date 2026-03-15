@@ -1,7 +1,7 @@
 # Example — Webhook Worker
 
 Process incoming webhooks reliably: validate the signature, persist the event,
-and dispatch processing — all in one Fluxbase function.
+and dispatch processing — all in one Flux function.
 
 ---
 
@@ -36,9 +36,9 @@ Create a `webhook_events` table:
 Create `on_webhook/index.ts`:
 
 ```typescript
-import { defineFunction } from "@fluxbase/functions";
+import { defineFunction } from "@flux/functions";
 import { z } from "zod";
-import { createClient } from "@fluxbase/sdk";
+import { createClient } from "@flux/sdk";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 // Minimal signature check — works with Stripe, GitHub, and most providers

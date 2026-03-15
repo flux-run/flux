@@ -3,7 +3,7 @@
 // Runs in the V8 context: Deno.core.ops.* is available, no imports needed.
 
 async function __flux_run_task(task) {
-    var __fluxbase_logs = [];
+    var __flux_logs = [];
 
     // Per-task seeded PRNG (same algorithm as build_wrapper in executor.rs)
     // Defensive BigInt guard: serde_v8 may return i64s > Number.MAX_SAFE_INTEGER as BigInt.
@@ -62,7 +62,7 @@ async function __flux_run_task(task) {
         },
 
         log: function(message, level) {
-            __fluxbase_logs.push({
+            __flux_logs.push({
                 level:     level || "info",
                 message:   String(message),
                 span_type: "event",
@@ -87,7 +87,7 @@ async function __flux_run_task(task) {
                     try {
                         var result = await step.fn(__ctx, outputs);
                         var duration = Date.now() - _start;
-                        __fluxbase_logs.push({
+                        __flux_logs.push({
                             level:     "info",
                             message:   "workflow:" + name + "  " + duration + "ms",
                             span_type: "workflow_step",
@@ -96,7 +96,7 @@ async function __flux_run_task(task) {
                         outputs[name] = result;
                     } catch (e) {
                         var dur = Date.now() - _start;
-                        __fluxbase_logs.push({
+                        __flux_logs.push({
                             level:     "error",
                             message:   "workflow:" + name + "  failed (" + dur + "ms): " + (e && e.message),
                             span_type: "workflow_step",
@@ -118,7 +118,7 @@ async function __flux_run_task(task) {
                     var _start = Date.now();
                     return step.fn(__ctx).then(function(result) {
                         var duration = Date.now() - _start;
-                        __fluxbase_logs.push({
+                        __flux_logs.push({
                             level:     "info",
                             message:   "workflow:" + name + "  " + duration + "ms (parallel)",
                             span_type: "workflow_step",
@@ -164,7 +164,7 @@ async function __flux_run_task(task) {
                         project_id:    task.project_id || null,
                     }
                 );
-                __fluxbase_logs.push({
+                __flux_logs.push({
                     level:     "info",
                     message:   "queue_push:" + functionName + "  job_id=" + (result && result.job_id),
                     span_type: "queue_push",
@@ -187,7 +187,7 @@ async function __flux_run_task(task) {
                         request_id:      task.request_id,
                     }
                 );
-                __fluxbase_logs.push({
+                __flux_logs.push({
                     level:       "info",
                     message:     "db:query  " + (Date.now() - _start) + "ms  " + (result && result.meta ? result.meta.rows + " rows" : ""),
                     span_type:   "db_query",
@@ -209,7 +209,7 @@ async function __flux_run_task(task) {
                 opts || {},
                 { request_id: task.request_id }
             );
-            __fluxbase_logs.push({
+            __flux_logs.push({
                 level:       "info",
                 message:     "http:" + (opts && opts.method || "GET") + "  " + url + "  " + result.status + "  " + (Date.now() - _start) + "ms",
                 span_type:   "http_fetch",
@@ -237,7 +237,7 @@ async function __flux_run_task(task) {
                         request_id:    task.request_id,
                     }
                 );
-                __fluxbase_logs.push({
+                __flux_logs.push({
                     level:       "info",
                     message:     "invoke:" + name + "  " + (Date.now() - _start) + "ms",
                     span_type:   "function_invoke",
@@ -250,7 +250,7 @@ async function __flux_run_task(task) {
     };
 
     // Extract the user function in an isolated scope so concurrent tasks don't conflict
-    var targetFn = new Function("var __fluxbase_fn;\n" + task.code + "\nreturn __fluxbase_fn;")();
+    var targetFn = new Function("var __flux_fn;\n" + task.code + "\nreturn __flux_fn;")();
 
     // esbuild wraps the default export under .default
     if (targetFn && targetFn.default) {
@@ -258,7 +258,7 @@ async function __flux_run_task(task) {
     }
 
     var __result;
-    if (typeof targetFn === "object" && targetFn !== null && targetFn.__fluxbase === true) {
+    if (typeof targetFn === "object" && targetFn !== null && targetFn.__flux === true) {
         try {
             __result = await targetFn.execute(__payload, __ctx);
         } catch (e) {
@@ -275,7 +275,7 @@ async function __flux_run_task(task) {
 
     Deno.core.ops.op_task_complete(
         task.request_id,
-        JSON.stringify({ result: __result, logs: __fluxbase_logs })
+        JSON.stringify({ result: __result, logs: __flux_logs })
     );
 }
 

@@ -59,8 +59,8 @@ pub async fn proxy_handler(
             "authorization"
                 | "content-type"
                 | "accept"
-                | "x-fluxbase-tenant"
-                | "x-fluxbase-project"
+                | "x-flux-tenant"
+                | "x-flux-project"
                 | "x-flux-replay"
         ) {
             if let Ok(v) = value.to_str() {

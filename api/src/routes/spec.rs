@@ -126,7 +126,7 @@ pub async fn project_spec(
 
     // ── Agent instructions ────────────────────────────────────────────────
     let instructions = json!({
-        "overview": "Fluxbase is a backend runtime. Functions are deployed TypeScript handlers. \
+        "overview": "Flux is a backend runtime. Functions are deployed TypeScript handlers. \
                      Invoke them via POST to their invoke_url. DB operations go through the gateway \
                      at /db/{table}. All requests require Authorization: Bearer <token>.",
         "auth": {

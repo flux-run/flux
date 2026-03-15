@@ -1,5 +1,5 @@
 /**
- * @fluxbase/functions — Fluxbase serverless function framework
+ * @flux/functions — Flux serverless function framework
  *
  * Developers use `defineFunction` to create schema-validated, typed serverless
  * functions. The runtime calls `functionDef.execute(payload, context)`.
@@ -150,11 +150,11 @@ function walkZodDef(def: Record<string, unknown>): Record<string, unknown> {
 // ─── defineFunction ───────────────────────────────────────────────────────────
 
 /**
- * Define a Fluxbase serverless function.
+ * Define a Flux serverless function.
  *
  * @example
  * ```ts
- * import { defineFunction } from "@fluxbase/functions"
+ * import { defineFunction } from "@flux/functions"
  * import { z } from "zod"
  *
  * export default defineFunction({
@@ -180,7 +180,7 @@ export function defineFunction<TInput = unknown, TOutput = unknown>(
   const output_schema = extractJsonSchema(outputSchema as Schema | undefined);
 
   const definition: FunctionDefinition<TInput, TOutput> = {
-    __fluxbase: true,
+    __flux: true,
 
     metadata: {
       name,

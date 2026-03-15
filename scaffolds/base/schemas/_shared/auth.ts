@@ -1,4 +1,4 @@
-import type { RulePredicate, InsertPredicate } from "@fluxbase/schema"
+import type { RulePredicate, InsertPredicate } from "@flux/schema"
 
 /**
  * Reusable rule predicates — import in any *.schema.ts

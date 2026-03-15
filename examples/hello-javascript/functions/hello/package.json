@@ -12,6 +12,6 @@
     "dev":   "node --watch index.js"
   },
   "dependencies": {
-    "@fluxbase/functions": "^0.1.0"
+    "@flux/functions": "^0.1.0"
   }
 }

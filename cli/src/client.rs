@@ -8,7 +8,7 @@
 //! # URL resolution (highest precedence first)
 //! 1. `FLUX_URL` env var
 //! 2. `.flux/config.json` `server_url` in project tree
-//! 3. `FLUXBASE_API_URL` env var
+//! 3. `FLUX_API_URL` env var
 //! 4. `~/.flux/config.json`
 //! 5. Hard-coded default: http://localhost:4000/flux/api
 

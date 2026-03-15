@@ -1,6 +1,6 @@
 # Gateway Production-Readiness Checklist
 
-**Service:** Fluxbase Gateway  
+**Service:** Flux Gateway  
 **Target Audience:** DevOps, SRE, Production Engineers  
 **Purpose:** Verify gateway is production-grade before handling real traffic
 

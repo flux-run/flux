@@ -105,7 +105,7 @@ export default function ProjectsPage() {
             <div className="max-w-2xl">
               <div className="inline-flex items-center gap-2 text-xs font-semibold text-[#a78bfa] bg-[#6c63ff]/15 border border-[#6c63ff]/20 rounded-full px-3 py-1 mb-4">
                 <Zap className="w-3 h-3" />
-                Welcome to Fluxbase
+                Welcome to Flux
               </div>
               <h2 className="text-2xl font-bold tracking-tight mb-2">
                 Build backends where every request is inspectable history

@@ -1,4 +1,4 @@
-import { defineSchema, column, index, foreignKey, ForbiddenError } from "@fluxbase/schema"
+import { defineSchema, column, index, foreignKey, ForbiddenError } from "@flux/schema"
 import { userRole, userStatus } from "./_types"
 import { adminOrOwner, adminOnly, adminOrMod } from "./_shared/auth"
 import { addressListSchema, moneySchema } from "./_shared/jsonb"

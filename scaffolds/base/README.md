@@ -1,6 +1,6 @@
 # {name}
 
-A [Flux](https://fluxbase.dev) project — the self-hosted backend framework where every execution is a record.
+A [Flux](https://flux.dev) project — the self-hosted backend framework where every execution is a record.
 
 ## Quick start
 
@@ -44,6 +44,6 @@ flux invoke hello # test the hello function
 
 ## Learn more
 
-- [Flux docs](https://docs.fluxbase.dev)
-- [Schema reference](https://docs.fluxbase.dev/schemas)
-- [Gateway reference](https://docs.fluxbase.dev/gateway)
+- [Flux docs](https://docs.flux.dev)
+- [Schema reference](https://docs.flux.dev/schemas)
+- [Gateway reference](https://docs.flux.dev/gateway)

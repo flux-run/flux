@@ -242,7 +242,7 @@ pub fn project_schema_name() -> String {
     String::new()
 }
 
-/// Return the list of hosts WASM functions may call via `fluxbase.http_fetch`.
+/// Return the list of hosts WASM functions may call via `flux.http_fetch`.
 ///
 /// Configured via `WASM_HTTP_ALLOWED_HOSTS`:
 /// - Not set / empty  → deny all (safe default)
@@ -464,7 +464,7 @@ mod tests {
         let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         // Code that throws a structured JSON error.
-        let code = r#"__fluxbase_fn = async (ctx) => {
+        let code = r#"__flux_fn = async (ctx) => {
             const err = {code: "NOT_FOUND", message: "user not found"};
             throw new Error(JSON.stringify(err));
         };"#.to_string();
@@ -495,7 +495,7 @@ mod tests {
         let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         // Code that throws INPUT_VALIDATION_ERROR — runner must map it to 400.
-        let code = r#"__fluxbase_fn = async (ctx) => {
+        let code = r#"__flux_fn = async (ctx) => {
             const err = {code: "INPUT_VALIDATION_ERROR", message: "bad input from user code"};
             throw new Error(JSON.stringify(err));
         };"#.to_string();
@@ -524,7 +524,7 @@ mod tests {
         let client = reqwest::Client::new();
         let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
-        let code = r#"__fluxbase_fn = async (ctx) => ({ ok: true, echo: ctx.payload.name });"#.to_string();
+        let code = r#"__flux_fn = async (ctx) => ({ ok: true, echo: ctx.payload.name });"#.to_string();
 
         let (status, body) = r.run(
             ResolvedBundle::Deno { code },
@@ -551,7 +551,7 @@ mod tests {
         let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         let (status, body) = r.run(
-            ResolvedBundle::Deno { code: r#"__fluxbase_fn = async (ctx) => 42;"#.into() },
+            ResolvedBundle::Deno { code: r#"__flux_fn = async (ctx) => 42;"#.into() },
             HashMap::new(),
             &ctx("duration_fn"),
             &null_tracer(),
@@ -576,7 +576,7 @@ mod tests {
         let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
 
         let resp = r.run_response(
-            ResolvedBundle::Deno { code: r#"__fluxbase_fn = async (ctx) => ({ v: 1 });"#.into() },
+            ResolvedBundle::Deno { code: r#"__flux_fn = async (ctx) => ({ v: 1 });"#.into() },
             HashMap::new(),
             &ctx("wrap_fn"),
             &null_tracer(),

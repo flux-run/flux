@@ -1,11 +1,11 @@
 /**
- * @fluxbase/client — Fluxbase client SDK
+ * @flux/client — Flux client SDK
  *
  * Call your deployed Flux functions from any TypeScript or JavaScript project.
  *
  * @example
  * ```ts
- * import { createClient } from "@fluxbase/client";
+ * import { createClient } from "@flux/client";
  *
  * const flux = createClient({
  *   url:   "https://your-gateway.example.com",

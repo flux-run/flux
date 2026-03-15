@@ -1,5 +1,5 @@
 /**
- * @fluxbase/schema — runtime implementation
+ * @flux/schema — runtime implementation
  *
  * These functions return plain objects at runtime.
  * The TypeScript type system enforces correctness at author-time.

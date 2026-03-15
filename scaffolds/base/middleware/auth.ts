@@ -1,4 +1,4 @@
-import { defineMiddleware } from "@fluxbase/functions"
+import { defineMiddleware } from "@flux/functions"
 
 /**
  * Auth middleware — applied to routes with auth = "jwt" in gateway.toml

@@ -116,7 +116,7 @@ fn json_to_kv(json: &Value) -> Vec<(String, String)> {
 
 fn global_config_path() -> Option<PathBuf> {
     let mut p = dirs::home_dir()?;
-    p.push(".fluxbase");
+    p.push(".flux");
     p.push("config.json");
     Some(p)
 }

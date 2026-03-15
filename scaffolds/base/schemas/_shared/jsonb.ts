@@ -1,4 +1,4 @@
-import type { JsonSchemaObject } from "@fluxbase/schema"
+import type { JsonSchemaObject } from "@flux/schema"
 
 /**
  * Reusable JSONB schemas — import in *.schema.ts column.jsonb().schema(addressSchema)

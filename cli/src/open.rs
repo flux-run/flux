@@ -2,7 +2,7 @@
 //!
 //! In the self-hosted framework there is no cloud dashboard.
 //! The trace viewer is served by the gateway — its URL comes from
-//! `flux.toml [dev]`, `FLUXBASE_GATEWAY_URL`, or the default `http://localhost:4000`.
+//! `flux.toml [dev]`, `FLUX_GATEWAY_URL`, or the default `http://localhost:4000`.
 
 use clap::Subcommand;
 use colored::Colorize;

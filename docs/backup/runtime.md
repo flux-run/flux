@@ -1,6 +1,6 @@
 # Runtime Service
 
-The **Runtime** is the language-independent execution engine of Fluxbase.  It
+The **Runtime** is the language-independent execution engine of Flux.  It
 receives function invocation requests, fetches the compiled bundle, and
 dispatches to one of two sandboxed execution engines:
 
@@ -63,7 +63,7 @@ Runtime  (bundle fetch, secret inject, dispatch)
   │
   └─ runtime=wasm ───► WasmExecutor  (Wasmtime, user .wasm module)
                           ↓
-                  fluxbase.* host imports  (secrets, log, http_fetch)
+                  flux.* host imports  (secrets, log, http_fetch)
 ```
 
 ### Execution internals
@@ -353,16 +353,16 @@ Cost: ~20 µs at worker startup; zero per-request overhead.
 **2. Baseline global snapshot + per-invocation sweep** — immediately after the freeze, `create_js_runtime()` captures all current `globalThis` key names:
 
 ```js
-globalThis.__fluxbase_allowed_globals =
+globalThis.__flux_allowed_globals =
     new Set(Object.getOwnPropertyNames(globalThis));
 ```
 
 At the top of every IIFE wrapper, before the user bundle runs, any key not in that baseline set is deleted:
 
 ```js
-if (typeof __fluxbase_allowed_globals !== "undefined") {
+if (typeof __flux_allowed_globals !== "undefined") {
     for (const __k of Object.getOwnPropertyNames(globalThis)) {
-        if (!__fluxbase_allowed_globals.has(__k)) {
+        if (!__flux_allowed_globals.has(__k)) {
             try { delete globalThis[__k]; } catch (_) {}
         }
     }
@@ -467,9 +467,9 @@ match bundle_meta.runtime.as_deref() {
 
 | Import | Signature | Description |
 |---|---|---|
-| `fluxbase.secrets_get` | `(key_ptr, key_len) → (val_ptr, val_len)` | Read a named secret |
-| `fluxbase.log` | `(level, msg_ptr, msg_len) → ()` | Emit a structured log line |
-| `fluxbase.http_fetch` | `(req_ptr, req_len) → (resp_ptr, resp_len)` | Outbound HTTP (allow-list gated) |
+| `flux.secrets_get` | `(key_ptr, key_len) → (val_ptr, val_len)` | Read a named secret |
+| `flux.log` | `(level, msg_ptr, msg_len) → ()` | Emit a structured log line |
+| `flux.http_fetch` | `(req_ptr, req_len) → (resp_ptr, resp_len)` | Outbound HTTP (allow-list gated) |
 
 Modules must export `handle(payload_ptr, payload_len) → result_ptr` plus
 memory helpers `__flux_alloc` and `__flux_free`.  See
@@ -536,10 +536,10 @@ The runtime accepts two export styles:
 
 ```js
 // Style 1: defineFunction() (schema-validated)
-__fluxbase_fn = defineFunction({ schema: ... }, async (payload, ctx) => { ... });
+__flux_fn = defineFunction({ schema: ... }, async (payload, ctx) => { ... });
 
 // Style 2: plain async function
-__fluxbase_fn = async (ctx) => { ... };
+__flux_fn = async (ctx) => { ... };
 ```
 
 esbuild bundles wrap the default export under `.default`; the executor unwraps this automatically.
@@ -636,7 +636,7 @@ const result = await ctx.agent.run({
 | `op_execute_tool` | JS → Rust | Calls `ToolExecutor` → Composio REST API |
 | `op_agent_llm_call` | JS → Rust | Calls OpenAI-compatible chat completions |
 
-Both ops are registered on a custom `Extension` named `"fluxbase"`.
+Both ops are registered on a custom `Extension` named `"flux"`.
 
 ---
 
@@ -686,9 +686,9 @@ Secrets are injected into the JS sandbox as both `ctx.env` (direct map) and `ctx
 
 | Secret | Used by | Purpose |
 |--------|---------|---------|
-| `FLUXBASE_LLM_KEY` | Agent | LLM API key |
-| `FLUXBASE_LLM_URL` | Agent | Override LLM endpoint (default: OpenAI) |
-| `FLUXBASE_LLM_MODEL` | Agent | Override model (default: `gpt-4o-mini`) |
+| `FLUX_LLM_KEY` | Agent | LLM API key |
+| `FLUX_LLM_URL` | Agent | Override LLM endpoint (default: OpenAI) |
+| `FLUX_LLM_MODEL` | Agent | Override model (default: `gpt-4o-mini`) |
 
 ---
 
@@ -702,7 +702,7 @@ Nothing bypasses `ToolExecutor`. This gives uniform trace visibility across func
 
 ### ToolRegistry
 
-Maps Fluxbase developer-facing names to Composio action IDs:
+Maps Flux developer-facing names to Composio action IDs:
 
 ```
 "slack.send_message"  →  { composio_action: "SLACK_SEND_MESSAGE", app: "slack" }
@@ -712,7 +712,7 @@ The registry is the **only** place that knows about Composio action IDs. To add 
 
 ### Registered tools (Phase 1)
 
-| App | Fluxbase name | Description |
+| App | Flux name | Description |
 |-----|---------------|-------------|
 | **Slack** | `slack.send_message` | Post to channel or DM |
 | | `slack.create_channel` | Create a new channel |
@@ -752,7 +752,7 @@ Body: { "entityId": "<tenant_id>", "appName": "<app>", "input": { ... } }
 
 Each tenant is a Composio **entity** identified by their `tenant_id` UUID. Their connected accounts (OAuth tokens) live under that entity, providing cross-tenant isolation.
 
-**Override**: `COMPOSIO_ENTITY_ID` env var overrides the entity (used for shared demo accounts like `fluxbase-demo`).
+**Override**: `COMPOSIO_ENTITY_ID` env var overrides the entity (used for shared demo accounts like `flux-demo`).
 
 ---
 
@@ -819,9 +819,9 @@ Non-JSON responses are treated as `done=true` with the text as the answer.
 
 | Secret | Default | Description |
 |--------|---------|-------------|
-| `FLUXBASE_LLM_KEY` | — | Required. LLM provider API key |
-| `FLUXBASE_LLM_URL` | `https://api.openai.com/v1/chat/completions` | Override endpoint |
-| `FLUXBASE_LLM_MODEL` | `gpt-4o-mini` | Override model |
+| `FLUX_LLM_KEY` | — | Required. LLM provider API key |
+| `FLUX_LLM_URL` | `https://api.openai.com/v1/chat/completions` | Override endpoint |
+| `FLUX_LLM_MODEL` | `gpt-4o-mini` | Override model |
 
 The `temperature` is fixed at `0.1` and `max_tokens` at `512` to keep agent decisions deterministic and cheap.
 
@@ -856,7 +856,7 @@ Fan-out is supported: multiple functions can listen to the same webhook source.
 
 ## Deterministic Execution Model
 
-Fluxbase is designed to support **deterministic replay** — the ability to re-run a function invocation with exactly the same inputs and produce the same outputs. This is the foundation of `flux trace replay` and time-travel debugging.
+Flux is designed to support **deterministic replay** — the ability to re-run a function invocation with exactly the same inputs and produce the same outputs. This is the foundation of `flux trace replay` and time-travel debugging.
 
 ### Sources of nondeterminism
 
@@ -981,7 +981,7 @@ Trace A (original)                 Trace B (replay)
 
 ### Execution Graph diff
 
-The Execution Graph section is what makes this more powerful than `git diff`. Git can show that a timeout value changed in source; Fluxbase can show that `stripe.charge` timed out in one execution and succeeded in the other.
+The Execution Graph section is what makes this more powerful than `git diff`. Git can show that a timeout value changed in source; Flux can show that `stripe.charge` timed out in one execution and succeeded in the other.
 
 Span types that are diffed:
 
@@ -1104,7 +1104,7 @@ execution_end    (span_type="end",    execution_state="completed", duration_ms=1
 | `code_sha` | string? | ✓ | | 16-char bundle fingerprint — identifies the exact bundle version for replay |
 | `execution_state` | string? | | ✓ | `"started"` \| `"completed"` \| `"error"` |
 | `duration_ms` | u64? | | ✓ | Total execution duration (end/error spans) or tool call duration (tool spans) |
-| `tool_name` | string? | | ✓ | Fluxbase tool name for `span_type=="tool"` spans |
+| `tool_name` | string? | | ✓ | Flux tool name for `span_type=="tool"` spans |
 
 ### `bundle_sha` implementation
 
@@ -1225,7 +1225,7 @@ All configuration is loaded from environment variables at startup (`Settings::lo
 ### Execution
 
 - [ ] **No per-function resource limits** — CPU time and memory are not capped independently per tenant. A single runaway function can starve other workers.
-- [ ] **Single Deno extension instance** — The `fluxbase` extension is rebuilt (`Cow::Owned(vec![...])`) on every `execute_function()` call. Consider pre-building it once.
+- [ ] **Single Deno extension instance** — The `flux` extension is rebuilt (`Cow::Owned(vec![...])`) on every `execute_function()` call. Consider pre-building it once.
 - [ ] **No function output size limit** — Large return values serialize into memory without a cap.
 - [ ] **Workflow step persistence** — Workflow steps run entirely in memory. A crash mid-workflow loses all progress. `WorkflowStepRecord` type exists but is not persisted.
 - [ ] **No step-level timeout** — `ctx.workflow.run()` steps inherit the function's 30s global timeout; there is no per-step deadline.

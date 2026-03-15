@@ -1,6 +1,6 @@
 //! `flux secret` — manage secrets via API or local `.env.local`.
 //!
-//! When `FLUXBASE_API_URL` and `FLUXBASE_TOKEN` are both set, secrets are
+//! When `FLUX_API_URL` and `FLUX_TOKEN` are both set, secrets are
 //! managed through the API.  Otherwise they are stored in `.env.local`
 //! (gitignored by default) in the current project directory.
 
@@ -31,8 +31,8 @@ pub enum SecretsCommands {
 }
 
 pub async fn execute(command: SecretsCommands) -> anyhow::Result<()> {
-    let api_url   = std::env::var("FLUXBASE_API_URL").ok();
-    let api_token = std::env::var("FLUXBASE_TOKEN").ok();
+    let api_url   = std::env::var("FLUX_API_URL").ok();
+    let api_token = std::env::var("FLUX_TOKEN").ok();
 
     if api_url.is_some() && api_token.is_some() {
         execute_api(command, api_url.unwrap(), api_token.unwrap()).await

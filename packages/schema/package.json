@@ -1,5 +1,5 @@
 {
-  "name": "@fluxbase/schema",
+  "name": "@flux/schema",
   "version": "0.1.0",
   "description": "Flux schema definition library — defineSchema, column, defineEnum, rules, hooks",
   "main": "dist/index.js",
