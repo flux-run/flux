@@ -22,7 +22,7 @@ const POSTHOG_KEY: &str = match option_env!("FLUX_POSTHOG_KEY") {
     Some(k) => k,
     None => "",
 };
-const POSTHOG_HOST: &str = "https://analytics.fluxbase.co";
+const POSTHOG_HOST: &str = "https://a.fluxbase.co";
 
 // Stable anonymous ID — no per-user or per-machine tracking.
 // PostHog requires a distinct_id; we use a deterministic string so all CLI
