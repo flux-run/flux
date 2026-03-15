@@ -160,10 +160,10 @@ jobs:
           path: dist/
           retention-days: 7
 
-  # ─── Create GitHub Release on v*.*.* tags ─────────────────────────────────
+  # ─── Create GitHub Release on v*.*.* tags pushed from main ───────────────
   release:
     name: Create Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && github.event.base_ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-22.04
     steps:
