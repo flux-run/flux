@@ -109,17 +109,25 @@ pub async fn execute() -> anyhow::Result<()> {
 
     // 6. Start Flux server — pass FLUX_FUNCTIONS_DIR so the runtime reads
     //    bundles from the local build directory instead of Postgres.
-    let mut server = start_server(DEFAULT_SERVER_PORT, &database_url, &dot_env_vars, &build_dir).await?;
+    //    Scan for a free port from DEFAULT_SERVER_PORT upward so multiple
+    //    projects can run simultaneously without clashing.
+    let server_port = find_free_server_port(DEFAULT_SERVER_PORT)
+        .ok_or_else(|| anyhow::anyhow!("No free port available in range {}–{}", DEFAULT_SERVER_PORT, DEFAULT_SERVER_PORT + 100))?;
+    let mut server = start_server(server_port, &database_url, &dot_env_vars, &build_dir).await?;
 
     // 7. Start file watcher for hot-reload.
     //    Watches functions/ directory; on change rebuilds the affected bundle,
     //    writes it to .flux/build/, and invalidates the runtime cache.
+    //    Store the JoinHandle so we can abort the task cleanly on shutdown.
+    //    (The watcher loop uses blocking recv_timeout with a 100 ms window;
+    //    without an explicit abort the tokio runtime can't shut down and the
+    //    terminal becomes unresponsive after the server exits.)
     let functions_src = project_root.join("functions");
-    if functions_src.exists() {
+    let watcher_handle: Option<tokio::task::JoinHandle<()>> = if functions_src.exists() {
         let build_dir_clone = build_dir.clone();
         let functions_src_clone = functions_src.clone();
-        tokio::spawn(async move {
-            if let Err(e) = watch_functions(&functions_src_clone, &build_dir_clone, DEFAULT_SERVER_PORT).await {
+        let handle = tokio::spawn(async move {
+            if let Err(e) = watch_functions(&functions_src_clone, &build_dir_clone, server_port).await {
                 eprintln!("file watcher error: {e}");
             }
         });
@@ -128,50 +136,63 @@ pub async fn execute() -> anyhow::Result<()> {
             "✔".green().bold(),
             "functions/".cyan(),
         );
-    }
+        Some(handle)
+    } else {
+        None
+    };
 
     // 8. First-run: if no admin account exists, prompt to create one.
-    prompt_admin_setup_if_needed(DEFAULT_SERVER_PORT).await;
+    prompt_admin_setup_if_needed(server_port).await;
 
     // 9. Print banner
-    print_banner(DEFAULT_SERVER_PORT);
+    print_banner(server_port);
 
     // 10. Wait for Ctrl+C or server exit
-    tokio::select! {
+    let server_result = tokio::select! {
         result = server.wait() => {
             let status = result?;
             if !status.success() {
                 let code = status.code().unwrap_or(-1);
-                bail!("Flux server exited with status {}", code);
+                Err(anyhow::anyhow!("Flux server exited with status {}", code))
+            } else {
+                Ok(())
             }
         }
         _ = signal::ctrl_c() => {
             println!();
             println!("{}", "Stopping…".dimmed());
-            // Send SIGTERM first so the server closes its DB connections
-            // gracefully; give it up to 3 s before forcing SIGKILL.
+            // SIGTERM first; give 3 s before SIGKILL.
+            #[cfg(unix)]
             if let Some(pid) = server.id() {
-                #[cfg(unix)]
                 let _ = std::process::Command::new("kill")
                     .args(["-s", "TERM", &pid.to_string()])
                     .status();
-                tokio::select! {
-                    _ = server.wait() => {}
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
-                        let _ = server.kill().await;
-                        let _ = server.wait().await;
-                    }
-                }
-            } else {
-                let _ = server.kill().await;
-                let _ = server.wait().await;
             }
+            tokio::select! {
+                _ = server.wait() => {}
+                _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
+                    let _ = server.kill().await;
+                    let _ = server.wait().await;
+                }
+            }
+            Ok(())
         }
+    };
+
+    // 11. Abort the file watcher — it uses a blocking recv_timeout loop so
+    //     we must explicitly abort its task before shutting down the runtime,
+    //     otherwise the process hangs and the terminal becomes unresponsive.
+    if let Some(h) = watcher_handle {
+        h.abort();
+        // The blocking recv_timeout window is 100 ms; give it 300 ms to exit.
+        let _ = tokio::time::timeout(Duration::from_millis(300), h).await;
     }
 
-    // 11. Stop embedded PostgreSQL if we started it.
+    // 12. Stop embedded PostgreSQL if we started it.
     // Cap the shutdown at 5 s to avoid hanging the terminal on Ctrl+C.
-    println!("{}", "Stopping PostgreSQL…".dimmed());
+    if _pg.is_some() {
+        println!("{}", "Stopping PostgreSQL…".dimmed());
+    }
     if let Some(pg) = _pg {
         let _ = tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -180,7 +201,7 @@ pub async fn execute() -> anyhow::Result<()> {
     }
     println!("{}", "✔  Stopped.".green());
 
-    Ok(())
+    server_result
 }
 
 /// Load all key-value pairs from the `.env` file at `project_root`.
@@ -393,20 +414,12 @@ async fn bootstrap_dev_db(port: u16) -> anyhow::Result<()> {
 static SCHEMA_V01: &str = include_str!("../../schemas/v0.1.sql");
 
 async fn run_migrations(database_url: &str, _project_root: &Path) -> anyhow::Result<usize> {
-    use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-    use std::str::FromStr;
-
-    let opts = PgConnectOptions::from_str(database_url)
-        .context("Invalid DATABASE_URL")?
-        // No space after the comma — a space causes SQLx to format the startup
-        // option as `-c search_path=flux, public` where the space terminates
-        // the option value, leaving PostgreSQL with "flux," (invalid).
-        .options([("search_path", "flux,public")]);
+    use sqlx::postgres::PgPoolOptions;
 
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .acquire_timeout(Duration::from_secs(10))
-        .connect_with(opts)
+        .connect(database_url)
         .await
         .context("Failed to connect to dev PostgreSQL")?;
 
@@ -438,7 +451,17 @@ async fn start_server(port: u16, database_url: &str, extra_env: &[(String, Strin
         .env("LOCAL_MODE", "true")
         .env("RUST_LOG", "warn")
         // Bundles live in the local build dir; runtime reads from here instead of DB.
-        .env("FLUX_FUNCTIONS_DIR", build_dir.as_os_str());
+        .env("FLUX_FUNCTIONS_DIR", build_dir.as_os_str())
+        // Do not inherit stdin — the server doesn't read from it, and leaving
+        // stdin shared with the CLI process can leave the terminal in a broken
+        // state when the server exits.
+        .stdin(std::process::Stdio::null());
+
+    // Resolve the dashboard static-export directory so the server can find it
+    // regardless of the CWD the user runs `flux dev` from.
+    if let Some(dashboard) = find_dashboard_dir(&binary) {
+        cmd.env("FLUX_DASHBOARD_DIR", dashboard);
+    }
 
     // Inject all .env vars so they are available in ctx.secrets / ctx.env
     // inside functions without needing a real secrets backend.
@@ -558,6 +581,18 @@ fn find_free_port(start: u16) -> Option<u16> {
     (start..5600).find(|&p| TcpListener::bind(("127.0.0.1", p)).is_ok())
 }
 
+/// Find a free port for the Flux server, starting from `start` (default 4000).
+/// Tries up to 100 ports before giving up.
+///
+/// Must check `0.0.0.0` (not `127.0.0.1`) because the server binds the
+/// wildcard address. On macOS a loopback-only bind can succeed even when
+/// `0.0.0.0:port` is already held by a prior server process, causing the
+/// new server to fail with EADDRINUSE at startup.
+fn find_free_server_port(start: u16) -> Option<u16> {
+    use std::net::TcpListener;
+    (start..start.saturating_add(100)).find(|&p| TcpListener::bind(("0.0.0.0", p)).is_ok())
+}
+
 /// Walk upward from cwd to find a directory containing `schemas/`, `.flux/`,
 /// or `flux.toml` — that's the project root.
 fn find_project_root() -> Option<PathBuf> {
@@ -606,6 +641,50 @@ fn find_server_binary() -> Option<PathBuf> {
 
     // 3. PATH
     which::which("server").ok()
+}
+
+/// Resolve the `dashboard/out` directory given the resolved server binary path.
+///
+/// Layout 1 — workspace build (`target/debug/server` or `target/release/server`):
+///   binary = {workspace}/target/{profile}/server
+///   out    = {workspace}/dashboard/out
+///
+/// Layout 2 — distribution install (all binaries alongside each other):
+///   binary = {prefix}/bin/server
+///   out    = {prefix}/share/flux/dashboard/out   (or sibling `dashboard/out`)
+///
+/// Falls back gracefully — if nothing is found, returns None and the server
+/// will use its own "dashboard/out" relative-path default.
+fn find_dashboard_dir(server_binary: &Path) -> Option<PathBuf> {
+    // Layout 1: workspace — binary sits under target/{profile}/
+    if let Some(target_dir) = server_binary
+        .parent()       // target/debug  or  target/release
+        .and_then(|p| p.parent())  // target/
+        .and_then(|p| p.parent())  // workspace root
+    {
+        let candidate = target_dir.join("dashboard").join("out");
+        if candidate.join("index.html").exists() {
+            return Some(candidate);
+        }
+    }
+
+    // Layout 2: distribution — look for `dashboard/out` next to the binary
+    if let Some(bin_dir) = server_binary.parent() {
+        let candidate = bin_dir.join("dashboard").join("out");
+        if candidate.join("index.html").exists() {
+            return Some(candidate);
+        }
+        // share/flux/dashboard/out  (FHS-style)
+        let candidate2 = bin_dir.parent()
+            .map(|p| p.join("share").join("flux").join("dashboard").join("out"));
+        if let Some(c) = candidate2 {
+            if c.join("index.html").exists() {
+                return Some(c);
+            }
+        }
+    }
+
+    None
 }
 
 /// Watch `functions/` for source file changes. On any write/create event:

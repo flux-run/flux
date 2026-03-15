@@ -1,4 +1,4 @@
-.PHONY: dev api dashboard server build migrate install clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types check-types
+.PHONY: dev api dashboard server build migrate install install-cli install-server clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types check-types
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API + dashboard in parallel, printing labelled output.
@@ -68,6 +68,16 @@ migrate:
 # ── Setup ────────────────────────────────────────────────────────────────────
 install:
 	cd dashboard && npm install
+
+# Install flux CLI and server binaries to ~/.cargo/bin
+install-local:
+	./scripts/install-local.sh
+
+install-cli:
+	./scripts/install-local.sh --cli
+
+install-server:
+	./scripts/install-local.sh --server
 
 # ── Clean ────────────────────────────────────────────────────────────────────
 clean:

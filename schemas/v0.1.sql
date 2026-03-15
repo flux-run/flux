@@ -131,11 +131,18 @@ CREATE INDEX IF NOT EXISTS idx_project_deployments_version
     ON flux.project_deployments (version DESC);
 
 -- Add FK now that project_deployments exists.  NOT VALID skips back-fill scan.
-ALTER TABLE flux.deployments
-    ADD CONSTRAINT IF NOT EXISTS fk_deployments_project_deployment
+-- ADD CONSTRAINT IF NOT EXISTS was added in PG 17; use DO block for compatibility.
+DO $$
+BEGIN
+  ALTER TABLE flux.deployments
+    ADD CONSTRAINT fk_deployments_project_deployment
     FOREIGN KEY (project_deployment_id)
     REFERENCES flux.project_deployments(id) ON DELETE SET NULL
     NOT VALID;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END;
+$$;
 
 
 -- ─── Routing ─────────────────────────────────────────────────────────────────
