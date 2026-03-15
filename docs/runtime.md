@@ -9,7 +9,7 @@ It is the component that loads a function bundle, provides the execution context
 The runtime owns:
 
 - bundle lookup and loading
-- execution of JavaScript or WebAssembly handlers
+- execution of JavaScript handlers via Deno V8
 - limit enforcement such as timeout and memory policies
 - secret and configuration access during execution
 - span and log emission

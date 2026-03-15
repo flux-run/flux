@@ -42,5 +42,8 @@ jsonschema = { version = "0.29", default-features = false }
 # sha2 for content-addressed artifact hashing
 sha2 = "0.10"
 
+# Postgres access for checkpoint store
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
+
 [dev-dependencies]
 futures = "0.3"

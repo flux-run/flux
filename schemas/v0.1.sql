@@ -980,3 +980,59 @@ DROP TRIGGER IF EXISTS trg_cache_invalidate_hooks ON flux_internal.hooks;
 CREATE OR REPLACE TRIGGER trg_cache_invalidate_hooks
     AFTER INSERT OR UPDATE OR DELETE ON flux_internal.hooks
     FOR EACH ROW EXECUTE FUNCTION flux_internal.notify_cache_change();
+
+
+-- ─── Execution records + checkpoints (replay/resume primitives) ────────────────
+-- Created idempotently so migration reruns are safe.
+
+-- execution_records: one row per inbound HTTP request handled by `flux serve`.
+-- Created at request start (status='running'), updated at end (ok/error).
+CREATE TABLE IF NOT EXISTS flux.execution_records (
+    id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- Human-readable label: the request method + path, e.g. "POST /webhook"
+    label           TEXT         NOT NULL DEFAULT '',
+    -- Serialised input payload (request body JSON, or raw text if non-JSON)
+    input           JSONB,
+    -- Output written back to the caller (null while running)
+    output          JSONB,
+    -- Error message if status='error' (null on success)
+    error           TEXT,
+    status          TEXT         NOT NULL DEFAULT 'running'
+                    CHECK (status IN ('running','ok','error','timeout')),
+    -- SHA-256 of the source file loaded at boot (hex, first 16 chars)
+    code_sha        TEXT         NOT NULL DEFAULT '',
+    started_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    -- null while the execution is still running
+    duration_ms     INTEGER,
+    -- Identifies the flux serve instance that handled this request
+    instance_id     TEXT         NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_execution_records_started
+    ON flux.execution_records (started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_execution_records_status
+    ON flux.execution_records (status, started_at DESC);
+
+-- checkpoints: every IO boundary crossing recorded as a (request, response) pair.
+-- call_index is always sequential per execution_id, never reused.
+-- Used to drive replay (inject recorded response by call_index) and resume
+-- (fast-forward through recorded checkpoints, then go live).
+CREATE TABLE IF NOT EXISTS flux.checkpoints (
+    id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    execution_id    UUID         NOT NULL
+                    REFERENCES flux.execution_records(id) ON DELETE CASCADE,
+    -- 0-based, incrementing per execution. First fetch() = 0, second = 1, …
+    call_index      INTEGER      NOT NULL,
+    -- 'http' for fetch() calls, 'db' for ctx.db writes
+    boundary        TEXT         NOT NULL CHECK (boundary IN ('http','db')),
+    -- Serialised request: { url, method, headers, body } for http;
+    --                      { query, params } for db
+    request         BYTEA        NOT NULL,
+    -- Serialised response: { status, headers, body } for http;
+    --                       { rows } for db
+    response        BYTEA        NOT NULL,
+    started_at_ms   BIGINT       NOT NULL,
+    duration_ms     INTEGER      NOT NULL DEFAULT 0,
+    UNIQUE (execution_id, call_index)
+);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_execution
+    ON flux.checkpoints (execution_id, call_index);

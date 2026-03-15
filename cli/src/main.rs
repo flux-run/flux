@@ -49,6 +49,7 @@ mod new_function;
 mod why;
 mod generate;
 mod toolchain;
+mod serve;
 #[derive(Parser)]
 #[command(name = "flux")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -570,10 +571,9 @@ enum Commands {
     /// Start the Flux server (gateway + runtime + api + queue embedded in one process)
     ///
     /// Examples:
-    ///   flux serve                        # start on port 8080
-    ///   flux serve --port 3000            # custom port
-    ///   flux serve --release              # use release binary
-    #[command(alias = "serve")]
+    ///   flux server                       # start on port 8080
+    ///   flux server --port 3000           # custom port
+    ///   flux server --release             # use release binary
     Server {
         /// Port to listen on
         #[arg(long, default_value = "8080", value_name = "PORT")]
@@ -586,6 +586,80 @@ enum Commands {
         no_color: bool,
         /// Override DATABASE_URL from the environment
         #[arg(long, value_name = "URL", env = "DATABASE_URL")]
+        database_url: Option<String>,
+    },
+
+    // ── flux serve ─────────────────────────────────────────────────────────
+    /// Serve any JS/TS file as an HTTP endpoint, recording every IO call as a checkpoint.
+    ///
+    /// Examples:
+    ///   flux serve index.js               # serve on port 8080
+    ///   flux serve handler.ts --port 3000 # custom port
+    ///   flux serve worker.js --database-url postgres://localhost/mydb
+    Serve {
+        /// Path to the JS/TS file to serve
+        #[arg(value_name = "FILE")]
+        file: std::path::PathBuf,
+        /// Port to listen on
+        #[arg(long, default_value = "8080", value_name = "PORT")]
+        port: u16,
+        /// Override DATABASE_URL from the environment
+        #[arg(long, value_name = "URL")]
+        database_url: Option<String>,
+    },
+
+    // ── flux replay ────────────────────────────────────────────────────────
+    /// Re-run a recorded execution with checkpoints injected instead of real network calls.
+    ///
+    /// By default, DB writes are suppressed (dry run). Use --commit to apply them.
+    ///
+    /// Examples:
+    ///   flux replay 550e8400-e29b-41d4-a716-446655440000
+    ///   flux replay 550e8400-... --commit
+    ///   flux replay 550e8400-... --from 2
+    Replay {
+        /// Execution ID to replay
+        #[arg(value_name = "EXECUTION_ID")]
+        execution_id: String,
+        /// Apply DB writes during replay (default: dry run)
+        #[arg(long)]
+        commit: bool,
+        /// Start replay from this checkpoint index
+        #[arg(long, value_name = "INDEX")]
+        from: Option<u32>,
+        /// Override DATABASE_URL from the environment
+        #[arg(long, value_name = "URL")]
+        database_url: Option<String>,
+    },
+
+    // ── flux resume ────────────────────────────────────────────────────────
+    /// Fast-forward through recorded checkpoints, then continue live.
+    ///
+    /// Used to retry a failed execution from the exact failure point without
+    /// replaying side effects.
+    ///
+    /// Examples:
+    ///   flux resume 550e8400-e29b-41d4-a716-446655440000
+    Resume {
+        /// Execution ID to resume
+        #[arg(value_name = "EXECUTION_ID")]
+        execution_id: String,
+        /// Override DATABASE_URL from the environment
+        #[arg(long, value_name = "URL")]
+        database_url: Option<String>,
+    },
+
+    // ── flux checkpoint ────────────────────────────────────────────────────
+    /// List all recorded checkpoints for an execution.
+    ///
+    /// Examples:
+    ///   flux checkpoint 550e8400-e29b-41d4-a716-446655440000
+    Checkpoint {
+        /// Execution ID to inspect
+        #[arg(value_name = "EXECUTION_ID")]
+        execution_id: String,
+        /// Override DATABASE_URL from the environment
+        #[arg(long, value_name = "URL")]
         database_url: Option<String>,
     },
 
@@ -807,6 +881,18 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Server { port, release, no_color, database_url } =>
             server::execute(port, release, no_color, database_url).await?,
+
+        Commands::Serve { file, port, database_url } =>
+            serve::execute(serve::ServeArgs { file, port, database_url }).await?,
+
+        Commands::Replay { execution_id, commit, from, database_url } =>
+            serve::execute_replay(execution_id, commit, from, database_url).await?,
+
+        Commands::Resume { execution_id, database_url } =>
+            serve::execute_resume(execution_id, database_url).await?,
+
+        Commands::Checkpoint { execution_id, database_url } =>
+            serve::execute_checkpoint(execution_id, database_url).await?,
 
         Commands::Stack { command } => match command {
             StackCommand::Up    { build, foreground } => stack::execute_up(build, !foreground).await?,

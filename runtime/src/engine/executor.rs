@@ -30,8 +30,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration};
+use uuid::Uuid;
 use job_contract::dispatch::{
     ApiDispatch, DataEngineDispatch, QueueDispatch, RuntimeDispatch,
+};
+use crate::checkpoint::{
+    BoundaryType, Checkpoint, CheckpointStore, ExecutionContext, ExecutionMode,
 };
 
 
@@ -310,6 +314,13 @@ pub struct HttpFetchOpState {
 /// engine to re-issue mocked responses in the same order as the original run.
 pub struct NetworkCallSeq(pub Arc<AtomicI32>);
 
+/// Checkpoint context injected into OpState for the current execution.
+/// Carries the execution context (mode + call_index) and the checkpoint store.
+pub struct CheckpointOpState {
+    pub ctx:   ExecutionContext,
+    pub store: Arc<dyn CheckpointStore>,
+}
+
 /// ctx.fetch(url, { method, headers, body }) — SSRF-protected HTTP from user functions.
 #[deno_core::op2(async)]
 #[serde]
@@ -327,7 +338,129 @@ pub async fn op_http_fetch(
         ));
     }
 
-    // Extract the host once — used for both the allow-list check and circuit breaker.
+    // ── Checkpoint / replay check ─────────────────────────────────────────
+    //
+    // If a CheckpointOpState is present in OpState, check the execution mode:
+    //   Replay → return recorded response by call_index, never hit the network.
+    //   Resume → if a checkpoint exists at call_index, return it; else go live.
+    //   Live   → proceed to the real network, then record a checkpoint.
+    let (checkpoint_ctx, checkpoint_store) = {
+        let s = state.borrow();
+        s.try_borrow::<CheckpointOpState>()
+            .map(|cp| (Some(cp.ctx.clone()), Some(Arc::clone(&cp.store))))
+            .unwrap_or((None, None))
+    };
+
+    if let (Some(ctx), Some(store)) = (&checkpoint_ctx, &checkpoint_store) {
+        let call_idx = ctx.call_index.next();
+        let started_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+
+        match &ctx.mode {
+            ExecutionMode::Replay { execution_id, .. } => {
+                // In Replay mode: MUST return recorded response. Never hit the network.
+                let recorded = store
+                    .get(*execution_id, call_idx)
+                    .await
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                match recorded {
+                    Some(cp) => {
+                        let resp: serde_json::Value = serde_json::from_slice(&cp.response)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                        return Ok(resp);
+                    }
+                    None => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!(
+                                "replay: no checkpoint at call_index={} for execution {}",
+                                call_idx, execution_id
+                            ),
+                        ));
+                    }
+                }
+            }
+            ExecutionMode::Resume { execution_id, from_checkpoint } => {
+                // In Resume mode: use recorded response if we haven't exceeded the checkpoint
+                // boundary yet; fall through to live execution once checkpoints are exhausted.
+                if call_idx < *from_checkpoint {
+                    if let Some(cp) = store.get(*execution_id, call_idx).await
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+                    {
+                        let resp: serde_json::Value = serde_json::from_slice(&cp.response)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                        return Ok(resp);
+                    }
+                }
+                // Checkpoints exhausted or past from_checkpoint → fall through to live, then record.
+                let result = make_real_fetch(&state, &url, &opts, &http_ctx_override, http_ctx_override.is_some()).await?;
+                // Record the live call as a new checkpoint under the new execution_id.
+                let req_bytes = serde_json::to_vec(&serde_json::json!({
+                    "url": url, "method": opts.get("method").and_then(|m| m.as_str()).unwrap_or("GET"),
+                })).unwrap_or_default();
+                let resp_bytes = serde_json::to_vec(&result).unwrap_or_default();
+                let cp = Checkpoint {
+                    id:            Uuid::new_v4(),
+                    execution_id:  ctx.execution_id,
+                    call_index:    call_idx,
+                    boundary:      BoundaryType::Http,
+                    request:       req_bytes,
+                    response:      resp_bytes,
+                    started_at_ms: started_ms,
+                    duration_ms:   0,
+                };
+                // Fire-and-forget checkpoint write
+                let store_c = Arc::clone(store);
+                tokio::task::spawn_local(async move {
+                    let _ = store_c.write(&cp).await;
+                });
+                return Ok(result);
+            }
+            ExecutionMode::Live => {
+                // Live mode: make the real call below, then record.
+                // We already incremented call_idx; save it for the checkpoint write.
+                let result = make_real_fetch(&state, &url, &opts, &http_ctx_override, http_ctx_override.is_some()).await?;
+                let req_bytes = serde_json::to_vec(&serde_json::json!({
+                    "url": url, "method": opts.get("method").and_then(|m| m.as_str()).unwrap_or("GET"),
+                })).unwrap_or_default();
+                let resp_bytes = serde_json::to_vec(&result).unwrap_or_default();
+                let cp = Checkpoint {
+                    id:            Uuid::new_v4(),
+                    execution_id:  ctx.execution_id,
+                    call_index:    call_idx,
+                    boundary:      BoundaryType::Http,
+                    request:       req_bytes,
+                    response:      resp_bytes,
+                    started_at_ms: started_ms,
+                    duration_ms:   0,
+                };
+                let store_c = Arc::clone(store);
+                tokio::task::spawn_local(async move {
+                    let _ = store_c.write(&cp).await;
+                });
+                return Ok(result);
+            }
+        }
+    }
+
+    // No checkpoint context → legacy path (no recording).
+    make_real_fetch(&state, &url, &opts, &http_ctx_override, http_ctx_override.is_some()).await
+}
+
+/// The actual HTTP fetch implementation, extracted so it can be called from
+/// both the checkpoint-aware path and the legacy no-recording path.
+async fn make_real_fetch(
+    state:            &Rc<RefCell<OpState>>,
+    url:              &str,
+    opts:             &serde_json::Value,
+    http_ctx_override: &Option<serde_json::Value>,
+    _is_concurrent:   bool,
+) -> Result<serde_json::Value, std::io::Error> {
+    let url = url.to_string();
+
     let host = url.parse::<reqwest::Url>()
         .ok()
         .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
@@ -348,7 +481,7 @@ pub async fn op_http_fetch(
 
     let (client, allowed_hosts) = {
         let s = state.borrow();
-        if let Some(ref _ctx) = http_ctx_override {
+        if let Some(_ctx) = http_ctx_override {
             // Concurrent path: use stored client, allow-list not enforced per-request
             let client = s.try_borrow::<HttpFetchOpState>()
                 .map(|c| c.client.clone())
