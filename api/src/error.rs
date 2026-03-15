@@ -120,12 +120,21 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        tracing::warn!(
-            status = self.status.as_u16(),
-            code   = self.code,
-            msg    = %self.message,
-            "api error",
-        );
+        if self.status.is_server_error() {
+            tracing::warn!(
+                status = self.status.as_u16(),
+                code   = self.code,
+                msg    = %self.message,
+                "api error",
+            );
+        } else {
+            tracing::info!(
+                status = self.status.as_u16(),
+                code   = self.code,
+                msg    = %self.message,
+                "api error",
+            );
+        }
         let body = serde_json::json!({
             "error":   self.code,
             "message": self.message,
