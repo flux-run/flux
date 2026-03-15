@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::client::ApiClient;
 use crate::config::Config;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum EnvCommands {
@@ -41,7 +42,7 @@ pub async fn execute(command: EnvCommands) -> anyhow::Result<()> {
         EnvCommands::List => {
             let res = client
                 .client
-                .get(format!("{}/environments", client.base_url))
+                .get(R::environments::LIST.url(&client.base_url))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -70,7 +71,7 @@ pub async fn execute(command: EnvCommands) -> anyhow::Result<()> {
         EnvCommands::Create { name } => {
             let res = client
                 .client
-                .post(format!("{}/environments", client.base_url))
+                .post(R::environments::LIST.url(&client.base_url))
                 .json(&serde_json::json!({ "name": name }))
                 .send()
                 .await?;
@@ -96,7 +97,7 @@ pub async fn execute(command: EnvCommands) -> anyhow::Result<()> {
             }
             let res = client
                 .client
-                .delete(format!("{}/environments/{}", client.base_url, name))
+                .delete(R::environments::DELETE.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -123,7 +124,7 @@ pub async fn execute(command: EnvCommands) -> anyhow::Result<()> {
         EnvCommands::Clone { source, destination } => {
             let res = client
                 .client
-                .post(format!("{}/environments/clone", client.base_url))
+                .post(R::environments::CLONE.url(&client.base_url))
                 .json(&serde_json::json!({
                     "source": source,
                     "destination": destination,

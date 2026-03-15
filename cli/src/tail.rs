@@ -17,13 +17,14 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use tokio::time::{sleep, Duration};
 
+use api_contract::routes as R;
 use crate::client::ApiClient;
 use crate::why::diff_json;
 
 /// Fetch up to `max` mutation rows for a request and return short display strings.
 /// Returns: Vec of (row_key like "users.id=7f3a", change_summary)
 async fn fetch_mutations(client: &ApiClient, request_id: &str) -> Vec<(String, String)> {
-    let url = format!("{}/db/mutations?request_id={}&limit=3", client.base_url, request_id);
+    let url = format!("{}?request_id={}&limit=3", R::db::MUTATIONS.url(&client.base_url), request_id);
     let Ok(res) = client.client.get(&url).send().await else { return vec![]; };
     if !res.status().is_success() { return vec![]; }
     let Ok(body): Result<Value, _> = res.json().await else { return vec![]; };
@@ -103,7 +104,7 @@ pub async fn execute(
     let mut last_mutated: HashMap<String, String> = HashMap::new();
 
     loop {
-        let mut url = format!("{}/traces?limit=20", client.base_url);
+        let mut url = format!("{}?limit=20", R::logs::TRACES_LIST.url(&client.base_url));
         if let Some(f) = &function {
             url.push_str(&format!("&function={}", urlencoding::encode(f)));
         }

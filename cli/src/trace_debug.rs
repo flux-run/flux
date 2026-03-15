@@ -16,6 +16,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
 
+use api_contract::routes as R;
 use crate::client::ApiClient;
 
 // ── Structured Step (item 17) ─────────────────────────────────────────────────
@@ -44,8 +45,8 @@ pub async fn execute(
 ) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
 
-    let trace_url = format!("{}/traces/{}?slow_ms=0", client.base_url, trace_id);
-    let muts_url  = format!("{}/db/mutations?request_id={}&limit=500", client.base_url, trace_id);
+    let trace_url = format!("{}?slow_ms=0", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", trace_id.as_str())]));
+    let muts_url  = format!("{}?request_id={}&limit=500", R::db::MUTATIONS.url(&client.base_url), trace_id);
 
     let (trace, muts) = tokio::try_join!(
         fetch_json(&client, &trace_url),

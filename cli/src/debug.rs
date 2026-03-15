@@ -19,6 +19,7 @@ use std::io::BufRead;
 use std::io::{self, Write};
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 /// Entry point — routes to interactive mode or direct mode.
 pub async fn execute(
@@ -143,7 +144,7 @@ async fn execute_request(
     // ── 1. Fetch trace ────────────────────────────────────────────────────
     let trace_res = client
         .client
-        .get(format!("{}/traces/{}", client.base_url, request_id))
+        .get(R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", request_id.as_str())]))
         .send()
         .await?;
 
@@ -421,7 +422,7 @@ async fn do_replay(
 
     let res = client
         .client
-        .post(format!("{}/traces/{}/replay", client.base_url, request_id))
+        .post(R::logs::TRACE_REPLAY.url_with(&client.base_url, &[("request_id", request_id)]))
         .json(&body)
         .send()
         .await?;

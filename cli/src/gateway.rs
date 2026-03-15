@@ -5,6 +5,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum GatewayCommands {
@@ -161,7 +162,7 @@ async fn route_cmd(command: RouteCommands) -> anyhow::Result<()> {
 
             let res = client
                 .client
-                .post(format!("{}/gateway/routes", client.base_url))
+                .post(R::gateway::ROUTES_LIST.url(&client.base_url))
                 .json(&payload)
                 .send()
                 .await?;
@@ -192,7 +193,7 @@ async fn route_cmd(command: RouteCommands) -> anyhow::Result<()> {
         RouteCommands::List => {
             let res = client
                 .client
-                .get(format!("{}/gateway/routes", client.base_url))
+                .get(R::gateway::ROUTES_LIST.url(&client.base_url))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -238,7 +239,7 @@ async fn route_cmd(command: RouteCommands) -> anyhow::Result<()> {
         RouteCommands::Get { id } => {
             let res = client
                 .client
-                .get(format!("{}/gateway/routes/{}", client.base_url, id))
+                .get(R::gateway::ROUTES_GET.url_with(&client.base_url, &[("id", &id)]))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -261,7 +262,7 @@ async fn route_cmd(command: RouteCommands) -> anyhow::Result<()> {
 
             let res = client
                 .client
-                .delete(format!("{}/gateway/routes/{}", client.base_url, id))
+                .delete(R::gateway::ROUTES_GET.url_with(&client.base_url, &[("id", &id)]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -291,7 +292,7 @@ async fn middleware_cmd(command: MiddlewareCommands) -> anyhow::Result<()> {
             });
             let res = client
                 .client
-                .post(format!("{}/gateway/middleware", client.base_url))
+                .post(R::gateway::MIDDLEWARE_CREATE.url(&client.base_url))
                 .json(&payload)
                 .send()
                 .await?;
@@ -301,7 +302,7 @@ async fn middleware_cmd(command: MiddlewareCommands) -> anyhow::Result<()> {
         MiddlewareCommands::Remove { route, r#type } => {
             let res = client
                 .client
-                .delete(format!("{}/gateway/middleware/{}/{}", client.base_url, route, r#type))
+                .delete(R::gateway::MIDDLEWARE_DELETE.url_with(&client.base_url, &[("route", route.as_str()), ("type", r#type.as_str())]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -324,7 +325,7 @@ async fn rate_limit_cmd(command: RateLimitCommands) -> anyhow::Result<()> {
             });
             let res = client
                 .client
-                .put(format!("{}/gateway/routes/{}/rate-limit", client.base_url, route))
+                .put(R::gateway::RATE_LIMIT_SET.url_with(&client.base_url, &[("id", route.as_str())]))
                 .json(&payload)
                 .send()
                 .await?;
@@ -334,7 +335,7 @@ async fn rate_limit_cmd(command: RateLimitCommands) -> anyhow::Result<()> {
         RateLimitCommands::Remove { route } => {
             let res = client
                 .client
-                .delete(format!("{}/gateway/routes/{}/rate-limit", client.base_url, route))
+                .delete(R::gateway::RATE_LIMIT_SET.url_with(&client.base_url, &[("id", route.as_str())]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -357,7 +358,7 @@ async fn cors_cmd(command: CorsCommands) -> anyhow::Result<()> {
             });
             let res = client
                 .client
-                .put(format!("{}/gateway/routes/{}/cors", client.base_url, route))
+                .put(R::gateway::CORS_SET.url_with(&client.base_url, &[("id", route.as_str())]))
                 .json(&payload)
                 .send()
                 .await?;
@@ -367,7 +368,7 @@ async fn cors_cmd(command: CorsCommands) -> anyhow::Result<()> {
         CorsCommands::List { route } => {
             let res = client
                 .client
-                .get(format!("{}/gateway/routes/{}/cors", client.base_url, route))
+                .get(R::gateway::CORS_SET.url_with(&client.base_url, &[("id", route.as_str())]))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;

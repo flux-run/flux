@@ -5,6 +5,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum MonitorCommands {
@@ -63,7 +64,7 @@ pub async fn execute(command: MonitorCommands) -> anyhow::Result<()> {
         MonitorCommands::Status => {
             let res = client
                 .client
-                .get(format!("{}/monitor/status", client.base_url))
+                .get(R::monitor::STATUS.url(&client.base_url))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -107,7 +108,7 @@ pub async fn execute(command: MonitorCommands) -> anyhow::Result<()> {
         }
 
         MonitorCommands::Metrics { function, window } => {
-            let mut url = format!("{}/monitor/metrics?window={}", client.base_url, window);
+            let mut url = format!("{}?window={}", R::monitor::METRICS.url(&client.base_url), window);
             if let Some(f) = &function {
                 url.push_str(&format!("&function={}", f));
             }
@@ -156,7 +157,7 @@ async fn alerts_cmd(command: AlertCommands, client: &ApiClient) -> anyhow::Resul
             });
             let res = client
                 .client
-                .post(format!("{}/monitor/alerts", client.base_url))
+                .post(R::monitor::ALERTS_LIST.url(&client.base_url))
                 .json(&body)
                 .send()
                 .await?;
@@ -173,7 +174,7 @@ async fn alerts_cmd(command: AlertCommands, client: &ApiClient) -> anyhow::Resul
         AlertCommands::List => {
             let res = client
                 .client
-                .get(format!("{}/monitor/alerts", client.base_url))
+                .get(R::monitor::ALERTS_LIST.url(&client.base_url))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -211,7 +212,7 @@ async fn alerts_cmd(command: AlertCommands, client: &ApiClient) -> anyhow::Resul
         AlertCommands::Delete { id } => {
             let res = client
                 .client
-                .delete(format!("{}/monitor/alerts/{}", client.base_url, id))
+                .delete(R::monitor::ALERTS_DELETE.url_with(&client.base_url, &[("id", &id)]))
                 .send()
                 .await?;
             res.error_for_status()?;

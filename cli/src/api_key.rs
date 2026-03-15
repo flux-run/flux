@@ -5,6 +5,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum ApiKeyCommands {
@@ -67,7 +68,7 @@ pub async fn execute(command: ApiKeyCommands) -> anyhow::Result<()> {
             });
             let res = client
                 .client
-                .post(format!("{}/api-keys", client.base_url))
+                .post(R::api_keys::LIST.url(&client.base_url))
                 .json(&body)
                 .send()
                 .await?;
@@ -95,7 +96,7 @@ pub async fn execute(command: ApiKeyCommands) -> anyhow::Result<()> {
         ApiKeyCommands::List => {
             let res = client
                 .client
-                .get(format!("{}/api-keys", client.base_url))
+                .get(R::api_keys::LIST.url(&client.base_url))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -151,7 +152,7 @@ pub async fn execute(command: ApiKeyCommands) -> anyhow::Result<()> {
             }
             let res = client
                 .client
-                .delete(format!("{}/api-keys/{}", client.base_url, id))
+                .delete(R::api_keys::DELETE.url_with(&client.base_url, &[("id", &id)]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -161,7 +162,7 @@ pub async fn execute(command: ApiKeyCommands) -> anyhow::Result<()> {
         ApiKeyCommands::Rotate { id } => {
             let res = client
                 .client
-                .post(format!("{}/api-keys/{}/rotate", client.base_url, id))
+                .post(R::api_keys::ROTATE.url_with(&client.base_url, &[("id", &id)]))
                 .send()
                 .await?;
             if res.status().is_success() {

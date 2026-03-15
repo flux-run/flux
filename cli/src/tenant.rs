@@ -1,6 +1,7 @@
 use clap::Subcommand;
 use crate::client::ApiClient;
 use serde_json::Value;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum TenantCommands {
@@ -23,7 +24,7 @@ pub async fn execute(command: TenantCommands) -> anyhow::Result<()> {
         TenantCommands::Create { name } => {
             let client = ApiClient::new().await?;
             let res = client.client
-                .post(format!("{}/tenants", client.base_url))
+                .post(R::tenants::LIST.url(&client.base_url))
                 .json(&serde_json::json!({ "name": name }))
                 .send()
                 .await?;
@@ -40,7 +41,7 @@ pub async fn execute(command: TenantCommands) -> anyhow::Result<()> {
 async fn list_tenants() -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
     let res = client.client
-        .get(format!("{}/tenants", client.base_url))
+        .get(R::tenants::LIST.url(&client.base_url))
         .send()
         .await?;
 

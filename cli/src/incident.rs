@@ -14,6 +14,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 // ── Subcommand definitions ───────────────────────────────────────────────────
 
@@ -218,7 +219,7 @@ async fn execute_replay(
             };
 
             let qres = client.client
-                .post(&format!("{}/db/query", client.base_url))
+                .post(&R::db::QUERY.url(&client.base_url))
                 .header("x-flux-replay", "true")
                 .header("x-request-id", &format!("replay:{}", rid))
                 .json(&payload)
@@ -365,7 +366,7 @@ async fn replay_single_request(
         };
 
         let qres = client.client
-            .post(&format!("{}/db/query", client.base_url))
+            .post(&R::db::QUERY.url(&client.base_url))
             .header("x-flux-replay", "true")
             .header("x-request-id", &format!("replay:{}", request_id))
             .json(&payload)

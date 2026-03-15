@@ -52,6 +52,7 @@ use std::time::Instant;
 use colored::Colorize;
 use serde_json::Value;
 
+use api_contract::routes as R;
 use crate::client::ApiClient;
 use crate::config::{Config, ProjectConfig};
 use crate::sdk::parse_local_version;
@@ -97,7 +98,7 @@ pub async fn execute(request_id: Option<String>, json_output: bool) -> anyhow::R
         .build()
         .unwrap_or_default();
 
-    let health_url = format!("{}/health", config.api_url);
+    let health_url = R::health::HEALTH.url(&config.api_url);
     let t0 = Instant::now();
     match http.get(&health_url).send().await {
         Err(e) => {
@@ -190,13 +191,13 @@ async fn execute_diagnosis(request_id: String, json_output: bool) -> anyhow::Res
     let client = ApiClient::new().await?;
 
     // ── Fetch trace + mutations + previous request ────────────────────────
-    let trace_url = format!("{}/traces/{}?slow_ms=0", client.base_url, request_id);
+    let trace_url = format!("{}?slow_ms=0", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", request_id.as_str())]));
     let trace_body: Value = match client.client.get(&trace_url).send().await {
         Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
         _ => Value::Null,
     };
 
-    let mut_url = format!("{}/db/mutations?request_id={}&limit=20", client.base_url, request_id);
+    let mut_url = format!("{}?request_id={}&limit=20", R::db::MUTATIONS.url(&client.base_url), request_id);
     let mut_body: Value = match client.client.get(&mut_url).send().await {
         Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
         _ => Value::Null,

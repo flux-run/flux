@@ -1,6 +1,6 @@
 use clap::Subcommand;
 use colored::Colorize;
-use api_contract::routes;
+use api_contract::routes as R;
 use crate::client::ApiClient;
 use serde_json::Value;
 
@@ -162,7 +162,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
         DbCommands::Create { name } => {
             println!("Creating database \"{}\"...", name);
             let res = client.client
-                .post(format!("{}/db/databases", client.base_url))
+                .post(R::db::DATABASES_LIST.url(&client.base_url))
                 .json(&serde_json::json!({ "name": name }))
                 .send()
                 .await?;
@@ -186,7 +186,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
         // ── flux db list ────────────────────────────────────────────────────
         DbCommands::List => {
             let res = client.client
-                .get(format!("{}/db/databases", client.base_url))
+                .get(R::db::DATABASES_LIST.url(&client.base_url))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -209,7 +209,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
         DbCommands::Table { command } => match command {
             TableCommands::List { database } => {
                 let res = client.client
-                    .get(format!("{}/db/tables/{}", client.base_url, database))
+                    .get(R::db::TABLES_LIST.url_with(&client.base_url, &[("database", database.as_str())]))
                     .send()
                     .await?;
                 let json: Value = res.error_for_status()?.json().await?;
@@ -254,7 +254,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
                 });
 
                 let res = client.client
-                    .post(format!("{}/db/tables", client.base_url))
+                    .post(R::db::TABLES_CREATE.url(&client.base_url))
                     .json(&payload)
                     .send()
                     .await?;
@@ -275,7 +275,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
         // ── flux db diff ──────────────────────────────────────────────────────
         DbCommands::Diff { env1, env2, format, output } => {
             let res = client.client
-                .get(format!("{}/db/diff?env1={}&env2={}&format={}", client.base_url, env1, env2, format))
+                .get(format!("{}?env1={}&env2={}&format={}", R::db::DIFF.url(&client.base_url), env1, env2, format))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -301,7 +301,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
             let payload = serde_json::json!({ "sql": statement, "database": database });
             let res = client.client
-                .post(format!("{}/db/query", client.base_url))
+                .post(R::db::QUERY.url(&client.base_url))
                 .json(&payload)
                 .send()
                 .await?;
@@ -346,7 +346,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
         DbCommands::Shell { database } => {
             // Fetch connection string from API, then exec psql
             let res = client.client
-                .get(format!("{}/db/connection?database={}", client.base_url, database))
+                .get(format!("{}?database={}", R::db::CONNECTION.url(&client.base_url), database))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -372,7 +372,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
         // ── flux db history <table> --id <pk> ─────────────────────────────────
         DbCommands::History { table, id, pk, database, limit } => {
-            let mut url = format!("{}/db/history/{}/{}", client.base_url, database, table);
+            let mut url = R::db::HISTORY.url_with(&client.base_url, &[("database", database.as_str()), ("table", table.as_str())]);
             let mut sep = '?';
             if let Some(ref v) = id  { url.push_str(&format!("{sep}id={v}"));  sep = '&'; }
             if let Some(ref v) = pk  { url.push_str(&format!("{sep}pk={}", urlencoding::encode(v))); sep = '&'; }
@@ -406,7 +406,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
         // ── flux db blame <table> ─────────────────────────────────────────────
         DbCommands::Blame { table, database, limit } => {
-            let url = format!("{}/db/blame/{}/{}?limit={}", client.base_url, database, table, limit);
+            let url = format!("{}?limit={}", R::db::BLAME.url_with(&client.base_url, &[("database", database.as_str()), ("table", table.as_str())]), limit);
             let res = client.client.get(&url).send().await?;
             let json: Value = res.error_for_status()?.json().await?;
             let rows = json["blame"].as_array().cloned().unwrap_or_default();
@@ -477,7 +477,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
                     body["count"] = serde_json::json!(n);
                 }
                 let res = client.client
-                    .post(routes::db::MIGRATE_APPLY.url(&client.base_url))
+                    .post(R::db::MIGRATE_APPLY.url(&client.base_url))
                     .json(&body)
                     .send()
                     .await?;
@@ -495,7 +495,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
             MigrationCommands::Rollback { database } => {
                 let res = client.client
-                    .post(routes::db::MIGRATE_ROLLBACK.url(&client.base_url))
+                    .post(R::db::MIGRATE_ROLLBACK.url(&client.base_url))
                     .json(&serde_json::json!({ "database": database }))
                     .send()
                     .await?;
@@ -506,7 +506,7 @@ pub async fn execute(command: DbCommands) -> anyhow::Result<()> {
 
             MigrationCommands::Status { database } => {
                 let res = client.client
-                    .get(format!("{}?database={}", routes::db::MIGRATE_STATUS.url(&client.base_url), database))
+                    .get(format!("{}?database={}", R::db::MIGRATE_STATUS.url(&client.base_url), database))
                     .send()
                     .await?;
                 let json: Value = res.error_for_status()?.json().await?;

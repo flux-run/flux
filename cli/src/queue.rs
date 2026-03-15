@@ -5,6 +5,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum QueueCommands {
@@ -87,7 +88,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
             });
             let res = client
                 .client
-                .post(format!("{}/queues", client.base_url))
+                .post(R::queues::LIST.url(&client.base_url))
                 .json(&body)
                 .send()
                 .await?;
@@ -108,7 +109,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
         QueueCommands::List => {
             let res = client
                 .client
-                .get(format!("{}/queues", client.base_url))
+                .get(R::queues::LIST.url(&client.base_url))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -146,7 +147,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
         QueueCommands::Describe { name } => {
             let res = client
                 .client
-                .get(format!("{}/queues/{}", client.base_url, name))
+                .get(R::queues::GET.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -158,7 +159,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("Invalid --payload JSON: {}", e))?;
             let res = client
                 .client
-                .post(format!("{}/queues/{}/messages", client.base_url, name))
+                .post(R::queues::PUBLISH.url_with(&client.base_url, &[("name", name.as_str())]))
                 .json(&serde_json::json!({ "payload": payload_val }))
                 .send()
                 .await?;
@@ -182,7 +183,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
         QueueCommands::Bind { name, function } => {
             let res = client
                 .client
-                .post(format!("{}/queues/{}/bindings", client.base_url, name))
+                .post(R::queues::BINDINGS_LIST.url_with(&client.base_url, &[("name", name.as_str())]))
                 .json(&serde_json::json!({ "function_name": function }))
                 .send()
                 .await?;
@@ -198,7 +199,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
         QueueCommands::Bindings { name } => {
             let res = client
                 .client
-                .get(format!("{}/queues/{}/bindings", client.base_url, name))
+                .get(R::queues::BINDINGS_LIST.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -236,7 +237,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
             }
             let res = client
                 .client
-                .post(format!("{}/queues/{}/purge", client.base_url, name))
+                .post(R::queues::PURGE.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -257,7 +258,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
             }
             let res = client
                 .client
-                .delete(format!("{}/queues/{}", client.base_url, name))
+                .delete(R::queues::GET.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -268,7 +269,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
             DlqCommands::List { name } => {
                 let res = client
                     .client
-                    .get(format!("{}/queues/{}/dlq", client.base_url, name))
+                    .get(R::queues::DLQ_LIST.url_with(&client.base_url, &[("name", name.as_str())]))
                     .send()
                     .await?;
                 let json: Value = res.error_for_status()?.json().await?;
@@ -303,7 +304,7 @@ pub async fn execute(command: QueueCommands) -> anyhow::Result<()> {
             DlqCommands::Replay { name } => {
                 let res = client
                     .client
-                    .post(format!("{}/queues/{}/dlq/replay", client.base_url, name))
+                    .post(R::queues::DLQ_REPLAY.url_with(&client.base_url, &[("name", name.as_str())]))
                     .send()
                     .await?;
                 if res.status().is_success() {

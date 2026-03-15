@@ -5,6 +5,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum ScheduleCommands {
@@ -75,7 +76,7 @@ pub async fn execute(command: ScheduleCommands) -> anyhow::Result<()> {
             });
             let res = client
                 .client
-                .post(format!("{}/schedules", client.base_url))
+                .post(R::schedules::LIST.url(&client.base_url))
                 .json(&body)
                 .send()
                 .await?;
@@ -93,7 +94,7 @@ pub async fn execute(command: ScheduleCommands) -> anyhow::Result<()> {
         ScheduleCommands::List => {
             let res = client
                 .client
-                .get(format!("{}/schedules", client.base_url))
+                .get(R::schedules::LIST.url(&client.base_url))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -129,7 +130,7 @@ pub async fn execute(command: ScheduleCommands) -> anyhow::Result<()> {
         ScheduleCommands::Pause { name } => {
             let res = client
                 .client
-                .post(format!("{}/schedules/{}/pause", client.base_url, name))
+                .post(R::schedules::PAUSE.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -139,7 +140,7 @@ pub async fn execute(command: ScheduleCommands) -> anyhow::Result<()> {
         ScheduleCommands::Resume { name } => {
             let res = client
                 .client
-                .post(format!("{}/schedules/{}/resume", client.base_url, name))
+                .post(R::schedules::RESUME.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -149,7 +150,7 @@ pub async fn execute(command: ScheduleCommands) -> anyhow::Result<()> {
         ScheduleCommands::Run { name } => {
             let res = client
                 .client
-                .post(format!("{}/schedules/{}/run", client.base_url, name))
+                .post(R::schedules::RUN.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             if res.status().is_success() {
@@ -166,7 +167,7 @@ pub async fn execute(command: ScheduleCommands) -> anyhow::Result<()> {
         ScheduleCommands::History { name } => {
             let res = client
                 .client
-                .get(format!("{}/schedules/{}/history", client.base_url, name))
+                .get(R::schedules::HISTORY.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -211,7 +212,7 @@ pub async fn execute(command: ScheduleCommands) -> anyhow::Result<()> {
             }
             let res = client
                 .client
-                .delete(format!("{}/schedules/{}", client.base_url, name))
+                .delete(R::schedules::DELETE.url_with(&client.base_url, &[("name", name.as_str())]))
                 .send()
                 .await?;
             res.error_for_status()?;

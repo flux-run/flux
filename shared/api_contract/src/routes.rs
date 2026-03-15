@@ -52,6 +52,32 @@ impl<Req, Resp> Route<Req, Resp> {
     pub fn url(&self, base: &str) -> String {
         format!("{}{}", base.trim_end_matches('/'), self.path)
     }
+
+    /// Build a full URL substituting `{param}` placeholders.
+    ///
+    /// ```rust
+    /// routes::gateway::ROUTES_GET.url_with(&base, &[("id", route_id.as_str())])
+    /// // → "http://host/gateway/routes/abc-123"
+    /// ```
+    pub fn url_with(&self, base: &str, params: &[(&str, &str)]) -> String {
+        let mut path = self.path.to_string();
+        for (key, val) in params {
+            path = path.replace(&format!("{{{}}}", key), val);
+        }
+        format!("{}{}", base.trim_end_matches('/'), path)
+    }
+
+    /// Return the path with the given static prefix stripped — for use inside
+    /// an axum `.nest(prefix, ...)` router so the outer prefix isn't doubled.
+    ///
+    /// ```rust
+    /// // routes::internal::BUNDLE_GET.path == "/internal/bundle"
+    /// .route(routes::internal::BUNDLE_GET.under("/internal"), get(handler))
+    /// // axum sees "/bundle", the nest adds "/internal" ⇒ "/internal/bundle" ✓
+    /// ```
+    pub fn under(&self, prefix: &str) -> &'static str {
+        self.path.strip_prefix(prefix).unwrap_or(self.path)
+    }
 }
 
 // ── Internal routes (service-token protected, /internal/*) ───────────────────
@@ -94,15 +120,28 @@ pub mod functions {
     use crate::functions::CreateFunctionPayload;
 
     /// `GET /functions`
-    pub const LIST:   Route<(), Value>                        = Route::new("GET",    "/functions");
+    pub const LIST:   Route<(), Value>                    = Route::new("GET",    "/functions");
     /// `POST /functions`
-    pub const CREATE: Route<CreateFunctionPayload, Value>     = Route::new("POST",   "/functions");
+    pub const CREATE: Route<CreateFunctionPayload, Value> = Route::new("POST",   "/functions");
     /// `GET /functions/{id}`
-    pub const GET:    Route<(), Value>                        = Route::new("GET",    "/functions/{id}");
+    pub const GET:    Route<(), Value>                    = Route::new("GET",    "/functions/{id}");
     /// `DELETE /functions/{id}`
-    pub const DELETE: Route<(), Value>                        = Route::new("DELETE", "/functions/{id}");
+    pub const DELETE: Route<(), Value>                    = Route::new("DELETE", "/functions/{id}");
     /// `POST /functions/deploy` — multipart bundle upload
-    pub const DEPLOY: Route<(), Value>                        = Route::new("POST",   "/functions/deploy");
+    pub const DEPLOY: Route<(), Value>                    = Route::new("POST",   "/functions/deploy");
+
+    // ── Version management ────────────────────────────────────────────────────
+
+    /// `GET /functions/{name}/deployments`
+    pub const DEPLOYMENTS_LIST:     Route<(), Value>      = Route::new("GET",  "/functions/{name}/deployments");
+    /// `GET /functions/{name}/deployments/{version}`
+    pub const DEPLOYMENTS_GET:      Route<(), Value>      = Route::new("GET",  "/functions/{name}/deployments/{version}");
+    /// `POST /functions/{name}/deployments/{version}/activate`
+    pub const DEPLOYMENTS_ACTIVATE: Route<(), Value>      = Route::new("POST", "/functions/{name}/deployments/{version}/activate");
+    /// `POST /functions/{name}/deployments/{version}/promote`
+    pub const DEPLOYMENTS_PROMOTE:  Route<Value, Value>   = Route::new("POST", "/functions/{name}/deployments/{version}/promote");
+    /// `GET /functions/{name}/deployments/diff`
+    pub const DEPLOYMENTS_DIFF:     Route<(), Value>      = Route::new("GET",  "/functions/{name}/deployments/diff");
 }
 
 // ── Deployments ───────────────────────────────────────────────────────────────
@@ -152,11 +191,13 @@ pub mod logs {
     use serde_json::Value;
 
     /// `GET /logs`
-    pub const LIST:        Route<(), Value> = Route::new("GET", "/logs");
-    /// `GET /traces/{request_id}`
-    pub const TRACE_GET:   Route<(), Value> = Route::new("GET", "/traces/{request_id}");
+    pub const LIST:         Route<(), Value> = Route::new("GET",  "/logs");
     /// `GET /traces`
-    pub const TRACES_LIST: Route<(), Value> = Route::new("GET", "/traces");
+    pub const TRACES_LIST:  Route<(), Value> = Route::new("GET",  "/traces");
+    /// `GET /traces/{request_id}`
+    pub const TRACE_GET:    Route<(), Value> = Route::new("GET",  "/traces/{request_id}");
+    /// `POST /traces/{request_id}/replay`
+    pub const TRACE_REPLAY: Route<(), Value> = Route::new("POST", "/traces/{request_id}/replay");
 }
 
 // ── Gateway routes & middleware ───────────────────────────────────────────────
@@ -218,6 +259,7 @@ pub mod sdk {
 
 pub mod db {
     use super::Route;
+    use serde_json::Value;
     use crate::db_migrate::{
         MigrateRequest, MigrateResponse,
         MigrationApplyRequest, MigrationApplyResponse,
@@ -225,14 +267,42 @@ pub mod db {
         MigrationStatusResponse,
     };
 
+    // ── Migrations ────────────────────────────────────────────────────────────
+
     /// `POST /db/migrate` — apply a single migration file (internal, used by `flux db push`)
-    pub const MIGRATE_SINGLE:   Route<MigrateRequest, MigrateResponse>                        = Route::new("POST", "/db/migrate");
+    pub const MIGRATE_SINGLE:   Route<MigrateRequest, MigrateResponse>                    = Route::new("POST", "/db/migrate");
     /// `POST /db/migrations/apply` — apply all pending migrations
-    pub const MIGRATE_APPLY:    Route<MigrationApplyRequest, MigrationApplyResponse>           = Route::new("POST", "/db/migrations/apply");
+    pub const MIGRATE_APPLY:    Route<MigrationApplyRequest, MigrationApplyResponse>      = Route::new("POST", "/db/migrations/apply");
     /// `POST /db/migrations/rollback` — roll back the last applied migration
-    pub const MIGRATE_ROLLBACK: Route<MigrationRollbackRequest, MigrationRollbackResponse>     = Route::new("POST", "/db/migrations/rollback");
+    pub const MIGRATE_ROLLBACK: Route<MigrationRollbackRequest, MigrationRollbackResponse> = Route::new("POST", "/db/migrations/rollback");
     /// `GET /db/migrations` — list all applied migrations
-    pub const MIGRATE_STATUS:   Route<(), MigrationStatusResponse>                             = Route::new("GET",  "/db/migrations");
+    pub const MIGRATE_STATUS:   Route<(), MigrationStatusResponse>                        = Route::new("GET",  "/db/migrations");
+
+    // ── Data-engine proxy (these hit the /db/{*path} wildcard in app.rs) ─────
+    // CLI calls these directly; app.rs proxies them to the data-engine service.
+
+    /// `GET /db/databases`
+    pub const DATABASES_LIST:   Route<(), Value>      = Route::new("GET",  "/db/databases");
+    /// `POST /db/databases`
+    pub const DATABASES_CREATE: Route<Value, Value>   = Route::new("POST", "/db/databases");
+    /// `GET /db/tables/{database}`
+    pub const TABLES_LIST:      Route<(), Value>      = Route::new("GET",  "/db/tables/{database}");
+    /// `POST /db/tables`
+    pub const TABLES_CREATE:    Route<Value, Value>   = Route::new("POST", "/db/tables");
+    /// `GET /db/diff`
+    pub const DIFF:             Route<(), Value>      = Route::new("GET",  "/db/diff");
+    /// `POST /db/query`
+    pub const QUERY:            Route<Value, Value>   = Route::new("POST", "/db/query");
+    /// `GET /db/connection`
+    pub const CONNECTION:       Route<(), Value>      = Route::new("GET",  "/db/connection");
+    /// `GET /db/history/{database}/{table}`
+    pub const HISTORY:          Route<(), Value>      = Route::new("GET",  "/db/history/{database}/{table}");
+    /// `GET /db/blame/{database}/{table}`
+    pub const BLAME:            Route<(), Value>      = Route::new("GET",  "/db/blame/{database}/{table}");
+    /// `GET /db/mutations`
+    pub const MUTATIONS:        Route<(), Value>      = Route::new("GET",  "/db/mutations");
+    /// `POST /db/explain`
+    pub const EXPLAIN:          Route<Value, Value>   = Route::new("POST", "/db/explain");
 }
 
 // ── API keys ──────────────────────────────────────────────────────────────────
@@ -404,5 +474,52 @@ pub mod stream {
     pub const EXECUTIONS: Route<(), Value> = Route::new("GET", "/stream/executions");
     /// `GET /stream/mutations`
     pub const MUTATIONS:  Route<(), Value> = Route::new("GET", "/stream/mutations");
+}
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+pub mod auth {
+    use super::Route;
+    use serde_json::Value;
+
+    /// `GET /auth/status`
+    pub const STATUS:       Route<(), Value>     = Route::new("GET",    "/auth/status");
+    /// `POST /auth/setup`
+    pub const SETUP:        Route<Value, Value>  = Route::new("POST",   "/auth/setup");
+    /// `POST /auth/login`
+    pub const LOGIN:        Route<Value, Value>  = Route::new("POST",   "/auth/login");
+    /// `POST /auth/logout`
+    pub const LOGOUT:       Route<(), Value>     = Route::new("POST",   "/auth/logout");
+    /// `GET /auth/me`
+    pub const ME:           Route<(), Value>     = Route::new("GET",    "/auth/me");
+    /// `GET /auth/users`
+    pub const USERS_LIST:   Route<(), Value>     = Route::new("GET",    "/auth/users");
+    /// `POST /auth/users`
+    pub const USERS_CREATE: Route<Value, Value>  = Route::new("POST",   "/auth/users");
+    /// `DELETE /auth/users/{id}`
+    pub const USERS_DELETE: Route<(), Value>     = Route::new("DELETE", "/auth/users/{id}");
+}
+
+// ── Health / Version ──────────────────────────────────────────────────────────
+
+pub mod health {
+    use super::Route;
+    use serde_json::Value;
+
+    /// `GET /health`
+    pub const HEALTH:  Route<(), Value> = Route::new("GET", "/health");
+    /// `GET /version`
+    pub const VERSION: Route<(), Value> = Route::new("GET", "/version");
+}
+
+// ── Tenants ───────────────────────────────────────────────────────────────────
+
+pub mod tenants {
+    use super::Route;
+    use serde_json::Value;
+
+    /// `GET /tenants`
+    pub const LIST:   Route<(), Value>    = Route::new("GET",  "/tenants");
+    /// `POST /tenants`
+    pub const CREATE: Route<Value, Value> = Route::new("POST", "/tenants");
 }
 

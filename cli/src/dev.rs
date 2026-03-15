@@ -53,6 +53,7 @@ use serde::Deserialize;
 use tokio::process::Command;
 use tokio::signal;
 
+use api_contract::routes as R;
 use crate::config::DEFAULT_SERVER_PORT;
 
 // Starting port when searching for a free one. 5432 is intentionally skipped
@@ -491,7 +492,7 @@ async fn start_server(port: u16, database_url: &str, extra_env: &[(String, Strin
         .with_context(|| format!("Failed to start server binary: {:?}", binary))?;
 
     // Health-check until the server is ready.
-    let ready = wait_healthy(&format!("http://localhost:{}", port), "/health", 30).await;
+    let ready = wait_healthy(&format!("http://localhost:{}", port), R::health::HEALTH.path, 30).await;
 
     if ready {
         println!("\r  {} flux server     localhost:{}         ",

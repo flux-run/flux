@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::client::ApiClient;
 use crate::config::Config;
+use api_contract::routes as R;
 
 // ─── API shapes ───────────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ fn prompt_password(label: &str) -> anyhow::Result<String> {
 async fn is_first_run(client: &ApiClient) -> bool {
     let res = client
         .client
-        .get(format!("{}/auth/status", client.base_url))
+        .get(R::auth::STATUS.url(&client.base_url))
         .send()
         .await;
     match res {
@@ -89,7 +90,7 @@ pub async fn execute() -> anyhow::Result<()> {
     // Check server is reachable before prompting for credentials.
     let health = client
         .client
-        .get(format!("{}/health", client.base_url))
+        .get(R::health::HEALTH.url(&client.base_url))
         .timeout(std::time::Duration::from_secs(3))
         .send()
         .await;
@@ -124,7 +125,7 @@ pub async fn execute() -> anyhow::Result<()> {
 
         let res = client
             .client
-            .post(format!("{}/auth/setup", client.base_url))
+            .post(R::auth::SETUP.url(&client.base_url))
             .json(&SetupBody { username, email, password, role: "admin" })
             .send()
             .await
@@ -153,7 +154,7 @@ pub async fn execute() -> anyhow::Result<()> {
 
         let res = client
             .client
-            .post(format!("{}/auth/login", client.base_url))
+            .post(R::auth::LOGIN.url(&client.base_url))
             .json(&LoginBody { email, password })
             .send()
             .await

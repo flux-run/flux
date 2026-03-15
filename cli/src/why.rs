@@ -24,6 +24,7 @@
 use colored::Colorize;
 use serde_json::Value;
 
+use api_contract::routes as R;
 use crate::client::ApiClient;
 
 fn trunc(s: &str, n: usize) -> String {
@@ -85,7 +86,7 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
     let client = ApiClient::new().await?;
 
     // ── Fetch trace spans ────────────────────────────────────────────────────
-    let trace_url = format!("{}/traces/{}?slow_ms=0", client.base_url, request_id);
+    let trace_url = format!("{}?slow_ms=0", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", request_id.as_str())]));
     let trace_res = client.client.get(&trace_url).send().await?;
     let trace_body: Value = if trace_res.status().is_success() {
         trace_res.json().await.unwrap_or_default()

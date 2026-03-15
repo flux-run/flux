@@ -14,6 +14,7 @@ use colored::Colorize;
 use serde::Deserialize;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 // ── Manifest types ────────────────────────────────────────────────────────────
 
@@ -115,7 +116,7 @@ pub async fn execute_generate(output_dir: Option<String>) -> anyhow::Result<()> 
 // ── Manifest fetch ────────────────────────────────────────────────────────────
 
 async fn fetch_manifest(client: &ApiClient) -> anyhow::Result<(Manifest, serde_json::Value)> {
-    let url = format!("{}/sdk/manifest", client.base_url);
+    let url = R::sdk::MANIFEST.url(&client.base_url);
     let resp = client.client.get(&url).send().await?;
 
     if !resp.status().is_success() {

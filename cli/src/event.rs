@@ -5,6 +5,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum EventCommands {
@@ -50,7 +51,7 @@ pub async fn execute(command: EventCommands) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("Invalid --payload JSON: {}", e))?;
             let res = client
                 .client
-                .post(format!("{}/events", client.base_url))
+                .post(R::events::PUBLISH.url(&client.base_url))
                 .json(&serde_json::json!({
                     "type": event_type,
                     "payload": payload_val,
@@ -77,7 +78,7 @@ pub async fn execute(command: EventCommands) -> anyhow::Result<()> {
         EventCommands::Subscribe { event_type, function } => {
             let res = client
                 .client
-                .post(format!("{}/events/subscriptions", client.base_url))
+                .post(R::events::SUBSCRIPTIONS_LIST.url(&client.base_url))
                 .json(&serde_json::json!({
                     "event_type": event_type,
                     "function_name": function,
@@ -106,7 +107,7 @@ pub async fn execute(command: EventCommands) -> anyhow::Result<()> {
         EventCommands::Unsubscribe { subscription_id } => {
             let res = client
                 .client
-                .delete(format!("{}/events/subscriptions/{}", client.base_url, subscription_id))
+                .delete(R::events::SUBSCRIPTIONS_DELETE.url_with(&client.base_url, &[("id", subscription_id.as_str())]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -116,7 +117,7 @@ pub async fn execute(command: EventCommands) -> anyhow::Result<()> {
         EventCommands::List => {
             let res = client
                 .client
-                .get(format!("{}/events/subscriptions", client.base_url))
+                .get(R::events::SUBSCRIPTIONS_LIST.url(&client.base_url))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;

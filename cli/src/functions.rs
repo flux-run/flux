@@ -1,6 +1,7 @@
 use clap::{Subcommand, ValueEnum};
 use crate::client::ApiClient;
 use serde_json::Value;
+use api_contract::routes as R;
 
 // ── Language enum ─────────────────────────────────────────────────────────────
 
@@ -135,7 +136,7 @@ fn print_languages() {
 async fn list_functions() -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
     let res = client.client
-        .get(format!("{}/functions", client.base_url))
+        .get(R::functions::LIST.url(&client.base_url))
         .send()
         .await?;
     let json: Value = res.error_for_status()?.json().await?;

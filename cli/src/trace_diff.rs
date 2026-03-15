@@ -39,6 +39,7 @@ use std::collections::VecDeque;
 use colored::Colorize;
 use serde_json::Value;
 
+use api_contract::routes as R;
 use crate::client::ApiClient;
 use crate::why::diff_json;
 
@@ -58,8 +59,8 @@ pub async fn execute(
     let client = ApiClient::new().await?;
 
     // Traces are small (one JSON object per request) — fetch both eagerly.
-    let orig_trace_url = format!("{}/traces/{}?slow_ms=0", client.base_url, original_id);
-    let rep_trace_url  = format!("{}/traces/{}?slow_ms=0", client.base_url, replay_id);
+    let orig_trace_url = format!("{}?slow_ms=0", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", original_id.as_str())]));
+    let rep_trace_url  = format!("{}?slow_ms=0", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", replay_id.as_str())]));
 
     let (orig_trace, rep_trace) = tokio::try_join!(
         fetch_json(&client, &orig_trace_url),

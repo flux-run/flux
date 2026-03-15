@@ -1,3 +1,4 @@
+use api_contract::routes as R;
 use crate::client::ApiClient;
 use colored::Colorize;
 use serde_json::Value;
@@ -188,7 +189,7 @@ fn render_flame(spans: &[Value], total_ms: i64, slow_thresh: u64) {
 
 pub async fn execute(request_id: String, slow_threshold: u64, flame: bool) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
-    let url    = format!("{}/traces/{}?slow_ms={}", client.base_url, request_id, slow_threshold);
+    let url    = format!("{}?slow_ms={}", R::logs::TRACE_GET.url_with(&client.base_url, &[("request_id", request_id.as_str())]), slow_threshold);
 
     let res: reqwest::Response = client.client.get(&url).send().await?;
 
@@ -400,7 +401,7 @@ pub async fn execute_list(limit: u64, function: Option<String>, json_output: boo
     let client = ApiClient::new().await?;
 
     // URL-encode the function name so names with slashes/spaces are safe.
-    let mut url = format!("{}/traces?limit={}", client.base_url, limit);
+    let mut url = format!("{}?limit={}", R::logs::TRACES_LIST.url(&client.base_url), limit);
     if let Some(ref fn_name) = function {
         url.push_str("&function=");
         url.push_str(&urlencoding::encode(fn_name));

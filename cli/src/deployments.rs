@@ -3,6 +3,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::context::resolve_context;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum DeploymentCommands {
@@ -30,7 +31,7 @@ pub async fn execute_deployments(command: DeploymentCommands) -> anyhow::Result<
             let client = crate::client::ApiClient::new().await?;
             let res = client
                 .client
-                .get(format!("{}/deployments/list/{}", client.base_url, name))
+                .get(R::deployments::LIST.url_with(&client.base_url, &[("id", name.as_str())]))
                 .send()
                 .await?;
 

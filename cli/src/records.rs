@@ -12,6 +12,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum RecordsCommands {
@@ -87,7 +88,7 @@ pub async fn execute(command: RecordsCommands) -> anyhow::Result<()> {
 
     match command {
         RecordsCommands::Export { before, after, function, errors_only, format } => {
-            let mut url = format!("{}/records/export", client.base_url);
+            let mut url = R::records::EXPORT.url(&client.base_url);
             let mut params: Vec<String> = Vec::new();
             if let Some(b) = &before   { params.push(format!("before={}", b)); }
             if let Some(a) = &after    { params.push(format!("after={}", a)); }
@@ -111,7 +112,7 @@ pub async fn execute(command: RecordsCommands) -> anyhow::Result<()> {
         }
 
         RecordsCommands::Count { before, after, function, errors_only, json } => {
-            let mut url = format!("{}/records/count", client.base_url);
+            let mut url = R::records::COUNT.url(&client.base_url);
             let mut params: Vec<String> = Vec::new();
             if let Some(b) = &before   { params.push(format!("before={}", b)); }
             if let Some(a) = &after    { params.push(format!("after={}", a)); }
@@ -135,7 +136,7 @@ pub async fn execute(command: RecordsCommands) -> anyhow::Result<()> {
         RecordsCommands::Prune { before, dry_run, yes } => {
             if dry_run {
                 // --dry-run: just count with the same filter
-                let mut url = format!("{}/records/count", client.base_url);
+                let mut url = R::records::COUNT.url(&client.base_url);
                 if let Some(b) = &before {
                     url = format!("{}?before={}", url, b);
                 }
@@ -151,7 +152,7 @@ pub async fn execute(command: RecordsCommands) -> anyhow::Result<()> {
             }
 
             // Count first, then confirm
-            let mut count_url = format!("{}/records/count", client.base_url);
+            let mut count_url = R::records::COUNT.url(&client.base_url);
             if let Some(b) = &before {
                 count_url = format!("{}?before={}", count_url, b);
             }
@@ -180,7 +181,7 @@ pub async fn execute(command: RecordsCommands) -> anyhow::Result<()> {
                 }
             }
 
-            let mut url = format!("{}/records/prune", client.base_url);
+            let mut url = R::records::PRUNE.url(&client.base_url);
             let mut params: Vec<String> = Vec::new();
             if let Some(b) = &before { params.push(format!("before={}", b)); }
             if !params.is_empty() {

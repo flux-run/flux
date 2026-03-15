@@ -35,6 +35,7 @@ use tokio::{fs, time};
 
 use crate::client::ApiClient;
 use crate::config::ProjectConfig;
+use api_contract::routes as R;
 
 // ─── Response shapes ──────────────────────────────────────────────────────────
 
@@ -49,7 +50,7 @@ struct SchemaResponse {
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
 async fn fetch_schema(client: &ApiClient) -> anyhow::Result<SchemaResponse> {
-    let url = format!("{}/sdk/schema", client.base_url);
+    let url = R::sdk::SDK_SCHEMA.url(&client.base_url);
     let res = client.client.get(&url).send().await
         .context("Failed to reach Flux API")?;
 
@@ -68,7 +69,7 @@ async fn fetch_schema(client: &ApiClient) -> anyhow::Result<SchemaResponse> {
 }
 
 async fn fetch_typescript_sdk(client: &ApiClient) -> anyhow::Result<String> {
-    let url = format!("{}/sdk/typescript", client.base_url);
+    let url = R::sdk::SDK_TS.url(&client.base_url);
     let res = client.client.get(&url).send().await
         .context("Failed to reach Flux API")?;
 

@@ -33,6 +33,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 fn section(title: &str) {
     let bar = "─".repeat(54);
@@ -65,7 +66,7 @@ pub async fn execute(file: Option<PathBuf>, json_output: bool) -> anyhow::Result
 
     // ── 2. Call /db/explain ──────────────────────────────────────────────────
     let client = ApiClient::new().await?;
-    let url = format!("{}/db/explain", client.base_url);
+    let url = R::db::EXPLAIN.url(&client.base_url);
 
     let resp = client
         .client

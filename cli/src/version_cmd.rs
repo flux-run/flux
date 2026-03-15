@@ -8,6 +8,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 #[derive(Subcommand)]
 pub enum VersionCommands {
@@ -59,7 +60,7 @@ pub async fn execute(command: VersionCommands) -> anyhow::Result<()> {
         VersionCommands::List { function } => {
             let res = client
                 .client
-                .get(format!("{}/functions/{}/deployments", client.base_url, function))
+                .get(R::functions::DEPLOYMENTS_LIST.url_with(&client.base_url, &[("name", function.as_str())]))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;

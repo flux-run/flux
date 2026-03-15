@@ -8,6 +8,7 @@ use clap::Subcommand;
 use colored::Colorize;
 use std::collections::BTreeMap;
 use std::path::Path;
+use api_contract::routes as R;
 
 const ENV_FILE: &str = ".env.local";
 
@@ -53,7 +54,7 @@ async fn execute_api(command: SecretsCommands, api_url: String, token: String) -
     match command {
         SecretsCommands::List => {
             let res = client
-                .get(format!("{}/secrets", api_url))
+                .get(R::secrets::LIST.url(&api_url))
                 .bearer_auth(&token)
                 .send()
                 .await?;
@@ -70,7 +71,7 @@ async fn execute_api(command: SecretsCommands, api_url: String, token: String) -
         }
         SecretsCommands::Get { key } => {
             let res = client
-                .get(format!("{}/secrets/{}", api_url, key))
+                .get(R::secrets::UPDATE.url_with(&api_url, &[("key", key.as_str())]))
                 .bearer_auth(&token)
                 .send()
                 .await?;
@@ -79,7 +80,7 @@ async fn execute_api(command: SecretsCommands, api_url: String, token: String) -
         }
         SecretsCommands::Set { key, value } => {
             let res = client
-                .post(format!("{}/secrets", api_url))
+                .post(R::secrets::LIST.url(&api_url))
                 .bearer_auth(&token)
                 .json(&serde_json::json!({ "key": key, "value": value }))
                 .send()
@@ -89,7 +90,7 @@ async fn execute_api(command: SecretsCommands, api_url: String, token: String) -
         }
         SecretsCommands::Delete { key } => {
             let res = client
-                .delete(format!("{}/secrets/{}", api_url, key))
+                .delete(R::secrets::UPDATE.url_with(&api_url, &[("key", key.as_str())]))
                 .bearer_auth(&token)
                 .send()
                 .await?;

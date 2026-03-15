@@ -1,3 +1,4 @@
+use api_contract::routes as R;
 use crate::client::ApiClient;
 use colored::Colorize;
 use serde_json::Value;
@@ -64,7 +65,7 @@ async fn fetch_logs(
     limit:    u64,
     since:    Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
-    let mut url = format!("{}/logs?limit={}", client.base_url, limit);
+    let mut url = format!("{}?limit={}", R::logs::LIST.url(&client.base_url), limit);
 
     match (source, resource) {
         (Some(s), Some(r)) => {
