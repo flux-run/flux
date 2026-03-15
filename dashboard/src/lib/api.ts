@@ -1,6 +1,9 @@
 import { getToken, clearToken } from "@/lib/auth";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+// In dev (monolith on one port), the management API is mounted at /flux/api.
+// In production, NEXT_PUBLIC_API_URL points directly to the API service host
+// where routes are at root level (e.g. https://api.example.com/functions).
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/flux/api";
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;

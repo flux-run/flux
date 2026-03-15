@@ -196,10 +196,10 @@ export default function OverviewPage() {
         description="Functions · routes · data · observability"
         breadcrumbs={[{ label: 'Overview' }]}
         actions={
-          <Link href="/docs/cli" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-3 py-1.5 transition-colors hover:bg-muted/30">
+          <a href="https://fluxbase.co/docs/cli" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-3 py-1.5 transition-colors hover:bg-muted/30">
             <Zap className="w-3.5 h-3.5 text-[#6c63ff]" />
             CLI docs
-          </Link>
+          </a>
         }
       />
       <div className="flex-1 overflow-y-auto">
