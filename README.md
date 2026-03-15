@@ -46,6 +46,16 @@ curl -fsSL https://fluxbase.co/install | bash
 irm https://fluxbase.co/install.ps1 | iex
 ```
 
+## Telemetry
+
+The CLI collects anonymous usage events (`flux dev`, `flux deploy`, `flux init`) to help us understand how Flux is used. **No personal data, code, or credentials are ever sent** — only CLI version, OS, and arch.
+
+Opt out at any time:
+
+```bash
+export FLUX_NO_TELEMETRY=1   # or DO_NOT_TRACK=1
+```
+
 ## Core Developer Loop
 
 The developer loop looks like this:

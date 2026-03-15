@@ -35,6 +35,7 @@ mod server;
 mod stack;
 mod state;
 mod tail;
+mod telemetry;
 mod tenant;
 mod trace;
 mod trace_debug;
@@ -703,17 +704,28 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Function    { command } => functions::execute(command).await?,
         Commands::Toolchain   { command } => toolchain::execute(command).await?,
-        Commands::Deploy { context, only, force, name: _, runtime: _ } =>
-            deploy::execute(context, only, force).await?,
+        Commands::Deploy { context, only, force, name: _, runtime: _ } => {
+            telemetry::capture("cli_deploy", serde_json::json!({ "force": force }));
+            deploy::execute(context, only, force).await?
+        }
         Commands::Invoke      { name, payload, gateway } => invoke::execute(&name, None, payload, gateway).await?,
         Commands::Version     { command } => version_cmd::execute(command).await?,
         Commands::Deployments { command } => deployments::execute_deployments(command).await?,
-        Commands::Dev                     => dev::execute().await?,
+        Commands::Dev => {
+            telemetry::capture("cli_dev", serde_json::json!({}));
+            dev::execute().await?
+        }
 
         Commands::New    { name, template } |
-        Commands::Create { name, template } => create::execute(name, template).await?,
+        Commands::Create { name, template } => {
+            telemetry::capture("cli_new", serde_json::json!({
+                "has_template": template.is_some()
+            }));
+            create::execute(name, template).await?
+        }
 
         Commands::Init { name, gateway_port } => {
+            telemetry::capture("cli_init", serde_json::json!({}));
             init::execute(init::InitOptions {
                 name,
                 gateway_port,

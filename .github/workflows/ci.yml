@@ -26,6 +26,9 @@ permissions:
 env:
   SQLX_OFFLINE: "true"
   CARGO_TERM_COLOR: always
+  # Baked into the CLI binary so telemetry works in released builds.
+  # Set this secret in: GitHub repo → Settings → Secrets → Actions → New secret
+  FLUX_POSTHOG_KEY: ${{ secrets.FLUX_POSTHOG_KEY }}
 
 jobs:
   build:
