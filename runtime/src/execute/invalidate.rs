@@ -38,7 +38,6 @@ pub async fn invalidate_cache_handler(
 
     if let Some(ref fid) = req.function_id {
         state.bundle_cache.invalidate_function(fid);
-        state.wasm_pool.evict(fid).await;
         state.schema_cache.invalidate(fid);
         evicted.push("function_bundle");
         evicted.push("function_schema");

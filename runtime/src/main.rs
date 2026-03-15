@@ -14,7 +14,6 @@ use runtime::dispatch::http_api::HttpApiDispatch;
 use runtime::dispatch::http_queue::HttpQueueDispatch;
 use runtime::engine::executor::PoolDispatchers;
 use runtime::engine::pool::IsolatePool;
-use runtime::engine::wasm_pool::WasmPool;
 use runtime::bundle::cache::BundleCache;
 use runtime::schema::cache::SchemaCache;
 use runtime::execute::handler::execute_handler;
@@ -108,11 +107,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bundle_cache:    BundleCache::new(100),
         schema_cache:    SchemaCache::new(200),
         isolate_pool:    IsolatePool::new(settings.isolate_workers, settings.request_timeout_secs, dispatchers.clone()),
-        wasm_pool:       WasmPool::new(
-            std::thread::available_parallelism().map(|n| (n.get() * 2).clamp(2, 16)).unwrap_or(4),
-            settings.wasm_fuel_limit,
-            settings.request_timeout_secs,
-        ),
         dispatchers,
     });
 
@@ -170,3 +164,4 @@ async fn shutdown_signal() {
 
     tracing::info!("Runtime: shutdown signal received — draining in-flight requests");
 }
+

@@ -44,7 +44,6 @@ pub struct FunctionResult {
 
 pub enum BundleKind {
     Js  { metadata: Option<Value> },
-    Wasm,
 }
 
 pub struct BundleOutput {
@@ -102,55 +101,6 @@ import('file://{bundle}').then(m => {{
     None
 }
 
-// ── WASM toolchain pre-flight ─────────────────────────────────────────────────
-
-fn check_wasm_toolchain(build_cmd: &str) -> Option<String> {
-    struct Check {
-        needle:  &'static str,
-        binary:  &'static str,
-        install: &'static str,
-    }
-
-    let checks: &[Check] = &[
-        Check { needle: "tinygo",      binary: "tinygo",  install: "https://tinygo.org/getting-started/install/" },
-        Check { needle: "asc ",        binary: "asc",     install: "npm install -g assemblyscript  (https://www.assemblyscript.org)" },
-        Check { needle: "npx asc",     binary: "npx",     install: "https://nodejs.org" },
-        Check { needle: "zig build",   binary: "zig",     install: "https://ziglang.org/download/" },
-        Check { needle: "py2wasm",     binary: "py2wasm", install: "pip install py2wasm  (https://github.com/astral-sh/py2wasm)" },
-        Check { needle: "emcc",        binary: "emcc",    install: "https://emscripten.org/docs/getting_started/downloads.html" },
-        Check { needle: "cargo build", binary: "cargo",   install: "rustup  (https://rustup.rs)" },
-    ];
-
-    for check in checks {
-        if build_cmd.contains(check.needle) {
-            if which::which(check.binary).is_err() {
-                return Some(format!(
-                    "required toolchain '{}' not found on PATH.\nInstall it from: {}",
-                    check.binary, check.install,
-                ));
-            }
-            if check.binary == "cargo" && build_cmd.contains("wasm32-wasip1") {
-                let targets = Command::new("rustup")
-                    .args(["target", "list", "--installed"])
-                    .output()
-                    .ok();
-                let has_target = targets
-                    .as_ref()
-                    .and_then(|o| String::from_utf8(o.stdout.clone()).ok())
-                    .map(|s| s.contains("wasm32-wasip1"))
-                    .unwrap_or(false);
-                if !has_target {
-                    return Some(
-                        "wasm32-wasip1 target not installed.\nRun: rustup target add wasm32-wasip1"
-                            .to_string(),
-                    );
-                }
-            }
-        }
-    }
-    None
-}
-
 // ── Bundle: JS/Deno ───────────────────────────────────────────────────────────
 
 fn bundle_js(dir: &Path, entry: &str) -> anyhow::Result<Vec<u8>> {    let out_dir = dir.join("dist");
@@ -182,65 +132,22 @@ fn bundle_js(dir: &Path, entry: &str) -> anyhow::Result<Vec<u8>> {    let out_di
     Ok(fs::read(&bundle_path)?)
 }
 
-// ── Bundle: WASM ──────────────────────────────────────────────────────────────
-
-fn bundle_wasm(dir: &Path, entry: &str, build_cmd: Option<&str>) -> anyhow::Result<Vec<u8>> {
-    if let Some(cmd) = build_cmd {
-        if let Some(hint) = check_wasm_toolchain(cmd) {
-            anyhow::bail!("{}", hint);
-        }
-        let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
-        let flag  = if cfg!(target_os = "windows") { "/C" } else { "-c" };
-        let status = Command::new(shell).args([flag, cmd]).current_dir(dir).status();
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) => anyhow::bail!("build command failed (exit {})", s),
-            Err(e) => anyhow::bail!("could not run build command: {}", e),
-        }
-    }
-
-    let wasm_path = dir.join(entry);
-    if !wasm_path.exists() {
-        anyhow::bail!(
-            "WASM binary '{}' not found. Set \"build\" in flux.json or build manually.",
-            entry
-        );
-    }
-
-    let bytes = fs::read(&wasm_path)?;
-    if bytes.len() < 8 || &bytes[0..4] != b"\x00asm" {
-        anyhow::bail!(
-            "'{}' is not a valid WASM binary (wrong magic bytes).",
-            entry
-        );
-    }
-    Ok(bytes)
-}
-
 // ── Bundle dispatch ───────────────────────────────────────────────────────────
 
 pub fn bundle_function(dir: &Path, metadata: &Value) -> anyhow::Result<BundleOutput> {
-    let runtime = metadata["runtime"].as_str().unwrap_or("deno").to_string();
+    let runtime = "deno".to_string();
 
-    // Default entry: for wasm → handler.wasm; for JS/TS → index.ts (prefer .js fallback)
+    // Default entry: index.ts (prefer .js fallback)
     let entry = metadata["entry"]
         .as_str()
         .map(|s| s.to_string())
         .unwrap_or_else(|| {
-            if runtime == "wasm" {
-                "handler.wasm".to_string()
-            } else if dir.join("index.js").exists() && !dir.join("index.ts").exists() {
+            if dir.join("index.js").exists() && !dir.join("index.ts").exists() {
                 "index.js".to_string()
             } else {
                 "index.ts".to_string()
             }
         });
-
-    if runtime == "wasm" {
-        let build_cmd = metadata["build"].as_str();
-        let bytes = bundle_wasm(dir, &entry, build_cmd)?;
-        return Ok(BundleOutput { bytes, runtime, kind: BundleKind::Wasm });
-    }
 
     if !entry.ends_with(".ts") && !entry.ends_with(".js") {
         anyhow::bail!("entry '{}' must be a .ts or .js file", entry);
@@ -271,12 +178,9 @@ async fn upload_function(
 ) -> anyhow::Result<(u64, Option<String>)> {
     let client = reqwest::Client::new();
 
-    let mime = if bundle.runtime == "wasm" { "application/wasm" } else { "application/javascript" };
-    let file_name = if bundle.runtime == "wasm" { "handler.wasm" } else { "bundle.js" };
-
     let part = multipart::Part::bytes(bundle.bytes)
-        .file_name(file_name)
-        .mime_str(mime)?;
+        .file_name("bundle.js")
+        .mime_str("application/javascript")?;
 
     let mut form = multipart::Form::new()
         .text("name",        name.to_string())

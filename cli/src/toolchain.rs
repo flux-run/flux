@@ -1,22 +1,16 @@
-//! `flux toolchain` — manage pinned language runtimes and compilers.
+//! `flux toolchain` — manage pinned language runtimes.
 //!
 //! ## Storage layout
 //! ```
 //! ~/.flux/toolchains/
 //!   deno/2.3.0/deno
 //!   node/22.14.0/bin/node
-//!   go/1.24.2/bin/go
-//!   python/3.12.9/bin/python3
-//!   zig/0.13.0/zig
-//!   wasi-sdk/24.0/bin/clang
-//!   kotlin/2.1.0/bin/kotlinc
-//!   java/21.0.6/bin/java
 //! ```
 //!
 //! ## Commands
 //!   flux toolchain list               — show languages, versions, install status
 //!   flux toolchain install <lang>     — download + install one toolchain
-//!   flux toolchain install all        — install all 14
+//!   flux toolchain install all        — install all
 //!   flux toolchain which <lang>       — print binary path (for scripting)
 
 use std::io::{Read, Write};
@@ -122,109 +116,6 @@ fn spec_for(lang: &str) -> Option<Spec> {
             binary_name: "node",
         }),
 
-        // ── Go ────────────────────────────────────────────────────────────────
-        "go" => Some(Spec {
-            version: "1.24.2",
-            archive: Archive::TarGz,
-            url: |os, arch| {
-                let (os_s, arch_s) = match (os, arch) {
-                    (Os::MacOs,  Arch::Aarch64) => ("darwin",  "arm64"),
-                    (Os::MacOs,  Arch::X86_64)  => ("darwin",  "amd64"),
-                    (Os::Linux,  Arch::X86_64)  => ("linux",   "amd64"),
-                    (Os::Linux,  Arch::Aarch64) => ("linux",   "arm64"),
-                    (Os::Windows, _)            => ("windows", "amd64"),
-                };
-                Some(format!("https://go.dev/dl/go1.24.2.{os_s}-{arch_s}.tar.gz"))
-            },
-            binary_in_archive: |os, _, _| {
-                match os {
-                    Os::Windows => "go/bin/go.exe".into(),
-                    _           => "go/bin/go".into(),
-                }
-            },
-            binary_name: "go",
-        }),
-
-        // ── Zig ───────────────────────────────────────────────────────────────
-        "zig" => Some(Spec {
-            version: "0.13.0",
-            archive: Archive::TarXz,
-            url: |os, arch| {
-                let (os_s, arch_s) = match (os, arch) {
-                    (Os::MacOs,  Arch::Aarch64) => ("macos",   "aarch64"),
-                    (Os::MacOs,  Arch::X86_64)  => ("macos",   "x86_64"),
-                    (Os::Linux,  Arch::X86_64)  => ("linux",   "x86_64"),
-                    (Os::Linux,  Arch::Aarch64) => ("linux",   "aarch64"),
-                    (Os::Windows, _)            => ("windows", "x86_64"),
-                };
-                Some(format!(
-                    "https://ziglang.org/download/0.13.0/zig-{os_s}-{arch_s}-0.13.0.tar.xz"
-                ))
-            },
-            binary_in_archive: |os, arch, _| {
-                let (os_s, arch_s) = match (os, arch) {
-                    (Os::MacOs,  Arch::Aarch64) => ("macos",   "aarch64"),
-                    (Os::MacOs,  Arch::X86_64)  => ("macos",   "x86_64"),
-                    (Os::Linux,  Arch::X86_64)  => ("linux",   "x86_64"),
-                    (Os::Linux,  Arch::Aarch64) => ("linux",   "aarch64"),
-                    (Os::Windows, _)            => ("windows", "x86_64"),
-                };
-                let ext = match os { Os::Windows => ".exe", _ => "" };
-                format!("zig-{os_s}-{arch_s}-0.13.0/zig{ext}")
-            },
-            binary_name: "zig",
-        }),
-
-        // ── Python (python-build-standalone by Astral) ────────────────────────
-        "python" => Some(Spec {
-            version: "3.12.9",
-            archive: Archive::TarGz,
-            url: |os, arch| {
-                let (arch_s, os_s) = match (os, arch) {
-                    (Os::MacOs,  Arch::Aarch64) => ("aarch64", "apple-darwin"),
-                    (Os::MacOs,  Arch::X86_64)  => ("x86_64",  "apple-darwin"),
-                    (Os::Linux,  Arch::X86_64)  => ("x86_64",  "unknown-linux-gnu"),
-                    (Os::Linux,  Arch::Aarch64) => ("aarch64", "unknown-linux-gnu"),
-                    (Os::Windows, _)            => ("x86_64",  "pc-windows-msvc"),
-                };
-                let ext = match os { Os::Windows => ".tar.gz", _ => ".tar.gz" };
-                let _ = ext;
-                Some(format!(
-                    "https://github.com/astral-sh/python-build-standalone/releases/download/20250317/cpython-3.12.9%2B20250317-{arch_s}-{os_s}-install_only.tar.gz"
-                ))
-            },
-            binary_in_archive: |os, _, _| {
-                match os {
-                    Os::Windows => "python/python.exe".into(),
-                    _           => "python/bin/python3".into(),
-                }
-            },
-            binary_name: "python3",
-        }),
-
-        // ── wasi-sdk (C + C++) ────────────────────────────────────────────────
-        "c" | "cpp" => Some(Spec {
-            version: "24.0",
-            archive: Archive::TarGz,
-            url: |os, arch| {
-                let (arch_s, os_s) = match (os, arch) {
-                    (Os::MacOs,  _)            => ("arm64",  "macos"),
-                    (Os::Linux,  Arch::X86_64) => ("x86_64", "linux"),
-                    (Os::Linux,  Arch::Aarch64)=> ("arm64",  "linux"),
-                    (Os::Windows, _)           => return None, // no wasi-sdk for windows
-                };
-                Some(format!(
-                    "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-24/wasi-sdk-24.0-{arch_s}-{os_s}.tar.gz"
-                ))
-            },
-            binary_in_archive: |_, _, _| "wasi-sdk-24.0/bin/clang".into(),
-            binary_name: "clang",
-        }),
-
-        // ── AssemblyScript (needs Node first, installed via npm) ──────────────
-        // ── Rust (via rustup) ─────────────────────────────────────────────────
-        // ── .NET, Swift, Kotlin, Java, Ruby — complex installers ──────────────
-        // These fall through to the manual-hint path.
         _ => None,
     }
 }
@@ -241,40 +132,18 @@ pub fn toolchain_root() -> PathBuf {
 /// Key (directory name) under toolchain_root for a language.
 fn dir_key(lang: &str) -> &'static str {
     match lang {
-        "typescript"     => "deno",
-        "javascript"     => "node",
-        "rust"           => "rust",
-        "go"             => "go",
-        "python"         => "python",
-        "c" | "cpp"      => "wasi-sdk",
-        "zig"            => "zig",
-        "assemblyscript" => "assemblyscript",
-        "csharp"         => "dotnet",
-        "swift"          => "swift",
-        "kotlin"         => "kotlin",
-        "java"           => "java",
-        "ruby"           => "ruby",
-        _                => "unknown",
+        "typescript" => "deno",
+        "javascript" => "node",
+        _            => "unknown",
     }
 }
 
 /// Binary name for a language.
 pub fn binary_name(lang: &str) -> &'static str {
     match lang {
-        "typescript"     => "deno",
-        "javascript"     => "node",
-        "rust"           => "cargo",
-        "go"             => "go",
-        "python"         => "python3",
-        "c" | "cpp"      => "clang",
-        "zig"            => "zig",
-        "assemblyscript" => "asc",
-        "csharp"         => "dotnet",
-        "swift"          => "swift",
-        "kotlin"         => "kotlinc",
-        "java"           => "java",
-        "ruby"           => "ruby",
-        _                => "unknown",
+        "typescript" => "deno",
+        "javascript" => "node",
+        _            => "unknown",
     }
 }
 
@@ -481,14 +350,7 @@ async fn install_one(lang: &str) -> anyhow::Result<()> {
 
 fn install_manual_hint(lang: &str) -> anyhow::Result<()> {
     let hint = match lang {
-        "rust"           => "rustup target add wasm32-wasip1  # https://rustup.rs",
-        "assemblyscript" => "npm install -g assemblyscript  # requires node first",
-        "csharp"         => "https://dotnet.microsoft.com/download/dotnet/9.0",
-        "swift"          => "https://www.swift.org/install/  # or: xcode-select --install",
-        "kotlin"         => "sdk install kotlin  # https://sdkman.io",
-        "java"           => "sdk install java 21-tem  # https://sdkman.io",
-        "ruby"           => "rbenv install 3.3.0  # https://github.com/rbenv/rbenv",
-        _                => "See https://flux.dev/docs/toolchains",
+        _ => "See https://flux.dev/docs/toolchains",
     };
     println!("  {} {} requires manual install:", "ℹ".yellow().bold(), lang.bold());
     println!("    {}", hint.cyan());

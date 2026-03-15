@@ -2,7 +2,7 @@
 //!
 //! ## Mental model
 //!
-//! Runtime executes user code in sandboxed **V8** (Deno) or **WASM** (Wasmtime) isolates.
+//! Runtime executes user code in sandboxed **V8** (Deno) isolates.
 //! It **never touches Postgres directly**. All state access goes through the `ctx` object
 //! which proxies to other services:
 //!
@@ -11,19 +11,18 @@
 //! - `ctx.secrets.*`  → `ApiDispatch::get_secrets` (with LRU cache)
 //! - `ctx.log()`      → `ApiDispatch::write_log` → `flux.platform_logs` (fire-and-forget)
 //!
-//! ## Execution paths
+//! ## Execution path
 //!
 //! ```text
 //! POST /execute (HTTP)
 //!        ↓
 //! execute_handler
-//!  ├─ BundleResolver (warm WASM → warm Deno → cold fetch → inline from DB)
+//!  ├─ BundleResolver (warm Deno → cold fetch)
 //!  ├─ SecretsClient (LRU cache, 30 s TTL)
 //!  └─ ExecutionRunner::run()
 //!       ├─ schema validation (input JSON Schema, if configured)
 //!       ├─ TraceEmitter::post_lifecycle("start")
 //!       ├─ IsolatePool::execute()   (Deno) — warm V8 isolate, function affinity
-//!       │   OR WasmPool::execute()  (WASM) — Wasmtime AOT + fuel limit
 //!       └─ TraceEmitter::emit_logs()  — fire-and-forget ctx.log() + execution_end span
 //! ```
 
