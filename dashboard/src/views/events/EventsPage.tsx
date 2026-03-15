@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { useStore } from '@/state/tenantStore'
 import { useEventStream, type AppEvent } from '@/hooks/useEventStream'
 
 const TARGET_COLOR: Record<string, string> = {
@@ -31,8 +30,6 @@ const OP_COLOR: Record<string, string> = {
 }
 
 export default function EventsPage() {
-  const { projectId } = useParams() as any
-  const { projectName } = useStore()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({
@@ -42,9 +39,8 @@ export default function EventsPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['subscriptions', projectId],
+    queryKey: ['subscriptions'],
     queryFn: () => apiFetch<{ subscriptions: EventSubscriptionRow[] }>('/db/subscriptions'),
-    enabled: !!projectId,
   })
 
   const deleteMutation = useMutation({
@@ -81,7 +77,6 @@ export default function EventsPage() {
         description={subs.length > 0 ? `${subs.length} subscription${subs.length !== 1 ? 's' : ''}` : 'Database change event subscriptions'}
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Events' },
         ]}
         actions={

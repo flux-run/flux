@@ -43,12 +43,11 @@ const FB_CLASS: Record<string, string> = {
 }
 
 export default function TableDataView({ database, table }: TableDataViewProps) {
-  const { projectId } = useParams() as any
   const [limit] = useState(100)
 
   // Schema (for column type annotations)
   const schemaQ = useQuery({
-    queryKey: ['schema-cols', projectId, database, table],
+    queryKey: ['schema-cols', database, table],
     queryFn: () => apiFetch<SchemaResponse>(`/db/schema?database=${database}`),
     enabled: !!database,
   })
@@ -63,7 +62,7 @@ export default function TableDataView({ database, table }: TableDataViewProps) {
 
   // Actual data
   const dataQ = useQuery({
-    queryKey: ['table-data', projectId, database, table, limit],
+    queryKey: ['table-data', database, table, limit],
     queryFn: () =>
       gatewayFetch<unknown[]>('/db/query', {
         method: 'POST',

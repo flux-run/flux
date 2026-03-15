@@ -35,7 +35,6 @@ const OP_COLORS: Record<string, string> = {
 }
 
 export default function TablePoliciesView({ database, table }: Props) {
-  const { projectId } = useParams() as any
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({
@@ -46,9 +45,8 @@ export default function TablePoliciesView({ database, table }: Props) {
   })
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['policies', projectId],
+    queryKey: ['policies'],
     queryFn: () => apiFetch<PolicyResponse>('/db/policies'),
-    enabled: !!projectId,
   })
 
   const policies = useMemo(

@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useStore } from '@/state/tenantStore'
 import { apiFetch } from '@/lib/api'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'
@@ -421,18 +420,15 @@ function RunRow({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function AgentsPage() {
-  const { projectId, projectName } = useStore()
   const [selectedRun, setSelectedRun] = useState<AgentRun | null>(null)
 
   const { data: wfData, isLoading: wfLoading, refetch, isFetching } = useQuery({
-    queryKey: ['workflows', projectId],
+    queryKey: ['workflows'],
     queryFn: () => apiFetch<{ workflows: Workflow[] }>('/db/workflows'),
-    enabled: !!projectId,
   })
   const { data: logData } = useQuery({
-    queryKey: ['agent-logs', projectId],
+    queryKey: ['agent-logs'],
     queryFn: () => apiFetch<{ logs: LogEntry[] }>('/logs?limit=100'),
-    enabled: !!projectId,
     refetchInterval: 30_000,
   })
 
@@ -463,7 +459,6 @@ export default function AgentsPage() {
         description="Full execution trace for every agent workflow — inputs, tool calls, mutations and errors"
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Agents' },
         ]}
         actions={

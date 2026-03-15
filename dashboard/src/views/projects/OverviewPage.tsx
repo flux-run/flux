@@ -1,14 +1,12 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   Code2, ShieldCheck, KeyRound, Globe, ArrowRight, CheckCircle2, Circle,
   Activity, Terminal, Zap, ChevronRight,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
-import { useStore } from '@/state/tenantStore'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { cn } from '@/lib/utils'
@@ -92,8 +90,8 @@ function ChecklistCard({ hasFunctions, hasRoutes }: { hasFunctions: boolean; has
   )
 }
 
-function QuickActions({ projectId }: { projectId: string }) {
-  const p = (s: string) => `/dashboard/projects/${projectId}/${s}`
+function QuickActions() {
+  const p = (s: string) => `/dashboard/${s}`
   const items = [
     { icon: Code2,       label: 'New function', href: p('functions'),   color: 'text-[#a78bfa]'   },
     { icon: Globe,       label: 'Add route',    href: p('routes'),      color: 'text-emerald-400' },
@@ -117,11 +115,10 @@ function QuickActions({ projectId }: { projectId: string }) {
   )
 }
 
-function ActivityFeed({ projectId }: { projectId: string }) {
+function ActivityFeed() {
   const { data, isLoading } = useQuery({
-    queryKey: ['logs-overview', projectId],
+    queryKey: ['logs-overview'],
     queryFn: () => apiFetch<{ logs: LogEntry[] }>('/logs?limit=15&level=all'),
-    enabled: !!projectId,
     refetchInterval: 20_000,
   })
   const logs = data?.logs ?? []
@@ -138,7 +135,7 @@ function ActivityFeed({ projectId }: { projectId: string }) {
             </span>
           )}
         </div>
-        <Link href={`/dashboard/projects/${projectId}/logs`} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+        <Link href={`/dashboard/logs`} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
           View all <ArrowRight className="w-3 h-3" />
         </Link>
       </div>
@@ -177,15 +174,12 @@ function ActivityFeed({ projectId }: { projectId: string }) {
 }
 
 export default function OverviewPage() {
-  const { projectId: paramId } = useParams() as any
-  const { projectId: storeId, projectName } = useStore()
-  const projectId = paramId ?? storeId
-  const p = (s: string) => `/dashboard/projects/${projectId}/${s}`
+  const p = (s: string) => `/dashboard/${s}`
 
-  const fns     = useQuery({ queryKey: ['functions', projectId],   queryFn: () => apiFetch<{ functions: Fn[] }>('/functions'),              enabled: !!projectId })
-  const secrets = useQuery({ queryKey: ['secrets',   projectId],   queryFn: () => apiFetch<{ secrets: Secret[] }>('/secrets'),              enabled: !!projectId })
-  const routes  = useQuery({ queryKey: ['routes',    projectId],   queryFn: () => apiFetch<any[]>(`/routes?project_id=${projectId}`),       enabled: !!projectId })
-  const apiKeys = useQuery({ queryKey: ['api-keys',  projectId],   queryFn: () => apiFetch<ApiKey[]>('/api-keys'),                          enabled: !!projectId })
+  const fns     = useQuery({ queryKey: ['functions'],  queryFn: () => apiFetch<{ functions: Fn[] }>('/functions') })
+  const secrets = useQuery({ queryKey: ['secrets'],    queryFn: () => apiFetch<{ secrets: Secret[] }>('/secrets') })
+  const routes  = useQuery({ queryKey: ['routes'],     queryFn: () => apiFetch<any[]>('/routes') })
+  const apiKeys = useQuery({ queryKey: ['api-keys'],   queryFn: () => apiFetch<ApiKey[]>('/api-keys') })
 
   const fnList  = fns.data?.functions ?? []
   const stats = [
@@ -198,9 +192,9 @@ export default function OverviewPage() {
   return (
     <div className="flex flex-col h-full">
       <PageHeader
-        title={projectName ?? 'Overview'}
+        title="Overview"
         description="Functions · routes · data · observability"
-        breadcrumbs={[{ label: 'Projects', href: '/dashboard' }, { label: projectName ?? projectId ?? '…' }]}
+        breadcrumbs={[{ label: 'Overview' }]}
         actions={
           <Link href="/docs/cli" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-3 py-1.5 transition-colors hover:bg-muted/30">
             <Zap className="w-3.5 h-3.5 text-[#6c63ff]" />
@@ -214,10 +208,10 @@ export default function OverviewPage() {
             {stats.map((s) => <StatCard key={s.label} {...s} />)}
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-5">
-            <ActivityFeed projectId={projectId} />
+            <ActivityFeed />
             <div className="space-y-4">
               <ChecklistCard hasFunctions={fnList.length > 0} hasRoutes={(Array.isArray(routes.data) ? routes.data : []).length > 0} />
-              <QuickActions projectId={projectId} />
+              <QuickActions />
               <div className="rounded-xl border border-[#6c63ff]/20 bg-[#6c63ff]/[0.03] p-5">
                 <div className="flex items-center gap-2 mb-2">
                   <Zap className="w-3.5 h-3.5 text-[#a78bfa]" />

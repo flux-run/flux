@@ -13,7 +13,6 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { useStore } from '@/state/tenantStore'
 
 interface WorkflowStep {
   id: string
@@ -41,17 +40,14 @@ const ACTION_COLOR: Record<string, string> = {
 }
 
 export default function WorkflowsPage() {
-  const { projectId } = useParams() as any
-  const { projectName } = useStore()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [form, setForm] = useState({ name: '', description: '', trigger_event: '' })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['workflows', projectId],
+    queryKey: ['workflows'],
     queryFn: () => apiFetch<WfResponse>('/db/workflows'),
-    enabled: !!projectId,
   })
 
   const deleteMutation = useMutation({
@@ -81,7 +77,6 @@ export default function WorkflowsPage() {
         description={workflows.length > 0 ? `${workflows.length} workflow${workflows.length !== 1 ? 's' : ''}` : 'Event-driven multi-step automations'}
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Workflows' },
         ]}
         actions={

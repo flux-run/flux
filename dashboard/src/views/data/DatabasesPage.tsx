@@ -21,7 +21,6 @@ interface DbList { databases: string[] }
 interface TablesResponse { database: string; tables: TableInfo[] }
 
 export default function DatabasesPage() {
-  const { projectId } = useParams() as any
   const router = useRouter()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
@@ -29,15 +28,14 @@ export default function DatabasesPage() {
 
   // --- list databases
   const { data, isLoading } = useQuery({
-    queryKey: ['databases', projectId],
+    queryKey: ['databases'],
     queryFn: () => apiFetch<DbList>('/db/databases'),
-    enabled: !!projectId,
   })
 
   // --- table counts per db (secondary fetch)
   const dbNames = data?.databases ?? []
   const tableCounts = useQuery({
-    queryKey: ['db-table-counts', projectId, dbNames.join(',')],
+    queryKey: ['db-table-counts', dbNames.join(',')],
     queryFn: async () => {
       const counts: Record<string, number> = {}
       await Promise.all(
@@ -108,7 +106,7 @@ export default function DatabasesPage() {
               <div
                 key={db}
                 className="group relative flex flex-col gap-3 p-5 rounded-xl border bg-card hover:border-primary/40 hover:shadow-sm transition-all cursor-pointer"
-                onClick={() => router.push(`/dashboard/projects/${projectId}/data/${db}`)}
+                onClick={() => router.push(`/dashboard/data/${db}`)}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-2.5">

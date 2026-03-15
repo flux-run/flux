@@ -6,7 +6,6 @@ import { Plus, Code2, Trash2, ChevronRight, Terminal, ArrowRight, Clock } from '
 import { useParams, useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/api'
 import type { FunctionResponse } from '@flux/api-types'
-import { useStore } from '@/state/tenantStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -37,9 +36,6 @@ function relTime(ts: string) {
 }
 
 export default function FunctionsPage() {
-  const { projectId } = useParams() as any
-  const { projectId: storeId, projectName } = useStore()
-  const effectiveId = projectId ?? storeId
   const queryClient = useQueryClient()
   const router = useRouter()
   const [createOpen, setCreateOpen] = useState(false)
@@ -47,9 +43,8 @@ export default function FunctionsPage() {
   const [runtime, setRuntime] = useState('deno')
 
   const { data, isLoading } = useQuery({
-    queryKey: ['functions', effectiveId],
+    queryKey: ['functions'],
     queryFn: () => apiFetch<{ functions: FunctionResponse[] }>('/functions'),
-    enabled: !!effectiveId,
   })
 
   const createMutation = useMutation({
@@ -70,8 +65,6 @@ export default function FunctionsPage() {
         title="Functions"
         description={functions.length > 0 ? `${functions.length} deployed` : 'Serverless runtime'}
         breadcrumbs={[
-          { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? effectiveId ?? '…', href: `/dashboard/projects/${effectiveId}/overview` },
           { label: 'Functions' },
         ]}
         actions={
@@ -153,7 +146,7 @@ export default function FunctionsPage() {
                 <div
                   key={fn.id}
                   className="flex items-center gap-4 px-5 py-3.5 hover:bg-muted/20 transition-colors cursor-pointer group"
-                  onClick={() => router.push(`/dashboard/projects/${effectiveId}/functions/${fn.id}`)}
+                  onClick={() => router.push(`/dashboard/functions/${fn.id}`)}
                 >
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
                   <div className="w-8 h-8 rounded-lg bg-[#6c63ff]/10 flex items-center justify-center shrink-0">

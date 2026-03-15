@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { useStore } from '@/state/tenantStore'
 
 function fmtDate(d: string | null): string {
   if (!d) return '—'
@@ -32,8 +31,6 @@ const PRESETS: { label: string; value: string }[] = [
 ]
 
 export default function CronPage() {
-  const { projectId } = useParams() as any
-  const { projectName } = useStore()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [preset, setPreset] = useState('0 * * * *')
@@ -41,9 +38,8 @@ export default function CronPage() {
   const [form, setForm] = useState({ name: '', action_type: 'function', action_value: '' })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['cron', projectId],
+    queryKey: ['cron'],
     queryFn: () => apiFetch<{ cron: CronJobRow[] }>('/db/cron'),
-    enabled: !!projectId,
   })
 
   const deleteMutation = useMutation({
@@ -91,7 +87,6 @@ export default function CronPage() {
         description={jobs.length > 0 ? `${jobs.length} scheduled` : 'Scheduled functions and queue jobs'}
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Cron' },
         ]}
         actions={

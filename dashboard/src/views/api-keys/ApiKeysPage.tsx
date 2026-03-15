@@ -5,7 +5,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, KeyRound, Trash2, Copy, Check } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import type { ApiKeyRow, CreateApiKeyResponse } from '@flux/api-types'
-import { useStore } from '@/state/tenantStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,7 +15,6 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/layout/PageHeader'
 
 export default function ApiKeysPage() {
-  const { projectId, projectName } = useStore()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [showKeyDialog, setShowKeyDialog] = useState(false)
@@ -25,9 +23,8 @@ export default function ApiKeysPage() {
   const [copied, setCopied] = useState(false)
 
   const { data, isLoading } = useQuery({
-    queryKey: ['api-keys', projectId],
+    queryKey: ['api-keys'],
     queryFn: () => apiFetch<ApiKeyRow[]>('/api-keys'),
-    enabled: !!projectId,
   })
 
   const createMutation = useMutation({
@@ -65,7 +62,6 @@ export default function ApiKeysPage() {
         description={apiKeys.length > 0 ? `${apiKeys.length} active key${apiKeys.length !== 1 ? 's' : ''}` : 'Service authentication keys for this project'}
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'API Keys' },
         ]}
         actions={

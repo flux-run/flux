@@ -7,7 +7,6 @@ import { Upload, CheckCircle2, Circle, ArrowLeft, Code2, Clock, Layers2 } from '
 import Link from 'next/link'
 import { apiFetch } from '@/lib/api'
 import type { FunctionResponse, DeploymentResponse } from '@flux/api-types'
-import { useStore } from '@/state/tenantStore'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -36,8 +35,7 @@ function relTime(ts: string) {
 }
 
 export default function FunctionDetailPage() {
-  const { projectId, functionId } = useParams() as any
-  const { projectName } = useStore()
+  const { functionId } = useParams() as any
   const queryClient = useQueryClient()
   const [uploadOpen, setUploadOpen] = useState(false)
   const [storageKey, setStorageKey] = useState('')
@@ -66,9 +64,7 @@ export default function FunctionDetailPage() {
       <PageHeader
         title={fn?.name ?? '…'}
         breadcrumbs={[
-          { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId, href: `/dashboard/projects/${projectId}/overview` },
-          { label: 'Functions', href: `/dashboard/projects/${projectId}/functions` },
+          { label: 'Functions', href: `/dashboard/functions` },
           { label: fn?.name ?? '…' },
         ]}
         badge={fn && (

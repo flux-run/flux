@@ -21,7 +21,6 @@ import {
   AlertCircle, Table2, Zap,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
-import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -193,15 +192,12 @@ function gridLayout(
 // ─── Main component ────────────────────────────────────────────────────────────
 
 export default function SchemaGraphPage() {
-  const { projectId } = useParams() as any
-  const { projectName } = useStore()
   const queryClient = useQueryClient()
   const [copied, setCopied] = useState(false)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['sdk-schema', projectId],
+    queryKey: ['sdk-schema'],
     queryFn: () => apiFetch<SdkSchema>('/sdk/schema'),
-    enabled: !!projectId,
   })
 
   const { nodes, edges } = useMemo(
@@ -219,18 +215,18 @@ export default function SchemaGraphPage() {
   const handleDownloadSDK = useCallback(() => {
     const apiBase = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080') as string
     window.open(
-      `${apiBase}/projects/${projectId}/sdk/typescript`,
+      `${apiBase}/sdk/typescript`,
       '_blank',
     )
-  }, [projectId])
+  }, [])
 
   const handleDownloadOpenAPI = useCallback(() => {
     const apiBase = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080') as string
     window.open(
-      `${apiBase}/projects/${projectId}/openapi.json`,
+      `${apiBase}/openapi.json`,
       '_blank',
     )
-  }, [projectId])
+  }, [])
 
   return (
     <div className="flex flex-col h-full">
@@ -239,7 +235,6 @@ export default function SchemaGraphPage() {
         description={data ? `${data.tables.length} tables · ${data.relationships.length} relationships · ${data.functions.length} functions` : 'Live visual map of your tables, relationships, and functions'}
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Schema' },
         ]}
         actions={
@@ -282,7 +277,7 @@ export default function SchemaGraphPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => queryClient.invalidateQueries({ queryKey: ['sdk-schema', projectId] })}
+              onClick={() => queryClient.invalidateQueries({ queryKey: ['sdk-schema'] })}
               disabled={isLoading}
               className="gap-1.5 text-xs h-8"
             >

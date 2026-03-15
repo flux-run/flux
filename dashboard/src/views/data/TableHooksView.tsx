@@ -38,22 +38,19 @@ const EVENT_COLORS: Record<string, string> = {
 const HOOK_EVENTS = Object.keys(EVENT_COLORS)
 
 export default function TableHooksView({ table }: Props) {
-  const { projectId } = useParams() as any
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [event, setEvent] = useState('after_insert')
   const [fnId, setFnId] = useState('')
 
   const hooksQ = useQuery({
-    queryKey: ['hooks', projectId],
+    queryKey: ['hooks'],
     queryFn: () => apiFetch<HookResponse>('/db/hooks'),
-    enabled: !!projectId,
   })
 
   const fnsQ = useQuery({
-    queryKey: ['functions', projectId],
+    queryKey: ['functions'],
     queryFn: () => apiFetch<FnResponse>('/functions'),
-    enabled: !!projectId,
   })
 
   const hooks = useMemo(

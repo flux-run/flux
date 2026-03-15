@@ -7,7 +7,6 @@ import {
   RefreshCw, Server, TrendingUp, Wifi, WifiOff,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
-import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -138,11 +137,10 @@ function ConnectionMeter({ active, idle, max }: { active: number; idle: number; 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function MonitorPage() {
-  const { tenantId } = useStore()
   const [refreshKey, setRefreshKey] = useState(0)
 
   const { data, isLoading, isError, dataUpdatedAt } = useQuery<MonitorData>({
-    queryKey: ['monitor', tenantId, refreshKey],
+    queryKey: ['monitor', refreshKey],
     queryFn: () => apiFetch('/flux/api/monitor'),
     refetchInterval: 30_000,
   })

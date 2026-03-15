@@ -57,7 +57,6 @@ function tableNode(id: string, label: string, x: number, y: number, highlight = 
 }
 
 export default function TableRelationshipsView({ database, table }: Props) {
-  const { projectId } = useParams() as any
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({
@@ -69,9 +68,8 @@ export default function TableRelationshipsView({ database, table }: Props) {
   })
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['relationships', projectId, database, table],
+    queryKey: ['relationships', database, table],
     queryFn: () => apiFetch<RelResponse>('/db/relationships'),
-    enabled: !!projectId,
   })
 
   const deleteMutation = useMutation({

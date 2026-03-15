@@ -2,7 +2,6 @@
 
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useStore } from '@/state/tenantStore'
 import { apiFetch } from '@/lib/api'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'
@@ -118,29 +117,23 @@ function EmptyTier({ message }: { message: string }) {
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function TopologyPage() {
-  const { projectId, projectName } = useStore()
   const router = useRouter()
-  const pid = projectId
 
   const { data: fnData,       isLoading: fnLoading }  = useQuery({
-    queryKey: ['functions', pid],
+    queryKey: ['functions'],
     queryFn: () => apiFetch<{ functions: Fn[] }>('/functions'),
-    enabled: !!pid,
   })
   const { data: routesData,   isLoading: rtLoading }  = useQuery({
-    queryKey: ['routes', pid],
-    queryFn: () => apiFetch<Route[]>(`/routes?project_id=${pid}`),
-    enabled: !!pid,
+    queryKey: ['routes'],
+    queryFn: () => apiFetch<Route[]>('/routes'),
   })
   const { data: wfData,       isLoading: wfLoading }  = useQuery({
-    queryKey: ['workflows', pid],
+    queryKey: ['workflows'],
     queryFn: () => apiFetch<{ workflows: WorkflowItem[] }>('/db/workflows'),
-    enabled: !!pid,
   })
   const { data: cronData,     isLoading: crLoading }  = useQuery({
-    queryKey: ['cron', pid],
+    queryKey: ['cron'],
     queryFn: () => apiFetch<{ cron: CronJob[] }>('/db/cron'),
-    enabled: !!pid,
   })
 
   const isLoading = fnLoading || rtLoading || wfLoading || crLoading
@@ -158,7 +151,7 @@ export default function TopologyPage() {
   const referencedFns = fns.filter((f) => referencedFnIds.has(f.id))
   const unreferencedFns = fns.filter((f) => !referencedFnIds.has(f.id))
 
-  const nav = (seg: string) => pid && router.push(`/dashboard/projects/${pid}/${seg}`)
+  const nav = (seg: string) => router.push(`/dashboard/${seg}`)
 
   return (
     <div className="flex flex-col h-full overflow-auto">
@@ -167,7 +160,6 @@ export default function TopologyPage() {
         description="Live view of your project's architecture — click any node to navigate"
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Topology' },
         ]}
       />

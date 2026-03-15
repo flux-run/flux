@@ -8,7 +8,6 @@ import {
   CheckCircle2, XCircle, Inbox, ArrowRight, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
-import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -162,13 +161,12 @@ function JobRow({ job, onRetry, onDelete }: {
 // ─── JobsTable ────────────────────────────────────────────────────────────────
 
 function JobsTable({ queueName, status }: { queueName: string; status: string }) {
-  const { tenantId } = useStore()
   const qc = useQueryClient()
   const { toast } = useToast()
-  const params = useParams<{ projectId: string }>()
+  const params = useParams()
 
   const { data: jobs = [], isLoading } = useQuery<QueueJob[]>({
-    queryKey: ['queue-jobs', queueName, status, tenantId],
+    queryKey: ['queue-jobs', queueName, status],
     queryFn: () => apiFetch(`/flux/api/queues/${queueName}/jobs?status=${status}`),
     refetchInterval: status === 'running' || status === 'pending' ? 5000 : false,
   })
@@ -272,19 +270,18 @@ function StatsBar({ stats }: { stats?: QueueStats }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function QueuePage() {
-  const { tenantId } = useStore()
   const { toast } = useToast()
   const qc = useQueryClient()
   const [selected, setSelected] = useState<QueueConfig | null>(null)
   const [activeTab, setActiveTab] = useState('pending')
 
   const { data: queues = [], isLoading } = useQuery<QueueConfig[]>({
-    queryKey: ['queues', tenantId],
+    queryKey: ['queues'],
     queryFn: () => apiFetch('/flux/api/queues'),
   })
 
   const { data: stats } = useQuery<QueueStats>({
-    queryKey: ['queue-stats', selected?.name, tenantId],
+    queryKey: ['queue-stats', selected?.name],
     queryFn: () => apiFetch(`/flux/api/queues/${selected!.name}/stats`),
     enabled: !!selected,
     refetchInterval: 8000,

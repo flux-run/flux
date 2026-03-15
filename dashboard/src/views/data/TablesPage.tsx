@@ -41,7 +41,7 @@ const COLUMN_TYPES = [
 ]
 
 export default function TablesPage() {
-  const { projectId, database } = useParams() as any
+  const { database } = useParams() as any
   const router = useRouter()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
@@ -52,7 +52,7 @@ export default function TablesPage() {
   ])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['tables', projectId, database],
+    queryKey: ['tables', database],
     queryFn: () => apiFetch<TablesResponse>(`/db/tables/${database}`),
     enabled: !!database,
   })
@@ -87,7 +87,7 @@ export default function TablesPage() {
     <div className="p-8 max-w-5xl mx-auto">
       {/* Breadcrumb */}
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-6">
-        <Link href={`/dashboard/projects/${projectId}/data`} className="flex items-center gap-1 hover:text-foreground transition-colors">
+        <Link href={`/dashboard/data`} className="flex items-center gap-1 hover:text-foreground transition-colors">
           <Database className="w-3 h-3" /> Data
         </Link>
         <ChevronRight className="w-3 h-3" />
@@ -97,7 +97,7 @@ export default function TablesPage() {
       <div className="flex items-center justify-between mb-8">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <Button variant="ghost" size="icon" className="w-7 h-7" onClick={() => router.push(`/dashboard/projects/${projectId}/data`)}>
+            <Button variant="ghost" size="icon" className="w-7 h-7" onClick={() => router.push(`/dashboard/data`)}>
               <ChevronLeft className="w-4 h-4" />
             </Button>
             <h1 className="text-2xl font-bold">{database}</h1>
@@ -136,7 +136,7 @@ export default function TablesPage() {
               <div
                 key={t.name}
                 className="group flex items-center justify-between px-5 py-4 hover:bg-muted/30 cursor-pointer transition-colors"
-                onClick={() => router.push(`/dashboard/projects/${projectId}/data/${database}/${t.name}`)}
+                onClick={() => router.push(`/dashboard/data/${database}/${t.name}`)}
               >
                 <div className="flex items-center gap-3">
                   <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-muted">

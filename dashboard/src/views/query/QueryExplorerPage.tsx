@@ -9,7 +9,6 @@ import {
   type ColumnDef,
 } from '@tanstack/react-table'
 import { apiFetch, gatewayFetch } from '@/lib/api'
-import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -302,7 +301,6 @@ function ResultTable({ rows, onExpand }: { rows: Record<string, unknown>[]; onEx
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function QueryExplorerPage() {
-  const { projectId, projectName } = useStore()
 
   /* Selectors */
   const [database, setDatabase] = useState('')
@@ -324,9 +322,8 @@ export default function QueryExplorerPage() {
   const [execMeta, setExecMeta] = useState<QueryMeta | null>(null)
 
   const debugQ = useQuery({
-    queryKey: ['engine-debug', projectId],
+    queryKey: ['engine-debug'],
     queryFn: () => apiFetch<EngineDebug>('/db/debug'),
-    enabled: !!projectId,
     staleTime: 60_000, // limits rarely change
   })
   const [execError, setExecError] = useState<string | null>(null)
@@ -335,13 +332,12 @@ export default function QueryExplorerPage() {
 
   /* Data fetching */
   const { data: dbData } = useQuery({
-    queryKey: ['databases', projectId],
+    queryKey: ['databases'],
     queryFn: () => apiFetch<{ databases: string[] }>('/db/databases'),
-    enabled: !!projectId,
   })
 
   const { data: tablesData } = useQuery({
-    queryKey: ['tables', projectId, database],
+    queryKey: ['tables', database],
     queryFn: () => apiFetch<{ database: string; tables: { name: string; columns: { name: string }[] }[] }>(`/db/tables/${database}`),
     enabled: !!database,
   })
@@ -447,7 +443,6 @@ export default function QueryExplorerPage() {
         description="Build and run queries against your data engine visually"
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Query' },
         ]}
       />

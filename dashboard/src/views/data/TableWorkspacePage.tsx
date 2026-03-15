@@ -22,7 +22,7 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 export default function TableWorkspacePage() {
-  const { projectId, database, table } = useParams() as any
+  const { database, table } = useParams() as any
   const [activeTab, setActiveTab] = useState<Tab>('data')
 
   return (
@@ -32,14 +32,14 @@ export default function TableWorkspacePage() {
         {/* Breadcrumb */}
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-4">
           <Link
-            href={`/dashboard/projects/${projectId}/data`}
+            href={`/dashboard/data`}
             className="flex items-center gap-1 hover:text-foreground transition-colors"
           >
             <Database className="w-3 h-3" /> Data
           </Link>
           <ChevronRight className="w-3 h-3" />
           <Link
-            href={`/dashboard/projects/${projectId}/data/${database}`}
+            href={`/dashboard/data/${database}`}
             className="hover:text-foreground transition-colors"
           >
             {database}

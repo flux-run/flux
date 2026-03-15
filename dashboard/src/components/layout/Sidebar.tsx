@@ -2,23 +2,21 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { useParams, usePathname } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import {
-  FolderOpen, Settings, LayoutDashboard,
+  Settings, LayoutDashboard,
   Code2, KeyRound, ShieldCheck, ScrollText, Globe,
   Database, Bell, GitBranch, Clock, Terminal, Share2, Puzzle,
   Activity, Network, Brain, ChevronDown, ListChecks, BarChart2, Search,
 } from 'lucide-react'
 import { FluxLogo } from '@/components/FluxLogo'
-import { TenantSwitcher } from '@/components/TenantSwitcher'
 import { useAuth } from '@/hooks/useAuth'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useStore } from '@/state/tenantStore'
 import { CommandPalette } from '@/components/CommandPalette'
 
 // ─── NavItem ──────────────────────────────────────────────────────────────────
@@ -92,9 +90,6 @@ function NavGroup({
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 export function Sidebar() {
-  const params = useParams() as any
-  const { projectId: storeProjectId } = useStore()
-  const projectId = params?.projectId ?? storeProjectId
   const { user, signOut } = useAuth()
 
   const initials = (user?.username ?? user?.email ?? 'User')
@@ -103,8 +98,6 @@ export function Sidebar() {
     .join('')
     .toUpperCase()
     .slice(0, 2) || '?'
-
-  const p = (seg: string) => `/dashboard/projects/${projectId}/${seg}`
 
   return (
     <aside className="flex flex-col w-56 shrink-0 h-screen border-r bg-[hsl(var(--sidebar-background))] border-[hsl(var(--sidebar-border))]">
@@ -129,70 +122,55 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* Tenant switcher */}
-      <div className="px-2 pt-2">
-        <TenantSwitcher />
-      </div>
-
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-2 pb-4">
 
-        {/* Workspace */}
-        <NavGroup label="Workspace">
-          <NavItem href="/dashboard"        Icon={FolderOpen} label="Projects" />
-          <NavItem href="/dashboard/tenants" Icon={Settings}   label="Tenant Settings" />
+        {/* Overview */}
+        <div className="pt-3 space-y-0.5">
+          <NavItem href="/dashboard" Icon={LayoutDashboard} label="Overview" />
+        </div>
+
+        {/* Runtime */}
+        <NavGroup label="Runtime" accent="bg-emerald-400">
+          <NavItem href="/dashboard/functions"  Icon={Code2}       label="Functions"  indent />
+          <NavItem href="/dashboard/routes"     Icon={Globe}       label="Routes"     indent />
+          <NavItem href="/dashboard/events"     Icon={Bell}        label="Events"     indent />
+          <NavItem href="/dashboard/workflows"  Icon={GitBranch}   label="Workflows"  indent />
+          <NavItem href="/dashboard/cron"       Icon={Clock}       label="Cron"       indent />
+          <NavItem href="/dashboard/queue"      Icon={ListChecks}  label="Queues"     indent />
         </NavGroup>
 
-        {projectId && (
-          <>
-            {/* Overview — top-level, no group */}
-            <div className="pt-3 space-y-0.5">
-              <NavItem href={p('overview')} Icon={LayoutDashboard} label="Overview" />
-            </div>
+        {/* Data */}
+        <NavGroup label="Data" accent="bg-blue-400">
+          <NavItem href="/dashboard/data"    Icon={Database}  label="Tables"          indent />
+          <NavItem href="/dashboard/query"   Icon={Terminal}  label="Query Explorer"  indent />
+          <NavItem href="/dashboard/schema"  Icon={Share2}    label="Schema Graph"    indent />
+        </NavGroup>
 
-            {/* Runtime */}
-            <NavGroup label="Runtime" accent="bg-emerald-400">
-              <NavItem href={p('functions')}  Icon={Code2}       label="Functions"  indent />
-              <NavItem href={p('routes')}     Icon={Globe}       label="Routes"     indent />
-              <NavItem href={p('events')}     Icon={Bell}        label="Events"     indent />
-              <NavItem href={p('workflows')}  Icon={GitBranch}   label="Workflows"  indent />
-              <NavItem href={p('cron')}       Icon={Clock}       label="Cron"       indent />
-              <NavItem href={p('queue')}      Icon={ListChecks}  label="Queues"     indent />
-            </NavGroup>
+        {/* Integrations */}
+        <NavGroup label="Integrations" accent="bg-amber-400" defaultOpen={true}>
+          <NavItem href="/dashboard/integrations" Icon={Puzzle} label="Integrations" />
+        </NavGroup>
 
-            {/* Data */}
-            <NavGroup label="Data" accent="bg-blue-400">
-              <NavItem href={p('data')}    Icon={Database}  label="Tables"          indent />
-              <NavItem href={p('query')}   Icon={Terminal}  label="Query Explorer"  indent />
-              <NavItem href={p('schema')}  Icon={Share2}    label="Schema Graph"    indent />
-            </NavGroup>
+        {/* Security */}
+        <NavGroup label="Security" accent="bg-rose-400">
+          <NavItem href="/dashboard/secrets"   Icon={ShieldCheck} label="Secrets"   indent />
+          <NavItem href="/dashboard/api-keys"  Icon={KeyRound}    label="API Keys"  indent />
+        </NavGroup>
 
-            {/* Integrations — single item, no indent needed */}
-            <NavGroup label="Integrations" accent="bg-amber-400" defaultOpen={true}>
-              <NavItem href={p('integrations')} Icon={Puzzle} label="Integrations" />
-            </NavGroup>
+        {/* Observability */}
+        <NavGroup label="Observability" accent="bg-[#a78bfa]">
+          <NavItem href="/dashboard/logs"     Icon={ScrollText} label="Logs"        indent />
+          <NavItem href="/dashboard/traces"   Icon={Activity}   label="Traces"      indent />
+          <NavItem href="/dashboard/monitor"  Icon={BarChart2}  label="Monitor"     indent />
+          <NavItem href="/dashboard/agents"   Icon={Brain}      label="Agent Runs"  indent />
+          <NavItem href="/dashboard/topology" Icon={Network}    label="Topology"    indent />
+        </NavGroup>
 
-            {/* Security */}
-            <NavGroup label="Security" accent="bg-rose-400">
-              <NavItem href={p('secrets')}   Icon={ShieldCheck} label="Secrets"   indent />
-              <NavItem href={p('api-keys')}  Icon={KeyRound}    label="API Keys"  indent />
-            </NavGroup>
-
-            {/* Observability */}
-            <NavGroup label="Observability" accent="bg-[#a78bfa]">
-              <NavItem href={p('logs')}     Icon={ScrollText} label="Logs"        indent />
-              <NavItem href={p('traces')}   Icon={Activity}   label="Traces"      indent />
-              <NavItem href={p('monitor')}  Icon={BarChart2}  label="Monitor"     indent />
-              <NavItem href={p('agents')}   Icon={Brain}      label="Agent Runs"  indent />
-              <NavItem href={p('topology')} Icon={Network}    label="Topology"    indent />
-            </NavGroup>
-
-            {/* Settings — bottom standalone */}
-            <div className="pt-3 space-y-0.5">
-              <NavItem href={p('settings')} Icon={Settings} label="Settings" />
-            </div>
-          </>
-        )}
+        {/* Settings */}
+        <div className="pt-3 space-y-0.5">
+          <NavItem href="/dashboard/settings" Icon={Settings} label="Settings" />
+        </div>
       </nav>
 
       {/* User footer */}

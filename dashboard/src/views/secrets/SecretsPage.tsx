@@ -5,7 +5,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, ShieldCheck, Trash2, Eye, EyeOff } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import type { SecretResponse } from '@flux/api-types'
-import { useStore } from '@/state/tenantStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,7 +15,6 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/layout/PageHeader'
 
 export default function SecretsPage() {
-  const { projectId, projectName } = useStore()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [key, setKey] = useState('')
@@ -24,9 +22,8 @@ export default function SecretsPage() {
   const [showValue, setShowValue] = useState(false)
 
   const { data, isLoading } = useQuery({
-    queryKey: ['secrets', projectId],
+    queryKey: ['secrets'],
     queryFn: () => apiFetch<{ secrets: SecretResponse[] }>('/secrets'),
-    enabled: !!projectId,
   })
 
   const createMutation = useMutation({
@@ -57,7 +54,6 @@ export default function SecretsPage() {
         description={secrets.length > 0 ? `${secrets.length} secret${secrets.length !== 1 ? 's' : ''}` : 'Environment variables injected at runtime'}
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Secrets' },
         ]}
         actions={

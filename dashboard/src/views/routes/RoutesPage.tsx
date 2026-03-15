@@ -14,7 +14,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { apiFetch } from '@/lib/api'
 import type { RouteRow, FunctionResponse } from '@flux/api-types'
-import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
@@ -25,8 +24,6 @@ const AUTH_TYPES = [
 ]
 
 export default function RoutesPage() {
-  const { projectId } = useParams() as any
-  const { projectName } = useStore()
   const queryClient = useQueryClient()
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
@@ -48,19 +45,17 @@ export default function RoutesPage() {
 
   // Fetch routes
   const { data: routes, isLoading } = useQuery({
-    queryKey: ['projects', projectId, 'routes'],
+    queryKey: ['projects', 'routes'],
     queryFn: async () => {
-      const resp = await apiFetch<RouteRow[]>(`/routes?project_id=${projectId}`)
+      const resp = await apiFetch<RouteRow[]>('/routes')
       return resp
     },
-    enabled: !!projectId
   })
 
   // Fetch functions for the dropdown
   const { data: functionsData } = useQuery({
-    queryKey: ['functions', projectId],
+    queryKey: ['functions'],
     queryFn: () => apiFetch<{ functions: FunctionResponse[] }>('/functions'),
-    enabled: !!projectId
   })
   const functions = functionsData?.functions ?? []
 
@@ -100,7 +95,7 @@ export default function RoutesPage() {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'routes'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', 'routes'] })
       setCreateOpen(false)
       resetForm()
     }
@@ -111,7 +106,7 @@ export default function RoutesPage() {
       return apiFetch(`/routes/${id}`, { method: 'DELETE' })
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'routes'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', 'routes'] })
     }
   })
 
@@ -166,7 +161,6 @@ export default function RoutesPage() {
         description={routes && routes.length > 0 ? `${routes.length} route${routes.length !== 1 ? 's' : ''}` : 'Public HTTP endpoints mapped to functions'}
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Routes' },
         ]}
         actions={

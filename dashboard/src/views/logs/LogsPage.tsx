@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import type { FunctionResponse, PlatformLogRow, CronJobRow } from '@flux/api-types'
-import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -70,15 +69,13 @@ function formatTs(ts: string | null): string {
 // ─── Function Logs Tab ────────────────────────────────────────────────────────
 
 function FunctionLogsTab() {
-  const { projectId } = useStore()
   const [functionId, setFunctionId] = useState('all')
   const [limit, setLimit] = useState('50')
   const [filterLevel, setFilterLevel] = useState('all')
 
   const { data: fnData } = useQuery({
-    queryKey: ['functions', projectId],
+    queryKey: ['functions'],
     queryFn: () => apiFetch<{ functions: FunctionResponse[] }>('/functions'),
-    enabled: !!projectId,
   })
 
   const {
@@ -87,14 +84,13 @@ function FunctionLogsTab() {
     refetch,
     error: logsError,
   } = useQuery({
-    queryKey: ['function-logs', projectId, functionId, limit],
+    queryKey: ['function-logs', functionId, limit],
     queryFn: async () => {
       const params = new URLSearchParams({ limit })
       if (functionId && functionId !== 'all') params.set('function_id', functionId)
 
       return apiFetch<{ logs: PlatformLogRow[] }>(`/logs?${params.toString()}`)
     },
-    enabled: !!projectId,
   })
 
   const logs = logsData?.logs ?? []
@@ -206,12 +202,10 @@ function FunctionLogsTab() {
 // ─── Workflows Tab ────────────────────────────────────────────────────────────
 
 function WorkflowsTab() {
-  const { projectId } = useStore()
 
   const { data, isFetching, refetch } = useQuery({
-    queryKey: ['workflows-log', projectId],
+    queryKey: ['workflows-log'],
     queryFn: () => apiFetch<{ workflows: Workflow[] }>('/db/workflows'), // eslint-disable-line @typescript-eslint/no-explicit-any
-    enabled: !!projectId,
   })
 
   const workflows = data?.workflows ?? []
@@ -263,12 +257,10 @@ function WorkflowsTab() {
 // ─── Cron Tab ─────────────────────────────────────────────────────────────────
 
 function CronTab() {
-  const { projectId } = useStore()
 
   const { data, isFetching, refetch } = useQuery({
-    queryKey: ['cron-log', projectId],
+    queryKey: ['cron-log'],
     queryFn: () => apiFetch<{ cron: CronJobRow[] }>('/db/cron'),
-    enabled: !!projectId,
   })
 
   const jobs = data?.cron ?? []
@@ -328,7 +320,6 @@ function CronTab() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function LogsPage() {
-  const { projectId, projectName } = useStore()
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <PageHeader
@@ -336,7 +327,6 @@ export default function LogsPage() {
         description="Function logs, workflow runs, and cron executions"
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Logs' },
         ]}
       />

@@ -4,12 +4,10 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Zap } from 'lucide-react'
 import { signIn } from '@/lib/auth'
-import { useStore } from '@/state/tenantStore'
 import { Button } from '@/components/ui/button'
 
 export default function LoginPage() {
   const router = useRouter()
-  const { setTenant } = useStore()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -22,7 +20,6 @@ export default function LoginPage() {
     try {
       const result = await signIn(email, password)
       if (result.user.tenant_id) {
-        setTenant(result.user.tenant_id, result.user.username)
       }
       router.push('/dashboard')
     } catch (e) {

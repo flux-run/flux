@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+
 import { useRouter } from 'next/navigation'
 import { Command } from 'cmdk'
 import { Dialog } from '@radix-ui/react-dialog'
-import { useStore } from '@/state/tenantStore'
 import {
   Code2, Globe, Bell, GitBranch, Clock, Database,
   Terminal, Share2, ShieldCheck, KeyRound, ScrollText, Activity,
@@ -28,7 +28,6 @@ interface CmdItem {
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
-  const { projectId } = useStore()
   const router = useRouter()
 
   // Open on Cmd+K / Ctrl+K
@@ -43,34 +42,31 @@ export function CommandPalette() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  const p = useCallback((path: string) => `/flux/dashboard/projects/${projectId}/${path}`, [projectId])
-
-  const items: CmdItem[] = projectId ? [
+  const items: CmdItem[] = [
+    // Overview
+    { id: 'overview',     label: 'Overview',       group: 'Other',         icon: LayoutDashboard, action: () => router.push('/dashboard') },
     // Runtime
-    { id: 'functions',    label: 'Functions',      group: 'Runtime',       icon: Code2,        action: () => router.push(p('functions')) },
-    { id: 'routes',       label: 'Routes',         group: 'Runtime',       icon: Globe,        action: () => router.push(p('routes')) },
-    { id: 'events',       label: 'Events',         group: 'Runtime',       icon: Bell,         action: () => router.push(p('events')) },
-    { id: 'workflows',    label: 'Workflows',      group: 'Runtime',       icon: GitBranch,    action: () => router.push(p('workflows')) },
-    { id: 'cron',         label: 'Cron Jobs',      group: 'Runtime',       icon: Clock,        action: () => router.push(p('cron')) },
-    { id: 'queues',       label: 'Queues',         group: 'Runtime',       icon: ListChecks,   action: () => router.push(p('queue')) },
+    { id: 'functions',    label: 'Functions',      group: 'Runtime',       icon: Code2,        action: () => router.push('/dashboard/functions') },
+    { id: 'routes',       label: 'Routes',         group: 'Runtime',       icon: Globe,        action: () => router.push('/dashboard/routes') },
+    { id: 'events',       label: 'Events',         group: 'Runtime',       icon: Bell,         action: () => router.push('/dashboard/events') },
+    { id: 'workflows',    label: 'Workflows',      group: 'Runtime',       icon: GitBranch,    action: () => router.push('/dashboard/workflows') },
+    { id: 'cron',         label: 'Cron Jobs',      group: 'Runtime',       icon: Clock,        action: () => router.push('/dashboard/cron') },
+    { id: 'queues',       label: 'Queues',         group: 'Runtime',       icon: ListChecks,   action: () => router.push('/dashboard/queue') },
     // Data
-    { id: 'data',         label: 'Tables',         group: 'Data',          icon: Database,     action: () => router.push(p('data')) },
-    { id: 'query',        label: 'Query Explorer', group: 'Data',          icon: Terminal,     action: () => router.push(p('query')) },
-    { id: 'schema',       label: 'Schema Graph',   group: 'Data',          icon: Share2,       action: () => router.push(p('schema')) },
+    { id: 'data',         label: 'Tables',         group: 'Data',          icon: Database,     action: () => router.push('/dashboard/data') },
+    { id: 'query',        label: 'Query Explorer', group: 'Data',          icon: Terminal,     action: () => router.push('/dashboard/query') },
+    { id: 'schema',       label: 'Schema Graph',   group: 'Data',          icon: Share2,       action: () => router.push('/dashboard/schema') },
     // Security
-    { id: 'secrets',      label: 'Secrets',        group: 'Security',      icon: ShieldCheck,  action: () => router.push(p('secrets')) },
-    { id: 'api-keys',     label: 'API Keys',       group: 'Security',      icon: KeyRound,     action: () => router.push(p('api-keys')) },
+    { id: 'secrets',      label: 'Secrets',        group: 'Security',      icon: ShieldCheck,  action: () => router.push('/dashboard/secrets') },
+    { id: 'api-keys',     label: 'API Keys',       group: 'Security',      icon: KeyRound,     action: () => router.push('/dashboard/api-keys') },
     // Observability
-    { id: 'logs',         label: 'Logs',           group: 'Observability', icon: ScrollText,   action: () => router.push(p('logs')) },
-    { id: 'traces',       label: 'Traces',         group: 'Observability', icon: Activity,     action: () => router.push(p('traces')) },
-    { id: 'monitor',      label: 'Monitor',        group: 'Observability', icon: BarChart2,    action: () => router.push(p('monitor')) },
-    { id: 'topology',     label: 'Topology',       group: 'Observability', icon: Network,      action: () => router.push(p('topology')) },
-    // Misc
-    { id: 'integrations', label: 'Integrations',   group: 'Other',         icon: Puzzle,       action: () => router.push(p('integrations')) },
-    { id: 'overview',     label: 'Overview',       group: 'Other',         icon: LayoutDashboard, action: () => router.push(p('overview')) },
-    { id: 'settings',     label: 'Settings',       group: 'Other',         icon: Settings,     action: () => router.push(p('settings')) },
-  ] : [
-    { id: 'projects', label: 'All Projects', group: 'Workspace', icon: LayoutDashboard, action: () => router.push('/dashboard') },
+    { id: 'logs',         label: 'Logs',           group: 'Observability', icon: ScrollText,   action: () => router.push('/dashboard/logs') },
+    { id: 'traces',       label: 'Traces',         group: 'Observability', icon: Activity,     action: () => router.push('/dashboard/traces') },
+    { id: 'monitor',      label: 'Monitor',        group: 'Observability', icon: BarChart2,    action: () => router.push('/dashboard/monitor') },
+    { id: 'topology',     label: 'Topology',       group: 'Observability', icon: Network,      action: () => router.push('/dashboard/topology') },
+    // Other
+    { id: 'integrations', label: 'Integrations',   group: 'Other',         icon: Puzzle,       action: () => router.push('/dashboard/integrations') },
+    { id: 'settings',     label: 'Settings',       group: 'Other',         icon: Settings,     action: () => router.push('/dashboard/settings') },
   ]
 
   // Group items

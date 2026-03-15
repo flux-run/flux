@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, XCircle, ExternalLink, Unplug } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
-import { useStore } from '@/state/tenantStore'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -84,16 +83,14 @@ function groupByProvider(tools: Tool[]): ProviderGroup[] {
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function IntegrationsPage() {
-  const { projectId, projectName } = useStore()
   const queryClient   = useQueryClient()
 
   const [disconnectTarget, setDisconnectTarget] = useState<string | null>(null)
 
   // Fetch all tools (with connected flag)
   const { data: toolsData, isLoading } = useQuery({
-    queryKey: ['tools', projectId],
+    queryKey: ['tools'],
     queryFn:  () => apiFetch<{ tools: Tool[] }>('/tools'),
-    enabled:  !!projectId,
   })
 
   // Connect mutation — gets OAuth URL and redirects window
@@ -130,7 +127,6 @@ export default function IntegrationsPage() {
         description={connected > 0 ? `${connected} connected` : 'Connect external services to use them in your functions with ctx.tools.run()'}
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Integrations' },
         ]}
       />

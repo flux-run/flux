@@ -34,10 +34,9 @@ const FB_META: Record<string, { label: string; icon: React.ReactNode; className:
 }
 
 export default function TableSchemaView({ database, table }: Props) {
-  const { projectId } = useParams() as any
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['schema', projectId, database],
+    queryKey: ['schema', database],
     queryFn: () => apiFetch<SchemaResponse>(`/db/schema?database=${database}`),
     enabled: !!database,
   })

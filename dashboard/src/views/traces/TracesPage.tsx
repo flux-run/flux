@@ -2,7 +2,6 @@
 
 import { useState, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useStore } from '@/state/tenantStore'
 import { apiFetch } from '@/lib/api'
 import type { FunctionResponse, PlatformLogRow } from '@flux/api-types'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -223,27 +222,24 @@ function TraceDrawer({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function TracesPage() {
-  const { projectId, projectName } = useStore()
   const [limit, setLimit] = useState('50')
   const [filter, setFilter] = useState('all')
   const [selected, setSelected] = useState<PlatformLogRow | null>(null)
 
   const { data: fnData } = useQuery({
-    queryKey: ['functions', projectId],
+    queryKey: ['functions'],
     queryFn: () => apiFetch<{ functions: FunctionResponse[] }>('/functions'),
-    enabled: !!projectId,
   })
   const fnMap: Record<string, string> = Object.fromEntries(
     (fnData?.functions ?? []).map((f) => [f.id, f.name])
   )
 
   const { data, isFetching, refetch } = useQuery({
-    queryKey: ['traces-feed', projectId, limit],
+    queryKey: ['traces-feed', limit],
     queryFn: () => {
       const p = new URLSearchParams({ limit })
       return apiFetch<{ logs: PlatformLogRow[] }>(`/logs?${p}`)
     },
-    enabled: !!projectId,
     refetchInterval: 15_000,
   })
 
@@ -274,7 +270,6 @@ export default function TracesPage() {
         description="Live execution stream — click any row to inspect the trace"
         breadcrumbs={[
           { label: 'Projects', href: '/dashboard' },
-          { label: projectName ?? projectId ?? '…', href: `/dashboard/projects/${projectId}/overview` },
           { label: 'Traces' },
         ]}
         actions={
