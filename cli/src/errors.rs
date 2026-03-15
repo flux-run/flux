@@ -14,6 +14,7 @@ use colored::Colorize;
 use serde_json::Value;
 
 use crate::client::ApiClient;
+use api_contract::routes as R;
 
 pub async fn execute(
     function: Option<String>,
@@ -23,8 +24,8 @@ pub async fn execute(
     let client = ApiClient::new().await?;
 
     let mut url = format!(
-        "{}/traces/errors/summary?since={}",
-        client.base_url, since
+        "{}?since={}",
+        R::logs::ERRORS_SUMMARY.url(&client.base_url), since
     );
     if let Some(f) = &function {
         url.push_str(&format!("&function={}", f));

@@ -151,9 +151,9 @@ pub async fn execute(command: EventCommands) -> anyhow::Result<()> {
         EventCommands::History { event_type, since } => {
             let res = client
                 .client
-                .get(format!(
-                    "{}/events/history?type={}&since={}",
-                    client.base_url, event_type, since
+                .get(format!("{}?type={}&since={}",
+                    R::events::HISTORY.url(&client.base_url),
+                    event_type, since
                 ))
                 .send()
                 .await?;

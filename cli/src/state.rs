@@ -12,6 +12,7 @@ use clap::Subcommand;
 use colored::Colorize;
 use serde_json::Value;
 
+use api_contract::routes as R;
 use crate::client::ApiClient;
 
 // ── Subcommand definitions ───────────────────────────────────────────────────
@@ -88,8 +89,9 @@ async fn execute_history(
 ) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
     let mut url = format!(
-        "{}/db/history/{}/{}?limit={}",
-        client.base_url, database, table, limit
+        "{}?limit={}",
+        R::db::HISTORY.url_with(&client.base_url, &[("database", &database), ("table", &table)]),
+        limit
     );
     if let Some(id_val) = &id {
         url.push_str(&format!("&id={}", urlencoding::encode(id_val)));
@@ -214,8 +216,9 @@ async fn execute_blame(
 ) -> anyhow::Result<()> {
     let client = ApiClient::new().await?;
     let url = format!(
-        "{}/db/blame/{}/{}?limit={}",
-        client.base_url, database, table, limit
+        "{}?limit={}",
+        R::db::BLAME.url_with(&client.base_url, &[("database", &database), ("table", &table)]),
+        limit
     );
 
     let res = client.client.get(&url).send().await?;

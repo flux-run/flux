@@ -42,9 +42,8 @@ async fn execute_interactive() -> anyhow::Result<()> {
     // Fetch recent errors (traces with errors, last 10 minutes)
     let res = client
         .client
-        .get(format!(
-            "{}/traces?status=error&limit=15&window=10m",
-            client.base_url
+        .get(format!("{}?status=error&limit=15&window=10m",
+            R::logs::TRACES_LIST.url(&client.base_url)
         ))
         .send()
         .await?;
@@ -155,9 +154,8 @@ async fn execute_request(
     let logs_data: Vec<Value> = if !no_logs {
         let logs_res = client
             .client
-            .get(format!(
-                "{}/logs?request_id={}&limit=100",
-                client.base_url, request_id
+            .get(format!("{}?request_id={}&limit=100",
+                R::logs::LIST.url(&client.base_url), request_id
             ))
             .send()
             .await

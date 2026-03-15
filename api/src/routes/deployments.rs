@@ -26,6 +26,7 @@ use axum::{
 use crate::error::{ApiError, ApiResponse, ApiResult};
 use crate::validation::validate_name;
 use api_contract::deployments::{CreateDeploymentPayload, CreateProjectDeploymentPayload};
+use api_contract::routes as R;
 use sqlx::PgPool;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -359,7 +360,7 @@ pub async fn deploy_function_cli(
     {
         let service_token = std::env::var("INTERNAL_SERVICE_TOKEN")
             .unwrap_or_else(|_| "dev-service-token".to_string());
-        let invalidate_url = format!("{}/internal/cache/invalidate", state.runtime_url);
+        let invalidate_url = R::internal::CACHE_INVALIDATE.url(&state.runtime_url);
         let body = serde_json::json!({ "function_id": name });
         if let Err(e) = state.http_client
             .post(&invalidate_url)

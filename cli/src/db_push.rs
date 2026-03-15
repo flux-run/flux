@@ -40,6 +40,7 @@ use anyhow::{Context as _, bail};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 
+use api_contract::routes as R;
 use crate::context::{ResolvedContext, resolve_context};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -221,7 +222,7 @@ async fn send_migration(
     name: &str,
     content: &str,
 ) -> anyhow::Result<MigrateResponse> {
-    let url = format!("{}/internal/db/migrate", ctx.endpoint);
+    let url = R::internal::DB_MIGRATE.url(&format!("{}/flux/api", ctx.endpoint.trim_end_matches('/')));
     let body = MigrateRequest {
         name:    name.to_owned(),
         content: content.to_owned(),
@@ -396,7 +397,7 @@ async fn send_schema(
     ctx: &ResolvedContext,
     manifest: &SchemaManifest,
 ) -> anyhow::Result<String> {
-    let url = format!("{}/internal/db/schema", ctx.endpoint);
+    let url = R::internal::DB_SCHEMA.url(&format!("{}/flux/api", ctx.endpoint.trim_end_matches('/')));
 
     let mut req = client.post(&url).json(manifest);
     if !ctx.api_key.is_empty() {

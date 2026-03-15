@@ -99,10 +99,7 @@ pub async fn execute(command: VersionCommands) -> anyhow::Result<()> {
         VersionCommands::Get { function, version } => {
             let res = client
                 .client
-                .get(format!(
-                    "{}/functions/{}/deployments/{}",
-                    client.base_url, function, version
-                ))
+                .get(R::functions::DEPLOYMENTS_GET.url_with(&client.base_url, &[("name", &function), ("version", &version.to_string())]))
                 .send()
                 .await?;
             let json: Value = res.error_for_status()?.json().await?;
@@ -112,10 +109,7 @@ pub async fn execute(command: VersionCommands) -> anyhow::Result<()> {
         VersionCommands::Rollback { function, to } => {
             let res = client
                 .client
-                .post(format!(
-                    "{}/functions/{}/deployments/{}/activate",
-                    client.base_url, function, to
-                ))
+                .post(R::functions::DEPLOYMENTS_ACTIVATE.url_with(&client.base_url, &[("name", &function), ("version", &to.to_string())]))
                 .send()
                 .await?;
             res.error_for_status()?;
@@ -134,10 +128,7 @@ pub async fn execute(command: VersionCommands) -> anyhow::Result<()> {
             });
             let res = client
                 .client
-                .post(format!(
-                    "{}/functions/{}/deployments/{}/promote",
-                    client.base_url, function, version
-                ))
+                .post(R::functions::DEPLOYMENTS_PROMOTE.url_with(&client.base_url, &[("name", &function), ("version", &version.to_string())]))
                 .json(&body)
                 .send()
                 .await?;
@@ -154,9 +145,9 @@ pub async fn execute(command: VersionCommands) -> anyhow::Result<()> {
         VersionCommands::Diff { function, from, to } => {
             let res = client
                 .client
-                .get(format!(
-                    "{}/functions/{}/deployments/diff?from={}&to={}",
-                    client.base_url, function, from, to
+                .get(format!("{}?from={}&to={}",
+                    R::functions::DEPLOYMENTS_DIFF.url_with(&client.base_url, &[("name", &function)]),
+                    from, to
                 ))
                 .send()
                 .await?;

@@ -1,3 +1,4 @@
+use api_contract::routes as R;
 use crate::client::ApiClient;
 use colored::Colorize;
 use std::time::Instant;
@@ -46,7 +47,7 @@ async fn invoke_via_runtime(
     let api_url = client.base_url.trim_end_matches('/');
     // base_url is http://localhost:4000/flux/api — step up to the server root
     let base = api_url.trim_end_matches("/flux/api").trim_end_matches('/');
-    let exec_url = format!("{}/flux/dev/invoke/{}", base, name);
+    let exec_url = R::execution::DEV_INVOKE.url_with(base, &[("name", name)]);
 
     print_invoke_header(name, base, "dev", &payload_str(&payload));
 

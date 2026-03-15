@@ -519,7 +519,7 @@ struct AuthStatus { user_count: u64 }
 /// the dashboard without having to remember a separate CLI command.
 async fn prompt_admin_setup_if_needed(port: u16) {
     let base = format!("http://localhost:{}/flux/api", port);
-    let Ok(res) = reqwest::get(format!("{}/auth/status", base)).await else { return };
+    let Ok(res) = reqwest::get(R::auth::STATUS.url(&base)).await else { return };
     let Ok(status) = res.json::<AuthStatus>().await else { return };
     if status.user_count > 0 { return; }   // already set up
 

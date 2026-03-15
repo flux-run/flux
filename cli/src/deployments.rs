@@ -69,7 +69,7 @@ pub async fn execute_list(context_name: Option<String>) -> anyhow::Result<()> {
     let ctx = resolve_context(context_name.as_deref(), project_root.as_deref())?;
 
     let client = reqwest::Client::new();
-    let url = format!("{}/api/deployments/project", ctx.endpoint);
+    let url = R::deployments::PROJECT_LIST.url(&format!("{}/flux/api", ctx.endpoint.trim_end_matches('/')));
     let mut req = client.get(&url);
     if !ctx.api_key.is_empty() {
         req = req.bearer_auth(&ctx.api_key);
@@ -139,7 +139,7 @@ pub async fn execute_rollback_version(
     let client = reqwest::Client::new();
 
     // Fetch the project deployment list to find the ID for this version.
-    let url = format!("{}/api/deployments/project", ctx.endpoint);
+    let url = R::deployments::PROJECT_LIST.url(&format!("{}/flux/api", ctx.endpoint.trim_end_matches('/')));
     let mut req = client.get(&url);
     if !ctx.api_key.is_empty() {
         req = req.bearer_auth(&ctx.api_key);
@@ -166,7 +166,7 @@ pub async fn execute_rollback_version(
         .ok_or_else(|| anyhow::anyhow!("Deployment record has no id"))?;
 
     // Execute rollback.
-    let rollback_url = format!("{}/api/deployments/project/{}/rollback", ctx.endpoint, id);
+    let rollback_url = R::deployments::PROJECT_ROLLBACK.url_with(&format!("{}/flux/api", ctx.endpoint.trim_end_matches('/')), &[("id", id)]);
     let mut roll_req = client.post(&rollback_url);
     if !ctx.api_key.is_empty() {
         roll_req = roll_req.bearer_auth(&ctx.api_key);

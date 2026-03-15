@@ -92,9 +92,8 @@ async fn execute_replay(
 
     // Fetch all mutations in the window via /db/replay/:database
     let url = format!(
-        "{}/db/replay/{}?from={}&to={}&limit=2000",
-        client.base_url,
-        database,
+        "{}?from={}&to={}&limit=2000",
+        R::db::REPLAY.url_with(&client.base_url, &[("database", &database)]),
         urlencoding::encode(&from_ts),
         urlencoding::encode(&to_ts),
     );
@@ -271,8 +270,8 @@ async fn replay_single_request(
 ) -> anyhow::Result<()> {
     // Fetch mutations for this request
     let url = format!(
-        "{}/db/mutations?request_id={}&limit=200",
-        client.base_url, request_id
+        "{}?request_id={}&limit=200",
+        R::db::MUTATIONS.url(&client.base_url), request_id
     );
     let res = client.client.get(&url).send().await?;
     if !res.status().is_success() {

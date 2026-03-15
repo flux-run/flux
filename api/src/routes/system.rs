@@ -4,6 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use api_contract::routes as R;
 
 /// POST /internal/cache/invalidate
 ///
@@ -18,7 +19,7 @@ pub async fn cache_invalidate(
     let payload = body.map(|b| b.0).unwrap_or_else(|| serde_json::json!({}));
     let service_token = std::env::var("INTERNAL_SERVICE_TOKEN")
         .unwrap_or_else(|_| "dev-service-token".to_string());
-    let url = format!("{}/internal/cache/invalidate", state.runtime_url);
+    let url = R::internal::CACHE_INVALIDATE.url(&state.runtime_url);
     match state.http_client.post(&url)
         .header("X-Service-Token", &service_token)
         .json(&payload)

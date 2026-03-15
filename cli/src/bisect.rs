@@ -28,6 +28,7 @@
 use colored::Colorize;
 use serde_json::Value;
 
+use api_contract::routes as R;
 use crate::client::ApiClient;
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -55,8 +56,8 @@ pub async fn execute(
     eprintln!("{}", "  fetching trace history…".dimmed());
 
     let traces_url = format!(
-        "{}/traces?function={}&limit=500",
-        client.base_url,
+        "{}?function={}&limit=500",
+        R::logs::TRACES_LIST.url(&client.base_url),
         urlencoding::encode(&function),
     );
     let res = client.client.get(&traces_url).send().await?;

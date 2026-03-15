@@ -96,8 +96,8 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
 
     // ── Fetch state mutations ────────────────────────────────────────────────
     let mut_url = format!(
-        "{}/db/mutations?request_id={}&limit=20",
-        client.base_url, request_id
+        "{}?request_id={}&limit=20",
+        R::db::MUTATIONS.url(&client.base_url), request_id
     );
     let mut_res = client.client.get(&mut_url).send().await?;
     let mut_body: Value = if mut_res.status().is_success() {
@@ -162,8 +162,8 @@ pub async fn execute(request_id: String, json_output: bool) -> anyhow::Result<()
 
     let prev_req: Option<Value> = if !first_span_ts.is_empty() {
         let prev_url = format!(
-            "{}/traces?before={}&limit=1&exclude={}",
-            client.base_url,
+            "{}?before={}&limit=1&exclude={}",
+            R::logs::TRACES_LIST.url(&client.base_url),
             urlencoding::encode(&first_span_ts),
             urlencoding::encode(&request_id),
         );

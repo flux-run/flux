@@ -22,6 +22,7 @@ use crate::{
     },
     AppState,
 };
+use api_contract::routes as R;
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
@@ -104,7 +105,7 @@ pub async fn graph(
         .to_owned();
 
     // ── 1. Fetch DB schema from Data Engine ───────────────────────────────
-    let mut de_url = format!("{}/db/schema", state.data_engine_url);
+    let mut de_url = R::db::SCHEMA.url(&state.data_engine_url);
     if let Some(ref db) = params.database {
         de_url.push_str(&format!("?database={}", db));
     }

@@ -455,8 +455,8 @@ async fn fetch_mutations_page(
     table:      Option<&str>,
 ) -> anyhow::Result<Value> {
     let mut url = format!(
-        "{}/db/mutations?request_id={}&limit={}",
-        client.base_url, request_id, limit,
+        "{}?request_id={}&limit={}",
+        R::db::MUTATIONS.url(&client.base_url), request_id, limit,
     );
     if let Some(seq) = after_seq {
         url.push_str(&format!("&after_seq={seq}"));

@@ -199,7 +199,9 @@ pub mod logs {
     /// `GET /traces/{request_id}`
     pub const TRACE_GET:    Route<(), Value> = Route::new("GET",  "/traces/{request_id}");
     /// `POST /traces/{request_id}/replay`
-    pub const TRACE_REPLAY: Route<(), Value> = Route::new("POST", "/traces/{request_id}/replay");
+    pub const TRACE_REPLAY:    Route<(), Value> = Route::new("POST", "/traces/{request_id}/replay");
+    /// `GET /traces/errors/summary` — per-function error summary
+    pub const ERRORS_SUMMARY:  Route<(), Value> = Route::new("GET",  "/traces/errors/summary");
 }
 
 // ── Gateway routes & middleware ───────────────────────────────────────────────
@@ -405,6 +407,8 @@ pub mod events {
     pub const SUBSCRIPTIONS_CREATE: Route<CreateSubscriptionPayload, EventSubscriptionRow> = Route::new("POST", "/events/subscriptions");
     /// `DELETE /events/subscriptions/{id}`
     pub const SUBSCRIPTIONS_DELETE: Route<(), Value>                                   = Route::new("DELETE", "/events/subscriptions/{id}");
+    /// `GET /events/history` — event history filtered by type/since
+    pub const HISTORY:              Route<(), Value>                                   = Route::new("GET",    "/events/history");
 }
 
 // ── Queues ────────────────────────────────────────────────────────────────────

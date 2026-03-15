@@ -19,6 +19,7 @@ use crate::{
 };
 
 use super::schema::forward_headers;
+use api_contract::routes as R;
 
 type ApiResult<T> = Result<ApiResponse<T>, ApiError>;
 
@@ -40,7 +41,7 @@ pub async fn fetch_schema_graph_pub(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(Value, Vec<Value>, String), ApiError> {
-    let de_url = format!("{}/db/schema", state.data_engine_url);
+    let de_url = R::db::SCHEMA.url(&state.data_engine_url);
     let db_schema: Value = state
         .http_client
         .get(&de_url)
