@@ -34,6 +34,7 @@ use tracing::info;
 use dispatch::{InProcessApiDispatch, InProcessDataEngineDispatch, InProcessQueueDispatch, InProcessRuntimeDispatch};
 use gateway::state::GatewayState;
 use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch};
+use api_contract::routes as R;
 use runtime::engine::executor::PoolDispatchers;
 use runtime::secrets::client::SecretsClient;
 use runtime::engine::pool::IsolatePool;
@@ -337,14 +338,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let dev_invoke_router = axum::Router::new()
-        .route("/flux/dev/invoke/{name}", axum::routing::post(dev_invoke_handler))
+        .route(R::execution::DEV_INVOKE.path, axum::routing::post(dev_invoke_handler))
         .with_state(dev_invoke_state);
 
     // Runtime execute endpoint — queue worker POSTs here via loopback.
     // Also exposes cache invalidation so the API can flush bundles after deploy.
     let runtime_execute_router = axum::Router::new()
-        .route("/execute", axum::routing::post(runtime::execute::handler::execute_handler))
-        .route("/internal/cache/invalidate", axum::routing::post(runtime::execute::invalidate::invalidate_cache_handler))
+        .route(R::execution::EXECUTE.path,          axum::routing::post(runtime::execute::handler::execute_handler))
+        .route(R::internal::CACHE_INVALIDATE.path,  axum::routing::post(runtime::execute::invalidate::invalidate_cache_handler))
         .with_state(runtime_state);
 
     let app = axum::Router::new()

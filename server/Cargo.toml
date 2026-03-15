@@ -17,6 +17,7 @@ gateway       = { path = "../gateway" }
 flux-queue = { path = "../queue" }
 data-engine   = { path = "../data-engine" }
 job_contract  = { path = "../shared/job_contract" }
+api_contract  = { path = "../shared/api_contract" }
 
 # Async runtime
 tokio         = { version = "1", features = ["full"] }

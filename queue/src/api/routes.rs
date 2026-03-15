@@ -1,22 +1,23 @@
 use std::sync::Arc;
 use axum::{Router, middleware, routing::{post, get}};
+use api_contract::routes as R;
 use crate::state::AppState;
 
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/jobs",
+        .route(R::jobs::LIST.path,
             get(crate::api::handlers::list_jobs::handler)
                 .post(crate::api::handlers::create_job::handler),
         )
-        .route("/jobs/stats", get(crate::api::handlers::stats::handler))
+        .route(R::jobs::STATS.path,  get(crate::api::handlers::stats::handler))
         .route(
-            "/jobs/{id}",
+            R::jobs::GET.path,
             get(crate::api::handlers::get_job::handler)
                 .delete(crate::api::handlers::cancel_job::handler),
         )
-        .route("/jobs/{id}/retry", post(crate::api::handlers::retry_job::handler))
-        .route("/health", get(|| async { axum::Json(serde_json::json!({ "status": "ok" })) }))
-        .route("/version", get(|| async {
+        .route(R::jobs::RETRY.path,   post(crate::api::handlers::retry_job::handler))
+        .route(R::health::HEALTH.path, get(|| async { axum::Json(serde_json::json!({ "status": "ok" })) }))
+        .route(R::health::VERSION.path, get(|| async {
             axum::Json(serde_json::json!({
                 "service": "queue",
                 "commit": std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".to_string()),

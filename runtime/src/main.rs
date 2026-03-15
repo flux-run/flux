@@ -21,6 +21,7 @@ use runtime::execute::handler::execute_handler;
 use runtime::execute::invalidate::invalidate_cache_handler;
 use runtime::AppState;
 use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch};
+use api_contract::routes as R;
 
 /// HTTP implementation of DataEngineDispatch for the standalone runtime binary.
 struct HttpDataEngineDispatch {
@@ -117,16 +118,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let workers = settings.isolate_workers;
     let app = Router::new()
-        .route("/health",  get(health))
-        .route("/version", get(move || async move {
+        .route(R::health::HEALTH.path,         get(health))
+        .route(R::health::VERSION.path,         get(move || async move {
             axum::Json(serde_json::json!({
                 "service": "runtime",
                 "commit":  std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".to_string()),
                 "isolate_workers": workers,
             }))
         }))
-        .route("/execute",                   post(execute_handler))
-        .route("/internal/cache/invalidate", post(invalidate_cache_handler))
+        .route(R::execution::EXECUTE.path,               post(execute_handler))
+        .route(R::internal::CACHE_INVALIDATE.path,        post(invalidate_cache_handler))
         .layer(axum::extract::DefaultBodyLimit::max(1 * 1024 * 1024))
         .with_state(state);
 

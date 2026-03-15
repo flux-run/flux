@@ -1192,6 +1192,7 @@ name = "data-engine"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "api_contract",
  "axum",
  "chrono",
  "cron",
@@ -1634,6 +1635,7 @@ name = "flux-queue"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "api_contract",
  "async-trait",
  "axum",
  "chrono",
@@ -1845,6 +1847,7 @@ name = "gateway"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "api_contract",
  "async-trait",
  "axum",
  "base64",
@@ -4002,6 +4005,7 @@ name = "runtime"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "api_contract",
  "async-trait",
  "axum",
  "base64",
@@ -4319,6 +4323,7 @@ name = "server"
 version = "0.1.1"
 dependencies = [
  "api",
+ "api_contract",
  "async-trait",
  "axum",
  "axum-server",

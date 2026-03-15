@@ -1,6 +1,7 @@
 use axum::{middleware as axum_middleware, routing::{delete, get, patch, post}, Json, Router};
 use serde_json::json;
 use std::sync::Arc;
+use api_contract::routes as R;
 
 use crate::{
     api::{
@@ -13,35 +14,35 @@ use crate::{
 pub fn build(state: Arc<AppState>) -> Router {
     Router::new()
         // ── Data API ──────────────────────────────────────────────────────────
-        .route("/db/query",                   post(query::handler))
-        .route("/db/sql",                     post(sql::handler))
+        .route(R::db::QUERY.path,            post(query::handler))
+        .route(R::db::SQL.path,              post(sql::handler))
         // ── Database management ───────────────────────────────────────────────
-        .route("/db/databases",               post(databases::create).get(databases::list))
-        .route("/db/databases/{name}",         delete(databases::drop_db))
+        .route(R::db::DATABASES_LIST.path,   post(databases::create).get(databases::list))
+        .route(R::db::DATABASES_DELETE.path, delete(databases::drop_db))
         // ── Table management ──────────────────────────────────────────────────
-        .route("/db/tables",                  post(tables::create))
-        .route("/db/tables/{database}",        get(tables::list))
-        .route("/db/tables/{database}/{table}", delete(tables::drop_table))
+        .route(R::db::TABLES_CREATE.path,    post(tables::create))
+        .route(R::db::TABLES_LIST.path,      get(tables::list))
+        .route(R::db::TABLES_DELETE.path,    delete(tables::drop_table))
         // ── Relationships ─────────────────────────────────────────────────────
-        .route("/db/relationships",     get(relationships::list).post(relationships::create))
-        .route("/db/relationships/{id}", delete(relationships::delete))
+        .route(R::db::RELATIONSHIPS_LIST.path,   get(relationships::list).post(relationships::create))
+        .route(R::db::RELATIONSHIPS_DELETE.path, delete(relationships::delete))
         // ── Cron jobs ──────────────────────────────────────────────────────────
-        .route("/db/cron",             get(cron::list).post(cron::create))
-        .route("/db/cron/{id}",         patch(cron::update).delete(cron::delete))
-        .route("/db/cron/{id}/trigger", post(cron::trigger))
+        .route(R::db::CRON_LIST.path,    get(cron::list).post(cron::create))
+        .route(R::db::CRON_UPDATE.path,  patch(cron::update).delete(cron::delete))
+        .route(R::db::CRON_TRIGGER.path, post(cron::trigger))
         // ── Audit trail (state_mutations read surface) ─────────────────────────
-        .route("/db/history/{database}/{table}", get(history::history))
-        .route("/db/blame/{database}/{table}",   get(history::blame))
-        .route("/db/replay/{database}",          get(history::replay))
-        .route("/db/mutations",                  get(mutations::handler))
+        .route(R::db::HISTORY.path,   get(history::history))
+        .route(R::db::BLAME.path,     get(history::blame))
+        .route(R::db::REPLAY.path,    get(history::replay))
+        .route(R::db::MUTATIONS.path, get(mutations::handler))
         // ── Schema introspection ───────────────────────────────────────────────
-        .route("/db/schema", get(schema::introspect))
+        .route(R::db::SCHEMA.path,  get(schema::introspect))
         // ── Debug / engine introspection ────────────────────────────────────────
-        .route("/db/debug",   get(debug::handler))
-        .route("/db/explain", post(explain::handler))
+        .route(R::db::DEBUG.path,   get(debug::handler))
+        .route(R::db::EXPLAIN.path, post(explain::handler))
         // ── Health ────────────────────────────────────────────────────────────
-        .route("/health", get(|| async { Json(json!({ "status": "ok" })) }))
-        .route("/version", get(|| async {
+        .route(R::health::HEALTH.path,  get(|| async { Json(json!({ "status": "ok" })) }))
+        .route(R::health::VERSION.path, get(|| async {
             Json(json!({
                 "service": "data-engine",
                 "commit": std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".to_string()),

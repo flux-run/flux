@@ -148,8 +148,8 @@ pub fn create_app(state: AppState) -> Router {
         .route(R::db::MIGRATE_ROLLBACK.path, post(routes::db_migrate::rollback_migration))
         .route(R::db::MIGRATE_STATUS.path,   get(routes::db_migrate::list_migrations))
         // Data Engine + Files proxy
-        .route("/db/{*path}",   any(routes::data_engine::proxy_handler))
-        .route("/files/{*path}", any(routes::data_engine::proxy_handler))
+        .route(R::proxy::DB.path,    any(routes::data_engine::proxy_handler))
+        .route(R::proxy::FILES.path, any(routes::data_engine::proxy_handler))
         // API Keys
         .route(R::api_keys::LIST.path,   get(routes::api_keys::list_api_keys).post(routes::api_keys::create_api_key))
         .route(R::api_keys::DELETE.path, delete(routes::api_keys::delete_api_key))
@@ -214,16 +214,16 @@ pub fn create_app(state: AppState) -> Router {
         .merge(auth_router)
         .nest("/internal", internal)
         // ── Execution-plane guard ──────────────────────────────────────────
-        .route("/run",                         any(routes::system::execution_not_allowed))
-        .route("/run/{*path}",                 any(routes::system::execution_not_allowed))
-        .route("/invoke",                      any(routes::system::execution_not_allowed))
-        .route("/invoke/{*path}",              any(routes::system::execution_not_allowed))
-        .route("/execute",                     any(routes::system::execution_not_allowed))
-        .route("/execute/{*path}",             any(routes::system::execution_not_allowed))
-        .route("/functions/{name}/run",        any(routes::system::execution_not_allowed))
-        .route("/functions/{name}/invoke",     any(routes::system::execution_not_allowed))
+        .route(R::execution::RUN.path,            any(routes::system::execution_not_allowed))
+        .route(R::execution::RUN_WILDCARD.path,   any(routes::system::execution_not_allowed))
+        .route(R::execution::INVOKE.path,         any(routes::system::execution_not_allowed))
+        .route(R::execution::INVOKE_WILDCARD.path, any(routes::system::execution_not_allowed))
+        .route(R::execution::EXECUTE.path,        any(routes::system::execution_not_allowed))
+        .route(R::execution::EXECUTE_WILDCARD.path, any(routes::system::execution_not_allowed))
+        .route(R::execution::FUNCTION_RUN.path,   any(routes::system::execution_not_allowed))
+        .route(R::execution::FUNCTION_INVOKE.path, any(routes::system::execution_not_allowed))
         // ── Swagger UI ────────────────────────────────────────────────────
-        .route("/openapi/ui",                  get(routes::openapi::ui))
+        .route(R::sdk::OPENAPI_UI.path,        get(routes::openapi::ui))
         // ── Utility ───────────────────────────────────────────────────────
         .route(R::health::HEALTH.path, get(|| async { Json(serde_json::json!({ "status": "ok" })) }))
         .route(R::health::VERSION.path, get(|| async {

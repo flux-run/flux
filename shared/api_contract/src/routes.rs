@@ -110,6 +110,8 @@ pub mod internal {
     pub const CACHE_INVALIDATE:  Route<Value, Value>                = Route::new("POST", "/internal/cache/invalidate");
     /// `GET /internal/routes` — gateway snapshot for the gateway service
     pub const ROUTES_GET:        Route<(), Value>                   = Route::new("GET",  "/internal/routes");
+    /// `GET /internal/metrics` — Prometheus metrics endpoint (gateway)
+    pub const METRICS:           Route<(), Value>                   = Route::new("GET",  "/internal/metrics");
 }
 
 // ── Functions ─────────────────────────────────────────────────────────────────
@@ -253,6 +255,8 @@ pub mod sdk {
     pub const OPENAPI:      Route<(), Value> = Route::new("GET", "/openapi.json");
     /// `GET /spec`
     pub const SPEC:         Route<(), Value> = Route::new("GET", "/spec");
+    /// `GET /openapi/ui` — Swagger UI HTML page
+    pub const OPENAPI_UI:   Route<(), Value> = Route::new("GET", "/openapi/ui");
 }
 
 // ── Database / Migrations ─────────────────────────────────────────────────────
@@ -303,6 +307,34 @@ pub mod db {
     pub const MUTATIONS:        Route<(), Value>      = Route::new("GET",  "/db/mutations");
     /// `POST /db/explain`
     pub const EXPLAIN:          Route<Value, Value>   = Route::new("POST", "/db/explain");
+    /// `POST /db/sql` — raw SQL passthrough
+    pub const SQL:              Route<Value, Value>   = Route::new("POST", "/db/sql");
+    /// `DELETE /db/databases/{name}`
+    pub const DATABASES_DELETE: Route<(), Value>      = Route::new("DELETE", "/db/databases/{name}");
+    /// `DELETE /db/tables/{database}/{table}`
+    pub const TABLES_DELETE:    Route<(), Value>      = Route::new("DELETE", "/db/tables/{database}/{table}");
+    /// `GET /db/relationships`
+    pub const RELATIONSHIPS_LIST:   Route<(), Value>      = Route::new("GET",    "/db/relationships");
+    /// `POST /db/relationships`
+    pub const RELATIONSHIPS_CREATE: Route<Value, Value>   = Route::new("POST",   "/db/relationships");
+    /// `DELETE /db/relationships/{id}`
+    pub const RELATIONSHIPS_DELETE: Route<(), Value>      = Route::new("DELETE",  "/db/relationships/{id}");
+    /// `GET /db/cron`
+    pub const CRON_LIST:    Route<(), Value>      = Route::new("GET",    "/db/cron");
+    /// `POST /db/cron`
+    pub const CRON_CREATE:  Route<Value, Value>   = Route::new("POST",   "/db/cron");
+    /// `PATCH /db/cron/{id}`
+    pub const CRON_UPDATE:  Route<Value, Value>   = Route::new("PATCH",  "/db/cron/{id}");
+    /// `DELETE /db/cron/{id}`
+    pub const CRON_DELETE:  Route<(), Value>      = Route::new("DELETE", "/db/cron/{id}");
+    /// `POST /db/cron/{id}/trigger`
+    pub const CRON_TRIGGER: Route<(), Value>      = Route::new("POST",   "/db/cron/{id}/trigger");
+    /// `GET /db/replay/{database}`
+    pub const REPLAY:       Route<(), Value>      = Route::new("GET",    "/db/replay/{database}");
+    /// `GET /db/schema` — introspect schema
+    pub const SCHEMA:       Route<(), Value>      = Route::new("GET",    "/db/schema");
+    /// `GET /db/debug` — engine debug info
+    pub const DEBUG:        Route<(), Value>      = Route::new("GET",    "/db/debug");
 }
 
 // ── API keys ──────────────────────────────────────────────────────────────────
@@ -506,9 +538,11 @@ pub mod health {
     use serde_json::Value;
 
     /// `GET /health`
-    pub const HEALTH:  Route<(), Value> = Route::new("GET", "/health");
+    pub const HEALTH:    Route<(), Value> = Route::new("GET", "/health");
+    /// `GET /readiness`
+    pub const READINESS: Route<(), Value> = Route::new("GET", "/readiness");
     /// `GET /version`
-    pub const VERSION: Route<(), Value> = Route::new("GET", "/version");
+    pub const VERSION:   Route<(), Value> = Route::new("GET", "/version");
 }
 
 // ── Tenants ───────────────────────────────────────────────────────────────────
@@ -521,5 +555,69 @@ pub mod tenants {
     pub const LIST:   Route<(), Value>    = Route::new("GET",  "/tenants");
     /// `POST /tenants`
     pub const CREATE: Route<Value, Value> = Route::new("POST", "/tenants");
+}
+
+// ── Queue jobs (queue service API) ───────────────────────────────────────────
+
+pub mod jobs {
+    use super::Route;
+    use serde_json::Value;
+
+    /// `GET /jobs`
+    pub const LIST:   Route<(), Value>    = Route::new("GET",    "/jobs");
+    /// `POST /jobs`
+    pub const CREATE: Route<Value, Value> = Route::new("POST",   "/jobs");
+    /// `GET /jobs/stats`
+    pub const STATS:  Route<(), Value>    = Route::new("GET",    "/jobs/stats");
+    /// `GET /jobs/{id}`
+    pub const GET:    Route<(), Value>    = Route::new("GET",    "/jobs/{id}");
+    /// `DELETE /jobs/{id}` — cancel job
+    pub const CANCEL: Route<(), Value>    = Route::new("DELETE", "/jobs/{id}");
+    /// `POST /jobs/{id}/retry`
+    pub const RETRY:  Route<(), Value>    = Route::new("POST",   "/jobs/{id}/retry");
+}
+
+// ── Execution (runtime service) ──────────────────────────────────────────────
+
+pub mod execution {
+    use super::Route;
+    use serde_json::Value;
+
+    /// `POST /execute` — runtime function execution endpoint
+    pub const EXECUTE:           Route<Value, Value> = Route::new("POST", "/execute");
+    /// `POST /flux/dev/invoke/{name}` — dev-mode invocation (server crate)
+    pub const DEV_INVOKE:        Route<Value, Value> = Route::new("POST", "/flux/dev/invoke/{name}");
+
+    // ── Execution guards (api service rejects these paths) ────────────────
+    /// `POST /run` — blocked on API, belongs to runtime
+    pub const RUN:               Route<Value, Value> = Route::new("POST", "/run");
+    /// `POST /run/{*path}`
+    pub const RUN_WILDCARD:      Route<Value, Value> = Route::new("POST", "/run/{*path}");
+    /// `POST /invoke`
+    pub const INVOKE:            Route<Value, Value> = Route::new("POST", "/invoke");
+    /// `POST /invoke/{*path}`
+    pub const INVOKE_WILDCARD:   Route<Value, Value> = Route::new("POST", "/invoke/{*path}");
+    /// `POST /execute/{*path}`
+    pub const EXECUTE_WILDCARD:  Route<Value, Value> = Route::new("POST", "/execute/{*path}");
+    /// `POST /functions/{name}/run`
+    pub const FUNCTION_RUN:      Route<Value, Value> = Route::new("POST", "/functions/{name}/run");
+    /// `POST /functions/{name}/invoke`
+    pub const FUNCTION_INVOKE:   Route<Value, Value> = Route::new("POST", "/functions/{name}/invoke");
+}
+
+// ── Proxy wildcard paths ──────────────────────────────────────────────────────
+// These are axum catch-all wildcards — not typed request/response contracts,
+// but centralized here so the path strings have a single source of truth.
+
+pub mod proxy {
+    use super::Route;
+    use serde_json::Value;
+
+    /// `ANY /db/{*path}` — proxied from API to data-engine
+    pub const DB:               Route<Value, Value> = Route::new("ANY", "/db/{*path}");
+    /// `ANY /files/{*path}` — proxied from API to data-engine
+    pub const FILES:            Route<Value, Value> = Route::new("ANY", "/files/{*path}");
+    /// `ANY /{*path}` — gateway dispatch wildcard (all user function calls)
+    pub const GATEWAY_DISPATCH: Route<Value, Value> = Route::new("ANY", "/{*path}");
 }
 

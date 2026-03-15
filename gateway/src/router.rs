@@ -6,6 +6,7 @@
 //!   ANY /{*path}   — function invocation
 use axum::{middleware, routing::{any, get}, Router};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use api_contract::routes as R;
 use crate::state::SharedState;
 
 /// Build the CORS layer.
@@ -62,10 +63,10 @@ fn build_cors() -> CorsLayer {
 
 pub fn create_router(state: SharedState) -> Router {
     Router::new()
-        .route("/health",             get(crate::handlers::health::handle))
-        .route("/readiness",          get(crate::handlers::readiness::handle))
-        .route("/internal/metrics",   get(crate::metrics::prometheus_handler))
-        .route("/{*path}",            any(crate::handlers::dispatch::handle))
+        .route(R::health::HEALTH.path,        get(crate::handlers::health::handle))
+        .route(R::health::READINESS.path,     get(crate::handlers::readiness::handle))
+        .route(R::internal::METRICS.path,     get(crate::metrics::prometheus_handler))
+        .route(R::proxy::GATEWAY_DISPATCH.path, any(crate::handlers::dispatch::handle))
         .layer(middleware::from_fn_with_state(state.clone(), crate::metrics::record_metrics))
         .layer(build_cors())
         .with_state(state)

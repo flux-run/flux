@@ -32,6 +32,7 @@ hex  = "0.4"
 hmac = "0.12"
 cron = "0.12"
 moka = { version = "0.12.14", features = ["sync"] }
+api_contract = { path = "../shared/api_contract" }
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
