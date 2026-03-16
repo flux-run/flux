@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate};
+use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
@@ -37,6 +37,7 @@ pub struct ExecutionResult {
     pub error: Option<String>,
     pub duration_ms: i32,
     pub checkpoints: Vec<FetchCheckpoint>,
+    pub logs: Vec<LogEntry>,
 }
 
 #[derive(Debug)]
@@ -164,6 +165,7 @@ fn spawn_isolate_worker(
                             output,
                             checkpoints,
                             error,
+                            logs,
                         }) => {
                             let (status, body, error) = match error {
                                 Some(err) => ("error".to_string(), serde_json::Value::Null, Some(err)),
@@ -186,6 +188,7 @@ fn spawn_isolate_worker(
                                 error,
                                 duration_ms: started.elapsed().as_millis() as i32,
                                 checkpoints,
+                                logs,
                             }
                         }
                         Err(err) => ExecutionResult {
@@ -197,6 +200,7 @@ fn spawn_isolate_worker(
                             error: Some(err.to_string()),
                             duration_ms: started.elapsed().as_millis() as i32,
                             checkpoints: vec![],
+                            logs: vec![],
                         },
                     };
 
@@ -236,5 +240,6 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
         error: Some(message.into()),
         duration_ms: 0,
         checkpoints: vec![],
+        logs: vec![],
     }
 }

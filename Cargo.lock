@@ -2159,6 +2159,7 @@ dependencies = [
  "deno_core",
  "hex",
  "prost",
+ "rand 0.8.5",
  "reqwest",
  "serde",
  "serde_json",
