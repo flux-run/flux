@@ -11,6 +11,7 @@ mod process_state;
 mod ps;
 mod replay;
 mod resume;
+mod run;
 mod serve;
 mod server;
 mod status;
@@ -56,6 +57,8 @@ enum Commands {
     Why(why::WhyArgs),
     /// Stream live execution events.
     Tail(tail::TailArgs),
+    /// Run a JS/TS file as a plain script (no HTTP server).
+    Run(run::RunArgs),
     /// Prepare a JS/TS entry file for runtime execution.
     Serve(serve::ServeArgs),
     /// Manage the Flux server process.
@@ -82,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Resume(args) => resume::execute(args).await?,
         Commands::Why(args) => why::execute(args).await?,
         Commands::Tail(args) => tail::execute(args).await?,
+        Commands::Run(args) => run::execute(args).await?,
         Commands::Serve(args) => serve::execute(args).await?,
         Commands::Server { command } => server::execute(command).await?,
     }

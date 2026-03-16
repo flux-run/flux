@@ -36,6 +36,11 @@ struct Args {
     /// Validate the entry file and print artifact info, then exit without serving.
     #[arg(long)]
     check_only: bool,
+
+    /// Execute the entry file as a plain script (no HTTP server).
+    /// Like `node index.js` — runs top-level code, drains the event loop, exits.
+    #[arg(long)]
+    script_mode: bool,
 }
 
 #[tokio::main]
@@ -89,6 +94,15 @@ async fn main() -> Result<()> {
         .and_then(|v| v.to_str())
         .ok_or_else(|| anyhow::anyhow!("invalid entry file stem: {}", entry.display()))?
         .to_string();
+
+    if args.script_mode {
+        tracing::debug!(entry = %entry.display(), "script mode");
+        let mut isolate = runtime::JsIsolate::new(&artifact.code, 0)
+            .context("failed to create JS isolate")?;
+        isolate.run_script().await
+            .context("script execution failed")?;
+        return Ok(());
+    }
 
     println!("server:   {}", args.server_url);
     println!("entry:    {}", entry.display());

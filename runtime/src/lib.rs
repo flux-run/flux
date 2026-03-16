@@ -22,3 +22,4 @@ pub use http_runtime::{
 	HttpRuntimeConfig,
 	run_http_runtime,
 };
+pub use deno_runtime::JsIsolate;

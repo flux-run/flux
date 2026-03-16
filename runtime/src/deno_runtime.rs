@@ -683,6 +683,25 @@ impl JsIsolate {
             logs,
         })
     }
+
+    /// Run the entry module as a plain script — drain the event loop after
+    /// module initialisation and return captured log output.  Console output
+    /// is already streamed to stdout/stderr by `op_console`; this collects
+    /// the structured log vec for optional server-side recording.
+    pub async fn run_script(&mut self) -> Result<Vec<LogEntry>> {
+        tokio::time::timeout(
+            EXECUTION_TIMEOUT,
+            self.runtime.run_event_loop(Default::default()),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("script timed out after {EXECUTION_TIMEOUT:?}"))?
+        .context("event loop error during script execution")?;
+
+        let state = self.runtime.op_state();
+        let state = state.borrow();
+        let exec = state.borrow::<RuntimeExecutionState>();
+        Ok(exec.logs.clone())
+    }
 }
 
 fn bootstrap_fetch_js() -> &'static str {
