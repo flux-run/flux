@@ -20,12 +20,9 @@ pub struct Settings {
     /// When a worker reaches this limit it returns 503 until capacity frees.
     /// Override with `MAX_CONCURRENT_PER_WORKER`.
     pub max_concurrent_per_worker: usize,
-    /// Per-request wall-clock timeout in seconds (V8 and WASM).
+    /// Per-request wall-clock timeout in seconds (V8).
     /// Override with `REQUEST_TIMEOUT_SECONDS`.
     pub request_timeout_secs: u64,
-    /// WASM CPU fuel limit (Wasmtime instruction units).
-    /// 1 billion ≈ a few hundred ms of CPU. Override with `WASM_FUEL_LIMIT`.
-    pub wasm_fuel_limit: u64,
 }
 
 impl Settings {
@@ -89,11 +86,6 @@ impl Settings {
             .and_then(|v| v.parse().ok())
             .unwrap_or(30);
 
-        let wasm_fuel_limit = env::var("WASM_FUEL_LIMIT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1_000_000_000);
-
         Self {
             api_url,
             queue_url,
@@ -104,7 +96,6 @@ impl Settings {
             isolate_workers,
             max_concurrent_per_worker,
             request_timeout_secs,
-            wasm_fuel_limit,
         }
     }
 }

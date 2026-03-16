@@ -15,7 +15,7 @@ clap = { version = "4.5.60", features = ["derive", "env"] }
 colored = "2"
 directories = "5"
 dirs = "6.0.0"
-reqwest = { version = "0.13.2", features = ["json", "multipart", "stream", "rustls", "blocking"], default-features = false }
+reqwest = { version = "0.13.2", features = ["json", "multipart", "stream", "rustls", "blocking", "query"], default-features = false }
 sha2 = "0.10"
 hex = "0.4"
 rpassword = "7.4.0"
@@ -34,8 +34,7 @@ which = "6"
 toml = "0.8"
 notify = "6"
 dotenvy = "0.15"
-postgresql_embedded = { version = "0.20.2", features = ["blocking", "rustls", "theseus"], default-features = false }
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "migrate", "tls-rustls"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "migrate", "tls-rustls", "uuid", "chrono"] }
 # API contract — shared request/response types
 api_contract = { path = "../shared/api_contract" }
 

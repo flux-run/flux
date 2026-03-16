@@ -31,15 +31,23 @@ The scaffold gives you a complete starting point:
 
 ## 3. Start The Local Runtime
 
+Flux requires a Postgres database. Start one with Docker:
+
+```bash
+docker run -p 5432:5432 -e POSTGRES_PASSWORD=flux postgres:16
+export DATABASE_URL=postgres://postgres:flux@localhost/flux
+```
+
+Then start the dev server:
+
 ```bash
 target/debug/flux dev
 ```
 
 `flux dev` gives you:
 
-- one command starts the stack
-- Postgres is bootstrapped or connected automatically
-- framework and project schema are applied
+- one command starts the stack (DATABASE_URL must be set)
+- framework schema is applied automatically
 - the operator API and dashboard are reachable
 - the CLI prints the next commands you are likely to need
 

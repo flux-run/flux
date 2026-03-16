@@ -1,13 +1,11 @@
 /// BundleResolver — single-responsibility bundle resolution for the execute pipeline.
 ///
-/// Encapsulates the three-path resolution strategy:
-///   1. Warm WASM path  — cached bytes in WasmPool (zero network calls)
-///   2. Warm Deno path  — cached code in BundleCache (zero network calls)
-///   3. Cold path       — fetch from control plane → inline code → populate both caches
+/// Encapsulates the two-path resolution strategy:
+///   1. Warm Deno path  — cached code in BundleCache (zero network calls)
+///   2. Cold path       — fetch from control plane → inline code → populate cache
 ///
 /// Separated from the HTTP handler and execution runner so each can be
 /// tested and reasoned about independently.
-use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::Json;
 use axum::response::{IntoResponse, Response};
@@ -16,15 +14,12 @@ use serde_json::Value;
 use job_contract::dispatch::ApiDispatch;
 use crate::bundle::cache::BundleCache;
 use crate::schema::cache::{SchemaCache, FunctionSchema};
-use crate::engine::wasm_pool::WasmPool;
 use crate::trace::emitter::TraceEmitter;
 
 /// The resolved bundle, ready for execution.
 pub enum ResolvedBundle {
     /// JavaScript/TypeScript code (Deno V8 path).
     Deno { code: String },
-    /// Compiled WASM bytes.
-    Wasm { bytes: Vec<u8> },
 }
 
 /// Short fingerprint of a bundle — used as `code_sha` in trace spans for replay.
@@ -41,19 +36,12 @@ pub fn bundle_sha(data: &[u8]) -> String {
 pub struct BundleResolver<'a> {
     pub bundle_cache:  &'a BundleCache,
     pub schema_cache:  &'a SchemaCache,
-    pub wasm_pool:     &'a WasmPool,
     pub http_client:   &'a reqwest::Client,
     /// Control-plane dispatch — used for the bundle metadata fetch.
     pub api:           &'a dyn ApiDispatch,
 }
 
 impl<'a> BundleResolver<'a> {
-    /// Attempt the warm WASM path.
-    /// Returns `Some(bytes)` on a cache hit, `None` on a miss.
-    pub async fn warm_wasm(&self, function_id: &str) -> Option<Arc<Vec<u8>>> {
-        self.wasm_pool.get_cached_bytes(function_id).await
-    }
-
     /// Attempt the warm Deno path.
     /// Returns `Some(code)` on a cache hit, `None` on a miss.
     pub fn warm_deno(&self, function_id: &str) -> Option<String> {
@@ -87,23 +75,9 @@ impl<'a> BundleResolver<'a> {
         // Cache schema if the control plane returned it alongside the bundle.
         self.cache_schema(function_id, &data);
 
-        let bundle_runtime = data.get("runtime")
-            .and_then(|r| r.as_str())
-            .unwrap_or("deno")
-            .to_string();
-
         let deployment_id = data.get("deployment_id").and_then(|v| v.as_str()).map(|s| s.to_string());
         let code_opt      = data.get("code")         .and_then(|v| v.as_str()).map(|s| s.to_string());
 
-        if bundle_runtime == "wasm" {
-            let bytes = self.resolve_wasm_bytes(code_opt).map_err(|e| {
-                internal("WasmBundleError", e)
-            })?;
-            self.wasm_pool.cache_bytes(function_id.to_string(), Arc::new(bytes.clone())).await;
-            return Ok(ResolvedBundle::Wasm { bytes });
-        }
-
-        // ── Deno cold path ────────────────────────────────────────────────
         // Check deployment-level cache first.
         if let Some(d_id) = &deployment_id {
             if let Some(cached) = self.bundle_cache.get(d_id) {
@@ -131,20 +105,6 @@ impl<'a> BundleResolver<'a> {
             self.schema_cache.insert(function_id.to_string(), FunctionSchema { input, output });
         }
     }
-
-    fn resolve_wasm_bytes(
-        &self,
-        code_opt: Option<String>,
-    ) -> Result<Vec<u8>, String> {
-        if let Some(encoded) = code_opt {
-            use base64::Engine as _;
-            Ok(base64::engine::general_purpose::STANDARD
-                .decode(&encoded)
-                .unwrap_or_else(|_| encoded.into_bytes()))
-        } else {
-            Err("No wasm bundle found for this function.".to_string())
-        }
-    }
 }
 
 // ── Error response helpers ────────────────────────────────────────────────────
@@ -167,8 +127,6 @@ fn internal(code: &str, message: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── bundle_sha ────────────────────────────────────────────────────────
 
     #[test]
     fn bundle_sha_is_16_hex_chars() {
@@ -200,3 +158,4 @@ mod tests {
         assert_eq!(sha.len(), 16);
     }
 }
+

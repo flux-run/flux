@@ -23,7 +23,6 @@
 //! | `X-Service-Token`     | → runtime  | inter-service authentication         |
 //! | `x-request-id`        | → runtime  | trace correlation                    |
 //! | `x-parent-span-id`    | → runtime  | nested span linkage                  |
-//! | `X-Function-Runtime`  | → runtime  | hint: `"deno"` or `"wasm"`           |
 //! | `X-User-Id`           | → runtime  | authenticated user identity          |
 //! | `X-JWT-Claims`        | → runtime  | full JWT claims as JSON string       |
 //! | `x-request-id`        | ← response | echoed for caller traceability       |

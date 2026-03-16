@@ -2,32 +2,46 @@
 //!
 //! ## Mental model
 //!
-//! Runtime executes user code in sandboxed **V8** (Deno) or **WASM** (Wasmtime) isolates.
-//! It **never touches Postgres directly**. All state access goes through the `ctx` object
-//! which proxies to other services:
+//! Flux is `node` but written in Rust. User runs their existing JS/TS code unchanged:
 //!
-//! - `ctx.db.*`       → POST data-engine `/db/query`
-//! - `ctx.queue.*`    → POST queue service `/jobs`
-//! - `ctx.secrets.*`  → `ApiDispatch::get_secrets` (with LRU cache)
-//! - `ctx.log()`      → `ApiDispatch::write_log` → `flux.platform_logs` (fire-and-forget)
+//! ```bash
+//! flux serve index.js
+//! ```
 //!
-//! ## Execution paths
+//! Flux boots a V8 isolate, loads the file, and runs it exactly like Node would —
+//! except Flux **owns every IO primitive in Rust**. `fetch()` is a Rust function.
+//! The DB client is a Rust function. Every outbound call crosses from V8 into Rust
+//! before hitting the network.
+//!
+//! ## Checkpoint recording
+//!
+//! At every IO boundary crossing, Flux records a checkpoint:
+//! ```text
+//! call_index=0  fetch POST https://stripe.com  → recorded (request + response)
+//! call_index=1  db INSERT users               → recorded (query + result)
+//! call_index=2  fetch POST https://email.co   → recorded (request + response)
+//! ```
+//!
+//! This makes any execution fully replayable: re-run the same code, inject recorded
+//! responses by `call_index` instead of hitting the network.
+//!
+//! ## Execution path
 //!
 //! ```text
-//! POST /execute (HTTP)
+//! incoming HTTP request
 //!        ↓
-//! execute_handler
-//!  ├─ BundleResolver (warm WASM → warm Deno → cold fetch → inline from DB)
-//!  ├─ SecretsClient (LRU cache, 30 s TTL)
-//!  └─ ExecutionRunner::run()
-//!       ├─ schema validation (input JSON Schema, if configured)
-//!       ├─ TraceEmitter::post_lifecycle("start")
-//!       ├─ IsolatePool::execute()   (Deno) — warm V8 isolate, function affinity
-//!       │   OR WasmPool::execute()  (WASM) — Wasmtime AOT + fuel limit
-//!       └─ TraceEmitter::emit_logs()  — fire-and-forget ctx.log() + execution_end span
+//! create execution_record (status='running')
+//!        ↓
+//! IsolatePool::execute() — warm V8 isolate
+//!   fetch() → Rust op_http_fetch → record checkpoint → return response
+//!   db.*    → Rust op_db_*       → record checkpoint → return result
+//!        ↓
+//! update execution_record (status='ok'|'error', duration_ms)
 //! ```
 
 pub mod bundle;
+pub mod checkpoint;
+pub mod checkpoint_store;
 pub mod config;
 pub mod dispatch;
 pub mod engine;
@@ -39,3 +53,6 @@ pub mod trace;
 
 // Convenience re-exports at crate root.
 pub use state::AppState;
+pub use checkpoint::{
+    BoundaryType, CallIndex, Checkpoint, CheckpointStore, ExecutionContext, ExecutionMode,
+};

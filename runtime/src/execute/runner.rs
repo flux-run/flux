@@ -1,6 +1,6 @@
 //! ExecutionRunner — single-responsibility execution layer.
 //!
-//! Shared by all three bundle-resolution paths (warm WASM, warm Deno, cold).
+//! Shared by all bundle-resolution paths (warm Deno, cold).
 //!
 //! ## Execution pipeline
 //!
@@ -11,8 +11,7 @@
 //! 2. **`execution_start` span** — fire-and-forget via `TraceEmitter::post_lifecycle`
 //!    so the span appears in `flux trace` even if the function panics.
 //!
-//! 3. **Deno or WASM dispatch** — route to `IsolatePool::execute` (JS) or
-//!    `WasmPool::execute` (WASM) based on the bundle type resolved by `BundleResolver`.
+//! 3. **Deno dispatch** — route to `IsolatePool::execute` (JS/TS via V8).
 //!
 //! 4. **Log collection + `execution_end` span** — after the isolate returns,
 //!    `TraceEmitter::emit_logs` ships all `ctx.log()` lines and the final `execution_end`
@@ -27,11 +26,8 @@
 //! the span write is in flight.
 /// ExecutionRunner — single-responsibility execution layer.
 ///
-/// Shared by all three bundle-resolution paths (warm WASM, warm Deno, cold).
-/// Previously each path had identical copy-pasted code for:
-///   validate_schema → dispatch to pool → emit trace spans
-///
-/// Now it lives here exactly once.
+/// Shared by all bundle-resolution paths (warm Deno, cold).
+/// Handles: validate_schema → dispatch to pool → emit trace spans.
 use std::collections::HashMap;
 use std::time::Instant;
 use axum::http::StatusCode;
@@ -40,7 +36,6 @@ use serde_json::Value;
 
 use crate::engine::executor::{DbContext, ExecutionResult, PoolDispatchers, QueueContext};
 use crate::engine::pool::IsolatePool;
-use crate::engine::wasm_pool::WasmPool;
 use crate::execute::bundle::ResolvedBundle;
 use crate::execute::types::InvocationCtx;
 use crate::schema::cache::SchemaCache;
@@ -49,10 +44,8 @@ use crate::trace::emitter::TraceEmitter;
 
 pub struct ExecutionRunner<'a> {
     pub isolate_pool:     &'a IsolatePool,
-    pub wasm_pool:        &'a WasmPool,
     pub schema_cache:     &'a SchemaCache,
     pub http_client:      &'a reqwest::Client,
-    pub wasm_http_hosts:  Vec<String>,
     /// Postgres schema name for this project — forwarded into ctx.db.query().
     pub database:         String,
     pub dispatchers:      &'a PoolDispatchers,
@@ -88,13 +81,10 @@ impl<'a> ExecutionRunner<'a> {
         // ── execution_start span ──────────────────────────────────────────
         tracer.post_lifecycle("info", "execution_start".into(), "start", "started", None);
 
-        // ── dispatch to the right engine ──────────────────────────────────
+        // ── dispatch to Deno engine ───────────────────────────────────────
         let (result, duration_ms) = match bundle {
             ResolvedBundle::Deno { code } => {
                 self.run_deno(code, secrets, ctx, tracer, start).await
-            }
-            ResolvedBundle::Wasm { bytes } => {
-                self.run_wasm(bytes, secrets, ctx, tracer, start).await
             }
         };
 
@@ -147,36 +137,6 @@ impl<'a> ExecutionRunner<'a> {
             queue_ctx,
             db_ctx,
             Some(ctx.function_id.clone()),
-        ).await;
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        let execution = match result {
-            Ok(r) => r,
-            Err(e) => {
-                return (Err(self.execution_error(e, duration_ms, tracer)), duration_ms);
-            }
-        };
-        (Ok(execution), duration_ms)
-    }
-
-    async fn run_wasm(
-        &self,
-        bytes:   Vec<u8>,
-        secrets: HashMap<String, String>,
-        ctx:     &InvocationCtx,
-        tracer:  &TraceEmitter,
-        start:   Instant,
-    ) -> (Result<ExecutionResult, (StatusCode, Value)>, u64) {
-        let result = self.wasm_pool.execute(
-            ctx.function_id.clone(),
-            bytes,
-            secrets,
-            ctx.payload.clone(),
-            None,
-            self.wasm_http_hosts.clone(),
-            self.http_client.clone(),
-            self.database.clone(),
-            self.dispatchers.clone(),
         ).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -242,39 +202,22 @@ pub fn project_schema_name() -> String {
     String::new()
 }
 
-/// Return the list of hosts WASM functions may call via `flux.http_fetch`.
-///
-/// Configured via `WASM_HTTP_ALLOWED_HOSTS`:
-/// - Not set / empty  → deny all (safe default)
-/// - `"*"`            → allow all (dev/internal only)
-/// - Comma-separated  → e.g. `"api.example.com,hooks.slack.com"`
-pub fn allowed_wasm_http_hosts() -> Vec<String> {
-    std::env::var("WASM_HTTP_ALLOWED_HOSTS")
-        .unwrap_or_default()
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::time::Instant;
 
     use async_trait::async_trait;
     use axum::http::StatusCode;
     use serde_json::{json, Value};
-    use uuid::Uuid;
 
     use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch, ResolvedFunction};
     use crate::engine::executor::PoolDispatchers;
     use crate::engine::pool::IsolatePool;
-    use crate::engine::wasm_pool::WasmPool;
     use crate::execute::bundle::ResolvedBundle;
     use crate::execute::types::InvocationCtx;
     use crate::schema::cache::{FunctionSchema, SchemaCache};
@@ -345,17 +288,14 @@ mod tests {
 
     fn runner<'a>(
         isolate_pool: &'a IsolatePool,
-        wasm_pool:    &'a WasmPool,
         schema_cache: &'a SchemaCache,
         http_client:  &'a reqwest::Client,
         dispatchers:  &'a PoolDispatchers,
     ) -> ExecutionRunner<'a> {
         ExecutionRunner {
             isolate_pool,
-            wasm_pool,
             schema_cache,
             http_client,
-            wasm_http_hosts: vec![],
             database:        String::new(),
             dispatchers,
         }
@@ -366,31 +306,6 @@ mod tests {
     #[test]
     fn project_schema_name_returns_empty() {
         assert_eq!(project_schema_name(), "");
-    }
-
-    // ── allowed_wasm_http_hosts ───────────────────────────────────────────────
-
-    #[test]
-    fn wasm_http_hosts_unset_returns_empty() {
-        // Guard against env bleed from other tests.
-        unsafe { std::env::remove_var("WASM_HTTP_ALLOWED_HOSTS"); }
-        assert!(allowed_wasm_http_hosts().is_empty());
-    }
-
-    #[test]
-    fn wasm_http_hosts_parses_csv() {
-        unsafe { std::env::set_var("WASM_HTTP_ALLOWED_HOSTS", "api.example.com, hooks.slack.com , "); }
-        let hosts = allowed_wasm_http_hosts();
-        assert_eq!(hosts, vec!["api.example.com", "hooks.slack.com"]);
-        unsafe { std::env::remove_var("WASM_HTTP_ALLOWED_HOSTS"); }
-    }
-
-    #[test]
-    fn wasm_http_hosts_wildcard_passthrough() {
-        unsafe { std::env::set_var("WASM_HTTP_ALLOWED_HOSTS", "*"); }
-        let hosts = allowed_wasm_http_hosts();
-        assert_eq!(hosts, vec!["*"]);
-        unsafe { std::env::remove_var("WASM_HTTP_ALLOWED_HOSTS"); }
     }
 
     // ── Schema validation (run() short-circuits before pool is touched) ───────
@@ -409,9 +324,8 @@ mod tests {
 
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
-        let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
+        let r = runner(&isolate_pool, &schema_cache, &client, &dispatchers);
 
         let mut c = ctx("validate_fn");
         c.payload = json!({"wrong_key": 123}); // missing required "user_id"
@@ -436,9 +350,8 @@ mod tests {
         let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
-        let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
+        let r = runner(&isolate_pool, &schema_cache, &client, &dispatchers);
 
         let (status, _body) = r.run(
             ResolvedBundle::Deno { code: "throw new Error('boom')".into() },
@@ -462,9 +375,8 @@ mod tests {
         let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
-        let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
+        let r = runner(&isolate_pool, &schema_cache, &client, &dispatchers);
 
         // Code that throws a structured JSON error.
         let code = r#"__flux_fn = async (ctx) => {
@@ -493,9 +405,8 @@ mod tests {
         let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
-        let wasm_pool    = WasmPool::new(1, 1_000_000, 5);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
+        let r = runner(&isolate_pool, &schema_cache, &client, &dispatchers);
 
         // Code that throws INPUT_VALIDATION_ERROR — runner must map it to 400.
         let code = r#"__flux_fn = async (ctx) => {
@@ -523,9 +434,8 @@ mod tests {
         let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 10, dispatchers.clone());
-        let wasm_pool    = WasmPool::new(1, 1_000_000, 10);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
+        let r = runner(&isolate_pool, &schema_cache, &client, &dispatchers);
 
         let code = r#"__flux_fn = async (ctx) => ({ ok: true, echo: ctx.payload.name });"#.to_string();
 
@@ -549,9 +459,8 @@ mod tests {
         let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 10, dispatchers.clone());
-        let wasm_pool    = WasmPool::new(1, 1_000_000, 10);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
+        let r = runner(&isolate_pool, &schema_cache, &client, &dispatchers);
 
         let (status, body) = r.run(
             ResolvedBundle::Deno { code: r#"__flux_fn = async (ctx) => 42;"#.into() },
@@ -574,9 +483,8 @@ mod tests {
         let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 10, dispatchers.clone());
-        let wasm_pool    = WasmPool::new(1, 1_000_000, 10);
         let client = reqwest::Client::new();
-        let r = runner(&isolate_pool, &wasm_pool, &schema_cache, &client, &dispatchers);
+        let r = runner(&isolate_pool, &schema_cache, &client, &dispatchers);
 
         let resp = r.run_response(
             ResolvedBundle::Deno { code: r#"__flux_fn = async (ctx) => ({ v: 1 });"#.into() },

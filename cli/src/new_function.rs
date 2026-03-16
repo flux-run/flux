@@ -6,16 +6,9 @@
 //! All scaffold file contents have `{name}` / `{Name}` as the function name placeholder,
 //! substituted at runtime.
 //!
-//! Supported languages — pinned versions:
-//!   typescript    Deno 2.3 (V8 native)
-//!   javascript    Node.js 22 LTS
-//!   python        3.12 (Pyodide WASM)
-//!   go            1.24 (TinyGo WASM)
-//!   java          21 LTS / Gradle 8.10 (TeaVM WASM)
-//!   php           PHP 8.3 / Emscripten 3.1 WASM
-//!   rust          1.87.0 / edition 2021 (wasm32-wasi)
-//!   csharp        .NET 9 (dotnet-wasi-sdk WASM)
-//!   ruby          3.3 (ruby.wasm)
+//! Supported languages:
+//!   typescript    Deno V8 (JS/TS native)
+//!   javascript    Deno V8 (JS/TS native)
 
 use std::path::Path;
 
@@ -25,15 +18,8 @@ use colored::Colorize;
 // ── Pinned language versions (shown in `flux function create --help`) ──────────
 
 pub const VERSIONS: &[(&str, &str)] = &[
-    ("typescript", "Deno 2.3 (V8 native)"),
-    ("javascript", "Node.js 22 LTS"),
-    ("python",     "3.12 / Pyodide WASM"),
-    ("go",         "1.24 / TinyGo WASM"),
-    ("java",       "21 LTS / TeaVM WASM / Gradle 8.10"),
-    ("php",        "PHP 8.3 / Emscripten 3.1 WASM"),
-    ("rust",       "1.87.0 / wasm32-wasi / edition 2021"),
-    ("csharp",     ".NET 9 / dotnet-wasi-sdk WASM"),
-    ("ruby",       "3.3 / ruby.wasm"),
+    ("typescript", "Deno V8 (JS/TS native)"),
+    ("javascript", "Deno V8 (JS/TS native)"),
 ];
 
 // ── Supported languages ───────────────────────────────────────────────────────
@@ -41,13 +27,6 @@ pub const VERSIONS: &[(&str, &str)] = &[
 const LANGUAGES: &[(&str, &[&str])] = &[
     ("typescript", &["ts", "deno"]),
     ("javascript", &["js", "node"]),
-    ("python",     &["py"]),
-    ("go",         &["golang"]),
-    ("java",       &[]),
-    ("php",        &[]),
-    ("rust",       &["rs"]),
-    ("csharp",     &["cs", "c#", "dotnet"]),
-    ("ruby",       &["rb"]),
 ];
 
 fn resolve_language(input: &str) -> anyhow::Result<&'static str> {
@@ -80,42 +59,6 @@ fn scaffold_files(lang: &str) -> Vec<(&'static str, &'static str)> {
             ("index.js",      include_str!("../../scaffolds/functions/javascript/index.js")),
             ("flux.json",     include_str!("../../scaffolds/functions/javascript/flux.json")),
             ("package.json",  include_str!("../../scaffolds/functions/javascript/package.json")),
-        ],
-        "python" => vec![
-            ("handler.py",       include_str!("../../scaffolds/functions/python/handler.py")),
-            ("requirements.txt", include_str!("../../scaffolds/functions/python/requirements.txt")),
-            ("flux.json",        include_str!("../../scaffolds/functions/python/flux.json")),
-        ],
-        "go" => vec![
-            ("main.go",   include_str!("../../scaffolds/functions/go/main.go")),
-            ("go.mod",    include_str!("../../scaffolds/functions/go/go.mod")),
-            ("flux.json", include_str!("../../scaffolds/functions/go/flux.json")),
-        ],
-        "java" => vec![
-            ("Handler.java",    include_str!("../../scaffolds/functions/java/Handler.java")),
-            ("build.gradle",    include_str!("../../scaffolds/functions/java/build.gradle")),
-            ("settings.gradle", include_str!("../../scaffolds/functions/java/settings.gradle")),
-            ("flux.json",       include_str!("../../scaffolds/functions/java/flux.json")),
-        ],
-        "php" => vec![
-            ("handler.php", include_str!("../../scaffolds/functions/php/handler.php")),
-            ("Makefile",    include_str!("../../scaffolds/functions/php/Makefile")),
-            ("flux.json",   include_str!("../../scaffolds/functions/php/flux.json")),
-        ],
-        "rust" => vec![
-            ("src/lib.rs",  include_str!("../../scaffolds/functions/rust/src/lib.rs")),
-            ("Cargo.toml",  include_str!("../../scaffolds/functions/rust/Cargo.toml")),
-            ("flux.json",   include_str!("../../scaffolds/functions/rust/flux.json")),
-        ],
-        "csharp" => vec![
-            ("Handler.cs",     include_str!("../../scaffolds/functions/csharp/Handler.cs")),
-            ("Handler.csproj", include_str!("../../scaffolds/functions/csharp/Handler.csproj")),
-            ("flux.json",      include_str!("../../scaffolds/functions/csharp/flux.json")),
-        ],
-        "ruby" => vec![
-            ("handler.rb", include_str!("../../scaffolds/functions/ruby/handler.rb")),
-            ("Gemfile",    include_str!("../../scaffolds/functions/ruby/Gemfile")),
-            ("flux.json",  include_str!("../../scaffolds/functions/ruby/flux.json")),
         ],
         _ => vec![],
     }
