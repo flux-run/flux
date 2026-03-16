@@ -4,6 +4,7 @@ package flux.internal.v1;
 
 service InternalAuthService {
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
 }
 
 message ValidateTokenRequest {}
@@ -11,4 +12,19 @@ message ValidateTokenRequest {}
 message ValidateTokenResponse {
   bool ok = 1;
   string auth_mode = 2;
+}
+
+message ListLogsRequest {
+  uint32 limit = 1;
+}
+
+message ListLogsResponse {
+  repeated LogEntry logs = 1;
+}
+
+message LogEntry {
+  string request_id = 1;
+  string code_version = 2;
+  string status = 3;
+  string timestamp = 4;
 }

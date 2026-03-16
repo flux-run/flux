@@ -43,7 +43,8 @@ fi
 TMP_DIR="$(mktemp -d)"
 SERVER_LOG="${TMP_DIR}/server.log"
 GOOD_AUTH_OUT="${TMP_DIR}/good_auth.out"
-BAD_AUTH_OUT="${TMP_DIR}/bad_auth.out"
+GOOD_LOGS_OUT="${TMP_DIR}/good_logs.out"
+BAD_LOGS_OUT="${TMP_DIR}/bad_logs.out"
 SERVE_OUT="${TMP_DIR}/serve.out"
 ENTRY_FILE="${TMP_DIR}/hello.js"
 SERVER_PID=""
@@ -115,21 +116,34 @@ else
   fail "auth command failed with valid token"
 fi
 
+echo "[info] Saving config values"
+cargo run -p cli -- config set token "${TOKEN}" >/dev/null 2>&1 || fail "failed to save token config"
+cargo run -p cli -- config set server "${URL}" >/dev/null 2>&1 || fail "failed to save server config"
+pass "config set token/server"
+
+echo "[info] Verifying logs with good token"
+if cargo run -p cli -- logs >"${GOOD_LOGS_OUT}" 2>&1; then
+  pass "logs command works with valid auth"
+else
+  cat "${GOOD_LOGS_OUT}" || true
+  fail "logs command failed with valid token"
+fi
+
 echo "[info] Verifying invalid token"
 set +e
-cargo run -p cli -- auth --url "${URL}" --token "bad_token_for_smoke" >"${BAD_AUTH_OUT}" 2>&1
+cargo run -p cli -- logs --token "bad_token_for_smoke" --url "${URL}" >"${BAD_LOGS_OUT}" 2>&1
 BAD_RC=$?
 set -e
 
 if [[ "${BAD_RC}" -eq 0 ]]; then
-  cat "${BAD_AUTH_OUT}" || true
+  cat "${BAD_LOGS_OUT}" || true
   fail "bad token unexpectedly accepted"
 fi
 
-if grep -Eqi "unauthenticated|rejected|invalid service token" "${BAD_AUTH_OUT}"; then
+if grep -Eqi "unauthenticated|rejected|invalid service token" "${BAD_LOGS_OUT}"; then
   pass "bad token rejected"
 else
-  cat "${BAD_AUTH_OUT}" || true
+  cat "${BAD_LOGS_OUT}" || true
   fail "bad token failed, but not with expected auth error"
 fi
 

@@ -2,7 +2,9 @@ use clap::{Parser, Subcommand};
 
 mod auth;
 mod config;
+mod config_cmd;
 mod grpc;
+mod logs;
 mod serve;
 mod server;
 
@@ -19,6 +21,13 @@ struct Cli {
 enum Commands {
     /// Save and verify runtime auth against a Flux server.
     Auth(auth::AuthArgs),
+    /// Manage local Flux CLI config values.
+    Config {
+        #[command(subcommand)]
+        command: config_cmd::ConfigCommand,
+    },
+    /// List recorded execution logs.
+    Logs(logs::LogsArgs),
     /// Prepare a JS/TS entry file for runtime execution.
     Serve(serve::ServeArgs),
     /// Manage the Flux server process.
@@ -34,6 +43,8 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Auth(args) => auth::execute(args).await?,
+        Commands::Config { command } => config_cmd::execute(command)?,
+        Commands::Logs(args) => logs::execute(args).await?,
         Commands::Serve(args) => serve::execute(args).await?,
         Commands::Server { command } => server::execute(command).await?,
     }

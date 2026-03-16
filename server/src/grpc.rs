@@ -47,16 +47,12 @@ impl InternalAuthGrpc {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
     }
-}
 
-#[tonic::async_trait]
-impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc {
-    async fn validate_token(
+    async fn authenticate(
         &self,
-        request: Request<pb::ValidateTokenRequest>,
-    ) -> Result<Response<pb::ValidateTokenResponse>, Status> {
-        let provided_token = Self::read_bearer_token(request.metadata())
-            .unwrap_or_default();
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<String, Status> {
+        let provided_token = Self::read_bearer_token(metadata).unwrap_or_default();
 
         if provided_token.is_empty() {
             return Err(Status::unauthenticated("missing authorization bearer token"));
@@ -69,10 +65,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 .into();
 
             if env_match {
-                return Ok(Response::new(pb::ValidateTokenResponse {
-                    ok: true,
-                    auth_mode: "env".to_string(),
-                }));
+                return Ok("env".to_string());
             }
         }
 
@@ -96,13 +89,35 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 .await;
             });
 
-            return Ok(Response::new(pb::ValidateTokenResponse {
-                ok: true,
-                auth_mode: "db".to_string(),
-            }));
+            return Ok("db".to_string());
         }
 
         Err(Status::unauthenticated("invalid service token"))
+    }
+}
+
+#[tonic::async_trait]
+impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc {
+    async fn validate_token(
+        &self,
+        request: Request<pb::ValidateTokenRequest>,
+    ) -> Result<Response<pb::ValidateTokenResponse>, Status> {
+        let auth_mode = self.authenticate(request.metadata()).await?;
+
+        Ok(Response::new(pb::ValidateTokenResponse {
+            ok: true,
+            auth_mode,
+        }))
+    }
+
+    async fn list_logs(
+        &self,
+        request: Request<pb::ListLogsRequest>,
+    ) -> Result<Response<pb::ListLogsResponse>, Status> {
+        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let _limit = request.into_inner().limit;
+
+        Ok(Response::new(pb::ListLogsResponse { logs: vec![] }))
     }
 }
 
