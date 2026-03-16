@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use deno_ast::{EmitOptions, MediaType, ParseParams, TranspileModuleOptions, TranspileOptions};
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -161,100 +160,35 @@ fn extension(path: &Path) -> Option<String> {
 }
 
 fn transpile_typescript(entry: &Path) -> Result<String> {
-    let temp_root = std::env::temp_dir().join(format!(
-        "flux-ts-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&temp_root)
-        .with_context(|| format!("failed to create {}", temp_root.display()))?;
+    let source = std::fs::read_to_string(entry)
+        .with_context(|| format!("failed to read {}", entry.display()))?;
 
-    let attempts: [(&str, &[&str]); 3] = [
-        (
-            "npx",
-            &[
-                "--yes",
-                "tsc",
-                "--pretty",
-                "false",
-                "--target",
-                "es2022",
-                "--module",
-                "es2022",
-                "--outDir",
-            ],
-        ),
-        (
-            "bunx",
-            &[
-                "tsc",
-                "--pretty",
-                "false",
-                "--target",
-                "es2022",
-                "--module",
-                "es2022",
-                "--outDir",
-            ],
-        ),
-        (
-            "tsc",
-            &[
-                "--pretty",
-                "false",
-                "--target",
-                "es2022",
-                "--module",
-                "es2022",
-                "--outDir",
-            ],
-        ),
-    ];
+    let media_type = match extension(entry).as_deref() {
+        Some("tsx") => MediaType::Tsx,
+        _           => MediaType::TypeScript,
+    };
 
-    let mut last_error = String::new();
-    for (bin, prefix_args) in attempts {
-        let mut command = Command::new(bin);
-        command.args(prefix_args);
-        command.arg(&temp_root);
-        command.arg(entry);
+    // Build a file:// specifier so SWC has a meaningful path in diagnostics.
+    let specifier = url::Url::from_file_path(entry)
+        .unwrap_or_else(|_| url::Url::parse("file:///input.ts").unwrap());
 
-        match command.output() {
-            Ok(output) if output.status.success() => {
-                let js_path = temp_root.join(
-                    entry
-                        .file_stem()
-                        .and_then(|v| v.to_str())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "invalid TypeScript file name: {}",
-                                entry.display()
-                            )
-                        })?
-                        .to_string()
-                        + ".js",
-                );
-                let code = std::fs::read_to_string(&js_path).with_context(|| {
-                    format!("failed to read transpiled output {}", js_path.display())
-                })?;
-                let _ = std::fs::remove_dir_all(&temp_root);
-                return Ok(code);
-            }
-            Ok(output) => {
-                last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            }
-            Err(err) => {
-                last_error = err.to_string();
-            }
-        }
-    }
+    let parsed = deno_ast::parse_module(ParseParams {
+        specifier,
+        text: source.into(),
+        media_type,
+        capture_tokens: false,
+        scope_analysis: false,
+        maybe_syntax: None,
+    })
+    .with_context(|| format!("failed to parse {}", entry.display()))?;
 
-    let _ = std::fs::remove_dir_all(&temp_root);
-    bail!(
-        "failed to transpile TypeScript {}; tried npx, bunx, and tsc: {}",
-        entry.display(),
-        last_error
-    )
+    let result = parsed
+        .transpile(
+            &TranspileOptions::default(),
+            &TranspileModuleOptions::default(),
+            &EmitOptions::default(),
+        )
+        .with_context(|| format!("failed to transpile {}", entry.display()))?;
+
+    Ok(result.into_source().text)
 }
