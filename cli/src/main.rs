@@ -6,6 +6,7 @@ mod config_cmd;
 mod grpc;
 mod logs;
 mod replay;
+mod resume;
 mod serve;
 mod server;
 mod tail;
@@ -36,6 +37,8 @@ enum Commands {
     Trace(trace::TraceArgs),
     /// Replay an execution using recorded checkpoints.
     Replay(replay::ReplayArgs),
+    /// Resume an execution from a checkpoint boundary.
+    Resume(resume::ResumeArgs),
     /// Explain why an execution failed or was slow.
     Why(why::WhyArgs),
     /// Stream live execution events.
@@ -59,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Logs(args) => logs::execute(args).await?,
         Commands::Trace(args) => trace::execute(args).await?,
         Commands::Replay(args) => replay::execute(args).await?,
+        Commands::Resume(args) => resume::execute(args).await?,
         Commands::Why(args) => why::execute(args).await?,
         Commands::Tail(args) => tail::execute(args).await?,
         Commands::Serve(args) => serve::execute(args).await?,

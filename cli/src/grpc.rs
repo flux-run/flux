@@ -61,6 +61,17 @@ pub struct ReplayView {
     pub steps: Vec<ReplayStepView>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResumeView {
+    pub execution_id: String,
+    pub status: String,
+    pub output: String,
+    pub error: String,
+    pub duration_ms: i32,
+    pub from_index: i32,
+    pub steps: Vec<ReplayStepView>,
+}
+
 pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
@@ -251,6 +262,54 @@ pub async fn replay(
         output: response.output,
         error: response.error,
         duration_ms: response.duration_ms,
+        steps: response
+            .steps
+            .into_iter()
+            .map(|step| ReplayStepView {
+                call_index: step.call_index,
+                boundary: step.boundary,
+                url: step.url,
+                used_recorded: step.used_recorded,
+                duration_ms: step.duration_ms,
+            })
+            .collect(),
+    })
+}
+
+pub async fn resume(
+    url: &str,
+    token: &str,
+    execution_id: &str,
+    from_index: Option<i32>,
+) -> Result<ResumeView> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+        .await
+        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+
+    let mut request = Request::new(pb::ResumeRequest {
+        execution_id: execution_id.to_string(),
+        from_index: from_index.unwrap_or(-1),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .resume(request)
+        .await
+        .context("resume request failed")?
+        .into_inner();
+
+    Ok(ResumeView {
+        execution_id: response.execution_id,
+        status: response.status,
+        output: response.output,
+        error: response.error,
+        duration_ms: response.duration_ms,
+        from_index: response.from_index,
         steps: response
             .steps
             .into_iter()

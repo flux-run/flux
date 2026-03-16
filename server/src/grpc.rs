@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
+use std::collections::HashMap;
 
+use reqwest::Client;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgListener};
 use subtle::ConstantTimeEq;
@@ -239,6 +241,72 @@ fn analyze_execution(exec: &WhyExecution, checkpoints: &[WhyCheckpoint]) -> (Str
         ),
         String::new(),
     )
+}
+
+async fn perform_live_http_call(request: &serde_json::Value) -> Result<(serde_json::Value, i32), Status> {
+    let url = request
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if url.is_empty() {
+        return Err(Status::invalid_argument("resume: checkpoint request missing url"));
+    }
+
+    let method = request
+        .get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("GET")
+        .parse::<reqwest::Method>()
+        .map_err(|e| Status::invalid_argument(format!("resume: invalid method: {e}")))?;
+
+    let client = Client::new();
+    let mut req = client.request(method, url);
+
+    if let Some(headers_val) = request.get("headers") {
+        if !headers_val.is_null() {
+            let map: HashMap<String, String> = serde_json::from_value(headers_val.clone())
+                .map_err(|e| Status::invalid_argument(format!("resume: invalid headers: {e}")))?;
+            for (k, v) in map {
+                req = req.header(k, v);
+            }
+        }
+    }
+
+    if let Some(body_val) = request.get("body") {
+        if !body_val.is_null() {
+            req = req.json(body_val);
+        }
+    }
+
+    let started = std::time::Instant::now();
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| Status::internal(format!("resume: live HTTP call failed: {e}")))?;
+    let duration_ms = started.elapsed().as_millis() as i32;
+
+    let status = resp.status().as_u16();
+    let headers = resp
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or_default().to_string()))
+        .collect::<HashMap<_, _>>();
+
+    let body_text = resp
+        .text()
+        .await
+        .map_err(|e| Status::internal(format!("resume: failed to read response body: {e}")))?;
+    let parsed_body = serde_json::from_str::<serde_json::Value>(&body_text)
+        .unwrap_or_else(|_| serde_json::Value::String(body_text));
+
+    Ok((
+        serde_json::json!({
+            "status": status,
+            "headers": headers,
+            "body": parsed_body,
+        }),
+        duration_ms,
+    ))
 }
 
 #[tonic::async_trait]
@@ -734,6 +802,208 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             output,
             error: replay_error,
             duration_ms,
+            steps,
+        }))
+    }
+
+    async fn resume(
+        &self,
+        request: Request<pb::ResumeRequest>,
+    ) -> Result<Response<pb::ResumeResponse>, Status> {
+        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+
+        let source_execution_id = uuid::Uuid::parse_str(&req.execution_id)
+            .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
+
+        let source_execution: Option<(
+            String,
+            String,
+            serde_json::Value,
+            String,
+        )> = sqlx::query_as(
+            "SELECT method, path, request, code_sha
+             FROM flux.executions
+             WHERE id = $1",
+        )
+        .bind(source_execution_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch source execution: {e}")))?;
+
+        let (method, path, source_request_json, code_sha) =
+            source_execution.ok_or_else(|| Status::not_found("execution not found"))?;
+
+        let checkpoint_rows: Vec<(
+            i32,
+            String,
+            Option<String>,
+            Option<String>,
+            serde_json::Value,
+            serde_json::Value,
+            i32,
+        )> = sqlx::query_as(
+            "SELECT call_index, boundary, url, method, request, response, duration_ms
+             FROM flux.checkpoints
+             WHERE execution_id = $1
+             ORDER BY call_index ASC",
+        )
+        .bind(source_execution_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
+
+        if checkpoint_rows.is_empty() {
+            return Err(Status::failed_precondition("resume requires at least one checkpoint"));
+        }
+
+        let inferred_from_index = checkpoint_rows
+            .iter()
+            .map(|(call_index, _, _, _, _, _, _)| *call_index)
+            .max()
+            .unwrap_or(0);
+        let from_index = if req.from_index < 0 {
+            inferred_from_index
+        } else {
+            req.from_index.max(0)
+        };
+
+        let resume_execution_id = uuid::Uuid::new_v4();
+        let resume_request_id = uuid::Uuid::new_v4();
+
+        let mut steps = Vec::with_capacity(checkpoint_rows.len());
+        let mut total_duration_ms = 0i32;
+        let mut final_status = "ok".to_string();
+        let mut final_error = String::new();
+        let mut final_output = serde_json::Value::Null;
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Status::internal(format!("failed to begin resume transaction: {e}")))?;
+
+        for (call_index, boundary, url, cp_method, request_json, response_json, _duration_ms) in checkpoint_rows {
+            let step_url = url.unwrap_or_else(|| {
+                request_json
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string()
+            });
+
+            let step_method = cp_method.or_else(|| {
+                request_json
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string())
+            });
+
+            if call_index < from_index || boundary != "http" {
+                sqlx::query(
+                    "INSERT INTO flux.checkpoints
+                     (execution_id, call_index, boundary, url, method, request, response, duration_ms)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                )
+                .bind(resume_execution_id)
+                .bind(call_index)
+                .bind(boundary.clone())
+                .bind(step_url.clone())
+                .bind(step_method)
+                .bind(request_json)
+                .bind(response_json)
+                .bind(0i32)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Status::internal(format!("failed to persist recorded resume checkpoint: {e}")))?;
+
+                steps.push(pb::ReplayStep {
+                    call_index,
+                    boundary,
+                    url: step_url,
+                    used_recorded: true,
+                    duration_ms: 0,
+                });
+
+                continue;
+            }
+
+            let (live_response, duration_ms) = perform_live_http_call(&request_json).await?;
+            total_duration_ms += duration_ms;
+
+            sqlx::query(
+                "INSERT INTO flux.checkpoints
+                 (execution_id, call_index, boundary, url, method, request, response, duration_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(resume_execution_id)
+            .bind(call_index)
+            .bind(boundary.clone())
+            .bind(step_url.clone())
+            .bind(step_method)
+            .bind(request_json)
+            .bind(live_response.clone())
+            .bind(duration_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(format!("failed to persist live resume checkpoint: {e}")))?;
+
+            steps.push(pb::ReplayStep {
+                call_index,
+                boundary,
+                url: step_url,
+                used_recorded: false,
+                duration_ms,
+            });
+
+            final_output = live_response
+                .get("body")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            let status_code = live_response
+                .get("status")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            if status_code >= 400 || status_code == 0 {
+                final_status = "error".to_string();
+                final_error = format!("external service returned {}", status_code);
+                break;
+            }
+        }
+
+        let output_json = serde_json::to_string(&final_output).unwrap_or_else(|_| "null".to_string());
+
+        sqlx::query(
+            "INSERT INTO flux.executions
+             (id, request_id, method, path, status, request, response, error, code_sha, duration_ms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10)",
+        )
+        .bind(resume_execution_id)
+        .bind(resume_request_id)
+        .bind(method)
+        .bind(path)
+        .bind(final_status.clone())
+        .bind(source_request_json)
+        .bind(final_output)
+        .bind(final_error.clone())
+        .bind(code_sha)
+        .bind(total_duration_ms)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(format!("failed to persist resume execution: {e}")))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| Status::internal(format!("failed to commit resume execution: {e}")))?;
+
+        Ok(Response::new(pb::ResumeResponse {
+            execution_id: resume_execution_id.to_string(),
+            status: final_status,
+            output: output_json,
+            error: final_error,
+            duration_ms: total_duration_ms,
+            from_index,
             steps,
         }))
     }
