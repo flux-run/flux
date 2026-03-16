@@ -65,6 +65,7 @@ pub struct LogEntry {
     pub source:      Option<String>,
     pub resource_id: Option<String>,
     pub request_id:  Option<String>,
+    pub project_id:  Option<String>,
     pub metadata:    Option<serde_json::Value>,
     /// Trace span classification: start | end | error | event (default)
     pub span_type:   Option<String>,
@@ -85,6 +86,7 @@ pub async fn create_log(
 
     let level  = entry.level.as_deref().unwrap_or("info");
     let source = entry.source.as_deref().unwrap_or("function");
+    let project_id = entry.project_id.as_deref().unwrap_or("default");
 
     // ── Resolve resource_id ───────────────────────────────────────────────
     let resource_id = if let Some(rid) = entry.resource_id.clone().filter(|s| !s.is_empty()) {
@@ -109,11 +111,11 @@ pub async fn create_log(
 
     sqlx::query(
         "INSERT INTO flux.platform_logs \
-         (source, resource_id, level, message, request_id, metadata, span_type) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            (source, resource_id, level, message, project_id, request_id, metadata, span_type) \
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(source).bind(&resource_id)
-    .bind(level).bind(&entry.message).bind(&entry.request_id).bind(&entry.metadata)
+        .bind(level).bind(&entry.message).bind(project_id).bind(&entry.request_id).bind(&entry.metadata)
     .bind(&entry.span_type)
     .execute(&pool).await.map_err(|_| db_err())?;
 
@@ -181,6 +183,7 @@ pub async fn list_logs(
 
 #[derive(Deserialize)]
 pub struct ProjectLogQuery {
+    pub project:  Option<String>,
     pub source:   Option<String>,
     pub resource: Option<String>,
     pub function: Option<String>,  // legacy alias
@@ -196,6 +199,7 @@ pub async fn list_project_logs(
 ) -> ApiResult<serde_json::Value> {
     let pool       = &state.pool;
     let limit      = params.limit.unwrap_or(100).min(1_000);
+    let project_id = params.project.as_deref().unwrap_or("default");
 
     // Backward compat: ?function=echo → source=function, resource=echo.
     let source   = params.source.as_deref()
@@ -228,6 +232,8 @@ pub async fn list_project_logs(
     if source.is_some()   { conditions.push(format!("l.source = ${bind_idx}"));      bind_idx += 1; }
     if resource.is_some() { conditions.push(format!("l.resource_id = ${bind_idx}")); bind_idx += 1; }
     if level.is_some()    { conditions.push(format!("l.level = ${bind_idx}"));        bind_idx += 1; }
+    conditions.push(format!("l.project_id = ${bind_idx}"));
+    bind_idx += 1;
 
     let (time_cond, time_order) = match since {
         Some(_) => (format!("l.timestamp > ${bind_idx}"), "ASC"),
@@ -254,6 +260,7 @@ pub async fn list_project_logs(
     if let Some(s)  = source   { q = q.bind(s); }
     if let Some(r)  = resource { q = q.bind(r); }
     if let Some(l)  = level    { q = q.bind(l); }
+    q = q.bind(project_id);
     if let Some(ts) = since    { q = q.bind(ts); }
     q = q.bind(limit);
 
@@ -290,6 +297,7 @@ pub async fn list_project_logs(
 
 #[derive(Deserialize)]
 pub struct TraceQuery {
+    pub project: Option<String>,
     pub slow_ms: Option<i64>,
 }
 
@@ -301,6 +309,7 @@ pub async fn get_trace(
 ) -> ApiResult<serde_json::Value> {
     let pool        = &state.pool;
     let slow_thresh = params.slow_ms.unwrap_or(500);   // 500ms default
+    let project_id  = params.project.as_deref().unwrap_or("default");
 
     #[derive(sqlx::FromRow)]
     struct TraceRow {
@@ -318,10 +327,11 @@ pub async fn get_trace(
         "SELECT l.id, l.source, l.resource_id, l.level, l.message, \
                 l.span_type, l.metadata, l.timestamp \
          FROM flux.platform_logs l \
-         WHERE l.request_id = $1 \
+            WHERE l.request_id = $1 AND l.project_id = $2 \
          ORDER BY l.timestamp ASC",
     )
     .bind(&request_id)
+        .bind(project_id)
     .fetch_all(pool)
     .await
     .map_err(|_| db_err())?;
@@ -489,6 +499,7 @@ pub async fn get_trace(
 
 #[derive(Deserialize)]
 pub struct ListTracesQuery {
+    pub project: Option<String>,
     pub before:  Option<String>,
     pub since:   Option<String>,
     pub exclude: Option<String>,
@@ -503,6 +514,7 @@ pub async fn list_traces(
     let pool       = &state.pool;
     let limit      = params.limit.unwrap_or(5).min(20);
     let exclude    = params.exclude.unwrap_or_default();
+    let project_id = params.project.unwrap_or_else(|| "default".to_string());
 
     // ── Step 1: find distinct request windows ─────────────────────────────────
     #[derive(sqlx::FromRow)]
@@ -522,12 +534,13 @@ pub async fn list_traces(
             "SELECT request_id, MIN(timestamp) AS started_at, MAX(timestamp) AS ended_at \
              FROM flux.platform_logs \
              WHERE request_id IS NOT NULL AND request_id != '' \
+                             AND project_id = $3 \
                AND timestamp > $1 \
              GROUP BY request_id \
              ORDER BY started_at ASC \
-             LIMIT $2",
+                         LIMIT $2",
         )
-        .bind(ts).bind(limit)
+                .bind(ts).bind(limit).bind(&project_id)
         .fetch_all(pool).await.map_err(|_| db_err())?
     } else {
         // Backward mode: why — requests whose first span started BEFORE before_ts
@@ -541,12 +554,13 @@ pub async fn list_traces(
              FROM flux.platform_logs \
              WHERE request_id IS NOT NULL AND request_id != '' \
                AND ($2 = '' OR request_id != $2) \
-               AND timestamp < $1 \
+                             AND timestamp < $1 \
+                             AND project_id = $4 \
              GROUP BY request_id \
              ORDER BY started_at DESC \
-             LIMIT $3",
+                         LIMIT $3",
         )
-        .bind(before_ts).bind(&exclude).bind(limit)
+                .bind(before_ts).bind(&exclude).bind(limit).bind(&project_id)
         .fetch_all(pool).await.map_err(|_| db_err())?
     };
 
@@ -661,6 +675,7 @@ pub async fn list_traces(
 
 #[derive(Deserialize)]
 pub struct NetworkCallEntry {
+    pub project_id:       Option<String>,
     pub request_id:       String,
     pub span_id:          Option<String>,
     pub call_seq:         Option<i32>,
@@ -682,14 +697,16 @@ pub async fn create_network_call(
     axum::Json(entry): axum::Json<NetworkCallEntry>,
 ) -> ApiResult<serde_json::Value> {
     validate_service_token(&headers)?;
+        let project_id = entry.project_id.as_deref().unwrap_or("default");
 
     sqlx::query(
         "INSERT INTO flux_internal.network_calls \
-         (request_id, span_id, call_seq, method, url, host, \
+            (project_id, request_id, span_id, call_seq, method, url, host, \
           request_headers, request_body, status, response_headers, response_body, \
-          duration_ms, error) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+            duration_ms, error) \
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
     )
+        .bind(project_id)
     .bind(&entry.request_id)
     .bind(&entry.span_id)
     .bind(entry.call_seq.unwrap_or(0))

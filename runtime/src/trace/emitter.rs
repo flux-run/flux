@@ -16,6 +16,7 @@ use crate::engine::executor::LogLine;
 pub struct TraceEmitter {
     api:            Arc<dyn ApiDispatch>,
     function_id:    Arc<String>,
+    project_id:     Arc<String>,
     request_id:     Arc<Option<String>>,
     parent_span_id: Option<String>,
     /// Short fingerprint of the JS/WASM bundle being executed — set after bundle resolve.
@@ -32,6 +33,7 @@ impl TraceEmitter {
         Self {
             api,
             function_id:   Arc::new(function_id),
+            project_id:    Arc::new(std::env::var("FLUX_PROJECT").unwrap_or_else(|_| "default".to_string())),
             request_id:    Arc::new(request_id),
             parent_span_id,
             code_sha:      None,
@@ -43,6 +45,7 @@ impl TraceEmitter {
         self.spawn_log(serde_json::json!({
             "source":      "runtime",
             "resource_id": &*self.function_id,
+            "project_id": &*self.project_id,
             "level":       level,
             "message":     message,
             "request_id":  &*self.request_id,
@@ -69,6 +72,7 @@ impl TraceEmitter {
         self.spawn_log(serde_json::json!({
             "source":           "runtime",
             "resource_id":      &*self.function_id,
+            "project_id":       &*self.project_id,
             "level":            level,
             "message":          message,
             "request_id":       &*self.request_id,
@@ -88,6 +92,7 @@ impl TraceEmitter {
     pub fn emit_logs(&self, logs: Vec<LogLine>, duration_ms: u64) {
         let api           = Arc::clone(&self.api);
         let function_id   = Arc::clone(&self.function_id);
+        let project_id    = Arc::clone(&self.project_id);
         let request_id    = Arc::clone(&self.request_id);
         let parent_span_id = self.parent_span_id.clone();
         let code_sha      = self.code_sha.clone();
@@ -100,6 +105,7 @@ impl TraceEmitter {
                 let payload: Value = serde_json::json!({
                     "source":           source,
                     "resource_id":      &*function_id,
+                    "project_id":       &*project_id,
                     "level":            log.level,
                     "message":          log.message,
                     "request_id":       &*request_id,
@@ -118,6 +124,7 @@ impl TraceEmitter {
             let end_payload: Value = serde_json::json!({
                 "source":           "runtime",
                 "resource_id":      &*function_id,
+                "project_id":       &*project_id,
                 "level":            "info",
                 "message":          format!("execution_end ({}ms)", duration_ms),
                 "request_id":       &*request_id,

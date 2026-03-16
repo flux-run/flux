@@ -138,7 +138,7 @@ pub async fn create_user(pool: &PgPool, req: CreateUserRequest) -> Result<Platfo
 
 pub async fn list_users(pool: &PgPool) -> Result<Vec<PlatformUser>, ApiError> {
     sqlx::query_as(
-        "SELECT id, username, email, password_hash, role, tenant_id, created_at
+        "SELECT id, username, email, password_hash, role, created_at
          FROM flux.platform_users ORDER BY created_at",
     )
     .fetch_all(pool)

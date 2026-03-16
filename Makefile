@@ -56,7 +56,7 @@ sqlx-prepare:
 	cd api && DATABASE_URL="$(DB_URL)" cargo sqlx prepare
 
 migrate:
-	sqlx migrate run --source schemas/api --ignore-missing
+	psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -f schemas/v0.1.sql
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 install:

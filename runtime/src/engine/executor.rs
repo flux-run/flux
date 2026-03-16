@@ -433,7 +433,9 @@ pub async fn op_http_fetch(
                 let host_c  = host.clone();
                 let err_c   = err_msg.clone();
                 tokio::task::spawn_local(async move {
+                    let project_id = std::env::var("FLUX_PROJECT").unwrap_or_else(|_| "default".to_string());
                     let call = serde_json::json!({
+                        "project_id": project_id,
                         "request_id": request_id,
                         "call_seq":   call_seq,
                         "method":     method_c,
@@ -498,7 +500,9 @@ pub async fn op_http_fetch(
             let method_clone       = method.clone();
             let host_clone         = host.clone();
             tokio::task::spawn_local(async move {
+                let project_id = std::env::var("FLUX_PROJECT").unwrap_or_else(|_| "default".to_string());
                 let call = serde_json::json!({
+                    "project_id":       project_id,
                     "request_id":       request_id,
                     "call_seq":         call_seq,
                     "method":           method_clone,
