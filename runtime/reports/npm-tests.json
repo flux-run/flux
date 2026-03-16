@@ -1,12 +1,12 @@
 {
   "suite": "NPM Ecosystem",
-  "timestamp": "2026-03-16T13:31:50.844Z",
+  "timestamp": "2026-03-16T13:35:48.135Z",
   "engine": "node v22.20.0",
   "passed": 68,
   "failed": 0,
   "skipped": 0,
   "total": 68,
-  "elapsedMs": 18,
+  "elapsedMs": 21,
   "passRate": "100.0%",
   "results": [
     {
@@ -31,7 +31,7 @@
       "name": "axios throws AxiosError on 4xx status",
       "passed": true,
       "skipped": false,
-      "duration": 7
+      "duration": 10
     },
     {
       "name": "request config merges headers correctly",

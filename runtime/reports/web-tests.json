@@ -1,0 +1,12 @@
+{
+  "suite": "Web Platform Tests (url · fetch · encoding)",
+  "timestamp": "2026-03-16T13:36:03.939Z",
+  "engine": "node v22.20.0",
+  "passed": 0,
+  "failed": 0,
+  "skipped": 0,
+  "total": 0,
+  "elapsedMs": 0,
+  "passRate": "N/A",
+  "results": []
+}

@@ -139,6 +139,67 @@ Exercises the ESM module system — patterns that break new runtimes.
 
 ---
 
+## Integration Tests (real binary)
+
+These tests compile the **actual `flux-runtime` Rust binary** and verify it end-to-end by sending real HTTP requests to running isolates. They are the only tests that exercise the full stack: Cargo build → binary start → Deno V8 isolate load → HTTP request/response.
+
+> **Why this matters:** the internal suites (trust / compat / replay / modules) run JavaScript assertions inside a Node.js process. They prove the JS logic is correct but never touch the Rust binary. Integration tests close that gap.
+
+### Quick start
+
+```bash
+# From runtime/tests/ (builds binary automatically if missing)
+npm run test:integration
+
+# Skip the cargo build step if the binary is already up-to-date
+npm run test:integration:skip-build
+
+# Or run directly from runtime/runners/
+cd runtime/runners
+npm run test:integration
+npm run test:integration:skip-build
+npm run test:integration -- --suite echo   # one suite only
+```
+
+### What it tests
+
+Each suite starts a `flux-runtime` process on a unique port (3100–3199), sends HTTP requests, asserts responses, then stops the process.
+
+| Suite | Handler | Checks |
+|-------|---------|--------|
+| `echo` | `echo.js` | Body reflection, field uppercasing, invalid-JSON 400 |
+| `json-types` | `json-types.js` | null, bool, int, float, string, array, nested object, UTF-8 |
+| `web-apis` | `web-apis.js` | `crypto.randomUUID`, `Date`, `URL`, `TextEncoder`, `btoa/atob`, `structuredClone` |
+| `async-ops` | `async-ops.js` | `await`, `Promise.all`, `Promise.race`, `setTimeout`, sequential pipeline |
+| `error-handling` | `error-handling.js` | 404/400/422 explicit responses, sync throw → 5xx, async reject → 5xx |
+
+Handler files live in `runtime/external-tests/flux-handlers/`. They use `Deno.serve(...)` so they are valid `flux-runtime --entry` targets.
+
+### Binary management
+
+`runtime/runners/lib/flux-binary.ts` is the helper that:
+- Locates the binary at `target/debug/flux-runtime` (or `target/release/` when `FLUX_RELEASE=1`)
+- Builds via `SQLX_OFFLINE=true cargo build -p runtime` when the binary is missing
+- Spawns the process with `--entry`, `--host`, `--port`, `--isolate-pool-size`
+- Polls the port every 100 ms until the isolate is ready (15 s timeout)
+- Kills the process after each suite (`SIGTERM → SIGKILL`)
+
+### Skipping the build
+
+If you have already built the binary (e.g. via `make build`), pass `--skip-build`:
+
+```bash
+npm run test:integration:skip-build
+```
+
+Set `FLUX_RELEASE=1` to test against the release binary:
+
+```bash
+FLUX_RELEASE=1 npm run test:integration:skip-build
+```
+
+---
+
 ## External & Ecosystem Compatibility
 
 These suites run official upstream test corpora against the same V8 engine. They live in `runtime/runners/` and require a one-time setup step.
@@ -201,6 +262,8 @@ npm run test:node-compat # → cd ../runners && npm run test:node
 npm run test:web-compat  # → cd ../runners && npm run test:web
 npm run test:report      # → cd ../runners && npm run report
 npm run test:compat-all  # → cd ../runners && npm run test:all
+npm run test:integration           # → cd ../runners && npm run test:integration
+npm run test:integration:skip-build # → cd ../runners && npm run test:integration:skip-build
 npm run setup:external   # → bash ../scripts/setup-external-tests.sh all
 ```
 

@@ -9,7 +9,10 @@
     "test:web":   "tsx run-web-tests.ts",
     "test:npm":   "tsx run-npm-tests.ts",
     "report":     "tsx generate-report.ts",
-    "test:all":   "npm run test:262 && npm run test:node && npm run test:web && npm run test:npm && npm run report",
+    "build:flux": "SQLX_OFFLINE=true cargo build -p runtime --manifest-path ../../Cargo.toml",
+    "test:integration": "tsx run-flux-integration.ts",
+    "test:integration:skip-build": "tsx run-flux-integration.ts --skip-build",
+    "test:all":   "npm run test:integration && npm run test:262 && npm run test:node && npm run test:web && npm run test:npm && npm run report",
     "setup":      "bash ../scripts/setup-external-tests.sh all"
   },
   "dependencies": {
