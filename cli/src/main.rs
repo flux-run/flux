@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod auth;
 mod config;
 mod config_cmd;
+mod exec;
 mod grpc;
 mod init;
 mod logs;
@@ -43,6 +44,8 @@ enum Commands {
     Ps,
     /// Show overall Flux health status.
     Status,
+    /// Run a one-off execution and record it.
+    Exec(exec::ExecArgs),
     /// Show execution trace with checkpoints.
     Trace(trace::TraceArgs),
     /// Replay an execution using recorded checkpoints.
@@ -73,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Logs(args) => logs::execute(args).await?,
         Commands::Ps => ps::execute().await?,
         Commands::Status => status::execute().await?,
+        Commands::Exec(args) => exec::execute(args).await?,
         Commands::Trace(args) => trace::execute(args).await?,
         Commands::Replay(args) => replay::execute(args).await?,
         Commands::Resume(args) => resume::execute(args).await?,
