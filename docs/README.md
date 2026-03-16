@@ -19,5 +19,5 @@ This documentation set is rebuilt for the current Flux CLI and runtime architect
 ## Examples
 
 - [examples/hello-http.md](examples/hello-http.md) — minimal request/trace loop
-- [examples/webhook-worker.md](examples/webhook-worker.md) — async intake + replay workflow
+- [examples/webhook-worker.md](examples/webhook-worker.md) — webhook intake + replay workflow
 - [examples/exec-smoke.md](examples/exec-smoke.md) — one-off local execution sanity check

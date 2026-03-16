@@ -31,18 +31,22 @@ flux resume <execution_id>
 flux resume <execution_id> --from 2
 ```
 
+Useful when you want to re-run only the steps after a known-good checkpoint.
+
 ## 5) One-Off Local Probe
 
 ```bash
 flux exec index.ts --payload '{"test":true}'
 ```
 
+Runs the function once, records the execution, then exits. Useful for verifying a fix without keeping the runtime running.
+
 ## Incident Outcome Standard
 
 A good incident workflow yields:
 
-- exact failing execution
+- exact failing execution ID
 - request/response visibility
 - call-level checkpoint trail
-- deterministic replay evidence
+- deterministic replay evidence showing the fix behaves differently
 - clear next action

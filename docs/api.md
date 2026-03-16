@@ -1,8 +1,8 @@
 # API
 
-Flux API is the operator-facing surface used by CLI workflows.
+Flux's operator-facing surface is a gRPC server (`flux-server`) that the CLI talks to for all commands.
 
-## Primary Uses
+## What It Handles
 
 - auth/token validation
 - execution list query (`flux logs`)
@@ -10,10 +10,11 @@ Flux API is the operator-facing surface used by CLI workflows.
 - diagnosis endpoint (`flux why`)
 - replay/resume operations (`flux replay`, `flux resume`)
 - live event streaming (`flux tail`)
+- recording new executions (written by `flux-runtime` after each request)
 
 ## Design Rule
 
-Operator traffic is separate from user request traffic:
+User request traffic and operator traffic are separate:
 
-- user calls hit runtime HTTP endpoints
-- operator commands hit server gRPC endpoints
+- user requests hit `flux-runtime` HTTP endpoints (port 3000)
+- operator commands hit `flux-server` gRPC endpoints (port 50051)
