@@ -44,6 +44,8 @@ POST http://127.0.0.1:3000/index
 target/debug/flux exec index.ts --payload '{"email":"user@example.com"}'
 ```
 
+For a focused smoke-test flow, see [examples/exec-smoke.md](examples/exec-smoke.md).
+
 ## 6) Inspect
 
 ```bash

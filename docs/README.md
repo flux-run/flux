@@ -15,3 +15,9 @@ This documentation set is rebuilt for the current Flux CLI and runtime architect
 - [single-binary-architecture.md](single-binary-architecture.md) — current three-binary model and responsibilities
 - [api.md](api.md) — operator API role
 - [api-reference.md](api-reference.md) — current exposed RPC/command mapping
+
+## Examples
+
+- [examples/hello-http.md](examples/hello-http.md) — minimal request/trace loop
+- [examples/webhook-worker.md](examples/webhook-worker.md) — async intake + replay workflow
+- [examples/exec-smoke.md](examples/exec-smoke.md) — one-off local execution sanity check
