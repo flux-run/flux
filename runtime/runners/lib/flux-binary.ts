@@ -1,12 +1,16 @@
 /**
  * lib/flux-binary.ts
  *
- * Helpers for finding, building, and lifecycle-managing the flux-runtime binary
+ * Helpers for finding, building, and lifecycle-managing the Flux CLI
  * during integration tests.
  *
- * The binary is expected at:
- *   <workspace>/target/debug/flux-runtime   (debug, default)
- *   <workspace>/target/release/flux-runtime (release, when FLUX_RELEASE=1)
+ * Tests use `flux serve --skip-verify <entry>` — the same command a developer
+ * runs locally — rather than calling flux-runtime directly.
+ *
+ * Binaries expected at:
+ *   <workspace>/target/debug/flux        (CLI, default)
+ *   <workspace>/target/debug/flux-runtime (started by `flux serve` internally)
+ *   <workspace>/target/release/…         (when FLUX_RELEASE=1)
  */
 
 import { spawnSync, spawn, ChildProcess } from "node:child_process";
@@ -24,27 +28,30 @@ const __dirname    = dirname(fileURLToPath(import.meta.url));
 /** Absolute path to the Cargo workspace root (two levels up from runners/lib). */
 export const WORKSPACE_ROOT = resolve(__dirname, "../../..");
 const PROFILE = process.env["FLUX_RELEASE"] === "1" ? "release" : "debug";
-/** Path to the compiled flux-runtime binary. */
+/** Path to the compiled flux CLI binary. */
+export const FLUX_CLI_BIN     = resolve(WORKSPACE_ROOT, "target", PROFILE, "flux");
+/** Path to the compiled flux-runtime binary (used by flux serve internally). */
 export const FLUX_RUNTIME_BIN = resolve(WORKSPACE_ROOT, "target", PROFILE, "flux-runtime");
 
 // ---------------------------------------------------------------------------
 // Build
 // ---------------------------------------------------------------------------
 
-/** Returns true if the binary already exists on disk. */
+/** Returns true if both the CLI and runtime binaries exist on disk. */
 export function binaryExists(): boolean {
-  return existsSync(FLUX_RUNTIME_BIN);
+  return existsSync(FLUX_CLI_BIN) && existsSync(FLUX_RUNTIME_BIN);
 }
 
 /**
- * Compiles the flux-runtime binary via `cargo build`.
+ * Compiles the `flux` CLI and `flux-runtime` binaries via `cargo build`.
  * Throws if the build fails.
  */
 export function buildFlux(opts: { release?: boolean; quiet?: boolean } = {}): void {
   const profile = opts.release ? ["--release"] : [];
-  const cmd     = ["build", "-p", "runtime", ...profile];
+  // Build both the CLI and the runtime in one pass
+  const cmd = ["build", "-p", "cli", "-p", "runtime", ...profile];
 
-  console.log(`  Building flux-runtime (${opts.release ? "release" : "debug"})…`);
+  console.log(`  Building flux CLI + runtime (${opts.release ? "release" : "debug"})…`);
 
   const result = spawnSync("cargo", cmd, {
     cwd:   WORKSPACE_ROOT,
@@ -57,19 +64,21 @@ export function buildFlux(opts: { release?: boolean; quiet?: boolean } = {}): vo
     throw new Error(`cargo build failed (exit ${result.status})\n${stderr}`);
   }
 
+  console.log(`  ✓ flux built → ${FLUX_CLI_BIN}`);
   console.log(`  ✓ flux-runtime built → ${FLUX_RUNTIME_BIN}`);
 }
 
 /**
- * Ensures the binary exists, building it first if needed (or if `force` is set).
+ * Ensures both binaries exist, building them if needed (or if `force` is set).
  * Pass `--skip-build` on the CLI to bypass this check entirely.
  */
 export function ensureBinary(opts: { force?: boolean; quiet?: boolean } = {}): void {
   if (process.argv.includes("--skip-build")) {
     if (!binaryExists()) {
       throw new Error(
-        `--skip-build was set but binary not found at:\n  ${FLUX_RUNTIME_BIN}\n` +
-        `Run: cd ${WORKSPACE_ROOT} && SQLX_OFFLINE=true cargo build -p runtime`,
+        `--skip-build was set but binaries not found.\n` +
+        `Expected:\n  ${FLUX_CLI_BIN}\n  ${FLUX_RUNTIME_BIN}\n` +
+        `Run: cd ${WORKSPACE_ROOT} && SQLX_OFFLINE=true cargo build -p cli -p runtime`,
       );
     }
     return;
@@ -94,42 +103,51 @@ export interface RuntimeHandle {
 }
 
 /**
- * Start flux-runtime with the given entry file.
+ * Start a handler via `flux serve --skip-verify <entry>`.
+ *
+ * This is exactly the same command a developer runs locally, which means
+ * the integration tests exercise the CLI's argument handling, binary lookup,
+ * and the runtime — the full user-facing path.
  *
  * @param entryAbsPath  Absolute path to the JS handler file to serve.
- * @param port          HTTP port to listen on (default: 3100, outside the normal 3000).
+ * @param port          HTTP port to listen on (default: 3100).
  * @param opts          Extra configuration.
  */
 export async function startRuntime(
   entryAbsPath: string,
   port = 3100,
   opts: {
-    host?:           string;
+    host?:            string;
     isolatePoolSize?: number;
-    timeoutMs?:      number;
-    token?:          string;
+    timeoutMs?:       number;
+    token?:           string;
   } = {},
 ): Promise<RuntimeHandle> {
-  const host           = opts.host            ?? "127.0.0.1";
+  const host            = opts.host            ?? "127.0.0.1";
   const isolatePoolSize = opts.isolatePoolSize ?? 1;
-  const token          = opts.token           ?? "test-token";
-  const timeoutMs      = opts.timeoutMs       ?? 15_000;
+  const token           = opts.token           ?? "test-token";
+  const timeoutMs       = opts.timeoutMs       ?? 15_000;
 
+  // `flux serve` requires a server URL when not skipping verify; --skip-verify
+  // lets us run without a live Flux server during tests.
   const args = [
-    "--entry", entryAbsPath,
+    "serve",
+    "--skip-verify",
     "--host",  host,
     "--port",  String(port),
     "--isolate-pool-size", String(isolatePoolSize),
+    entryAbsPath,
   ];
 
-  const proc = spawn(FLUX_RUNTIME_BIN, args, {
+  const proc = spawn(FLUX_CLI_BIN, args, {
     cwd: WORKSPACE_ROOT,
+    // FLUX_SERVICE_TOKEN is read by `flux serve` via clap's env() attribute
     env: { ...process.env, FLUX_SERVICE_TOKEN: token },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   proc.on("error", (err) => {
-    throw new Error(`flux-runtime failed to start: ${err.message}`);
+    throw new Error(`flux serve failed to start: ${err.message}`);
   });
 
   // Wait until the port is open (or timeout)

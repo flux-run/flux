@@ -30,7 +30,7 @@
     "test:npm": "cd ../runners && npm run test:npm",
     "test:report": "cd ../runners && npm run report",
     "test:compat-all": "cd ../runners && npm run test:all",
-    "build:flux": "SQLX_OFFLINE=true cargo build -p runtime --manifest-path ../../Cargo.toml",
+    "build:flux": "SQLX_OFFLINE=true cargo build -p cli -p runtime --manifest-path ../../Cargo.toml",
     "test:integration": "cd ../runners && npm run test:integration",
     "test:integration:skip-build": "cd ../runners && npm run test:integration:skip-build",
     "setup:external": "bash ../scripts/setup-external-tests.sh all",
