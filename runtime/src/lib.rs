@@ -1,37 +1,17 @@
-//! `runtime` library crate — sandboxed user-code execution.
+//! `runtime` library crate — prepares JavaScript artifacts for the server.
 //!
-//! ## Mental model
-//!
-//! Runtime executes user code in sandboxed **V8** (Deno) isolates.
-//! It **never touches Postgres directly**. All state access goes through the `ctx` object
-//! which proxies to other services:
-//!
-//! - `ctx.db.*`       → POST data-engine `/db/query`
-//! - `ctx.queue.*`    → POST queue service `/jobs`
-//! - `ctx.secrets.*`  → `ApiDispatch::get_secrets` (with LRU cache)
-//! - `ctx.log()`      → `ApiDispatch::write_log` → `flux.platform_logs` (fire-and-forget)
-//!
-//! ## Execution paths
-//!
-//! ```text
-//! POST /execute (HTTP)
-//!        ↓
-//! execute_handler
-//!  ├─ BundleResolver (warm Deno → cold fetch → inline from DB)
-//!  ├─ SecretsClient (LRU cache, 30 s TTL)
-//!  └─ ExecutionRunner::run()
-//!       ├─ schema validation (input JSON Schema, if configured)
-//!       ├─ TraceEmitter::post_lifecycle("start")
-//!       ├─ IsolatePool::execute()   (Deno) — warm V8 isolate, function affinity
-//!       └─ TraceEmitter::emit_logs()  — fire-and-forget ctx.log() + execution_end span
-//! ```
+//! This crate no longer executes user code.
+//! Its only job is to:
+//! - accept a JavaScript source file or string,
+//! - compute a deterministic SHA-256 content hash,
+//! - package the script into a payload the server can store and run.
 
-pub mod bundle;
-pub mod contracts;
-pub mod engine;
-pub mod execute;
-pub mod state;
-pub mod trace;
+pub mod artifact;
 
-// Convenience re-exports at crate root.
-pub use state::AppState;
+pub use artifact::{
+	RuntimeArtifact,
+	RuntimeSubmitRequest,
+	build_artifact,
+	build_artifact_from_file,
+	sha256_hex,
+};
