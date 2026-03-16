@@ -21,11 +21,11 @@ The internal modules still matter, but the external experience stays unified.
 
 ## Logical Components
 
-Flux has six main logical components:
+Flux has four main logical components:
 
-- `gateway` - ingress, auth, validation, middleware, request IDs
 - `runtime` - function execution and bundle loading
-- `data-engine` - guarded database execution and mutation recording
+- `runtime` request handling - ingress, routing, validation, request IDs
+- database dispatch - guarded database execution and mutation recording
 - `queue` - async jobs, retries, schedules
 - `api` - operator-facing APIs for deployments, traces, records, and admin actions
 
@@ -35,10 +35,10 @@ The `server` crate is where those pieces come together into the monolithic deplo
 
 The product is easiest to understand by following one request:
 
-1. a request enters through the gateway
-2. the gateway resolves route, policy, validation, and middleware
+1. a request enters through runtime request handling
+2. routing, policy, validation, and middleware are resolved
 3. the runtime executes the target function
-4. the function uses the data engine for database work
+4. the function uses database dispatch for database work
 5. the function may enqueue background jobs or invoke tools
 6. the system writes the execution record, including spans, logs, deploy metadata, and mutations
 7. the CLI and dashboard can inspect that record
@@ -86,7 +86,7 @@ Flux does not collapse everything into one indistinguishable runtime module.
 
 The boundaries are valuable because:
 
-- gateway concerns are different from code execution concerns
+- request-handling concerns are different from code execution concerns
 - database execution deserves its own careful contract
 - async work has different failure and retry semantics
 - operator APIs stay distinct from the hot request path

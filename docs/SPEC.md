@@ -61,7 +61,7 @@ Flux treats mutations, row history, and state blame as first-class debugging sur
 
 ### 4. Ship A Complete System
 
-Functions, gateway, database execution, and async work feel like one runtime rather than several loosely connected services.
+Functions, database execution, and async work feel like one runtime rather than several loosely connected services.
 
 ### 5. Keep Local And Production Legible
 
@@ -113,7 +113,7 @@ The core workflow is:
 flux init
 flux dev
 flux function create
-flux invoke --gateway
+flux invoke
 flux trace
 flux why
 flux incident replay

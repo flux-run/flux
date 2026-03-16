@@ -29,7 +29,7 @@ Flux preserves the same operator clarity here that it offers for normal backends
 ```bash
 flux init ai-backend
 flux dev
-flux invoke ask_support --gateway --payload '{"message":"refund my order"}'
+flux invoke ask_support --payload '{"message":"refund my order"}'
 flux trace
 flux why <request_id>
 flux incident replay --request-id <request_id>

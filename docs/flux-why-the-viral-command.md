@@ -43,10 +43,10 @@ The command is shareable because it produces output that feels:
 
 `flux why` only works if the rest of Flux does its job:
 
-- gateway creates stable request identities
+- runtime request handling creates stable request identities
 - runtime records execution metadata
 - deployments are linked to requests
-- data engine records mutations
+- database dispatch records mutations
 - queue and async work remain attributable
 
 That dependency chain is why Flux includes more than just functions.

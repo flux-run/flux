@@ -16,13 +16,13 @@ The API owns:
 - project configuration and secrets management
 - operator-authenticated administrative actions
 
-It is not the main ingress path for user traffic. That belongs to the gateway.
+It is not the main ingress path for user traffic. That belongs to the runtime request entry path.
 
 ## Product Role
 
 Flux has two broad request categories:
 
-- product traffic that enters through the gateway
+- product traffic that enters through runtime request handling
 - operator traffic that enters through the API
 
 The API exists so the CLI and dashboard can inspect and control the runtime without conflating operator actions with end-user request handling.
@@ -49,7 +49,7 @@ The API exposes route groups for:
 - traces and debugging
 - database and mutation inspection
 - queue and schedule operations
-- gateway and route configuration
+- route configuration
 - records, metrics, and operator views
 
 See [api-reference.md](api-reference.md) for the route map.

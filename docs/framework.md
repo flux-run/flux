@@ -22,8 +22,8 @@ The result feels less like "serverless functions plus add-ons" and more like a c
 Flux is:
 
 - a function runtime
-- an HTTP gateway
-- a database execution layer
+- an in-process execution dispatcher
+- a database execution contract
 - a queue and scheduler
 - an operator API, dashboard, and CLI
 - an execution record system for debugging and replay
@@ -94,9 +94,8 @@ This loop is excellent, and the complete system reinforces it.
 
 Flux keeps a deliberate internal shape:
 
-- `gateway` for ingress and policy
 - `runtime` for code execution
-- `data-engine` for database access and mutation recording
+- dispatch-backed database execution for mutation recording
 - `queue` for background work and retries
 - `api` for operator-facing actions
 - `server` for the single-binary deployment direction

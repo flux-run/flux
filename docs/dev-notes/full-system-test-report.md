@@ -1,5 +1,7 @@
 # Full System Test Report
 
+> Historical note (2026-03-16): this report captures a pre-simplification architecture snapshot and contains references to deleted `gateway` and `data-engine` crates. Treat service-specific sections as archival context, not current source-of-truth.
+
 ## Purpose
 
 This report defines the practical test surface for Flux as it exists in the repo today and as it is intended to ship as a complete product.

@@ -31,23 +31,21 @@ Functions can be triggered by:
 
 Flux functions matter because they live inside one runtime and one debugging model.
 
-## Gateway
+## Runtime Ingress
 
-The gateway is the controlled entrypoint into the system.
+Runtime ingress is the controlled entrypoint into the execution path.
 
 It gives Flux:
 
-- stable routing
-- auth and policy enforcement
-- request validation
-- middleware hooks
+- stable request routing
+- request validation hooks
 - one top-level request ID and trace root
 
-The gateway is where an execution becomes a record.
+Runtime ingress is where an execution becomes a record.
 
-## Data Engine
+## Database Dispatch
 
-The data engine is the database layer that Flux can reason about.
+Database dispatch is the data layer that Flux can reason about.
 
 It exists so that:
 
@@ -55,7 +53,7 @@ It exists so that:
 - mutations can be attributed to a specific execution
 - row history, blame, replay, and diff become possible
 
-The data engine is what prevents the database from becoming a debugging blind spot.
+Database dispatch is what prevents the database from becoming a debugging blind spot.
 
 ## Queue
 
@@ -123,7 +121,7 @@ It answers:
 
 ## Complete System, Focused Story
 
-Flux includes functions, gateway, database execution, queue, schedules, secrets, and deployment because the execution record has to span the whole backend.
+Flux includes functions, database execution, queue, schedules, secrets, and deployment because the execution record has to span the whole backend.
 
 But the product message stays narrow:
 

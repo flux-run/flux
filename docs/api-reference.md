@@ -6,7 +6,7 @@ The goal is to make the product surface legible to contributors, operators, and 
 
 ## Principles
 
-- user traffic enters through the gateway
+- user traffic enters through runtime request handling
 - operator traffic enters through the API
 - debugging and execution-record routes are first-class
 - route groups map cleanly to CLI workflows
@@ -62,7 +62,7 @@ These routes are what make the database part of the product rather than a hidden
 
 The goal is to preserve the same operator model for async work.
 
-### Gateway And Routing
+### Routing
 
 - inspect routes
 - manage middleware

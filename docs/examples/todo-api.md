@@ -6,7 +6,7 @@ It shows that Flux is not only for advanced AI or workflow-heavy systems. It als
 
 ## What The Example Covers
 
-- HTTP routes through the gateway
+- HTTP routes through runtime request handling
 - simple CRUD functions
 - database schema and mutations
 - execution records for normal requests
@@ -31,7 +31,7 @@ flux init todo-api
 flux dev
 flux function create create_todo
 flux function create complete_todo
-flux invoke create_todo --gateway --payload '{"title":"ship beta"}'
+flux invoke create_todo --payload '{"title":"ship beta"}'
 flux trace
 flux why <request_id>
 flux state history todos --id <todo_id>

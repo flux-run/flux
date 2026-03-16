@@ -6,7 +6,7 @@ It is a good demonstration of why queues, retries, and mutation history belong i
 
 ## What The Example Covers
 
-- a gateway endpoint for incoming webhooks
+- an endpoint for incoming webhooks
 - signature verification or auth checks
 - storing raw events for audit
 - enqueueing follow-up work
@@ -31,7 +31,7 @@ This is a strong proof of the complete-system story.
 ```bash
 flux init webhook-worker
 flux dev
-flux invoke receive_webhook --gateway --payload '{"provider":"stripe","event":"invoice.paid"}'
+flux invoke receive_webhook --payload '{"provider":"stripe","event":"invoice.paid"}'
 flux trace
 flux why <request_id>
 flux queue

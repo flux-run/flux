@@ -13,7 +13,7 @@ The runtime owns:
 - limit enforcement such as timeout and memory policies
 - secret and configuration access during execution
 - span and log emission
-- integration with the data engine and queue surfaces
+- integration with database dispatch and queue surfaces
 
 The runtime is not the primary place for ingress policy or broad operator APIs.
 
@@ -21,7 +21,7 @@ The runtime is not the primary place for ingress policy or broad operator APIs.
 
 A typical runtime execution looks like this:
 
-1. receive an execution request from the gateway, queue, or schedule
+1. receive an execution request from runtime request handling, queue, or schedule
 2. resolve the function version and load the bundle
 3. construct the Flux execution context
 4. execute the handler under configured limits

@@ -35,7 +35,7 @@ flux function create
 flux db push
 flux generate
 flux deploy
-flux invoke --gateway
+flux invoke
 ```
 
 This is how developers change code, evolve the database, and exercise the full stack.
@@ -95,7 +95,7 @@ It is reasonable for Flux to expose commands for:
 - functions
 - database and schema
 - queue and schedules
-- gateway config
+- routing config
 - deployments
 - traces and incidents
 

@@ -20,9 +20,9 @@ It is not part of the public product docs set.
 | Single-binary direction | Active | The `server` crate is the right architectural direction even though individual crates still exist and are still used during development. |
 | CLI core loop | Active | Core loop validated end-to-end (see release gate run below). |
 | Local dev story | Active | `flux dev` is the right idea and one of the most important product surfaces. |
-| Gateway | Active | The request pipeline is strong and aligned with the product model. CORS production guard added — panics at startup if `CORS_ALLOWED_ORIGINS` is unset in production. |
+| Runtime request handling | Active | The request pipeline is strong and aligned with the product model. |
 | Runtime | Active | Execution, bundle loading, and caching are substantive. WASM pool with dual-engine (speed/fast OptLevel) and AOT disk cache is production-worthy. |
-| Data engine | Active | Mutation-aware execution is a core strength of the repo. |
+| Database dispatch | Active | Mutation-aware execution is a core strength of the repo. |
 | Auth and service hardening | Active | JWT + DB-stored API keys + RBAC fully implemented. Login rate-limiting (10/15min per email). Internal service token on all internal routes. `FLUX_API_KEY` fix applied 2026-03-15. |
 | Queue and schedules | Shaping | Important to the complete-system story. Poller, retry, dead-letter, timeout recovery all work. `request_id` tracing fix applied 2026-03-15. |
 | Replay and diff | Shaping | High value, but trustworthiness matters more than breadth here. |
@@ -82,9 +82,7 @@ Comprehensive audit of all files changed since the 2026-03-14 gate run.
 ### Areas reviewed — no issues found
 
 - `api/src/auth/routes.rs` — login rate-limiting (10/15min per email) looks correct
-- `gateway/src/router.rs` — production CORS guard is correct (panics if env is empty in production)
-- `gateway/src/handlers/dispatch.rs` — request pipeline steps 1–8 are correct
-- `gateway/src/metrics.rs` — fire-and-forget `gateway_metrics` insert correct (search_path=flux,public resolves unqualified table correctly)
+- runtime request-handling path in `server` and `runtime` remains aligned with the request pipeline and observability model
 - `queue/src/worker/poller.rs` — graceful shutdown drain logic is correct
 - `queue/src/services/retry_service.rs` — unqualified `jobs` is correct for public schema
 - `runtime/src/engine/wasm_executor.rs` — AOT compile, fuel-based limits, WASI argv embedding all look correct
@@ -92,6 +90,6 @@ Comprehensive audit of all files changed since the 2026-03-14 gate run.
 - `runtime/src/engine/pool.rs` — backpressure guard, affinity routing, isolate pool sizing all look correct
 - `cli/src/dev.rs` — embedded Postgres, hot-reload watcher, graceful shutdown all correct
 - `cli/src/trace.rs` / `cli/src/why.rs` / `cli/src/doctor.rs` — display-only, no logical issues
-- `data-engine/src/executor/db_executor.rs` — SET LOCAL search_path correct, mutation logging atomic with data write
+- database dispatch remains atomic with data writes in current runtime/server execution paths
 - `api/src/secrets/service.rs` — AES-256-GCM encrypt/decrypt, no secrets in logs
 

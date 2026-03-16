@@ -54,14 +54,14 @@ Flux scaffolds a function that is ready to edit immediately.
 ## 5. Invoke The System
 
 ```bash
-target/debug/flux invoke create_user --gateway --payload '{"email":"user@example.com"}'
+target/debug/flux invoke create_user --payload '{"email":"user@example.com"}'
 ```
 
-The `--gateway` path is the most representative local path because it includes:
+The default invoke path is the most representative local path because it includes:
 
-- routing
-- middleware
-- auth and validation hooks
+- runtime dispatch
+- execution context construction
+- validation hooks
 - tracing and request IDs
 
 ## 6. Inspect The Execution Record

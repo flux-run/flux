@@ -99,7 +99,7 @@ Each `ctx.*` method maps to a `deno_core` async op:
 
 | JS code | Rust async op | What it does |
 |---------|--------------|-------------|
-| `ctx.db.query(sql, params)` | `op_db_query` | SQLx async query via data-engine |
+| `ctx.db.query(sql, params)` | `op_db_query` | SQLx async query via database dispatch |
 | `ctx.db.<table>.find/insert/update/delete` | `op_db_query` | Typed helpers compile to `op_db_query` |
 | `ctx.http.fetch(url, opts)` | `op_http_fetch` | reqwest + SSRF check + trace span |
 | `ctx.queue.push(fn, payload, opts)` | `op_queue_push` | Resolve function → POST to queue service |
@@ -314,7 +314,7 @@ This is strictly stronger isolation than V8. No request can observe another requ
 
 | Import | Signature | Behavior |
 |--------|-----------|----------|
-| `flux.db_query` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — SQLx query via data-engine + span |
+| `flux.db_query` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — SQLx query via database dispatch + span |
 | `flux.http_fetch` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — reqwest + SSRF check + span |
 | `flux.queue_push` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — resolve function → POST to queue |
 | `flux.function_invoke` | `(req_ptr, req_len, out_ptr, out_max) → i32` | Async — recursive dispatch with lineage |
@@ -405,8 +405,8 @@ I/O-bound concurrency scales with available memory (pending request contexts), n
 ## Request Lifecycle
 
 ```
-1. Gateway receives HTTP request
-2. Gateway routes to Runtime (in-process call in monolith)
+1. Runtime request handling receives HTTP request
+2. Request handling routes to Runtime (in-process call in monolith)
 3. Runtime dispatcher selects a worker:
    - V8: prefer worker already running same bundle key, or idle worker
    - WASM: any worker with semaphore capacity
@@ -453,7 +453,7 @@ V8 worker-wide reset is the correct trade-off: a `while(true)` in JS monopolizes
 | Concern | How it is handled |
 |---------|-------------------|
 | Runaway concurrency | Per-worker cap: `MAX_CONCURRENT_PER_WORKER` (default 64). Excess requests get 503. |
-| Memory exhaustion | Pending request count is bounded by the concurrency cap. Backpressure propagates via 503 to the gateway. |
+| Memory exhaustion | Pending request count is bounded by the concurrency cap. Backpressure propagates via 503 to request handling. |
 | Queue depth | Channel capacity is `workers × 4`. Callers block naturally when all workers are at capacity. |
 
 ### Network Security
@@ -530,7 +530,7 @@ Every effect carries the full request lineage:
 
 | Header / Field | Purpose |
 |---------------|---------|
-| `x-request-id` | UUID propagated from gateway through all Flux-owned effects |
+| `x-request-id` | UUID propagated from request handling through all Flux-owned effects |
 | `parent_span_id` | Links child spans to parent for trace reconstruction |
 | `project_id` | Tenant isolation — ensures spans are scoped to the correct project |
 | `code_sha` | Deployed code version — links trace to exact source |
