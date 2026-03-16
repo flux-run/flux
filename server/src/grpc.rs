@@ -225,6 +225,62 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         Ok(Response::new(pb::RecordExecutionResponse { ok: true }))
     }
+
+    async fn get_trace(
+        &self,
+        request: Request<pb::GetTraceRequest>,
+    ) -> Result<Response<pb::GetTraceResponse>, Status> {
+        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let execution_id_raw = request.into_inner().execution_id;
+        let execution_id = uuid::Uuid::parse_str(&execution_id_raw)
+            .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
+
+        let execution: Option<(String, String, String, i32, Option<String>)> = sqlx::query_as(
+            "SELECT method, path, status, duration_ms, error
+             FROM flux.executions
+             WHERE id = $1",
+        )
+        .bind(execution_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch execution: {e}")))?;
+
+        let (method, path, status, duration_ms, error) = execution
+            .ok_or_else(|| Status::not_found("execution not found"))?;
+
+        let checkpoint_rows: Vec<(i32, String, serde_json::Value, serde_json::Value, i32)> =
+            sqlx::query_as(
+                "SELECT call_index, boundary, request, response, duration_ms
+                 FROM flux.checkpoints
+                 WHERE execution_id = $1
+                 ORDER BY call_index ASC",
+            )
+            .bind(execution_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
+
+        let checkpoints = checkpoint_rows
+            .into_iter()
+            .map(|(call_index, boundary, request, response, duration_ms)| pb::Checkpoint {
+                call_index,
+                boundary,
+                request: serde_json::to_vec(&request).unwrap_or_default(),
+                response: serde_json::to_vec(&response).unwrap_or_default(),
+                duration_ms,
+            })
+            .collect();
+
+        Ok(Response::new(pb::GetTraceResponse {
+            execution_id: execution_id_raw,
+            method,
+            path,
+            status,
+            duration_ms,
+            error: error.unwrap_or_default(),
+            checkpoints,
+        }))
+    }
 }
 
 pub async fn serve(

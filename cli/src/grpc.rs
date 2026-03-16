@@ -14,6 +14,26 @@ pub struct LogEntry {
     pub timestamp: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct TraceCheckpoint {
+    pub call_index: i32,
+    pub boundary: String,
+    pub request: Vec<u8>,
+    pub response: Vec<u8>,
+    pub duration_ms: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct TraceView {
+    pub execution_id: String,
+    pub method: String,
+    pub path: String,
+    pub status: String,
+    pub duration_ms: i32,
+    pub error: String,
+    pub checkpoints: Vec<TraceCheckpoint>,
+}
+
 pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
@@ -69,6 +89,48 @@ pub async fn list_logs(url: &str, token: &str, limit: u32) -> Result<Vec<LogEntr
             timestamp: log.timestamp,
         })
         .collect())
+}
+
+pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<TraceView> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+        .await
+        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+
+    let mut request = Request::new(pb::GetTraceRequest {
+        execution_id: execution_id.to_string(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .get_trace(request)
+        .await
+        .context("get trace request failed")?
+        .into_inner();
+
+    Ok(TraceView {
+        execution_id: response.execution_id,
+        method: response.method,
+        path: response.path,
+        status: response.status,
+        duration_ms: response.duration_ms,
+        error: response.error,
+        checkpoints: response
+            .checkpoints
+            .into_iter()
+            .map(|cp| TraceCheckpoint {
+                call_index: cp.call_index,
+                boundary: cp.boundary,
+                request: cp.request,
+                response: cp.response,
+                duration_ms: cp.duration_ms,
+            })
+            .collect(),
+    })
 }
 
 pub fn normalize_grpc_url(url: &str) -> String {

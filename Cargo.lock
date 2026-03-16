@@ -358,6 +358,7 @@ dependencies = [
  "rpassword",
  "runtime",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
  "tonic",

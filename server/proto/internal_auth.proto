@@ -6,6 +6,7 @@ service InternalAuthService {
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
   rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
   rpc RecordExecution(RecordExecutionRequest) returns (RecordExecutionResponse);
+  rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
 }
 
 message ValidateTokenRequest {}
@@ -56,4 +57,26 @@ message RecordExecutionRequest {
 
 message RecordExecutionResponse {
   bool ok = 1;
+}
+
+message GetTraceRequest {
+  string execution_id = 1;
+}
+
+message Checkpoint {
+  int32 call_index = 1;
+  string boundary = 2;
+  bytes request = 3;
+  bytes response = 4;
+  int32 duration_ms = 5;
+}
+
+message GetTraceResponse {
+  string execution_id = 1;
+  string method = 2;
+  string path = 3;
+  string status = 4;
+  int32 duration_ms = 5;
+  string error = 6;
+  repeated Checkpoint checkpoints = 7;
 }
