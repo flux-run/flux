@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::Args;
+use std::collections::BTreeSet;
 
 use crate::config::resolve_auth;
-use crate::grpc::replay;
+use crate::grpc::{get_trace, replay};
 
 #[derive(Debug, Args)]
 pub struct ReplayArgs {
@@ -16,11 +17,18 @@ pub struct ReplayArgs {
     pub url: Option<String>,
     #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
     pub token: Option<String>,
+    #[arg(long)]
+    pub diff: bool,
 }
 
 pub async fn execute(args: ReplayArgs) -> Result<()> {
     let auth = resolve_auth(args.url, args.token)?;
     let from_index = args.from_index.unwrap_or(0).max(0);
+    let original = if args.diff {
+        Some(get_trace(&auth.url, &auth.token, &args.execution_id).await?)
+    } else {
+        None
+    };
 
     let short_id = if args.execution_id.len() >= 8 {
         &args.execution_id[..8]
@@ -41,11 +49,29 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     )
     .await?;
 
-    let status_symbol = if response.status == "ok" { "✓" } else { "✗" };
+    let status_symbol = if response.status == "ok" {
+        "\x1b[32m✓\x1b[0m"
+    } else {
+        "\x1b[31m✗\x1b[0m"
+    };
     println!(
         "  {}  {}  {}ms",
         status_symbol, response.status, response.duration_ms
     );
+
+    if let Some(original) = &original {
+        println!();
+        println!("  comparing original vs replay");
+        println!();
+        let original_status = colorize_status_label(&original.status, original.duration_ms);
+        let replay_status = colorize_status_label(&response.status, response.duration_ms);
+        println!(
+            "  original  {:<18}  {}ms",
+            original_status,
+            original.duration_ms
+        );
+        println!("  replay    {:<18}  {}ms", replay_status, response.duration_ms);
+    }
 
     if !response.error.is_empty() {
         println!("  error  {}", sanitize_replay_error(&response.error));
@@ -66,6 +92,35 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
             step.duration_ms,
             source
         );
+
+        if args.diff {
+            if step.used_recorded {
+                println!("      response unchanged (recorded)");
+            } else {
+                println!("      response from live call");
+            }
+        }
+    }
+
+    if let Some(original) = &original {
+        let original_output = first_non_empty_value(&[
+            Some(original.response_json.clone()),
+            if original.error.is_empty() { None } else { Some(original.error.clone()) },
+        ]);
+        let replay_output = first_non_empty_value(&[
+            if response.output.is_empty() || response.output == "null" {
+                None
+            } else {
+                Some(response.output.clone())
+            },
+            if response.error.is_empty() { None } else { Some(response.error.clone()) },
+        ]);
+
+        println!();
+        println!("  output");
+        for line in json_diff_lines(&original_output, &replay_output) {
+            println!("  {}", colorize_diff_line(&line));
+        }
     }
 
     if !args.commit {
@@ -75,6 +130,109 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
 
     println!();
     Ok(())
+}
+
+fn first_non_empty_value(candidates: &[Option<String>]) -> serde_json::Value {
+    for item in candidates {
+        if let Some(value) = item {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    return parsed;
+                }
+                return serde_json::Value::String(trimmed.to_string());
+            }
+        }
+    }
+    serde_json::Value::Null
+}
+
+fn json_diff_lines(original: &serde_json::Value, replay: &serde_json::Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    diff_value("$", Some(original), Some(replay), &mut lines);
+
+    if lines.is_empty() {
+        vec!["unchanged".to_string()]
+    } else {
+        lines
+    }
+}
+
+fn diff_value(
+    path: &str,
+    original: Option<&serde_json::Value>,
+    replay: Option<&serde_json::Value>,
+    out: &mut Vec<String>,
+) {
+    match (original, replay) {
+        (None, None) => {}
+        (None, Some(right)) => {
+            out.push(format!("+ {} = {}", path, compact_json(right)));
+        }
+        (Some(left), None) => {
+            out.push(format!("- {} = {}", path, compact_json(left)));
+        }
+        (Some(left), Some(right)) => {
+            if left == right {
+                return;
+            }
+
+            match (left, right) {
+                (serde_json::Value::Object(a), serde_json::Value::Object(b)) => {
+                    let mut keys = BTreeSet::new();
+                    keys.extend(a.keys().cloned());
+                    keys.extend(b.keys().cloned());
+
+                    for key in keys {
+                        let child_path = format!("{}.{}", path, key);
+                        diff_value(&child_path, a.get(&key), b.get(&key), out);
+                    }
+                }
+                (serde_json::Value::Array(a), serde_json::Value::Array(b)) => {
+                    let max = a.len().max(b.len());
+                    for idx in 0..max {
+                        let child_path = format!("{}[{}]", path, idx);
+                        diff_value(&child_path, a.get(idx), b.get(idx), out);
+                    }
+                }
+                _ => {
+                    out.push(format!("- {} = {}", path, compact_json(left)));
+                    out.push(format!("+ {} = {}", path, compact_json(right)));
+                }
+            }
+        }
+    }
+}
+
+fn compact_json(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+}
+
+fn colorize_diff_line(line: &str) -> String {
+    if line.starts_with("+ ") {
+        return format!("\x1b[32m{}\x1b[0m", line);
+    }
+    if line.starts_with("- ") {
+        return format!("\x1b[31m{}\x1b[0m", line);
+    }
+    format!("\x1b[90m{}\x1b[0m", line)
+}
+
+fn colorize_status_label(status: &str, duration_ms: i32) -> String {
+    let lower = status.to_ascii_lowercase();
+    if lower == "ok" || lower == "success" {
+        if duration_ms > 500 {
+            return "\x1b[33m⚠ slow\x1b[0m".to_string();
+        }
+        return "\x1b[32m✓ ok\x1b[0m".to_string();
+    }
+    if lower == "error" || lower == "failed" {
+        return "\x1b[31m✗ error\x1b[0m".to_string();
+    }
+    if duration_ms > 500 {
+        return format!("\x1b[33m⚠ {}\x1b[0m", lower);
+    }
+    lower
 }
 
 fn sanitize_replay_error(raw: &str) -> String {
