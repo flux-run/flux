@@ -50,17 +50,6 @@ else
   FAIL=1
 fi
 
-# ── Dashboard static mount ────────────────────────────────────────────────────
-
-s_dash="$(curl -sS -o /tmp/t_srv_dash.html -w "%{http_code}" \
-  "${SERVER_BASE}/flux" || true)"
-if [[ "$s_dash" == "200" || "$s_dash" == "301" || "$s_dash" == "302" ]]; then
-  print_result 1 "server dashboard mount (${s_dash})"
-else
-  print_result 0 "server dashboard mount" "HTTP ${s_dash}"
-  FAIL=1
-fi
-
 # ── Response headers ──────────────────────────────────────────────────────────
 
 s="$(curl -sS -D /tmp/t_srv_hdr.txt -o /tmp/t_srv_hdr_body.json -w "%{http_code}" \

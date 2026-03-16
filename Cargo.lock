@@ -155,7 +155,7 @@ dependencies = [
  "futures-util",
  "hex",
  "job_contract",
- "jsonwebtoken 9.3.1",
+ "jsonwebtoken",
  "rand 0.8.5",
  "reqwest",
  "serde",
@@ -886,17 +886,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cron"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f8c3e73077b4b4a6ab1ea5047c37c57aee77657bc8ecd6f29b0af082d0b0c07"
-dependencies = [
- "chrono",
- "nom",
- "once_cell",
-]
-
-[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -968,34 +957,6 @@ name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
-
-[[package]]
-name = "data-engine"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "api_contract",
- "axum",
- "chrono",
- "cron",
- "dotenvy",
- "hex",
- "hmac",
- "moka",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "subtle",
- "thiserror 1.0.69",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "debugid"
@@ -1298,17 +1259,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fancy-regex"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72cf461f865c862bb7dc573f643dd6a2b6842f7c30b07882b56bd148cc2761b8"
-dependencies = [
- "bit-set",
- "regex-automata",
- "regex-syntax",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1355,17 +1305,6 @@ name = "fluent-uri"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1918b65d96df47d3591bed19c5cca17e3fa5d0707318e4b5ef2eae01764df7e5"
-dependencies = [
- "borrow-or-share",
- "ref-cast",
- "serde",
-]
-
-[[package]]
-name = "fluent-uri"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc74ac4d8359ae70623506d512209619e5cf8f347124910440dbc221714b328e"
 dependencies = [
  "borrow-or-share",
  "ref-cast",
@@ -1582,40 +1521,6 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
-]
-
-[[package]]
-name = "gateway"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "api_contract",
- "async-trait",
- "axum",
- "base64",
- "bytes",
- "chrono",
- "dashmap",
- "dotenvy",
- "futures",
- "job_contract",
- "jsonschema 0.44.1",
- "jsonwebtoken 10.3.0",
- "lazy_static",
- "metrics",
- "metrics-exporter-prometheus",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -2200,46 +2105,17 @@ dependencies = [
  "base64",
  "bytecount",
  "email_address",
- "fancy-regex 0.14.0",
+ "fancy-regex",
  "fraction",
  "idna",
  "itoa",
  "num-cmp",
  "once_cell",
  "percent-encoding",
- "referencing 0.29.1",
+ "referencing",
  "regex-syntax",
  "serde",
  "serde_json",
- "uuid-simd",
-]
-
-[[package]]
-name = "jsonschema"
-version = "0.44.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f98b64a413c93a1b413dfbaf973b78d271648b9cae50b10302ad88af78991672"
-dependencies = [
- "ahash",
- "bytecount",
- "data-encoding",
- "email_address",
- "fancy-regex 0.17.0",
- "fraction",
- "getrandom 0.3.4",
- "idna",
- "itoa",
- "num-cmp",
- "num-traits",
- "percent-encoding",
- "referencing 0.44.1",
- "regex",
- "regex-syntax",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "unicode-general-category",
  "uuid-simd",
 ]
 
@@ -2255,22 +2131,6 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "simple_asn1",
-]
-
-[[package]]
-name = "jsonwebtoken"
-version = "10.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0529410abe238729a60b108898784df8984c87f6054c9c4fcacc47e4803c1ce1"
-dependencies = [
- "base64",
- "getrandom 0.2.17",
- "js-sys",
- "pem",
- "serde",
- "serde_json",
- "signature",
  "simple_asn1",
 ]
 
@@ -2561,23 +2421,6 @@ dependencies = [
  "serde_urlencoded",
  "similar",
  "tokio",
-]
-
-[[package]]
-name = "moka"
-version = "0.12.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85f8024e1c8e71c778968af91d43700ce1d11b219d127d79fb2934153b82b42b"
-dependencies = [
- "crossbeam-channel",
- "crossbeam-epoch",
- "crossbeam-utils",
- "equivalent",
- "parking_lot",
- "portable-atomic",
- "smallvec",
- "tagptr",
- "uuid",
 ]
 
 [[package]]
@@ -3387,23 +3230,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40a64b3a635fad9000648b4d8a59c8710c523ab61a23d392a7d91d47683f5adc"
 dependencies = [
  "ahash",
- "fluent-uri 0.3.2",
+ "fluent-uri",
  "once_cell",
- "parking_lot",
- "percent-encoding",
- "serde_json",
-]
-
-[[package]]
-name = "referencing"
-version = "0.44.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22952642836711d7a730d23a4dfb0d732e75a85e4c4f5704266d9c8fac278ff1"
-dependencies = [
- "ahash",
- "fluent-uri 0.4.1",
- "getrandom 0.3.4",
- "hashbrown 0.16.1",
  "parking_lot",
  "percent-encoding",
  "serde_json",
@@ -3617,7 +3445,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "job_contract",
- "jsonschema 0.29.1",
+ "jsonschema",
  "lru",
  "reqwest",
  "serde",
@@ -3913,12 +3741,9 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-server",
- "base64",
  "chrono",
- "data-engine",
  "dotenvy",
  "flux-queue",
- "gateway",
  "job_contract",
  "metrics",
  "metrics-exporter-prometheus",
@@ -3928,7 +3753,6 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
- "tower-http",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -4395,12 +4219,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tagptr"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
-
-[[package]]
 name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4826,12 +4644,6 @@ name = "unicode-bidi"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
-
-[[package]]
-name = "unicode-general-category"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b993bddc193ae5bd0d623b49ec06ac3e9312875fdae725a975c51db1cc1677f"
 
 [[package]]
 name = "unicode-id-start"

@@ -135,7 +135,7 @@ deploy_cloud_run() {
     fi
 }
 
-SERVICES=("api" "gateway" "runtime" "queue" "data-engine")
+SERVICES=("api" "runtime" "queue" "server")
 
 # ── Rollback ──────────────────────────────────────────────────────────────────
 #

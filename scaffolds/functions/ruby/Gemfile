@@ -1,7 +1,0 @@
-# frozen_string_literal: true
-source "https://rubygems.org"
-
-# Ruby WASM runtime — bundles Ruby + your handler into a .wasm file.
-# Build: flux deploy  (the CLI runs: ruby.wasm build handler.rb -o <name>.wasm)
-# Install: gem install ruby_wasm
-gem "ruby_wasm", "~> 2.0"

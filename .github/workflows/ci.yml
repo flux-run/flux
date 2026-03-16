@@ -98,25 +98,6 @@ jobs:
         with:
           key: ${{ matrix.target }}-ci
 
-      - name: Setup Node.js
-        if: ${{ matrix.cli_only != true }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: dashboard/package-lock.json
-
-      - name: Build dashboard
-        # Skip for cli_only targets (e.g. Windows ARM64) — server is not built
-        # there so the dashboard assets are not needed.
-        if: ${{ matrix.cli_only != true }}
-        # Pre-build dashboard/out/ so server/build.rs can embed it.
-        # Runs on the host runner — cross containers inherit the built assets
-        # via the mounted workspace, and build.rs skips npm when out/ exists.
-        working-directory: dashboard
-        shell: bash
-        run: npm ci && npm run build
-
       - name: Install cross (Linux ARM64 only)
         if: matrix.cross == true
         run: cargo install cross --git https://github.com/cross-rs/cross --locked

@@ -4,10 +4,8 @@ members = [
     "api",
     "runtime",
     "cli",
-    "gateway",
     "queue",
     "shared/job_contract",
     "shared/api_contract",
-    "data-engine",
     "server",
 ]

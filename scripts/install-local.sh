@@ -38,7 +38,7 @@ if $INSTALL_CLI; then
   rm -f "$CARGO_BIN/flux"
   # Touch main entry points to bust cargo's release artifact cache so the
   # install always recompiles from current source, not a stale cached binary.
-  touch "$ROOT/cli/src/main.rs" "$ROOT/cli/src/dev.rs"
+  touch "$ROOT/cli/src/main.rs"
   SQLX_OFFLINE=true cargo install --path cli --offline --force
   # Sync to any other PATH locations of an older flux binary (e.g. /usr/local/bin)
   # so the newly built version is always the one that runs.
@@ -54,8 +54,6 @@ fi
 
 # ─── Server ─────────────────────────────────────────────────────────────────
 if $INSTALL_SERVER; then
-  echo "▶ Building dashboard (required by server)..."
-  (cd "$ROOT/dashboard" && npm run build)
   echo "▶ Installing server..."
   CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
   rm -f "$CARGO_BIN/server"

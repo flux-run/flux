@@ -11,11 +11,8 @@ path = "src/main.rs"
 [dependencies]
 # Internal service crates (library targets)
 api           = { path = "../api" }
-base64        = "0.22"
 runtime       = { path = "../runtime" }
-gateway       = { path = "../gateway" }
 flux-queue = { path = "../queue" }
-data-engine   = { path = "../data-engine" }
 job_contract  = { path = "../shared/job_contract" }
 api_contract  = { path = "../shared/api_contract" }
 
@@ -52,9 +49,6 @@ metrics-exporter-prometheus = { version = "0.16", default-features = false }
 
 # HTTP client (for inter-service calls)
 reqwest       = { version = "0.13", features = ["json", "rustls"], default-features = false }
-
-# Static file serving (dashboard SPA)
-tower-http    = { version = "0.6", features = ["fs"] }
 
 # .env file loading
 dotenvy       = "0.15"

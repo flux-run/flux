@@ -25,9 +25,7 @@ Flux is a complete backend runtime built around deterministic debugging.
 
 - [single-binary-architecture.md](single-binary-architecture.md) - overall system architecture and deployment model
 - [api.md](api.md) - operator-facing API responsibilities
-- [gateway.md](gateway.md) - ingress routing and policy enforcement
 - [runtime.md](runtime.md) - execution engine for user code
-- [data-engine.md](data-engine.md) - database execution and mutation recording
 - [queue.md](queue.md) - background work and retries
 - [observability.md](observability.md) - execution record, spans, logs, and debugging surfaces
 - [storage.md](storage.md) - persisted state, bundles, caches, and retention
@@ -42,7 +40,6 @@ Flux is a complete backend runtime built around deterministic debugging.
 ## Operational And Reference Docs
 
 - [api-reference.md](api-reference.md) - route groups and API surface
-- [gateway-production-checklist.md](gateway-production-checklist.md) - production hardening checklist
 - [FOLDER_STRUCTURE.md](FOLDER_STRUCTURE.md) - repo layout and generated project layout
 
 ## Examples

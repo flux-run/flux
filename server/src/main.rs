@@ -1,23 +1,19 @@
 //! Monolithic Flux server — single binary, single port.
 //!
-//! All five services (API, Runtime, Gateway, Data-Engine, Queue) run in one
-//! OS process.  Service boundaries are enforced by the compile-time dispatch
-//! traits (`RuntimeDispatch`, `ApiDispatch`) rather than by HTTP.
+//! Core services (API, Runtime, Queue) run in one OS process.
+//! Service boundaries are enforced by compile-time dispatch traits
+//! (`RuntimeDispatch`, `ApiDispatch`) rather than by HTTP.
 //!
 //! Architecture:
 //!   ```
 //!   :4000
 //!    ├─ /flux/api/*         → api::create_app     (management, secrets, logs, …)
-//!    ├─ /flux/data-engine/* → data_engine routes   (query, mutations, history, …)
 //!    ├─ /flux/queue/*       → queue routes         (jobs, stats, retry, …)
 //!    ├─ /execute            → runtime handler      (queue worker → runtime, loopback)
 //!    ├─ /flux/dev/invoke/*  → dev invoke shortcut
-//!    ├─ /flux/              → dashboard SPA        (static assets + SPA fallback)
-//!    └─ /{*path}            → gateway router       (function invocation, auth, rate-limit)
-//!                                │
-//!                                └─ InProcessRuntimeDispatch  (no HTTP)
-//!                                        │
-//!                                        └─ runtime::execute::service::invoke
+//!    └─ InProcessRuntimeDispatch  (no HTTP)
+//!           │
+//!           └─ runtime::execute::service::invoke
 //!   ```
 
 mod dispatch;
@@ -26,13 +22,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::info;
 
 use dispatch::{InProcessApiDispatch, InProcessDataEngineDispatch, InProcessQueueDispatch, InProcessRuntimeDispatch};
-use gateway::state::GatewayState;
 use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch};
 use api_contract::routes as R;
 use runtime::engine::executor::PoolDispatchers;
@@ -54,18 +48,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load .env if present (silently ignored in production).
     dotenvy::dotenv().ok();
 
-    // Install the Prometheus metrics recorder once at startup.
-    // The scrape endpoint /internal/metrics is registered in gateway::create_router.
-    gateway::metrics::init_prometheus();
-
     // ── Config ────────────────────────────────────────────────────────────
     let port = std::env::var("PORT")
         .unwrap_or_else(|_| "4000".to_string())
         .parse::<u16>()
         .expect("PORT must be a valid u16");
-
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL is required");
 
     let service_token = std::env::var("INTERNAL_SERVICE_TOKEN")
         .unwrap_or_else(|_| {
@@ -86,21 +73,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "4".to_string())
         .parse::<usize>()
         .unwrap_or(4);
-
-    let max_request_size_bytes = std::env::var("MAX_REQUEST_SIZE_BYTES")
-        .unwrap_or_else(|_| "10485760".to_string())
-        .parse::<usize>()
-        .unwrap_or(10 * 1024 * 1024);
-
-    let rate_limit_per_sec = std::env::var("RATE_LIMIT_PER_SEC")
-        .unwrap_or_else(|_| "50".to_string())
-        .parse::<u32>()
-        .unwrap_or(50);
-
-    let local_mode = std::env::var("LOCAL_MODE")
-        .or_else(|_| std::env::var("FLUX_LOCAL"))
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false);
 
     let queue_worker_concurrency: usize = std::env::var("QUEUE_WORKER_CONCURRENCY")
         .ok()
@@ -124,31 +96,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tcp_keepalive(Duration::from_secs(30))
         .build()?;
 
-    // ── Database pools ────────────────────────────────────────────────────
-    //
-    // Two pools with different search_path settings:
-    //   pool    → flux, public          (API, Gateway, Queue, Runtime)
-    //   de_pool → flux_internal, flux, public  (Data-Engine)
+    // ── Database pool ─────────────────────────────────────────────────────
     api::config::init();
     let pool = api::db::connection::init_pool().await?;
     info!("Server connected to database (flux pool)");
-
-    let de_pool = PgPoolOptions::new()
-        .max_connections(
-            std::env::var("DE_DB_POOL_SIZE")
-                .ok()
-                .and_then(|v| v.parse::<u32>().ok())
-                .unwrap_or(20),
-        )
-        .after_connect(|conn, _meta| Box::pin(async move {
-            sqlx::query("SET search_path = flux_internal, flux, public")
-                .execute(conn)
-                .await?;
-            Ok(())
-        }))
-        .connect(&database_url)
-        .await?;
-    info!("Server connected to database (data-engine pool)");
 
     // ── Shutdown channel ──────────────────────────────────────────────────
     let (shutdown_tx, shutdown_rx) = watch::channel(());
@@ -178,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool: pool.clone(),
     });
     let de_dispatch: Arc<dyn DataEngineDispatch> = Arc::new(InProcessDataEngineDispatch::new(
-        de_pool.clone(),
+        pool.clone(),
         env_parse("STATEMENT_TIMEOUT_MS", 5000),
     ));
 
@@ -217,31 +168,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = runtime_lock.set(
         Arc::clone(&runtime_dispatch) as Arc<dyn job_contract::dispatch::RuntimeDispatch>,
     );
-    // Keep a ref for the dev invoke endpoint before moving into gateway_state.
+    // Keep a ref for the dev invoke endpoint.
     let runtime_dispatch_ref: Arc<dyn job_contract::dispatch::RuntimeDispatch> =
         Arc::clone(&runtime_dispatch) as Arc<dyn job_contract::dispatch::RuntimeDispatch>;
-
-    // ── Data-Engine AppState ──────────────────────────────────────────────
-    let de_cfg = data_engine::config::Config {
-        database_url:           database_url.clone(),
-        port:                   port,
-        default_query_limit:    env_parse("DEFAULT_QUERY_LIMIT", 100),
-        max_query_limit:        env_parse("MAX_QUERY_LIMIT", 5000),
-        runtime_url:            base_url.clone(),
-        max_query_complexity:   env_parse("MAX_QUERY_COMPLEXITY", 1000),
-        query_timeout_ms:       env_parse("QUERY_TIMEOUT_MS", 30_000),
-        statement_timeout_ms:   env_parse("STATEMENT_TIMEOUT_MS", 5000),
-        max_nest_depth:         env_parse("MAX_NEST_DEPTH", 6),
-        record_retention_days:  env_parse("RECORD_RETENTION_DAYS", 30),
-        error_retention_days:   std::env::var("ERROR_RETENTION_DAYS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0),
-        retention_job_hour:     env_parse("RETENTION_JOB_HOUR", 3),
-    };
-    let de_state = Arc::new(
-        data_engine::state::AppState::new(de_pool.clone(), &de_cfg).await,
-    );
 
     // ── Queue AppState ────────────────────────────────────────────────────
     let queue_state = Arc::new(
@@ -250,28 +179,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             api_dispatch_for_queue,
         ),
     );
-
-    // ── Gateway state ─────────────────────────────────────────────────────
-    let snapshot = gateway::snapshot::GatewaySnapshot::new(
-        pool.clone(),
-        database_url.clone(),
-    );
-    if let Err(e) = snapshot.refresh().await {
-        tracing::warn!("Initial snapshot fetch failed (will retry): {:?}", e);
-    }
-    gateway::snapshot::GatewaySnapshot::start_notify_listener(snapshot.clone());
-
-    let jwks_cache = gateway::auth::JwksCache::new(http_client.clone());
-
-    let gateway_state = Arc::new(GatewayState {
-        db_pool:                pool.clone(),
-        runtime:                runtime_dispatch,
-        snapshot,
-        jwks_cache,
-        max_request_size_bytes,
-        rate_limit_per_sec,
-        local_mode,
-    });
 
     // ── Background workers ────────────────────────────────────────────────
 
@@ -296,40 +203,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         shutdown_rx.clone(),
     ));
 
-    // Data-engine cache invalidation — keeps schema/plan caches in sync via LISTEN/NOTIFY.
-    data_engine::cache::invalidation::start_listener(
-        Arc::clone(&de_state),
-        database_url.clone(),
-    );
-
-    // Data-engine cron scheduler — fires overdue cron jobs.
-    let cron_pool = Arc::new(de_pool.clone());
-    let cron_http = Arc::new(http_client.clone());
-    let cron_url = base_url.clone();
-    tokio::spawn(async move {
-        data_engine::cron::worker::run(cron_pool, cron_http, cron_url).await;
-    });
-
-    // Data-engine retention — daily hard-delete of old execution records.
-    let ret_pool = Arc::new(de_pool.clone());
-    let ret_cfg = data_engine::retention::RetentionConfig {
-        record_retention_days: de_cfg.record_retention_days,
-        error_retention_days:  de_cfg.error_retention_days,
-        job_hour_utc:          de_cfg.retention_job_hour,
-    };
-    tokio::spawn(async move {
-        data_engine::retention::worker::run(ret_pool, ret_cfg).await;
-    });
-
     // Monitor alert evaluator — checks alert thresholds every 60s.
     tokio::spawn(api::routes::monitor::run_alert_evaluator(pool.clone()));
     info!("Monitor alert evaluator started");
 
     // ── Router ────────────────────────────────────────────────────────────
-    let dashboard_dir = std::env::var("FLUX_DASHBOARD_DIR")
-        .unwrap_or_else(|_| "dashboard/out".to_string());
-    let dashboard_index = format!("{}/index.html", dashboard_dir);
-
     // Dev invoke state — runtime dispatch for unregistered calls.
     let dev_invoke_state = Arc::new(DevInvokeState {
         runtime:    Arc::clone(&runtime_dispatch_ref),
@@ -348,16 +226,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = axum::Router::new()
         .nest("/flux/api", api::create_app((*api_state).clone()))
-        .nest("/flux/data-engine", data_engine::api::routes::build(de_state))
         .nest("/flux/queue", flux_queue::api::routes::routes(queue_state))
         .merge(runtime_execute_router)
-        .merge(dev_invoke_router)
-        .nest_service(
-            "/flux",
-            tower_http::services::ServeDir::new(&dashboard_dir)
-                .not_found_service(tower_http::services::ServeFile::new(&dashboard_index)),
-        )
-        .merge(gateway::create_router(gateway_state));
+        .merge(dev_invoke_router);
 
     // ── Listen ────────────────────────────────────────────────────────────
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -381,7 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
         }
         _ => {
-            info!(port, "Flux monolithic server listening (all 5 services)");
+            info!(port, "Flux monolithic server listening (api + runtime + queue)");
             let listener = TcpListener::bind(addr).await?;
             axum::serve(listener, app)
                 .with_graceful_shutdown(async move {

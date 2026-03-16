@@ -1,6 +1,0 @@
-# Python WASM functions have no external dependencies by default.
-# Add pure-Python packages here — they will be bundled automatically.
-# Note: C-extension packages are not supported in WASM.
-#
-# Build: flux deploy  (the CLI compiles handler.py → WASM via py2wasm)
-# Install py2wasm: pip install py2wasm

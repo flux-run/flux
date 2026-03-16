@@ -28,8 +28,8 @@ That is why commands like `flux trace`, `flux why`, replay, diff, mutation histo
 Flux is a complete backend runtime:
 
 - functions for synchronous application logic
-- a gateway for routing, auth, validation, and middleware
-- a data engine for guarded database access and mutation recording
+- a runtime kernel for execution, replay, and resume
+- in-process database dispatch with mutation recording
 - queues and schedules for background work
 - secrets, deployment, and project configuration
 - a CLI built around setup, deployment, and incident debugging
@@ -65,7 +65,7 @@ flux init my-app
 cd my-app
 flux dev
 flux function create create_user
-flux invoke create_user --gateway --payload '{"email":"user@example.com"}'
+flux invoke create_user --payload '{"email":"user@example.com"}'
 flux trace
 flux why <request_id>
 ```
@@ -108,7 +108,7 @@ Repository shape:
 
 - separate Rust crates keep boundaries clear
 - the `server` crate represents the monolithic deployment direction
-- `gateway`, `runtime`, `data-engine`, `queue`, and `api` can still be developed independently
+- `runtime`, `queue`, and `api` can still be developed independently
 
 See [docs/single-binary-architecture.md](docs/single-binary-architecture.md) for the full architecture narrative.
 
@@ -116,13 +116,9 @@ See [docs/single-binary-architecture.md](docs/single-binary-architecture.md) for
 
 - `cli/` - developer and operator CLI
 - `server/` - monolithic runtime entrypoint
-- `gateway/` - ingress, routing, auth, validation, middleware
 - `runtime/` - function execution and bundle loading
-- `data-engine/` - database execution, mutation logging, hooks, policies
 - `queue/` - async jobs, retries, worker execution
 - `api/` - operator-facing APIs for deployments, traces, records, admin actions
-- `dashboard/` - internal/product dashboard UI
-- `scaffolds/` - project and function templates used by `flux init` and `flux function create`
 - `docs/` - product, architecture, and component documentation
 
 ## Start Here

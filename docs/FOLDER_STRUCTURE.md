@@ -10,13 +10,9 @@ The repo is split into product-facing subsystems:
 flowbase/
 ├── api/              # operator-facing APIs
 ├── cli/              # developer and operator CLI
-├── dashboard/        # dashboard UI
-├── data-engine/      # database execution and mutation recording
 ├── docs/             # product and architecture docs
-├── gateway/          # ingress, routing, middleware, auth
 ├── queue/            # async jobs and retries
 ├── runtime/          # user code execution
-├── scaffolds/        # project and function templates
 ├── schemas/          # framework-level SQL and schema assets
 ├── server/           # single-binary deployment target
 └── shared/           # shared contracts and libraries
