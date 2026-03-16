@@ -1,4 +1,4 @@
-.PHONY: dev api server build migrate install install-cli install-server clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types
+.PHONY: dev api server build migrate install install-cli install-server clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types smoke-auth-runtime
 
 # ── Full stack ──────────────────────────────────────────────────────────────
 # Starts API.
@@ -98,3 +98,6 @@ test-product-loop:
 
 test-system:
 	./scripts/platform-tests/run_all.sh
+
+smoke-auth-runtime:
+	bash ./scripts/smoke_auth_runtime.sh
