@@ -1,129 +1,34 @@
 # Concepts
 
-Flux has multiple subsystems, but the product only works if they all reinforce one mental model.
+## Core Model
 
-## Execution Record
+Flux treats each function run as an execution record.
 
-The execution record is the core primitive of Flux.
+Each record ties together:
 
-An execution record connects:
+- input payload
+- output/error
+- checkpointed IO calls
+- duration
+- code/version identity
 
-- the trigger that started work
-- the function or job that ran
-- the code version that handled it
-- spans and logs
-- database reads and mutations
-- downstream jobs or follow-up triggers
-- the final result
+## Why This Matters
 
-If a feature does not strengthen the execution record, it is not central to Flux.
+Debugging starts from one execution ID instead of stitching logs, traces, and DB state from different tools.
 
-## Function
+## Checkpoints
 
-A function is the smallest deployable unit of application logic.
+Checkpointed boundaries (for replay/resume) capture request/response and timing for side-effect calls.
 
-Functions can be triggered by:
+This enables:
 
-- an HTTP route
-- a queue worker
-- a scheduled job
-- an event
+- deterministic replay (`flux replay`)
+- partial continuation (`flux resume`)
+- field-level output comparison (`flux replay --diff`)
 
-Flux functions matter because they live inside one runtime and one debugging model.
+## Operator Loop
 
-## Runtime Ingress
-
-Runtime ingress is the controlled entrypoint into the execution path.
-
-It gives Flux:
-
-- stable request routing
-- request validation hooks
-- one top-level request ID and trace root
-
-Runtime ingress is where an execution becomes a record.
-
-## Database Dispatch
-
-Database dispatch is the data layer that Flux can reason about.
-
-It exists so that:
-
-- database access is part of the runtime contract
-- mutations can be attributed to a specific execution
-- row history, blame, replay, and diff become possible
-
-Database dispatch is what prevents the database from becoming a debugging blind spot.
-
-## Queue
-
-The queue is how Flux handles async work without losing causal context.
-
-The queue preserves:
-
-- parent-child links between executions
-- retry history
-- timeout and dead-letter behavior
-- mutation attribution
-
-Async work is not outside the product. It is part of the same record model.
-
-## Schedule
-
-A schedule is just a time-based trigger into the same runtime.
-
-Cron exists in Flux so that scheduled work uses the same:
-
-- execution record
-- retry model
-- tracing
-- code versioning
-- mutation history
-
-## Deployment
-
-Deployments are part of the causal graph.
-
-Useful backend debugging always asks:
-
-- what version ran?
-- what changed since the last good execution?
-- did the incident start after a deploy?
-
-That is why deployments belong inside the product rather than in a separate CI system narrative.
-
-## Replay
-
-Replay is controlled re-execution of a past request or incident.
-
-The value of replay is not "run it again." The value is:
-
-- reproduce a failure safely
-- compare old versus new behavior
-- separate code problems from data problems
-- inspect what changed at the state level
-
-Replay is credible because the runtime owns enough of the execution path.
-
-## `flux why`
-
-`flux why` is the product thesis in one command.
-
-It answers:
-
-- what failed?
-- where did the failure start?
-- what changed?
-- what state did it mutate?
-- what does the operator do next?
-
-`flux why` is a command people reach for before logs. That is the center of gravity.
-
-## Complete System, Focused Story
-
-Flux includes functions, database execution, queue, schedules, secrets, and deployment because the execution record has to span the whole backend.
-
-But the product message stays narrow:
-
-- Flux is the backend runtime for deterministic production debugging.
-- The complete system exists to make that statement true.
+1. find issue (`flux logs --status error`)
+2. inspect full context (`flux trace <id> --verbose`)
+3. diagnose quickly (`flux why <id>`)
+4. validate fix behavior (`flux replay <id> --diff`)
