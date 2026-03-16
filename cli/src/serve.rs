@@ -76,6 +76,8 @@ pub async fn execute(args: ServeArgs) -> Result<()> {
             port: args.port,
             route_name,
             isolate_pool_size: args.isolate_pool_size,
+            server_url: auth.url,
+            service_token: auth.token,
         },
         artifact,
     )

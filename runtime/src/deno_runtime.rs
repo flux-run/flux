@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::{Context, Result, bail};
@@ -14,10 +15,28 @@ pub enum ExecutionMode {
     Live,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchCheckpoint {
+    pub call_index: u32,
+    pub boundary: String,
+    pub url: String,
+    pub method: String,
+    pub request: serde_json::Value,
+    pub response: serde_json::Value,
+    pub duration_ms: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct JsExecutionOutput {
+    pub output: serde_json::Value,
+    pub checkpoints: Vec<FetchCheckpoint>,
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeExecutionState {
     context: ExecutionContext,
     call_index: u32,
+    checkpoints: Vec<FetchCheckpoint>,
 }
 
 deno_core::extension!(flux_runtime_ext, ops = [op_fetch]);
@@ -29,6 +48,7 @@ async fn op_fetch(
     #[string] url: String,
     #[string] method: String,
     #[serde] body: Option<serde_json::Value>,
+    #[serde] headers: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, AnyError> {
     let (request_id, call_index, mode) = {
         let mut state_ref = state.borrow_mut();
@@ -44,43 +64,89 @@ async fn op_fetch(
 
     match mode {
         ExecutionMode::Live => {
-            let client = Client::new();
-            let method = method.parse::<reqwest::Method>()
-                .map_err(|err| deno_core::error::custom_error("TypeError", err.to_string()))?;
+            let request_json = serde_json::json!({
+                "url": url,
+                "method": method,
+                "body": body,
+                "headers": headers,
+            });
 
-            let mut request = client.request(method, &url);
-            if let Some(body) = body {
-                request = request.json(&body);
+            let started = std::time::Instant::now();
+            let response = make_http_request(&url, &method, body, headers).await?;
+            let duration_ms = started.elapsed().as_millis() as i32;
+
+            {
+                let mut state_ref = state.borrow_mut();
+                let execution = state_ref.borrow_mut::<RuntimeExecutionState>();
+                execution.checkpoints.push(FetchCheckpoint {
+                    call_index,
+                    boundary: "http".to_string(),
+                    url: url.clone(),
+                    method: method.clone(),
+                    request: request_json,
+                    response: response.clone(),
+                    duration_ms,
+                });
             }
 
-            let response = request.send().await.map_err(|err| {
-                deno_core::error::custom_error("TypeError", format!("fetch failed: {err}"))
-            })?;
-
-            let status = response.status().as_u16();
-            let headers = response
-                .headers()
-                .iter()
-                .map(|(k, v)| {
-                    let value = v.to_str().unwrap_or_default().to_string();
-                    (k.to_string(), value)
-                })
-                .collect::<std::collections::HashMap<_, _>>();
-
-            let body_json = response
-                .json::<serde_json::Value>()
-                .await
-                .unwrap_or(serde_json::Value::Null);
-
-            tracing::debug!(%request_id, %call_index, %url, status, "intercepted fetch");
-
-            Ok(serde_json::json!({
-                "status": status,
-                "headers": headers,
-                "body": body_json,
-            }))
+            tracing::debug!(%request_id, %call_index, %url, "intercepted fetch");
+            Ok(response)
         }
     }
+}
+
+async fn make_http_request(
+    url: &str,
+    method: &str,
+    body: Option<serde_json::Value>,
+    headers: Option<serde_json::Value>,
+) -> Result<serde_json::Value, AnyError> {
+    let client = Client::new();
+    let method = method
+        .parse::<reqwest::Method>()
+        .map_err(|err| deno_core::error::custom_error("TypeError", err.to_string()))?;
+
+    let mut request = client.request(method, url);
+
+    if let Some(raw_headers) = headers {
+        let map: HashMap<String, String> = serde_json::from_value(raw_headers)
+            .map_err(|err| deno_core::error::custom_error("TypeError", err.to_string()))?;
+        for (key, value) in map {
+            request = request.header(key, value);
+        }
+    }
+
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+
+    let response = request.send().await.map_err(|err| {
+        deno_core::error::custom_error("TypeError", format!("fetch failed: {err}"))
+    })?;
+
+    let status = response.status().as_u16();
+    let response_headers = response
+        .headers()
+        .iter()
+        .map(|(k, v)| {
+            let value = v.to_str().unwrap_or_default().to_string();
+            (k.to_string(), value)
+        })
+        .collect::<HashMap<_, _>>();
+
+    let text = response
+        .text()
+        .await
+        .map_err(|err| deno_core::error::custom_error("TypeError", err.to_string()))?;
+
+    let parsed_body = serde_json::from_str::<serde_json::Value>(&text)
+        .unwrap_or_else(|_| serde_json::Value::String(text));
+
+    Ok(serde_json::json!({
+        "status": status,
+        "headers": response_headers,
+        "body": parsed_body,
+    }))
 }
 
 pub struct JsIsolate {
@@ -110,13 +176,14 @@ impl JsIsolate {
         &mut self,
         payload: serde_json::Value,
         context: ExecutionContext,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<JsExecutionOutput> {
         {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
             state.put(RuntimeExecutionState {
                 context,
                 call_index: 0,
+                checkpoints: Vec::new(),
             });
         }
 
@@ -152,10 +219,12 @@ impl JsIsolate {
             )
             .context("failed to read handler result")?;
 
-        let scope = &mut self.runtime.handle_scope();
-        let local = deno_core::v8::Local::new(scope, result_value);
-        let raw: String = deno_core::serde_v8::from_v8(scope, local)
-            .context("failed to deserialize handler result")?;
+        let raw: String = {
+            let scope = &mut self.runtime.handle_scope();
+            let local = deno_core::v8::Local::new(scope, result_value);
+            deno_core::serde_v8::from_v8(scope, local)
+                .context("failed to deserialize handler result")?
+        };
 
         let envelope: serde_json::Value = serde_json::from_str(&raw)
             .context("handler result envelope is not valid JSON")?;
@@ -166,7 +235,20 @@ impl JsIsolate {
             }
         }
 
-        Ok(envelope.get("result").cloned().unwrap_or(serde_json::Value::Null))
+        let checkpoints = {
+            let state = self.runtime.op_state();
+            let mut state = state.borrow_mut();
+            let execution = state.borrow_mut::<RuntimeExecutionState>();
+            std::mem::take(&mut execution.checkpoints)
+        };
+
+        Ok(JsExecutionOutput {
+            output: envelope
+                .get("result")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            checkpoints,
+        })
     }
 }
 
@@ -175,7 +257,8 @@ fn bootstrap_fetch_js() -> &'static str {
 globalThis.fetch = async function(url, init = {}) {
   const method = typeof init?.method === "string" ? init.method : "GET";
   const body = init?.body ?? null;
-    const response = await Deno.core.ops.op_fetch(String(url), String(method), body);
+  const headers = init?.headers ?? null;
+  const response = await Deno.core.ops.op_fetch(String(url), String(method), body, headers);
 
   return {
     status: response.status,

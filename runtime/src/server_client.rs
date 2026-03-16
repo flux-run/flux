@@ -1,0 +1,79 @@
+use anyhow::{Context, Result};
+use tonic::Request;
+use tonic::metadata::MetadataValue;
+
+use crate::deno_runtime::FetchCheckpoint;
+use crate::isolate_pool::ExecutionResult;
+
+pub mod pb {
+    tonic::include_proto!("flux.internal.v1");
+}
+
+pub struct ExecutionEnvelope {
+    pub method: String,
+    pub path: String,
+    pub request_json: serde_json::Value,
+    pub result: ExecutionResult,
+}
+
+pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelope) -> Result<()> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+        .await
+        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+
+    let mut request = Request::new(pb::RecordExecutionRequest {
+        execution_id: envelope.result.execution_id,
+        request_id: envelope.result.request_id,
+        code_version: envelope.result.code_version,
+        method: envelope.method,
+        path: envelope.path,
+        status: envelope.result.status,
+        request_json: serde_json::to_string(&envelope.request_json)
+            .context("failed to encode request JSON")?,
+        response_json: serde_json::to_string(&envelope.result.body)
+            .context("failed to encode response JSON")?,
+        error: envelope.result.error.unwrap_or_default(),
+        duration_ms: envelope.result.duration_ms,
+        checkpoints: envelope
+            .result
+            .checkpoints
+            .into_iter()
+            .map(checkpoint_to_proto)
+            .collect(),
+    });
+
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    client
+        .record_execution(request)
+        .await
+        .context("record execution request failed")?;
+
+    Ok(())
+}
+
+fn checkpoint_to_proto(checkpoint: FetchCheckpoint) -> pb::CheckpointEntry {
+    pb::CheckpointEntry {
+        call_index: checkpoint.call_index,
+        boundary: checkpoint.boundary,
+        url: checkpoint.url,
+        method: checkpoint.method,
+        request_json: serde_json::to_string(&checkpoint.request).unwrap_or_else(|_| "null".to_string()),
+        response_json: serde_json::to_string(&checkpoint.response).unwrap_or_else(|_| "null".to_string()),
+        duration_ms: checkpoint.duration_ms,
+    }
+}
+
+fn normalize_grpc_url(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{}", trimmed)
+    }
+}

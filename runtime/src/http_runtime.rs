@@ -18,6 +18,8 @@ pub struct HttpRuntimeConfig {
     pub port: u16,
     pub route_name: String,
     pub isolate_pool_size: usize,
+    pub server_url: String,
+    pub service_token: String,
 }
 
 impl Default for HttpRuntimeConfig {
@@ -27,6 +29,8 @@ impl Default for HttpRuntimeConfig {
             port: 3000,
             route_name: "hello".to_string(),
             isolate_pool_size: 16,
+            server_url: "http://127.0.0.1:50051".to_string(),
+            service_token: String::new(),
         }
     }
 }
@@ -36,6 +40,8 @@ struct RuntimeState {
     route_name: String,
     code_version: String,
     pool: Arc<IsolatePool>,
+    server_url: String,
+    service_token: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,6 +60,8 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         route_name: config.route_name.clone(),
         code_version: artifact.sha256.clone(),
         pool: Arc::new(IsolatePool::new(config.isolate_pool_size, &artifact.code)?),
+        server_url: config.server_url,
+        service_token: config.service_token,
     };
 
     let app = Router::new()
@@ -95,15 +103,32 @@ async fn handle_request(
             .into_response();
     }
 
+    let request_payload = payload.clone();
+
     let result = state
         .pool
         .execute(payload, ExecutionContext::new(state.code_version.clone()))
         .await;
 
+    if !state.service_token.is_empty() {
+        let _ = crate::server_client::record_execution(
+            &state.server_url,
+            &state.service_token,
+            crate::server_client::ExecutionEnvelope {
+                method: "POST".to_string(),
+                path: format!("/{}", route),
+                request_json: request_payload,
+                result: result.clone(),
+            },
+        )
+        .await;
+    }
+
     if result.status != "ok" {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
+                "execution_id": result.execution_id,
                 "request_id": result.request_id,
                 "code_version": result.code_version,
                 "status": result.status,
@@ -116,6 +141,7 @@ async fn handle_request(
     (
         StatusCode::OK,
         Json(serde_json::json!({
+            "execution_id": result.execution_id,
             "request_id": result.request_id,
             "code_version": result.code_version,
             "status": result.status,

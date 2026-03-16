@@ -9,6 +9,7 @@ pub mod artifact;
 pub mod deno_runtime;
 pub mod http_runtime;
 pub mod isolate_pool;
+pub mod server_client;
 
 pub use artifact::{
 	RuntimeArtifact,

@@ -35,6 +35,7 @@ impl CoreService {
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let config = self.config;
         let pool = init_pool().await?;
+        ensure_runtime_tables(&pool).await?;
         info!("Server connected to database");
 
         if let Some(token) = ensure_service_token(&pool).await? {
@@ -107,6 +108,49 @@ async fn ensure_service_token(pool: &PgPool) -> Result<Option<String>, sqlx::Err
     .await?;
 
     Ok(Some(raw))
+}
+
+async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query("CREATE SCHEMA IF NOT EXISTS flux")
+        .execute(pool)
+        .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS flux.executions (
+            id UUID PRIMARY KEY,
+            request_id UUID NOT NULL,
+            method TEXT NOT NULL,
+            path TEXT NOT NULL,
+            status TEXT NOT NULL,
+            request JSONB,
+            response JSONB,
+            error TEXT,
+            code_sha TEXT NOT NULL,
+            started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            duration_ms INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS flux.checkpoints (
+            execution_id UUID NOT NULL,
+            call_index INTEGER NOT NULL,
+            boundary TEXT NOT NULL,
+            url TEXT,
+            method TEXT,
+            request JSONB,
+            response JSONB,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (execution_id, call_index)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 async fn shutdown_signal() {

@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::deno_runtime::{ExecutionMode, JsIsolate};
+use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
+    pub execution_id: String,
     pub request_id: String,
     pub code_version: String,
     pub mode: ExecutionMode,
@@ -18,6 +19,7 @@ pub struct ExecutionContext {
 impl ExecutionContext {
     pub fn new(code_version: impl Into<String>) -> Self {
         Self {
+            execution_id: Uuid::new_v4().to_string(),
             request_id: Uuid::new_v4().to_string(),
             code_version: code_version.into(),
             mode: ExecutionMode::Live,
@@ -27,11 +29,14 @@ impl ExecutionContext {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionResult {
+    pub execution_id: String,
     pub request_id: String,
     pub code_version: String,
     pub status: String,
     pub body: serde_json::Value,
     pub error: Option<String>,
+    pub duration_ms: i32,
+    pub checkpoints: Vec<FetchCheckpoint>,
 }
 
 #[derive(Debug)]
@@ -134,23 +139,30 @@ fn spawn_isolate_worker(
 
                 while let Some(work) = rx.recv().await {
                     let context = work.context.clone();
+                    let started = std::time::Instant::now();
                     let result = match isolate.execute(work.payload, work.context).await {
-                        Ok(body) => ExecutionResult {
+                        Ok(JsExecutionOutput { output, checkpoints }) => ExecutionResult {
+                            execution_id: context.execution_id,
                             request_id: context.request_id,
                             code_version: context.code_version,
                             status: "ok".to_string(),
                             body: serde_json::json!({
                                 "isolate_id": isolate_id,
-                                "output": body,
+                                "output": output,
                             }),
                             error: None,
+                            duration_ms: started.elapsed().as_millis() as i32,
+                            checkpoints,
                         },
                         Err(err) => ExecutionResult {
+                            execution_id: context.execution_id,
                             request_id: context.request_id,
                             code_version: context.code_version,
                             status: "error".to_string(),
                             body: serde_json::Value::Null,
                             error: Some(err.to_string()),
+                            duration_ms: started.elapsed().as_millis() as i32,
+                            checkpoints: vec![],
                         },
                     };
 
@@ -171,10 +183,13 @@ fn spawn_isolate_worker(
 
 fn error_result(context: ExecutionContext, message: impl Into<String>) -> ExecutionResult {
     ExecutionResult {
+        execution_id: context.execution_id,
         request_id: context.request_id,
         code_version: context.code_version,
         status: "error".to_string(),
         body: serde_json::Value::Null,
         error: Some(message.into()),
+        duration_ms: 0,
+        checkpoints: vec![],
     }
 }
