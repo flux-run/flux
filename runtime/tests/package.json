@@ -1,0 +1,44 @@
+{
+  "name": "flux-runtime-tests",
+  "version": "0.1.0",
+  "description": "Comprehensive runtime compatibility test suite for Flux",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "flux-runtime-test": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --loader tsx dist/cli.js",
+    "test:watch": "tsc --watch",
+    "test:ecmascript": "node --loader tsx dist/cli.js ecmascript",
+    "test:node": "node --loader tsx dist/cli.js node",
+    "test:web": "node --loader tsx dist/cli.js web",
+    "test:frameworks": "node --loader tsx dist/cli.js frameworks",
+    "test:runtime": "node --loader tsx dist/cli.js runtime",
+    "test:determinism": "node --loader tsx dist/cli.js determinism",
+    "test:errors": "node --loader tsx dist/cli.js error-handling",
+    "test:concurrency": "node --loader tsx dist/cli.js concurrency",
+    "test:all": "node --loader tsx dist/cli.js all",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "runtime",
+    "testing",
+    "compatibility",
+    "v8",
+    "typescript"
+  ],
+  "author": "Flux Contributors",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "zora": "^5.0.0"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "table": "^6.8.1"
+  }
+}
