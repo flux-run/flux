@@ -52,8 +52,8 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
 
     let state = RuntimeState {
         route_name: config.route_name.clone(),
-        code_version: artifact.sha256,
-        pool: Arc::new(IsolatePool::new(config.isolate_pool_size)),
+        code_version: artifact.sha256.clone(),
+        pool: Arc::new(IsolatePool::new(config.isolate_pool_size, &artifact.code)?),
     };
 
     let app = Router::new()
@@ -111,6 +111,19 @@ async fn handle_request(
     isolate.set_context(ExecutionContext::new(state.code_version.clone()));
     let result = isolate.run(payload, &route).await;
 
+    if result.status != "ok" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "request_id": result.request_id,
+                "code_version": result.code_version,
+                "status": result.status,
+                "error": result.error,
+            })),
+        )
+            .into_response();
+    }
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -118,6 +131,7 @@ async fn handle_request(
             "code_version": result.code_version,
             "status": result.status,
             "result": result.body,
+            "error": result.error,
         })),
     )
         .into_response()

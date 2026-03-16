@@ -1,12 +1,12 @@
-//! `runtime` library crate — prepares JavaScript artifacts for the server.
+//! `runtime` library crate — executes JavaScript handlers in embedded V8 isolates.
 //!
-//! This crate no longer executes user code.
-//! Its only job is to:
-//! - accept a JavaScript source file or string,
-//! - compute a deterministic SHA-256 content hash,
-//! - package the script into a payload the server can store and run.
+//! This crate is responsible for:
+//! - preparing artifacts,
+//! - running user code inside reused isolates,
+//! - exposing Rust-owned host I/O ops (for example intercepted `fetch`).
 
 pub mod artifact;
+pub mod deno_runtime;
 pub mod http_runtime;
 pub mod isolate_pool;
 
