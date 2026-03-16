@@ -27,12 +27,9 @@
 //! ```
 
 pub mod bundle;
-pub mod config;
-pub mod dispatch;
+pub mod contracts;
 pub mod engine;
 pub mod execute;
-pub mod schema;
-pub mod secrets;
 pub mod state;
 pub mod trace;
 

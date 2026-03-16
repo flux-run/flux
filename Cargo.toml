@@ -2,9 +2,4 @@
 resolver = "2"
 members = [
     "runtime",
-    "cli",
-    "queue",
-    "shared/job_contract",
-    "shared/api_contract",
-    "server",
 ]

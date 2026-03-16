@@ -34,21 +34,16 @@
 /// Now it lives here exactly once.
 use std::collections::HashMap;
 use std::time::Instant;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use serde_json::Value;
 
 use crate::engine::executor::{DbContext, ExecutionResult, PoolDispatchers, QueueContext};
 use crate::engine::pool::IsolatePool;
 use crate::execute::bundle::ResolvedBundle;
 use crate::execute::types::InvocationCtx;
-use crate::schema::cache::SchemaCache;
-use crate::schema::validator;
 use crate::trace::emitter::TraceEmitter;
 
 pub struct ExecutionRunner<'a> {
     pub isolate_pool:     &'a IsolatePool,
-    pub schema_cache:     &'a SchemaCache,
     /// Postgres schema name for this project — forwarded into ctx.db.query().
     pub database:         String,
     pub dispatchers:      &'a PoolDispatchers,
@@ -58,8 +53,7 @@ impl<'a> ExecutionRunner<'a> {
     /// Validate → execute → emit spans → return (status_code, json_body).
     ///
     /// `tracer` must already have `code_sha` set before this call.
-    /// The caller wraps this in `.into_response()` for HTTP handlers, or
-    /// converts to `ExecuteResponse` for in-process dispatch.
+    /// Caller converts this `(status_code, body)` tuple into transport output.
     pub async fn run(
         &self,
         bundle:  ResolvedBundle,
@@ -67,20 +61,7 @@ impl<'a> ExecutionRunner<'a> {
         ctx:     &InvocationCtx,
         tracer:  &TraceEmitter,
         start:   Instant,
-    ) -> (StatusCode, Value) {
-        // ── JSON Schema validation ────────────────────────────────────────
-        if let Some(schema) = self.schema_cache.get(&ctx.function_id) {
-            if let Some(input_schema) = &schema.input {
-                if let Err(violations) = validator::validate_input(input_schema, &ctx.payload) {
-                    return (StatusCode::BAD_REQUEST, serde_json::json!({
-                        "error":      "INPUT_VALIDATION_ERROR",
-                        "message":    "Payload does not match the function's input schema",
-                        "violations": violations,
-                    }));
-                }
-            }
-        }
-
+    ) -> (u16, Value) {
         // ── execution_start span ──────────────────────────────────────────
         tracer.post_lifecycle("info", "execution_start".into(), "start", "started", None);
 
@@ -107,23 +88,10 @@ impl<'a> ExecutionRunner<'a> {
         // ── emit ctx.log() lines + execution_end span (fire-and-forget) ──
         tracer.emit_logs(execution.logs, duration_ms);
 
-        (StatusCode::OK, serde_json::json!({
+        (200, serde_json::json!({
             "result":      execution.output,
             "duration_ms": duration_ms,
         }))
-    }
-
-    /// Convenience wrapper for axum HTTP handlers.
-    pub async fn run_response(
-        &self,
-        bundle:  ResolvedBundle,
-        secrets: HashMap<String, String>,
-        ctx:     &InvocationCtx,
-        tracer:  &TraceEmitter,
-        start:   Instant,
-    ) -> Response {
-        let (status, body) = self.run(bundle, secrets, ctx, tracer, start).await;
-        (status, axum::Json(body)).into_response()
     }
 
     // ── private ───────────────────────────────────────────────────────────
@@ -135,7 +103,7 @@ impl<'a> ExecutionRunner<'a> {
         ctx:     &InvocationCtx,
         tracer:  &TraceEmitter,
         start:   Instant,
-    ) -> (Result<ExecutionResult, (StatusCode, Value)>, u64) {
+    ) -> (Result<ExecutionResult, (u16, Value)>, u64) {
         let queue_ctx = QueueContext {};
         let db_ctx = DbContext {
             database: self.database.clone(),
@@ -160,7 +128,7 @@ impl<'a> ExecutionRunner<'a> {
         (Ok(execution), duration_ms)
     }
 
-    fn execution_error(&self, error: String, duration_ms: u64, tracer: &TraceEmitter) -> (StatusCode, Value) {
+    fn execution_error(&self, error: String, duration_ms: u64, tracer: &TraceEmitter) -> (u16, Value) {
         // Pool saturation — map to 503 before JSON parsing so callers get a
         // proper Retry-After hint rather than a generic 500.
         if error.starts_with("pool_saturated") {
@@ -171,7 +139,7 @@ impl<'a> ExecutionRunner<'a> {
                 Some(duration_ms),
             );
             return (
-                StatusCode::SERVICE_UNAVAILABLE,
+                503,
                 serde_json::json!({
                     "error":       "pool_saturated",
                     "message":     "All function workers are at capacity — retry in a moment",
@@ -195,11 +163,7 @@ impl<'a> ExecutionRunner<'a> {
             Some(duration_ms),
         );
 
-        let status = if err_code == "INPUT_VALIDATION_ERROR" {
-            StatusCode::BAD_REQUEST
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
+        let status = if err_code == "INPUT_VALIDATION_ERROR" { 400 } else { 500 };
         (status, serde_json::json!({ "error": err_code, "message": message }))
     }
 }
@@ -223,16 +187,14 @@ mod tests {
     use std::time::Instant;
 
     use async_trait::async_trait;
-    use axum::http::StatusCode;
     use serde_json::{json, Value};
     use uuid::Uuid;
 
-    use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch, ResolvedFunction};
+    use crate::contracts::{ApiDispatch, DataEngineDispatch, QueueDispatch, ResolvedFunction};
     use crate::engine::executor::PoolDispatchers;
     use crate::engine::pool::IsolatePool;
     use crate::execute::bundle::ResolvedBundle;
     use crate::execute::types::InvocationCtx;
-    use crate::schema::cache::{FunctionSchema, SchemaCache};
     use crate::trace::emitter::TraceEmitter;
 
     // ── Test doubles ─────────────────────────────────────────────────────────
@@ -300,12 +262,10 @@ mod tests {
 
     fn runner<'a>(
         isolate_pool: &'a IsolatePool,
-        schema_cache: &'a SchemaCache,
         dispatchers:  &'a PoolDispatchers,
     ) -> ExecutionRunner<'a> {
         ExecutionRunner {
             isolate_pool,
-            schema_cache,
             database:        String::new(),
             dispatchers,
         }
@@ -318,48 +278,11 @@ mod tests {
         assert_eq!(project_schema_name(), "");
     }
 
-    // ── Schema validation (run() short-circuits before pool is touched) ───────
-
     #[tokio::test]
-    async fn schema_validation_failure_returns_400() {
-        let schema_cache = SchemaCache::new(10);
-        schema_cache.insert("validate_fn".into(), FunctionSchema {
-            input: Some(json!({
-                "type": "object",
-                "required": ["user_id"],
-                "properties": { "user_id": { "type": "string" } }
-            })),
-            output: None,
-        });
-
+    async fn invalid_code_returns_error() {
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
-        let r = runner(&isolate_pool, &schema_cache, &dispatchers);
-
-        let mut c = ctx("validate_fn");
-        c.payload = json!({"wrong_key": 123}); // missing required "user_id"
-
-        let (status, body) = r.run(
-            ResolvedBundle::Deno { code: "".into() },
-            HashMap::new(),
-            &c,
-            &null_tracer(),
-            Instant::now(),
-        ).await;
-
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body["error"], "INPUT_VALIDATION_ERROR");
-        assert!(body["violations"].is_array());
-    }
-
-    #[tokio::test]
-    async fn no_schema_skips_validation() {
-        // Empty cache → validation step is bypassed; pool will error with bad code,
-        // but the point is we get a 500 (execution error), not a 400 (schema error).
-        let schema_cache = SchemaCache::new(10);
-        let dispatchers = test_dispatchers();
-        let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
-        let r = runner(&isolate_pool, &schema_cache, &dispatchers);
+        let r = runner(&isolate_pool, &dispatchers);
 
         let (status, _body) = r.run(
             ResolvedBundle::Deno { code: "throw new Error('boom')".into() },
@@ -370,20 +293,17 @@ mod tests {
         ).await;
 
         // Not 400 — schema wasn't the problem.
-        assert_ne!(status, StatusCode::BAD_REQUEST);
+        assert_ne!(status, 400);
     }
-
-    // ── execution_error: JSON error envelope parsing ──────────────────────────
 
     #[tokio::test]
     async fn json_error_code_extracted_from_pool_error() {
         // Deno throws structured errors as JSON strings, e.g.:
         //   {"code":"NOT_FOUND","message":"user not found"}
         // The runner must parse code/message and preserve them.
-        let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
-        let r = runner(&isolate_pool, &schema_cache, &dispatchers);
+        let r = runner(&isolate_pool, &dispatchers);
 
         // Code that throws a structured JSON error.
         let code = r#"__flux_fn = async (ctx) => {
@@ -399,7 +319,7 @@ mod tests {
             Instant::now(),
         ).await;
 
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(status, 500);
         // The error field should be present.
         assert!(body.get("error").is_some() || body.get("message").is_some(),
             "expected error body, got: {}", body);
@@ -409,10 +329,9 @@ mod tests {
     async fn input_validation_error_code_in_pool_error_returns_400() {
         // If the pool itself returns INPUT_VALIDATION_ERROR (unlikely but possible),
         // the runner must map it to 400.
-        let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 5, dispatchers.clone());
-        let r = runner(&isolate_pool, &schema_cache, &dispatchers);
+        let r = runner(&isolate_pool, &dispatchers);
 
         // Code that throws INPUT_VALIDATION_ERROR — runner must map it to 400.
         let code = r#"__flux_fn = async (ctx) => {
@@ -428,7 +347,7 @@ mod tests {
             Instant::now(),
         ).await;
 
-        assert_eq!(status, StatusCode::BAD_REQUEST,
+        assert_eq!(status, 400,
             "INPUT_VALIDATION_ERROR must map to 400, body: {}", body);
         assert_eq!(body["error"], "INPUT_VALIDATION_ERROR");
     }
@@ -437,10 +356,9 @@ mod tests {
 
     #[tokio::test]
     async fn deno_success_returns_200_with_result() {
-        let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 10, dispatchers.clone());
-        let r = runner(&isolate_pool, &schema_cache, &dispatchers);
+        let r = runner(&isolate_pool, &dispatchers);
 
         let code = r#"__flux_fn = async (ctx) => ({ ok: true, echo: ctx.payload.name });"#.to_string();
 
@@ -452,7 +370,7 @@ mod tests {
             Instant::now(),
         ).await;
 
-        assert_eq!(status, StatusCode::OK, "body: {}", body);
+        assert_eq!(status, 200, "body: {}", body);
         assert_eq!(body["result"]["ok"], true);
         assert!(body["duration_ms"].is_number());
     }
@@ -461,10 +379,9 @@ mod tests {
 
     #[tokio::test]
     async fn successful_run_includes_duration_ms() {
-        let schema_cache = SchemaCache::new(10);
         let dispatchers = test_dispatchers();
         let isolate_pool = IsolatePool::new(1, 10, dispatchers.clone());
-        let r = runner(&isolate_pool, &schema_cache, &dispatchers);
+        let r = runner(&isolate_pool, &dispatchers);
 
         let (status, body) = r.run(
             ResolvedBundle::Deno { code: r#"__flux_fn = async (ctx) => 42;"#.into() },
@@ -474,32 +391,8 @@ mod tests {
             Instant::now(),
         ).await;
 
-        assert_eq!(status, StatusCode::OK, "body: {}", body);
+        assert_eq!(status, 200, "body: {}", body);
         assert!(body["duration_ms"].as_u64().is_some(), "duration_ms must be a number");
     }
 
-    // ── run_response wraps into HTTP response ─────────────────────────────────
-
-    #[tokio::test]
-    async fn run_response_returns_axum_response() {
-        use axum::body::to_bytes;
-
-        let schema_cache = SchemaCache::new(10);
-        let dispatchers = test_dispatchers();
-        let isolate_pool = IsolatePool::new(1, 10, dispatchers.clone());
-        let r = runner(&isolate_pool, &schema_cache, &dispatchers);
-
-        let resp = r.run_response(
-            ResolvedBundle::Deno { code: r#"__flux_fn = async (ctx) => ({ v: 1 });"#.into() },
-            HashMap::new(),
-            &ctx("wrap_fn"),
-            &null_tracer(),
-            Instant::now(),
-        ).await;
-
-        assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
-        let body: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["result"]["v"], 1);
-    }
 }

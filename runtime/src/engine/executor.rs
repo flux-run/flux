@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{timeout, Duration};
-use job_contract::dispatch::{
+use crate::contracts::{
     ApiDispatch, DataEngineDispatch, QueueDispatch, RuntimeDispatch,
 };
 
@@ -583,7 +583,7 @@ pub async fn op_function_invoke(
             .unwrap_or_default()
     };
 
-    let req = job_contract::dispatch::ExecuteRequest {
+    let req = crate::contracts::ExecuteRequest {
         function_id:    function_name,
         payload,
         execution_seed: None,

@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use uuid::Uuid;
 use serde_json::Value;
-use job_contract::dispatch::ApiDispatch;
+use crate::contracts::ApiDispatch;
 use crate::engine::executor::LogLine;
 
 #[derive(Clone)]

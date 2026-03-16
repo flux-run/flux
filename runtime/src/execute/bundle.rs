@@ -6,14 +6,8 @@
 ///
 /// Separated from the HTTP handler and execution runner so each can be
 /// tested and reasoned about independently.
-use axum::http::StatusCode;
-use axum::Json;
-use axum::response::{IntoResponse, Response};
-use serde_json::Value;
-
-use job_contract::dispatch::ApiDispatch;
+use crate::contracts::ApiDispatch;
 use crate::bundle::cache::BundleCache;
-use crate::schema::cache::{SchemaCache, FunctionSchema};
 use crate::trace::emitter::TraceEmitter;
 
 /// The resolved bundle, ready for execution.
@@ -37,8 +31,6 @@ pub fn bundle_sha(data: &[u8]) -> String {
 /// State slice used by the resolver (all immutably shared via Arc in AppState).
 pub struct BundleResolver<'a> {
     pub bundle_cache:  &'a BundleCache,
-    pub schema_cache:  &'a SchemaCache,
-    pub http_client:   &'a reqwest::Client,
     /// Control-plane dispatch — used for the bundle metadata fetch.
     pub api:           &'a dyn ApiDispatch,
 }
@@ -53,29 +45,23 @@ impl<'a> BundleResolver<'a> {
     /// Cold path: fetch bundle from the control-plane `/internal/bundle` endpoint,
     /// populate caches, and cache any schema data included in the response.
     ///
-    /// Returns `Ok(ResolvedBundle)` on success, or an `Err(Response)` with the
-    /// appropriate HTTP error status already encoded.
+    /// Returns `Ok(ResolvedBundle)` on success, or an `Err(String)`.
     pub async fn cold_fetch(
         &self,
         function_id: &str,
         _tracer:     &TraceEmitter,
-    ) -> Result<ResolvedBundle, Response> {
+    ) -> Result<ResolvedBundle, String> {
         // Fetch bundle metadata via the ApiDispatch trait (HTTP in multi-process
         // mode, direct call in single-binary mode).  The dispatch impl already
         // unwraps the outer `{ success, data }` envelope and returns the inner
         // data object.
         let data = self.api.get_bundle(function_id).await.map_err(|e| {
             if e.contains("HTTP 404") {
-                not_found("no_bundle_found",
-                    "No active deployment found for this function. Deploy it first.")
+                "no_bundle_found: No active deployment found for this function. Deploy it first.".to_string()
             } else {
-                bad_gateway("BundleFetchError",
-                    format!("Failed to reach API service: {}", e))
+                format!("BundleFetchError: Failed to reach API service: {}", e)
             }
         })?;
-
-        // Cache schema if the control plane returned it alongside the bundle.
-        self.cache_schema(function_id, &data);
 
         let deployment_id = data.get("deployment_id").and_then(|v| v.as_str()).map(|s| s.to_string());
         let code_opt      = data.get("code")         .and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -91,8 +77,7 @@ impl<'a> BundleResolver<'a> {
         }
 
         let code = code_opt.ok_or_else(|| {
-            internal("no_bundle_found",
-                "Bundle response contained no code field".to_string())
+            "no_bundle_found: Bundle response contained no code field".to_string()
         })?;
         self.bundle_cache.insert_both(function_id.to_string(), deployment_id, code.clone());
         Ok(ResolvedBundle::Deno { code })
@@ -100,32 +85,6 @@ impl<'a> BundleResolver<'a> {
 
     // ── private helpers ───────────────────────────────────────────────────
 
-    /// `data` is the already-unwrapped inner data object from the bundle response.
-    fn cache_schema(&self, function_id: &str, data: &Value) {
-        let input  = data.get("input_schema" ).cloned().filter(|v| !v.is_null());
-        let output = data.get("output_schema").cloned().filter(|v| !v.is_null());
-        if input.is_some() || output.is_some() {
-            self.schema_cache.insert(function_id.to_string(), FunctionSchema { input, output });
-        }
-    }
-
-}
-
-// ── Error response helpers ────────────────────────────────────────────────────
-
-fn bad_gateway(code: &str, message: String) -> Response {
-    (StatusCode::BAD_GATEWAY,
-     Json(serde_json::json!({ "error": code, "message": message }))).into_response()
-}
-
-fn not_found(code: &str, message: &str) -> Response {
-    (StatusCode::NOT_FOUND,
-     Json(serde_json::json!({ "error": code, "message": message }))).into_response()
-}
-
-fn internal(code: &str, message: String) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR,
-     Json(serde_json::json!({ "error": code, "message": message }))).into_response()
 }
 
 #[cfg(test)]

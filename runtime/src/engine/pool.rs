@@ -263,7 +263,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, OnceLock};
     use async_trait::async_trait;
-    use job_contract::dispatch::{
+    use crate::contracts::{
         ApiDispatch, DataEngineDispatch, QueueDispatch,
         ExecuteRequest, ExecuteResponse, ResolvedFunction,
     };
