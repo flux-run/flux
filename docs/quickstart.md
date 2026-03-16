@@ -43,7 +43,7 @@ POST http://127.0.0.1:3000/index
 ## 5) Run One-Off Execution
 
 ```bash
-target/debug/flux exec index.ts --payload '{"email":"user@example.com"}'
+target/debug/flux exec index.ts --input '{"email":"user@example.com"}'
 ```
 
 For a focused smoke-test flow, see [examples/exec-smoke.md](examples/exec-smoke.md).

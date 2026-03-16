@@ -56,8 +56,8 @@ flux resume <execution_id> --from 2
 ## One-Off Local Run
 
 ```bash
-flux exec index.ts --payload '{"amount":100}'
-flux exec index.ts --payload '{"amount":100}' --timeout-secs 30
+flux exec index.ts --input '{"amount":100}'
+flux exec index.ts --input '{"amount":100}' --timeout-secs 30
 ```
 
 ## UX Conventions

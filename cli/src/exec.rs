@@ -14,7 +14,7 @@ pub struct ExecArgs {
     #[arg(value_name = "ENTRY", default_value = "index.js")]
     pub entry: String,
     #[arg(long, value_name = "JSON", default_value = "{}")]
-    pub payload: String,
+    pub input: String,
     #[arg(long, value_name = "URL")]
     pub url: Option<String>,
     #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
@@ -29,8 +29,8 @@ pub struct ExecArgs {
 
 pub async fn execute(args: ExecArgs) -> Result<()> {
     let auth = resolve_auth(args.url.clone(), args.token.clone())?;
-    let payload_json: serde_json::Value = serde_json::from_str(&args.payload)
-        .context("invalid --payload JSON")?;
+    let payload_json: serde_json::Value = serde_json::from_str(&args.input)
+        .context("invalid --input JSON")?;
 
     let entry = PathBuf::from(&args.entry);
     if !entry.exists() {

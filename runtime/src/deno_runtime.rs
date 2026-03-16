@@ -627,7 +627,8 @@ impl JsIsolate {
              globalThis.__flux_last_error = null;\n\
              (async () => {{\n\
                try {{\n\
-                 const result = await globalThis.__flux_user_handler({payload});\n\
+                 const ctx = {{}};\n\
+                 const result = await globalThis.__flux_user_handler({{ input: {payload}, ctx }});\n\
                  globalThis.__flux_last_result = result ?? null;\n\
                }} catch (err) {{\n\
                  globalThis.__flux_last_error = String(err && err.stack ? err.stack : err);\n\

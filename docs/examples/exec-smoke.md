@@ -18,7 +18,7 @@ flux server start --database-url postgres://postgres:postgres@localhost:5432/flu
 flux init
 
 # 3. Run a one-off execution
-flux exec examples/hello.js --payload '{"health":"ok"}'
+flux exec examples/hello.js --input '{"health":"ok"}'
 ```
 
 ## Optional Follow-up

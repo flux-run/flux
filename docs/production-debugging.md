@@ -36,7 +36,7 @@ Useful when you want to re-run only the steps after a known-good checkpoint.
 ## 5) One-Off Local Probe
 
 ```bash
-flux exec index.ts --payload '{"test":true}'
+flux exec index.ts --input '{"test":true}'
 ```
 
 Runs the function once, records the execution, then exits. Useful for verifying a fix without keeping the runtime running.
