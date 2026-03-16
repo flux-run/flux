@@ -1,8 +1,8 @@
 /**
  * run-test262.ts
  *
- * Runs the TC39 Test262 conformance suite against Node.js (V8) — the same
- * JavaScript engine used inside Flux's Deno-based isolates.
+ * Runs the TC39 Test262 conformance suite via `flux run` to measure
+ * ECMAScript conformance inside Flux's V8 isolates.
  *
  * Prerequisites
  * -------------
@@ -22,9 +22,11 @@
  *   runtime/reports/test262.json
  */
 
-import { spawnSync }                from "node:child_process";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { resolve, join, relative }  from "node:path";
+import { spawnSync }                                             from "node:child_process";
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { resolve, join, relative }                               from "node:path";
+import { tmpdir }                                                from "node:os";
+import { FLUX_CLI_BIN }                                          from "./lib/flux-binary.js";
 import { performance }              from "node:perf_hooks";
 import {
   EXTERNAL_TESTS_DIR,
@@ -49,6 +51,11 @@ const EXCLUDED_DIRS = new Set(["annexB", "intl402"]);
 /** CLI flag  --limit <n>  caps how many tests are attempted (quick smoke run). */
 const limitArg = process.argv.indexOf("--limit");
 const LIMIT    = limitArg !== -1 ? parseInt(process.argv[limitArg + 1] ?? "9999", 10) : Infinity;
+
+// Temp directory for writing combined test sources (harness + test body).
+// Reuse a single file per test run (sequential execution, no concurrency).
+const TEMP_DIR = mkdtempSync(join(tmpdir(), "flux-test262-"));
+process.on("exit", () => rmSync(TEMP_DIR, { recursive: true, force: true }));
 
 // Harness files loaded once and prepended to every test
 const HARNESS_INLINE = ["assert.js", "sta.js", "doneprintHandle.js"]
@@ -137,7 +144,9 @@ function runOneTest(testPath: string): TestResult {
   const fullSrc = [HARNESS_INLINE, extraIncludes, src].join("\n");
   const isNegative = Boolean(meta.negative);
 
-  const result = spawnSync(process.execPath, ["--eval", fullSrc], {
+  const tmpFile = join(TEMP_DIR, "test.js");
+  writeFileSync(tmpFile, fullSrc, "utf-8");
+  const result = spawnSync(FLUX_CLI_BIN, ["run", tmpFile], {
     timeout:  5000,
     encoding: "utf-8",
   });

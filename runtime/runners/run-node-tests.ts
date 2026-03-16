@@ -2,8 +2,8 @@
  * run-node-tests.ts
  *
  * Runs a subset of Node.js `test/parallel` and `test/sequential` tests
- * to measure how much of the Node.js built-in API surface works correctly
- * when executed in the same environment as Flux user functions.
+ * via `flux run` to measure how much of the Node.js built-in API surface
+ * works correctly inside Flux's V8 isolates.
  *
  * Prerequisites
  * -------------
@@ -24,6 +24,7 @@
 import { spawnSync }          from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
+import { FLUX_CLI_BIN }       from "./lib/flux-binary.js";
 import { performance }        from "node:perf_hooks";
 import {
   EXTERNAL_TESTS_DIR,
@@ -95,10 +96,9 @@ function runOneTest(filePath: string, timeoutMs = 10_000): TestResult {
     return { name, passed: false, skipped: true, duration: 0 };
   }
 
-  const ext = filePath.endsWith(".mjs") ? ["--input-type=module"] : [];
   const result = spawnSync(
-    process.execPath,
-    [...ext, filePath],
+    FLUX_CLI_BIN,
+    ["run", filePath],
     { timeout: timeoutMs, encoding: "utf-8" },
   );
 

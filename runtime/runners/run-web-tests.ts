@@ -1,12 +1,8 @@
 /**
  * run-web-tests.ts
  *
- * Runs JSON-format Web Platform Tests from the url/, fetch/, and encoding/
- * subdirectories of the wpt repository.
- *
- * Most of these APIs (URL, URLSearchParams, TextEncoder, TextDecoder, fetch)
- * are available natively in Node.js ≥ 18 and Deno, so they map directly to
- * the Web API surface exposed inside Flux isolates.
+ * Runs Web Platform Tests (url / fetch / encoding) via `flux run` to measure
+ * Web API compatibility inside Flux's V8 isolates.
  *
  * Prerequisites
  * -------------
@@ -29,8 +25,10 @@
  */
 
 import { spawnSync }    from "node:child_process";
-import { readdirSync, statSync, existsSync } from "node:fs";
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, basename }           from "node:path";
+import { tmpdir }                            from "node:os";
+import { FLUX_CLI_BIN }                      from "./lib/flux-binary.js";
 import { performance }  from "node:perf_hooks";
 import {
   EXTERNAL_TESTS_DIR,
@@ -66,6 +64,11 @@ const BROWSER_SKIP_PATTERNS = [
 
 const suiteArg = process.argv.indexOf("--suite");
 const SUITE    = suiteArg !== -1 ? process.argv[suiteArg + 1] : undefined;
+
+// Temp directory for writing SHIM + test source so flux run can execute both.
+// Sequential execution means we can safely reuse a single file.
+const TEMP_DIR = mkdtempSync(join(tmpdir(), "flux-wpt-"));
+process.on("exit", () => rmSync(TEMP_DIR, { recursive: true, force: true }));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -138,10 +141,10 @@ async function runOneTest(filePath: string): Promise<TestResult> {
   const name = basename(filePath);
   const t0   = performance.now();
 
-  // Quick DOM-sniff to skip browser-only tests
+  // Read test source upfront — used for browser-sniff and SHIM concatenation
+  let src: string;
   try {
-    const { readFileSync } = await import("node:fs");
-    const src = readFileSync(filePath, "utf-8");
+    src = readFileSync(filePath, "utf-8");
     if (BROWSER_SKIP_PATTERNS.some(re => re.test(src))) {
       return { name, passed: false, skipped: true, duration: 0 };
     }
@@ -150,9 +153,15 @@ async function runOneTest(filePath: string): Promise<TestResult> {
     return { name, passed: false, skipped: true, duration: 0 };
   }
 
+  // Write SHIM + test content to a temp file so `flux run` can execute both.
+  // (Previously, ["--eval", SHIM, filePath] only ran the SHIM — the test
+  // file content was never loaded, which was a bug.)
+  const tmpFile = join(TEMP_DIR, "test.js");
+  writeFileSync(tmpFile, SHIM + "\n" + src, "utf-8");
+
   const result = spawnSync(
-    process.execPath,
-    ["--eval", SHIM, filePath],
+    FLUX_CLI_BIN,
+    ["run", tmpFile],
     { timeout: 8000, encoding: "utf-8" },
   );
 

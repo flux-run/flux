@@ -1,7 +1,7 @@
 {
   "name": "flux-compat-runners",
   "version": "0.1.0",
-  "description": "Compatibility test runners — Test262 · Node core · Web Platform Tests · NPM ecosystem",
+  "description": "Flux compatibility runners — Test262 · Node core · Web Platform Tests · NPM ecosystem (all run via flux run)",
   "type": "module",
   "scripts": {
     "test:262":   "tsx run-test262.ts",
