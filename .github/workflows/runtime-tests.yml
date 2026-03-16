@@ -1,0 +1,213 @@
+name: Runtime Compatibility Tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "runtime/**"
+      - ".github/workflows/runtime-tests.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "runtime/**"
+      - ".github/workflows/runtime-tests.yml"
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  RUST_TOOLCHAIN: stable
+
+jobs:
+  # ── 1. Internal test suites (trust · compat · replay · modules) ────────────
+  internal-suites:
+    name: Internal Test Suites
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runtime/tests
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: runtime/tests/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Trust Suite (40 tests)
+        run: npm run test:trust
+
+      - name: Compatibility Suite (52 tests)
+        run: npm run test:compat
+
+      - name: Replay Suite (8 tests)
+        run: npm run test:replay
+
+      - name: Module Loader Suite (17 tests)
+        run: npm run test:modules
+
+  # ── 2. NPM Ecosystem compatibility ─────────────────────────────────────────
+  npm-ecosystem:
+    name: NPM Ecosystem Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runtime/runners
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: runtime/runners/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run NPM ecosystem tests
+        run: npm run test:npm
+
+      - name: Upload npm test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-tests-report
+          path: runtime/reports/npm-tests.json
+          retention-days: 30
+
+  # ── 3. ECMAScript Test262 ───────────────────────────────────────────────────
+  test262:
+    name: ECMAScript Test262
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runtime/runners
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: runtime/runners/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Clone test262 (shallow)
+        run: |
+          mkdir -p ../external-tests
+          git clone --depth 1 https://github.com/tc39/test262 ../external-tests/test262
+
+      - name: Run Test262 (first 2000 tests for CI speed)
+        run: npm run test:262 -- --limit 2000
+        continue-on-error: true  # report even on failure
+
+      - name: Upload test262 report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test262-report
+          path: runtime/reports/test262.json
+          retention-days: 30
+
+  # ── 4. Web Platform Tests ───────────────────────────────────────────────────
+  web-platform:
+    name: Web Platform Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runtime/runners
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: runtime/runners/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Sparse-clone WPT (url + fetch + encoding)
+        run: |
+          git clone \
+            --depth 1 \
+            --filter=blob:none \
+            --sparse \
+            https://github.com/web-platform-tests/wpt \
+            ../external-tests/web-platform
+          cd ../external-tests/web-platform
+          git sparse-checkout set url fetch encoding
+
+      - name: Run Web Platform Tests
+        run: npm run test:web
+        continue-on-error: true
+
+      - name: Upload web-tests report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-tests-report
+          path: runtime/reports/web-tests.json
+          retention-days: 30
+
+  # ── 5. Compatibility Summary ────────────────────────────────────────────────
+  summary:
+    name: Generate Compatibility Summary
+    runs-on: ubuntu-latest
+    needs: [npm-ecosystem, test262, web-platform]
+    if: always()
+    defaults:
+      run:
+        working-directory: runtime/runners
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: runtime/runners/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Download all reports
+        uses: actions/download-artifact@v4
+        with:
+          path: runtime/reports
+          merge-multiple: true
+
+      - name: Generate summary.md
+        run: npm run report
+
+      - name: Print summary
+        run: cat ../reports/summary.md
+
+      - name: Upload summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: compatibility-summary
+          path: runtime/reports/summary.md
+          retention-days: 90
+
+      - name: Append to GitHub Step Summary
+        run: cat ../reports/summary.md >> $GITHUB_STEP_SUMMARY

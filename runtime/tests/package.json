@@ -24,6 +24,13 @@
     "test:replay": "node dist/src/cli.js replay",
     "test:modules": "node dist/src/cli.js modules",
     "test:all": "node --loader tsx dist/cli.js all",
+    "test:262": "cd ../runners && npm run test:262",
+    "test:node-compat": "cd ../runners && npm run test:node",
+    "test:web-compat": "cd ../runners && npm run test:web",
+    "test:npm": "cd ../runners && npm run test:npm",
+    "test:report": "cd ../runners && npm run report",
+    "test:compat-all": "cd ../runners && npm run test:all",
+    "setup:external": "bash ../scripts/setup-external-tests.sh all",
     "clean": "rm -rf dist"
   },
   "keywords": [
