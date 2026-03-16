@@ -42,6 +42,25 @@ pub struct WhyView {
     pub suggestion: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ReplayStepView {
+    pub call_index: i32,
+    pub boundary: String,
+    pub url: String,
+    pub used_recorded: bool,
+    pub duration_ms: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplayView {
+    pub execution_id: String,
+    pub status: String,
+    pub output: String,
+    pub error: String,
+    pub duration_ms: i32,
+    pub steps: Vec<ReplayStepView>,
+}
+
 pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
@@ -194,6 +213,55 @@ pub async fn why(url: &str, token: &str, execution_id: &str) -> Result<WhyView> 
         execution_id: response.execution_id,
         reason: response.reason,
         suggestion: response.suggestion,
+    })
+}
+
+pub async fn replay(
+    url: &str,
+    token: &str,
+    execution_id: &str,
+    commit: bool,
+    from_index: i32,
+) -> Result<ReplayView> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+        .await
+        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+
+    let mut request = Request::new(pb::ReplayRequest {
+        execution_id: execution_id.to_string(),
+        commit,
+        from_index,
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .replay(request)
+        .await
+        .context("replay request failed")?
+        .into_inner();
+
+    Ok(ReplayView {
+        execution_id: response.execution_id,
+        status: response.status,
+        output: response.output,
+        error: response.error,
+        duration_ms: response.duration_ms,
+        steps: response
+            .steps
+            .into_iter()
+            .map(|step| ReplayStepView {
+                call_index: step.call_index,
+                boundary: step.boundary,
+                url: step.url,
+                used_recorded: step.used_recorded,
+                duration_ms: step.duration_ms,
+            })
+            .collect(),
     })
 }
 

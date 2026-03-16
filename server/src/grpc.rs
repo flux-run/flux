@@ -596,6 +596,147 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             suggestion,
         }))
     }
+
+    async fn replay(
+        &self,
+        request: Request<pb::ReplayRequest>,
+    ) -> Result<Response<pb::ReplayResponse>, Status> {
+        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+        let _commit = req.commit;
+
+        let source_execution_id = uuid::Uuid::parse_str(&req.execution_id)
+            .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
+        let from_index = req.from_index.max(0);
+
+        let source_execution: Option<(
+            String,
+            String,
+            serde_json::Value,
+            Option<serde_json::Value>,
+            String,
+            Option<String>,
+            i32,
+            String,
+        )> = sqlx::query_as(
+            "SELECT method, path, request, response, status, error, duration_ms, code_sha
+             FROM flux.executions
+             WHERE id = $1",
+        )
+        .bind(source_execution_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch source execution: {e}")))?;
+
+        let (method, path, request_json, response_json, status, error, duration_ms, code_sha) =
+            source_execution.ok_or_else(|| Status::not_found("execution not found"))?;
+
+        let checkpoint_rows: Vec<(
+            i32,
+            String,
+            Option<String>,
+            Option<String>,
+            serde_json::Value,
+            serde_json::Value,
+            i32,
+        )> = sqlx::query_as(
+            "SELECT call_index, boundary, url, method, request, response, duration_ms
+             FROM flux.checkpoints
+             WHERE execution_id = $1 AND call_index >= $2
+             ORDER BY call_index ASC",
+        )
+        .bind(source_execution_id)
+        .bind(from_index)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
+
+        let replay_execution_id = uuid::Uuid::new_v4();
+        let replay_request_id = uuid::Uuid::new_v4();
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Status::internal(format!("failed to begin replay transaction: {e}")))?;
+
+        sqlx::query(
+            "INSERT INTO flux.executions
+             (id, request_id, method, path, status, request, response, error, code_sha, duration_ms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10)",
+        )
+        .bind(replay_execution_id)
+        .bind(replay_request_id)
+        .bind(method.clone())
+        .bind(path.clone())
+        .bind(status.clone())
+        .bind(request_json.clone())
+        .bind(response_json.clone())
+        .bind(error.clone().unwrap_or_default())
+        .bind(code_sha)
+        .bind(duration_ms)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(format!("failed to insert replay execution: {e}")))?;
+
+        let mut steps = Vec::with_capacity(checkpoint_rows.len());
+        for (call_index, boundary, url, method, request, response, checkpoint_duration_ms) in
+            checkpoint_rows
+        {
+            let step_url = url.unwrap_or_else(|| {
+                request
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string()
+            });
+
+            sqlx::query(
+                "INSERT INTO flux.checkpoints
+                 (execution_id, call_index, boundary, url, method, request, response, duration_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(replay_execution_id)
+            .bind(call_index)
+            .bind(boundary.clone())
+            .bind(step_url.clone())
+            .bind(method)
+            .bind(request)
+            .bind(response)
+            .bind(checkpoint_duration_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(format!("failed to persist replay checkpoint: {e}")))?;
+
+            steps.push(pb::ReplayStep {
+                call_index,
+                boundary,
+                url: step_url,
+                used_recorded: true,
+                duration_ms: checkpoint_duration_ms,
+            });
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| Status::internal(format!("failed to commit replay execution: {e}")))?;
+
+        let output = response_json
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "null".to_string()))
+            .unwrap_or_else(|| "null".to_string());
+
+        let replay_error = error.unwrap_or_default();
+
+        Ok(Response::new(pb::ReplayResponse {
+            execution_id: replay_execution_id.to_string(),
+            status,
+            output,
+            error: replay_error,
+            duration_ms,
+            steps,
+        }))
+    }
 }
 
 pub async fn serve(
