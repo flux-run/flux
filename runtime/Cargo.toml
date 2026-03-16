@@ -8,6 +8,12 @@ name = "runtime"
 path = "src/lib.rs"
 
 [dependencies]
+anyhow = "1"
+axum = "0.7"
 hex = "0.4"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }

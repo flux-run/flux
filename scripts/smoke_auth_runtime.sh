@@ -148,7 +148,7 @@ else
 fi
 
 echo "[info] Verifying runtime serve handshake"
-if cargo run -p cli -- serve "${ENTRY_FILE}" --url "${URL}" --token "${TOKEN}" >"${SERVE_OUT}" 2>&1; then
+if cargo run -p cli -- serve "${ENTRY_FILE}" --url "${URL}" --token "${TOKEN}" --check-only >"${SERVE_OUT}" 2>&1; then
   if grep -q "runtime artifact prepared" "${SERVE_OUT}"; then
     pass "serve command validates token and prepares artifact"
   else

@@ -17,11 +17,25 @@ pub struct ServeArgs {
     pub url: Option<String>,
     #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
     pub token: Option<String>,
+    #[arg(long)]
+    pub skip_verify: bool,
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+    #[arg(long, default_value_t = 3000)]
+    pub port: u16,
+    #[arg(long, default_value_t = 16)]
+    pub isolate_pool_size: usize,
+    #[arg(long)]
+    pub check_only: bool,
 }
 
 pub async fn execute(args: ServeArgs) -> Result<()> {
     let auth = resolve_auth(args.url, args.token)?;
-    let auth_mode = validate_service_token(&auth.url, &auth.token).await?;
+    let auth_mode = if args.skip_verify {
+        "skipped".to_string()
+    } else {
+        validate_service_token(&auth.url, &auth.token).await?
+    };
 
     let entry = PathBuf::from(&args.entry);
     if !entry.exists() {
@@ -41,7 +55,31 @@ pub async fn execute(args: ServeArgs) -> Result<()> {
     println!("entry:    {}", entry.display());
     println!("hash:     {}", artifact.sha256);
     println!("bytes:    {}", artifact.size_bytes);
-    println!("status:   ready for runtime execution and event streaming");
+    if args.check_only {
+        println!("status:   ready for runtime execution and event streaming");
+        return Ok(());
+    }
+
+    let route_name = entry
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid entry file stem: {}", entry.display()))?
+        .to_string();
+
+    let runtime_url = format!("http://{}:{}/{}", args.host, args.port, route_name);
+    println!("runtime:  {}", runtime_url);
+    println!("status:   serving");
+
+    runtime::run_http_runtime(
+        runtime::HttpRuntimeConfig {
+            host: args.host,
+            port: args.port,
+            route_name,
+            isolate_pool_size: args.isolate_pool_size,
+        },
+        artifact,
+    )
+    .await?;
 
     Ok(())
 }

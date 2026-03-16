@@ -7,6 +7,8 @@
 //! - package the script into a payload the server can store and run.
 
 pub mod artifact;
+pub mod http_runtime;
+pub mod isolate_pool;
 
 pub use artifact::{
 	RuntimeArtifact,
@@ -14,4 +16,8 @@ pub use artifact::{
 	build_artifact,
 	build_artifact_from_file,
 	sha256_hex,
+};
+pub use http_runtime::{
+	HttpRuntimeConfig,
+	run_http_runtime,
 };
