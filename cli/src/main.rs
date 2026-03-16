@@ -1,680 +1,67 @@
 use clap::{Parser, Subcommand};
 
-mod api_key;
 mod auth;
-mod bisect;
-mod client;
 mod config;
 mod config_cmd;
-mod create;
-mod db;
-mod debug;
-mod deploy;
-mod deployments;
-mod dev;
-mod doctor;
-mod env_cmd;
-mod errors;
-mod event;
-mod explain;
-mod functions;
-mod gateway;
-mod incident;
+mod exec;
+mod grpc;
 mod init;
-mod invoke;
 mod logs;
-mod monitor;
-mod open;
-mod projects;
-mod queue;
-mod records;
-mod schedule;
-mod sdk;
-mod secrets;
+mod process_state;
+mod ps;
+mod replay;
+mod resume;
+mod serve;
 mod server;
-mod stack;
-mod state;
+mod status;
 mod tail;
-mod telemetry;
-mod tenant;
 mod trace;
-mod trace_debug;
-mod trace_diff;
-mod upgrade;
-mod version_cmd;
-mod whoami;
-mod context;
-mod db_push;
-mod new_function;
 mod why;
-mod generate;
-mod toolchain;
+
 #[derive(Parser)]
 #[command(name = "flux")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(about = "Fluxbase CLI — deploy backends in minutes", long_about = None)]
+#[command(about = "Flux CLI — auth and JS runtime entry handling", long_about = None)]
 struct Cli {
-    /// Override the active tenant
-    #[arg(long, global = true, value_name = "SLUG", env = "FLUXBASE_TENANT")]
-    tenant: Option<String>,
-
-    /// Override the active project
-    #[arg(long, global = true, value_name = "SLUG", env = "FLUXBASE_PROJECT")]
-    project: Option<String>,
-
-    /// Target environment (default: production)
-    #[arg(long, global = true, value_name = "ENV", env = "FLUXBASE_ENV", default_value = "production")]
-    env: String,
-
-    /// Output raw JSON (machine-readable)
-    #[arg(long, global = true)]
-    json: bool,
-
-    /// Disable coloured output
-    #[arg(long, global = true)]
-    no_color: bool,
-
-    /// Suppress non-error output
-    #[arg(long, global = true)]
-    quiet: bool,
-
-    /// Enable verbose/debug output
-    #[arg(long, global = true)]
-    verbose: bool,
-
-    /// Show what would happen without making changes
-    #[arg(long, global = true)]
-    dry_run: bool,
-
-    /// Auto-confirm prompts (non-interactive)
-    #[arg(long, global = true)]
-    yes: bool,
-
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
-enum BugCommands {
-    /// Binary-search commits to find the first regression (reads trace history, no replays needed).
-    Bisect {
-        /// Function name to bisect (e.g. create_user)
-        #[arg(long)]
-        function: String,
-        /// Known-good commit SHA (prefix is fine)
-        #[arg(long)]
-        good: String,
-        /// Known-bad commit SHA (prefix is fine)
-        #[arg(long)]
-        bad: String,
-        /// Failure-rate threshold to classify a commit as bad (0.0–1.0, default: 0.05)
-        #[arg(long, default_value = "0.05")]
-        threshold: f64,
-        /// Output raw JSON
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
 enum Commands {
-    /// Login to the Flux dashboard (prompts for email + password).
-    /// On first run, creates the initial admin account.
-    Login,
-    /// Create the initial admin account (alias for `flux login` on first run).
-    #[command(name = "admin-setup", visible_alias = "setup")]
-    AdminSetup,
-    /// Show the current authenticated identity
-    Whoami,
-
-    // ── Tenants & Projects ────────────────────────────────────────────────────
-    /// Tenant operations
-    Tenant {
-        #[command(subcommand)]
-        command: tenant::TenantCommands,
-    },
-    /// Project operations
-    Project {
-        #[command(subcommand)]
-        command: projects::ProjectCommands,
-    },
-
-    // ── Functions ─────────────────────────────────────────────────────────────
-    /// Function operations (create scaffold, list)
-    Function {
-        #[command(subcommand)]
-        command: functions::FunctionCommands,
-    },
-
-    // ── Toolchain ─────────────────────────────────────────────────────────────
-    /// Manage pinned language runtimes and compilers
-    Toolchain {
-        #[command(subcommand)]
-        command: toolchain::ToolchainCommand,
-    },
-    /// Deploy to Fluxbase.
-    ///
-    /// In a function directory (has flux.json): deploys that single function.
-    /// At the project root: discovers and deploys all function sub-directories.
-    Deploy {
-        /// Override the active context (e.g. --context prod)
-        #[arg(long)]
-        context: Option<String>,
-        /// Deploy only the named functions (comma-separated)
-        #[arg(long, value_delimiter = ',')]
-        only: Option<Vec<String>>,
-        /// Skip hash check and redeploy all functions
-        #[arg(long)]
-        force: bool,
-        // Kept for backward compatibility — not used in the new deploy flow.
-        #[arg(long, hide = true)]
-        name: Option<String>,
-        #[arg(long, hide = true)]
-        runtime: Option<String>,
-    },
-    /// Invoke a deployed function
-    Invoke {
-        name: String,
-        #[arg(long, value_name = "JSON")]
-        payload: Option<String>,
-        #[arg(long)]
-        gateway: bool,
-    },
-    /// Deployment version operations (list, rollback, promote, diff)
-    Version {
-        #[command(subcommand)]
-        command: version_cmd::VersionCommands,
-    },
-    /// Deployment history
-    Deployments {
-        #[command(subcommand)]
-        command: deployments::DeploymentCommands,
-    },
-    /// Run function locally with file-watch hot-reload
-    Dev,
-
-    // ── Scaffolding ───────────────────────────────────────────────────────────
-    /// Create a new project from an official template
-    New {
-        name: String,
-        #[arg(long, short, value_name = "TEMPLATE")]
-        template: Option<String>,
-    },
-    /// Alias for `new` (backward-compatible)
-    #[command(hide = true)]
-    Create {
-        name: String,
-        #[arg(long, short, value_name = "TEMPLATE")]
-        template: Option<String>,
-    },
-    /// Initialise flux.toml for this project directory.
-    ///
-    /// Creates flux.toml at the project root with sensible defaults.
-    ///
-    /// Examples:
-    ///   flux init
-    ///   flux init --name my-api
-    ///   flux init --gateway-port 4000
-    Init {
-        /// Project name — creates a new directory. Defaults to current directory name.
-        #[arg(value_name = "NAME")]
-        name: Option<String>,
-        /// Override local gateway port in [dev] section
-        #[arg(long, value_name = "PORT")]
-        gateway_port: Option<u16>,
-    },
-
-    /// Dry-run a query: show the compiler output, applied policies, complexity score, and
-    /// compiled SQL without executing against the database.
-    ///
-    /// Examples:
-    ///   flux explain request.json
-    ///   flux explain -          (read JSON from stdin)
-    ///   flux explain request.json --json
-    Explain {
-        /// Path to a JSON query file (use "-" for stdin)
-        file: Option<std::path::PathBuf>,
-        /// Output raw JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Compare two executions of the same request: duration, status, and field-level state diffs.
-    ///
-    /// Typical use: compare original production run vs a replay to see what changed.
-    ///
-    /// Examples:
-    ///   flux trace diff 9624a58d 550e8400
-    ///   flux trace diff 9624a58d 550e8400 --json
-    TraceDiff {
-        /// Original request ID (production run)
-        original_id: String,
-        /// Second request ID to compare against (typically a replay)
-        replay_id: String,
-        /// Output raw JSON
-        #[arg(long)]
-        json: bool,
-        /// Only diff mutations for this table (dramatically faster on large traces)
-        #[arg(long)]
-        table: Option<String>,
-    },
-
-    /// Step-through debugger for a past production request.
-    ///
-    /// Walks the execution graph span-by-span, showing which database mutations
-    /// happened at each step.  Reconstructs backend state at any point in execution.
-    ///
-    /// Examples:
-    ///   flux trace debug 9624a58d
-    ///   flux trace debug 9624a58d --at 2
-    ///   flux trace debug 9624a58d --interactive
-    ///   flux trace debug 9624a58d --json
-    TraceDebug {
-        /// Request ID to debug
-        trace_id: String,
-        /// Inspect state at exactly this step number (1-based)
-        #[arg(long, value_name = "STEP")]
-        at: Option<usize>,
-        /// Step through spans interactively (Enter/s/p/q)
-        #[arg(long)]
-        interactive: bool,
-        /// Output raw JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Binary-search commit history to find the first regression.
-    ///
-    /// Scans trace history for a function, groups by commit SHA, and binary-searches
-    /// between a known-good and known-bad commit to identify the first bad deploy.
-    ///
-    /// Examples:
-    ///   flux bug bisect --function create_user --good a93f42c --bad 9624a58d
-    ///   flux bug bisect --function create_user --good a93f42c --bad 9624a58d --threshold 0.1
-    Bug {
-        #[command(subcommand)]
-        command: BugCommands,
-    },
-
-    /// Root cause explanation for a request — shows error, commit, state changes, and suggested fixes.
-    ///
-    /// Combines trace spans, state mutations, and error logs for a single request_id.
-    ///
-    /// Examples:
-    ///   flux why 550e8400
-    ///   flux why 550e8400 --json
-    Why {
-        /// Request ID to explain
-        request_id: String,
-        /// Output raw JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Row-level state audit (history + blame).
-    ///
-    /// Examples:
-    ///   flux state history users --id 42
-    ///   flux state blame orders
-    State {
-        #[command(subcommand)]
-        command: state::StateCommands,
-    },
-
-    /// Incident investigation and deterministic replay.
-    ///
-    /// Examples:
-    ///   flux incident replay 2026-03-11T15:00:00Z..2026-03-11T15:05:00Z
-    ///   flux incident replay --request-id 550e8400
-    Incident {
-        #[command(subcommand)]
-        command: incident::IncidentCommands,
-    },
-
-    // ── Observability ─────────────────────────────────────────────────────────
-    /// Tail or stream platform logs
-    Logs {
-        source: Option<String>,
-        resource: Option<String>,
-        #[arg(short, long)]
-        follow: bool,
-        #[arg(long, default_value = "100", value_name = "N")]
-        limit: u64,
-    },
-    /// Show the full cross-service request trace for a request ID.
-    /// With no request ID, lists recent traces.
-    ///
-    /// Examples:
-    ///   flux trace                    # list last 20 traces
-    ///   flux trace 9624a58d           # full waterfall for one request
-    ///   flux trace 9624a58d --flame   # with Gantt flame graph
-    ///   flux trace 9624a58d --replay  # re-run the request
-    Trace {
-        /// Request ID to show (omit to list recent traces)
-        request_id: Option<String>,
-        #[arg(long, default_value = "500", value_name = "MS")]
-        slow: u64,
-        #[arg(long)]
-        flame: bool,
-        /// Filter / sort for `flux trace` list mode
-        #[arg(long, value_name = "NAME")]
-        function: Option<String>,
-        /// Number of traces to list (default 20)
-        #[arg(long, default_value = "20", value_name = "N")]
-        limit: u64,
-        /// Re-apply this request in replay mode (x-flux-replay: true)
-        #[arg(long)]
-        replay: bool,
-    },
-    /// Interactive production debugger.
-    ///
-    /// Without a request ID: lists recent errors and lets you select one.
-    /// With a request ID: deep-dives that specific request.
-    ///
-    /// Examples:
-    ///   flux debug               # interactive: pick from recent errors
-    ///   flux debug 9624a58d57e7  # deep-dive a specific request
-    Debug {
-        /// Request ID to inspect directly (omit for interactive mode)
-        request_id: Option<String>,
-        #[arg(long)]
-        replay: bool,
-        #[arg(long, value_name = "FILE")]
-        replay_payload: Option<String>,
-        #[arg(long)]
-        no_logs: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Alias for `debug` — shorter to type when responding to an alert.
-    ///
-    /// `flux fix` is identical to `flux debug`: interactive mode with no args,
-    /// or deep-dive a specific request when a request ID is given.
-    #[command(name = "fix")]
-    Fix {
-        request_id: Option<String>,
-        #[arg(long)]
-        replay: bool,
-        #[arg(long, value_name = "FILE")]
-        replay_payload: Option<String>,
-        #[arg(long)]
-        no_logs: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Production error summary by function — quick triage before `flux debug`.
-    ///
-    /// Shows per-function error counts, most recent error type, and p95 duration.
-    ///
-    /// Examples:
-    ///   flux errors               # last 1h
-    ///   flux errors --since 24h   # last 24h
-    ///   flux errors --function create_user
-    Errors {
-        /// Filter to a specific function
-        #[arg(long, value_name = "NAME")]
-        function: Option<String>,
-        /// Time window (e.g. 1h, 24h, 7d)
-        #[arg(long, default_value = "1h", value_name = "DURATION")]
-        since: String,
-        /// Output raw JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Live request stream — htop for your backend.
-    ///
-    /// Streams incoming requests in real time: method, route, function, duration, status.
-    /// Errors print a `flux debug <id>` hint inline.
-    ///
-    /// Examples:
-    ///   flux tail                   # all functions
-    ///   flux tail create_user       # single function
-    ///   flux tail --errors          # errors only
-    ///   flux tail --slow 500        # requests > 500ms
-    Tail {
-        /// Filter to a specific function name
-        function: Option<String>,
-        /// Show only failed requests
-        #[arg(long)]
-        errors: bool,
-        /// Show only requests slower than N ms
-        #[arg(long, value_name = "MS")]
-        slow: Option<u64>,
-        /// Output raw JSON (one object per line)
-        #[arg(long)]
-        json: bool,
-        /// Automatically run `flux debug` when an error appears (pauses stream)
-        #[arg(long)]
-        auto_debug: bool,
-    },
-    /// Monitor service status, metrics, and alerts
-    Monitor {
-        #[command(subcommand)]
-        command: monitor::MonitorCommands,
-    },
-
-    // ── Secrets & Config ──────────────────────────────────────────────────────
-    /// Secrets operations (list, set, delete)
-    Secrets {
-        #[command(subcommand)]
-        command: secrets::SecretsCommands,
-    },
-    /// View and edit CLI/project configuration
+    /// First-time setup (server URL + token) saved to config.
+    Init,
+    /// Save and verify runtime auth against a Flux server.
+    Auth(auth::AuthArgs),
+    /// Manage local Flux CLI config values.
     Config {
         #[command(subcommand)]
-        command: config_cmd::ConfigCommands,
+        command: config_cmd::ConfigCommand,
     },
-    /// API key management (create, list, revoke, rotate)
-    ApiKey {
-        #[command(subcommand)]
-        command: api_key::ApiKeyCommands,
-    },
-
-    // ── Gateway ───────────────────────────────────────────────────────────────
-    /// Gateway route and middleware management
-    Gateway {
-        #[command(subcommand)]
-        command: gateway::GatewayCommands,
-    },
-
-    // ── Schedules, Queues, Events ─────────────────────────────────────────────
-    /// Scheduled job management (create, pause, resume, history)
-    Schedule {
-        #[command(subcommand)]
-        command: schedule::ScheduleCommands,
-    },
-    /// Message queue management (create, publish, dlq)
-    Queue {
-        #[command(subcommand)]
-        command: queue::QueueCommands,
-    },
-    /// Platform event operations (publish, subscribe, list, history)
-    Event {
-        #[command(subcommand)]
-        command: event::EventCommands,
-    },
-    /// Execution record management (export, count, prune)
-    Records {
-        #[command(subcommand)]
-        command: records::RecordsCommands,
-    },
-
-    // ── Environments ─────────────────────────────────────────────────────────
-    /// Environment management (create, delete, clone)
-    Env {
-        #[command(subcommand)]
-        command: env_cmd::EnvCommands,
-    },
-
-    // ── Database ─────────────────────────────────────────────────────────────
-    /// Database operations (create, list, diff, query, shell, migration)
-    Db {
-        #[command(subcommand)]
-        command: db::DbCommands,
-    },
-    /// Apply user SQL migrations from schemas/ to the connected Flux database.
-    ///
-    /// Migrations are tracked in flux.user_migrations and applied idempotently.
-    /// Works with any context: `flux db push --context prod`
-    DbPush {
-        /// Named context to connect to (default: active context)
-        #[arg(long, short, value_name = "NAME")]
-        context: Option<String>,
-        /// Migrations directory (default: schemas/ or flux.toml db.migrations_dir)
-        #[arg(long, short, value_name = "DIR")]
-        dir: Option<String>,
-    },
-
-    // ── SDK ───────────────────────────────────────────────────────────────────
-    /// Pull the TypeScript SDK for the current project
-    Pull {
-        #[arg(long, short, value_name = "FILE")]
-        output: Option<String>,
-    },
-    /// Watch schema for changes and auto-regenerate the SDK
-    Watch {
-        #[arg(long, short, value_name = "FILE")]
-        output: Option<String>,
-        #[arg(long, default_value = "5", value_name = "SECS")]
-        interval: u64,
-    },
-    /// Show local vs remote schema version status
-    Status {
-        #[arg(long, short, value_name = "FILE")]
-        sdk: Option<String>,
-    },
-    /// Generate typed ctx bindings for all languages from the live project schema.
-    ///
-    /// Writes .flux/manifest.json and generates:
-    ///   .flux/types.d.ts  (TypeScript)
-    ///   .flux/ctx.js      (JavaScript)
-    ///   .flux/ctx.rs      (Rust)
-    ///   .flux/ctx.go      (Go)
-    ///   .flux/ctx.pyi     (Python)
-    ///   .flux/ctx.h       (C)
-    ///   .flux/ctx.hpp     (C++)
-    ///   .flux/ctx.zig     (Zig)
-    ///   .flux/ctx.as.ts   (AssemblyScript)
-    ///   .flux/Ctx.cs      (C#)
-    ///   .flux/Ctx.swift   (Swift)
-    ///   .flux/Ctx.kt      (Kotlin)
-    ///   .flux/Ctx.java    (Java)
-    ///   .flux/ctx.rb      (Ruby)
-    Generate {
-        /// Output directory (default: .flux/)
-        #[arg(short, long, value_name = "DIR")]
-        output: Option<String>,
-    },
-
-    // ── Local Server (native, no Docker) ────────────────────────────────────
-    /// Start the Flux server (gateway + runtime + api + queue embedded in one process)
-    ///
-    /// Examples:
-    ///   flux serve                        # start on port 8080
-    ///   flux serve --port 3000            # custom port
-    ///   flux serve --release              # use release binary
-    #[command(alias = "serve")]
-    Server {
-        /// Port to listen on
-        #[arg(long, default_value = "8080", value_name = "PORT")]
-        port: u16,
-        /// Use release binary instead of debug
-        #[arg(long)]
-        release: bool,
-        /// Disable coloured output
-        #[arg(long)]
-        no_color: bool,
-        /// Override DATABASE_URL from the environment
-        #[arg(long, value_name = "URL", env = "DATABASE_URL")]
-        database_url: Option<String>,
-    },
-
-    // ── Local Stack ───────────────────────────────────────────────────────────
-    /// Manage the local Fluxbase development stack (Docker Compose)
-    Stack {
-        #[command(subcommand)]
-        command: StackCommand,
-    },
-
-    // ── Utilities ────────────────────────────────────────────────────────────
-    /// Diagnose environment/connectivity, or analyze a failed request with flux doctor <request-id>
-    Doctor {
-        /// Request ID to diagnose (omit for environment health check)
-        #[arg(value_name = "REQUEST_ID")]
-        request_id: Option<String>,
-    },
-    /// Open the Fluxbase dashboard (or a specific resource) in the browser
-    Open {
-        #[command(subcommand)]
-        command: Option<open::OpenCommands>,
-    },
-    /// Check for CLI updates and upgrade if needed
-    Upgrade {
-        #[arg(long)]
-        check: bool,
-        #[arg(long, value_name = "VERSION")]
-        version: Option<String>,
-    },
-
-    // ── Context (remote connections) ─────────────────────────────────────────
-    /// Add or update a named connection to a Flux server instance.
-    ///
-    /// Example: flux link prod https://myapp.com --key sk_live_xxx
-    Link {
-        /// Context name (e.g. "prod", "staging")
-        name: String,
-        /// Base URL of the Flux server (e.g. https://myapp.com)
-        endpoint: String,
-        /// API key for authenticating against the remote server
-        #[arg(long, short, value_name = "KEY")]
-        key: Option<String>,
-    },
-    /// Switch the active context (like kubectl use-context).
-    ///
-    /// Example: flux use prod
-    Use {
-        /// Context name to activate
-        name: String,
-    },
-    /// Show the current context and all configured contexts.
-    Context,
-    /// Remove a named context.
-    ///
-    /// Example: flux unlink staging
-    Unlink {
-        /// Context name to remove
-        name: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum StackCommand {
-    /// Build and start all services (detached by default)
-    Up {
-        #[arg(long)]
-        build: bool,
-        #[arg(long)]
-        foreground: bool,
-    },
-    /// Stop and remove containers
-    Down {
-        #[arg(short, long)]
-        volumes: bool,
-    },
-    /// List running services and their exposed ports
+    /// List recorded execution logs.
+    Logs(logs::LogsArgs),
+    /// Show managed Flux processes.
     Ps,
-    /// Tail logs for one or all services
-    Logs {
-        service: Option<String>,
-        #[arg(long, default_value = "100")]
-        tail: u32,
-    },
-    /// Wipe all local data volumes and restart fresh
-    Reset,
-    /// Run seed data against the running database service
-    Seed {
-        #[arg(long, value_name = "FILE")]
-        file: Option<String>,
+    /// Show overall Flux health status.
+    Status,
+    /// Run a one-off execution and record it.
+    Exec(exec::ExecArgs),
+    /// Show execution trace with checkpoints.
+    Trace(trace::TraceArgs),
+    /// Replay an execution using recorded checkpoints.
+    Replay(replay::ReplayArgs),
+    /// Resume an execution from a checkpoint boundary.
+    Resume(resume::ResumeArgs),
+    /// Explain why an execution failed or was slow.
+    Why(why::WhyArgs),
+    /// Stream live execution events.
+    Tail(tail::TailArgs),
+    /// Prepare a JS/TS entry file for runtime execution.
+    Serve(serve::ServeArgs),
+    /// Manage the Flux server process.
+    Server {
+        #[command(subcommand)]
+        command: server::ServerCommand,
     },
 }
 
@@ -682,152 +69,21 @@ enum StackCommand {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Propagate global flags via env vars so child modules can read them.
-    // SAFETY: single-threaded at this point (before tokio spawns tasks).
-    if cli.no_color {
-        unsafe { std::env::set_var("NO_COLOR", "1"); }
-    }
-    if let Some(t) = &cli.tenant {
-        unsafe { std::env::set_var("FLUXBASE_TENANT", t); }
-    }
-    if let Some(p) = &cli.project {
-        unsafe { std::env::set_var("FLUXBASE_PROJECT", p); }
-    }
-
     match cli.command {
-        Commands::Login        => auth::execute().await?,
-        Commands::AdminSetup   => auth::execute().await?,
-        Commands::Whoami       => whoami::execute().await?,
-
-        Commands::Tenant  { command } => tenant::execute(command).await?,
-        Commands::Project { command } => projects::execute(command).await?,
-
-        Commands::Function    { command } => functions::execute(command).await?,
-        Commands::Toolchain   { command } => toolchain::execute(command).await?,
-        Commands::Deploy { context, only, force, name: _, runtime: _ } => {
-            telemetry::capture("cli_deploy", serde_json::json!({ "force": force }));
-            deploy::execute(context, only, force).await?
-        }
-        Commands::Invoke      { name, payload, gateway } => invoke::execute(&name, None, payload, gateway).await?,
-        Commands::Version     { command } => version_cmd::execute(command).await?,
-        Commands::Deployments { command } => deployments::execute_deployments(command).await?,
-        Commands::Dev => {
-            telemetry::capture("cli_dev", serde_json::json!({}));
-            dev::execute().await?
-        }
-
-        Commands::New    { name, template } |
-        Commands::Create { name, template } => {
-            telemetry::capture("cli_new", serde_json::json!({
-                "has_template": template.is_some()
-            }));
-            create::execute(name, template).await?
-        }
-
-        Commands::Init { name, gateway_port } => {
-            telemetry::capture("cli_init", serde_json::json!({}));
-            init::execute(init::InitOptions {
-                name,
-                gateway_port,
-            }).await?
-        }
-
-        Commands::Logs { source, resource, follow, limit } => {
-            const SOURCES: &[&str] = &["function", "db", "event", "queue", "system"];
-            let (resolved_source, resolved_resource) = match (source, resource) {
-                (Some(s), r) if SOURCES.contains(&s.as_str()) => (Some(s), r),
-                (Some(s), None) => (Some("function".to_string()), Some(s)),
-                other => other,
-            };
-            if follow {
-                logs::execute_follow(resolved_source, resolved_resource, limit).await?
-            } else {
-                logs::execute(resolved_source, resolved_resource, limit).await?
-            }
-        }
-        Commands::Trace { request_id, slow, flame, function, limit, replay } => {
-            match request_id {
-                Some(id) if replay => {
-                    incident::execute(incident::IncidentCommands::Replay {
-                        window:     None,
-                        request_id: Some(id),
-                        from:       None,
-                        to:         None,
-                        database:   "default".to_string(),
-                        yes:        cli.yes,
-                        json:       cli.json,
-                    }).await?
-                }
-                Some(id) => trace::execute(id, slow, flame).await?,
-                None     => trace::execute_list(limit, function, cli.json).await?,
-            }
-        }
-        Commands::TraceDiff { original_id, replay_id, json, table } => trace_diff::execute(original_id, replay_id, json, table).await?,
-        Commands::TraceDebug { trace_id, at, interactive, json } => trace_debug::execute(trace_id, at, interactive, json).await?,
-        Commands::Bug { command } => match command {
-            BugCommands::Bisect { function, good, bad, threshold, json } =>
-                bisect::execute(function, good, bad, threshold, json).await?,
-        },
-        Commands::Why  { request_id, json } => why::execute(request_id, json).await?,
-        Commands::Explain { file, json } => explain::execute(file, json).await?,
-        Commands::State    { command } => state::execute(command).await?,
-        Commands::Incident { command } => incident::execute(command).await?,
-
-        Commands::Debug { request_id, replay, replay_payload, no_logs, json } |
-        Commands::Fix   { request_id, replay, replay_payload, no_logs, json } => {
-            debug::execute(request_id, replay, replay_payload, no_logs, json).await?
-        }
-        Commands::Tail { function, errors, slow, json, auto_debug } => {
-            tail::execute(function, errors, slow, json, auto_debug).await?
-        }
-        Commands::Errors { function, since, json } => {
-            errors::execute(function, since, json).await?
-        }
-        Commands::Monitor { command } => monitor::execute(command).await?,
-
-        Commands::Secrets { command } => secrets::execute(command).await?,
-        Commands::Config  { command } => config_cmd::execute(command).await?,
-        Commands::ApiKey  { command } => api_key::execute(command).await?,
-
-        Commands::Gateway  { command } => gateway::execute(command).await?,
-        Commands::Schedule { command } => schedule::execute(command).await?,
-        Commands::Queue    { command } => queue::execute(command).await?,
-        Commands::Event    { command } => event::execute(command).await?,
-        Commands::Records  { command } => records::execute(command).await?,
-        Commands::Env      { command } => env_cmd::execute(command).await?,
-
-        Commands::Db { command } => db::execute(command).await?,
-        Commands::DbPush { context, dir } =>
-            db_push::execute_db_push(context, dir).await?,
-
-        Commands::Pull   { output }           => sdk::execute_pull(output).await?,
-        Commands::Watch  { output, interval } => sdk::execute_watch(output, interval).await?,
-        Commands::Status { sdk }              => sdk::execute_status(sdk).await?,
-        Commands::Generate { output }         => generate::execute_generate(output).await?,
-
-        Commands::Server { port, release, no_color, database_url } =>
-            server::execute(port, release, no_color, database_url).await?,
-
-        Commands::Stack { command } => match command {
-            StackCommand::Up    { build, foreground } => stack::execute_up(build, !foreground).await?,
-            StackCommand::Down  { volumes }           => stack::execute_down(volumes).await?,
-            StackCommand::Ps                          => stack::execute_ps().await?,
-            StackCommand::Logs  { service, tail }     => stack::execute_logs(service, tail).await?,
-            StackCommand::Reset                       => stack::execute_reset().await?,
-            StackCommand::Seed  { file }              => stack::execute_seed(file).await?,
-        },
-
-        Commands::Doctor { request_id } => doctor::execute(request_id, cli.json).await?,
-        Commands::Open { command } => match command {
-            Some(cmd) => open::execute(cmd).await?,
-            None      => open::execute_default().await?,
-        },
-        Commands::Upgrade { check, version } => upgrade::execute(version, check).await?,
-
-        Commands::Link    { name, endpoint, key } => context::execute_link(name, endpoint, key)?,
-        Commands::Use     { name }               => context::execute_use(name)?,
-        Commands::Context                        => context::execute_context(dev::find_project_root_pub().as_deref())?,
-        Commands::Unlink  { name }               => context::execute_unlink(name)?,
+        Commands::Init => init::execute().await?,
+        Commands::Auth(args) => auth::execute(args).await?,
+        Commands::Config { command } => config_cmd::execute(command)?,
+        Commands::Logs(args) => logs::execute(args).await?,
+        Commands::Ps => ps::execute().await?,
+        Commands::Status => status::execute().await?,
+        Commands::Exec(args) => exec::execute(args).await?,
+        Commands::Trace(args) => trace::execute(args).await?,
+        Commands::Replay(args) => replay::execute(args).await?,
+        Commands::Resume(args) => resume::execute(args).await?,
+        Commands::Why(args) => why::execute(args).await?,
+        Commands::Tail(args) => tail::execute(args).await?,
+        Commands::Serve(args) => serve::execute(args).await?,
+        Commands::Server { command } => server::execute(command).await?,
     }
 
     Ok(())

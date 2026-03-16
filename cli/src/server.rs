@@ -1,143 +1,259 @@
-//! `flux serve` / `flux server` — start the Flux monolithic server.
-//!
-//! All services (gateway, runtime, api, data-engine, queue) are embedded in a
-//! single `server` binary and communicate in-process — no HTTP between them.
-//!
-//! ```text
-//! $ flux serve                    # port 8080, debug binary
-//! $ flux serve --port 3000        # custom port
-//! $ flux serve --release          # release binary
-//! ```
-//!
-//! Binary resolution (first match wins):
-//!   1. Same directory as the `flux` binary  (self-host distribution)
-//!   2. <workspace>/target/debug/server      (dev build)
-//!   3. <workspace>/target/release/server    (release build)
-//!   4. System PATH
+use std::path::{Path, PathBuf};
 
-use std::path::PathBuf;
+use anyhow::{Context, Result, bail};
+use clap::{Args, Subcommand};
 
-use colored::Colorize;
+#[derive(Debug, Subcommand)]
+pub enum ServerCommand {
+    /// Start the Flux server.
+    Start(ServerStartArgs),
+    /// Restart the Flux server.
+    Restart(ServerStartArgs),
+}
 
-fn find_server_binary(prefer_release: bool) -> Option<PathBuf> {
-    let bin = if cfg!(windows) { "server.exe" } else { "server" };
+#[derive(Debug, Args)]
+pub struct ServerStartArgs {
+    #[arg(long, default_value = "50051", value_name = "PORT")]
+    pub port: u16,
+    #[arg(long, env = "DATABASE_URL", value_name = "URL")]
+    pub database_url: Option<String>,
+    #[arg(long, env = "INTERNAL_SERVICE_TOKEN", value_name = "TOKEN")]
+    pub service_token: Option<String>,
+    #[arg(long)]
+    pub release: bool,
+}
 
-    // 1. Alongside the flux binary (self-host distribution)
-    if let Ok(exe) = std::env::current_exe() {
-        let candidate = exe.parent().unwrap_or(&exe).join(bin);
-        if candidate.exists() {
-            return Some(candidate);
-        }
+pub async fn execute(command: ServerCommand) -> Result<()> {
+    match command {
+        ServerCommand::Start(args) => execute_start(args).await,
+        ServerCommand::Restart(args) => execute_restart(args).await,
+    }
+}
+
+async fn execute_restart(args: ServerStartArgs) -> Result<()> {
+    stop_existing_server()?;
+    execute_start(args).await
+}
+
+async fn execute_start(args: ServerStartArgs) -> Result<()> {
+    let workspace_root = find_workspace_root()
+        .ok_or_else(|| anyhow::anyhow!("could not locate workspace root containing Cargo.toml"))?;
+
+    let database_url = args
+        .database_url
+        .or_else(|| std::env::var("DATABASE_URL").ok())
+        .ok_or_else(|| anyhow::anyhow!("DATABASE_URL must be set or passed with --database-url"))?;
+
+    let service_token = args
+        .service_token
+        .or_else(|| std::env::var("INTERNAL_SERVICE_TOKEN").ok())
+        .unwrap_or_else(|| "dev-service-token".to_string());
+
+    write_server_port(args.port)?;
+
+    let binary = find_server_binary(&workspace_root, args.release);
+    if let Some(bin) = binary {
+        println!("starting server binary {}", bin.display());
+        return start_server_binary(&workspace_root, &bin, args.port, &database_url, &service_token)
+            .await;
     }
 
-    // 2 + 3. Workspace target directory
-    if let Some(root) = find_workspace_root() {
-        let dirs: &[&str] = if prefer_release {
-            &["target/release", "target/debug"]
-        } else {
-            &["target/debug", "target/release"]
-        };
-        for dir in dirs {
-            let candidate = root.join(dir).join(bin);
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
+    println!("server binary not found, starting via cargo run");
+    start_server_cargo(
+        &workspace_root,
+        args.release,
+        args.port,
+        &database_url,
+        &service_token,
+    )
+    .await
+}
+
+#[cfg(unix)]
+async fn start_server_binary(
+    workspace_root: &Path,
+    bin: &Path,
+    port: u16,
+    database_url: &str,
+    service_token: &str,
+) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    write_server_pid(std::process::id())?;
+
+    let err = std::process::Command::new(bin)
+        .current_dir(workspace_root)
+        .env("GRPC_PORT", port.to_string())
+        .env("DATABASE_URL", database_url)
+        .env("INTERNAL_SERVICE_TOKEN", service_token)
+        .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
+        .exec();
+
+    Err(anyhow::anyhow!("failed to exec server binary: {}", err))
+}
+
+#[cfg(not(unix))]
+async fn start_server_binary(
+    workspace_root: &Path,
+    bin: &Path,
+    port: u16,
+    database_url: &str,
+    service_token: &str,
+) -> Result<()> {
+    let status = tokio::process::Command::new(bin)
+        .current_dir(workspace_root)
+        .env("GRPC_PORT", port.to_string())
+        .env("DATABASE_URL", database_url)
+        .env("INTERNAL_SERVICE_TOKEN", service_token)
+        .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
+        .status()
+        .await
+        .context("failed to start server binary")?;
+
+    if !status.success() {
+        bail!("server exited with {}", status);
     }
 
-    // 4. System PATH
-    which::which(bin).ok()
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn start_server_cargo(
+    workspace_root: &Path,
+    release: bool,
+    port: u16,
+    database_url: &str,
+    service_token: &str,
+) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    write_server_pid(std::process::id())?;
+
+    let mut command = std::process::Command::new("cargo");
+    command.current_dir(workspace_root);
+    command.args(["run", "-p", "server", "--bin", "flux-server"]);
+    if release {
+        command.arg("--release");
+    }
+    command.env("GRPC_PORT", port.to_string());
+    command.env("DATABASE_URL", database_url);
+    command.env("INTERNAL_SERVICE_TOKEN", service_token);
+    command.env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()));
+
+    let err = command.exec();
+    Err(anyhow::anyhow!("failed to exec `cargo run -p server --bin flux-server`: {}", err))
+}
+
+#[cfg(not(unix))]
+async fn start_server_cargo(
+    workspace_root: &Path,
+    release: bool,
+    port: u16,
+    database_url: &str,
+    service_token: &str,
+) -> Result<()> {
+    let mut command = tokio::process::Command::new("cargo");
+    command.current_dir(workspace_root);
+    command.args(["run", "-p", "server", "--bin", "flux-server"]);
+    if release {
+        command.arg("--release");
+    }
+    command.env("GRPC_PORT", port.to_string());
+    command.env("DATABASE_URL", database_url);
+    command.env("INTERNAL_SERVICE_TOKEN", service_token);
+    command.env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()));
+
+    let status = command.status().await.context("failed to start `cargo run -p server --bin flux-server`")?;
+    if !status.success() {
+        bail!("server exited with {}", status);
+    }
+
+    Ok(())
 }
 
 fn find_workspace_root() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
-        let toml = dir.join("Cargo.toml");
-        if toml.exists() {
-            if let Ok(c) = std::fs::read_to_string(&toml) {
-                if c.contains("[workspace]") {
-                    return Some(dir);
-                }
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            let contents = std::fs::read_to_string(&cargo_toml).ok()?;
+            if contents.contains("[workspace]") {
+                return Some(dir);
             }
         }
+
         if !dir.pop() {
             return None;
         }
     }
 }
 
-pub async fn execute(
-    port:            u16,
-    prefer_release:  bool,
-    no_color:        bool,
-    db_url_override: Option<String>,
-) -> anyhow::Result<()> {
-    if no_color {
-        colored::control::set_override(false);
+fn find_server_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
+    let name = if cfg!(windows) { "flux-server.exe" } else { "flux-server" };
+    let primary = if release { "release" } else { "debug" };
+    let secondary = if release { "debug" } else { "release" };
+
+    [primary, secondary]
+        .into_iter()
+        .map(|profile| workspace_root.join("target").join(profile).join(name))
+        .find(|path| path.exists())
+}
+
+fn flux_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".flux")
+}
+
+fn server_pid_path() -> PathBuf {
+    flux_dir().join("server.pid")
+}
+
+fn server_port_path() -> PathBuf {
+    flux_dir().join("server.port")
+}
+
+fn write_server_pid(pid: u32) -> Result<()> {
+    let dir = flux_dir();
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::write(server_pid_path(), pid.to_string()).context("failed to write ~/.flux/server.pid")
+}
+
+fn write_server_port(port: u16) -> Result<()> {
+    let dir = flux_dir();
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::write(server_port_path(), port.to_string())
+        .context("failed to write ~/.flux/server.port")
+}
+
+fn stop_existing_server() -> Result<()> {
+    let pid_path = server_pid_path();
+    if !pid_path.exists() {
+        return Ok(());
     }
 
-    let database_url = db_url_override
-        .or_else(|| std::env::var("DATABASE_URL").ok())
-        .unwrap_or_else(|| {
-            eprintln!(
-                "{} {} is not set.\n  {}",
-                "✗".red().bold(),
-                "DATABASE_URL".cyan(),
-                "export DATABASE_URL=postgres://user:pass@localhost:5432/fluxbase".dimmed(),
-            );
-            std::process::exit(1);
-        });
+    let raw = std::fs::read_to_string(&pid_path).context("failed to read ~/.flux/server.pid")?;
+    let pid = raw
+        .trim()
+        .parse::<i32>()
+        .with_context(|| format!("invalid pid in {}", pid_path.display()))?;
 
-    let bin = find_server_binary(prefer_release).unwrap_or_else(|| {
-        eprintln!(
-            "{} Could not find the {} binary.",
-            "✗".red().bold(),
-            "server".cyan(),
-        );
-        eprintln!(
-            "  Build it first: {}",
-            "cargo build -p server".dimmed(),
-        );
-        std::process::exit(1);
-    });
-
-    println!();
-    println!("  {} {}", "flux server".bold(), env!("CARGO_PKG_VERSION").dimmed());
-    println!("  {}  {}", "address  ".dimmed(), format!("http://localhost:{port}").cyan());
-    println!("  {}  {}", "database ".dimmed(), database_url.dimmed());
-    println!("  {}  {}", "binary   ".dimmed(), bin.display().to_string().dimmed());
-    println!();
-
-    let token = std::env::var("INTERNAL_SERVICE_TOKEN")
-        .unwrap_or_else(|_| "flux_dev_token".to_string());
-
-    // Replace the current process with the server — signals propagate correctly.
-    // On Windows this falls back to a child-process spawn.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = std::process::Command::new(&bin)
-            .env("PORT",                   port.to_string())
-            .env("DATABASE_URL",           &database_url)
-            .env("INTERNAL_SERVICE_TOKEN", &token)
-            .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
-            .exec();
-        return Err(anyhow::anyhow!("Failed to exec server binary: {err}"));
+    if pid <= 0 {
+        bail!("invalid server pid: {}", pid);
     }
 
-    #[cfg(not(unix))]
-    {
-        let status = tokio::process::Command::new(&bin)
-            .env("PORT",                   port.to_string())
-            .env("DATABASE_URL",           &database_url)
-            .env("INTERNAL_SERVICE_TOKEN", &token)
-            .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
-            .status()
-            .await?;
+    let status = std::process::Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status()
+        .context("failed to execute kill command")?;
 
-        if !status.success() {
-            anyhow::bail!("server exited with {status}");
-        }
-        Ok(())
+    if !status.success() {
+        bail!("failed to stop existing server process {}", pid);
     }
+
+    let _ = std::fs::remove_file(pid_path);
+    Ok(())
 }

@@ -1,4 +1,4 @@
-# Fluxbase Copilot Instructions
+# Flux Copilot Instructions
 
 ## What Flux Is
 

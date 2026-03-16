@@ -27,7 +27,7 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-SERVICES=("api" "gateway" "runtime" "queue" "data-engine" "cli")
+SERVICES=("api" "runtime" "queue" "cli" "server")
 
 package_name_for_service() {
     local service=$1
@@ -114,40 +114,21 @@ build_rust_service() {
     fi
 }
 
-build_dashboard() {
-    echo "Building Dashboard..."
-    (
-        cd dashboard
-        npm install > /tmp/dashboard_install.log 2>&1
-        npm run build > /tmp/dashboard_build.log 2>&1
-    )
-    if [ $? -eq 0 ]; then
-        echo "✅ dashboard build successful."
-    else
-        echo "❌ dashboard build failed. See /tmp/dashboard_build.log"
-        return 1
-    fi
-}
-
 if [ "$SERVICE_NAME" == "all" ]; then
     if [ "$PARALLEL" = true ]; then
         echo "Starting parallel build for all services..."
         for service in "${SERVICES[@]}"; do
             build_rust_service "$service" &
         done
-        build_dashboard &
         wait
     else
         for service in "${SERVICES[@]}"; do
             build_rust_service "$service"
         done
-        build_dashboard
     fi
 else
     if [[ " ${SERVICES[@]} " =~ " ${SERVICE_NAME} " ]]; then
         build_rust_service "$SERVICE_NAME"
-    elif [ "$SERVICE_NAME" == "dashboard" ]; then
-        build_dashboard
     else
         echo "Error: Unknown service $SERVICE_NAME"
         exit 1

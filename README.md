@@ -28,8 +28,8 @@ That is why commands like `flux trace`, `flux why`, replay, diff, mutation histo
 Flux is a complete backend runtime:
 
 - functions for synchronous application logic
-- a gateway for routing, auth, validation, and middleware
-- a data engine for guarded database access and mutation recording
+- a runtime kernel for execution, replay, and resume
+- in-process database dispatch with mutation recording
 - queues and schedules for background work
 - secrets, deployment, and project configuration
 - a CLI built around setup, deployment, and incident debugging
@@ -46,9 +46,19 @@ curl -fsSL https://fluxbase.co/install | bash
 irm https://fluxbase.co/install.ps1 | iex
 ```
 
+onboarding (minimal): install with `cargo install --path cli`, run `flux server start` and `flux serve your-app.js`, then debug with `flux logs`, `flux trace <id>`, and `flux replay <id>`.
+
+Local source install (current repo):
+
+```bash
+cargo install --path cli --force
+```
+
+This installs one CLI binary (`flux`) that manages the runtime binaries (`flux-server`, `flux-runtime`) for you.
+
 ## Telemetry
 
-The CLI collects anonymous usage events (`flux dev`, `flux deploy`, `flux init`) to help us understand how Flux is used. **No personal data, code, or credentials are ever sent** — only CLI version, OS, and arch.
+The CLI collects anonymous usage events (`flux init`, `flux serve`, `flux logs`) to help us understand how Flux is used. **No personal data, code, or credentials are ever sent** — only CLI version, OS, and arch.
 
 Opt out at any time:
 
@@ -61,21 +71,20 @@ export FLUX_NO_TELEMETRY=1   # or DO_NOT_TRACK=1
 The developer loop looks like this:
 
 ```bash
-flux init my-app
-cd my-app
-flux dev
-flux function create create_user
-flux invoke create_user --gateway --payload '{"email":"user@example.com"}'
-flux trace
-flux why <request_id>
+flux server start --database-url postgres://localhost:5432/postgres
+flux init
+flux serve index.ts
+flux logs --status error
+flux trace <execution_id> --verbose
+flux replay <execution_id> --diff
 ```
 
 The experience is:
 
-- one project
-- one runtime
-- one local command to start everything
-- one place to inspect what happened
+- one setup command (`flux init`)
+- one command to serve functions (`flux serve`)
+- one command to check health (`flux status`)
+- one place to inspect what happened (`logs`, `trace`, `why`, `replay`)
 
 ## Product Positioning
 
@@ -95,12 +104,12 @@ The headline is debugging. The rest of the system is proof that debugging can st
 
 ## Architecture At A Glance
 
-Flux presents one unified runtime externally and keeps clear subsystem boundaries internally.
+Flux presents one CLI surface externally and keeps clear subsystem boundaries internally.
 
 External product shape:
 
-- one binary
-- one port
+- three binaries (`flux`, `flux-server`, `flux-runtime`)
+- one user-facing CLI
 - one Postgres-backed execution record
 - one operator surface for CLI and dashboard
 
@@ -108,7 +117,7 @@ Repository shape:
 
 - separate Rust crates keep boundaries clear
 - the `server` crate represents the monolithic deployment direction
-- `gateway`, `runtime`, `data-engine`, `queue`, and `api` can still be developed independently
+- `runtime`, `queue`, and `api` can still be developed independently
 
 See [docs/single-binary-architecture.md](docs/single-binary-architecture.md) for the full architecture narrative.
 
@@ -116,13 +125,9 @@ See [docs/single-binary-architecture.md](docs/single-binary-architecture.md) for
 
 - `cli/` - developer and operator CLI
 - `server/` - monolithic runtime entrypoint
-- `gateway/` - ingress, routing, auth, validation, middleware
 - `runtime/` - function execution and bundle loading
-- `data-engine/` - database execution, mutation logging, hooks, policies
 - `queue/` - async jobs, retries, worker execution
 - `api/` - operator-facing APIs for deployments, traces, records, admin actions
-- `dashboard/` - internal/product dashboard UI
-- `scaffolds/` - project and function templates used by `flux init` and `flux function create`
 - `docs/` - product, architecture, and component documentation
 
 ## Start Here

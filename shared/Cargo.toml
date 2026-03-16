@@ -1,0 +1,17 @@
+[package]
+name          = "shared"
+version       = "0.1.0"
+edition       = "2024"
+description   = "Shared proto types for flux, flux-server, and flux-runtime."
+
+[lib]
+name = "shared"
+path = "src/lib.rs"
+
+[dependencies]
+tonic = { version = "0.12", features = ["transport"] }
+prost = "0.13"
+
+[build-dependencies]
+tonic-build         = "0.12"
+protoc-bin-vendored = "3"

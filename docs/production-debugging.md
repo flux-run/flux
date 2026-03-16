@@ -1,103 +1,48 @@
 # Production Debugging
 
-Flux is built so production debugging starts from an execution record instead of from disconnected logs.
-
-This is the incident workflow in Flux.
-
-## 1. Triage
-
-Start by finding the failing or slow execution:
+## 1) Triage
 
 ```bash
-flux errors
-flux tail --errors
-flux trace
+flux status
+flux logs --status error --limit 100
+flux tail
 ```
 
-The goal is to get to a concrete request or job ID quickly.
-
-## 2. Inspect The Trace
-
-Once you have an execution ID:
+## 2) Deep Inspect
 
 ```bash
-flux trace <request_id>
+flux trace <execution_id> --verbose
+flux why <execution_id>
 ```
 
-This answers:
-
-- what route or function ran?
-- how long did it take?
-- where did time go?
-- what failed first?
-
-## 3. Ask For An Explanation
+## 3) Safe Reproduction
 
 ```bash
-flux why <request_id>
+flux replay <execution_id>
+flux replay <execution_id> --diff
 ```
 
-`flux why` connects:
+Use `--diff` to compare original and replay output fields.
 
-- the failure
-- the relevant span or spans
-- the code version
-- the most relevant state changes
-- the next likely debugging step
-
-## 4. Inspect State Changes
-
-When the problem is stateful, the next step is not more logs. It is state history:
+## 4) Continue From Checkpoint
 
 ```bash
-flux state history <table> --id <primary_key>
-flux state blame <table> --id <primary_key>
+flux resume <execution_id>
+flux resume <execution_id> --from 2
 ```
 
-This is where Flux outperforms most backend stacks.
-
-## 5. Replay Safely
-
-If the incident needs reproduction:
+## 5) One-Off Local Probe
 
 ```bash
-flux incident replay --request-id <request_id>
+flux exec index.ts --payload '{"test":true}'
 ```
 
-Replay answers:
+## Incident Outcome Standard
 
-- does the failure still reproduce?
-- was the problem tied to old code?
-- was the problem tied to old state?
+A good incident workflow yields:
 
-## 6. Diff The Outcomes
-
-Compare the original run with the replay:
-
-```bash
-flux trace diff <original_id> <replay_id>
-```
-
-The interesting output is not only timing. It is also state-level divergence.
-
-## 7. Track Regressions
-
-If the incident appears deploy-related:
-
-```bash
-flux bug bisect --function <name> --good <sha> --bad <sha>
-```
-
-This is where deployment metadata becomes part of the debugging product.
-
-## What Good Incident Debugging Looks Like
-
-A strong Flux incident workflow gives an operator:
-
-- I find the failing execution quickly
-- I see the path through the system
-- I know what state changed
-- I know which version ran
-- I reproduce or compare behavior without rebuilding the whole world
-
-That is the standard the product delivers.
+- exact failing execution
+- request/response visibility
+- call-level checkpoint trail
+- deterministic replay evidence
+- clear next action

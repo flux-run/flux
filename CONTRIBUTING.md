@@ -61,7 +61,7 @@ cd flux
 
 # Start PostgreSQL (Docker is easiest)
 docker run -d --name flux-pg \
-  -e POSTGRES_DB=fluxbase \
+  -e POSTGRES_DB=flux \
   -e POSTGRES_PASSWORD=password \
   -p 5432:5432 postgres:16
 
@@ -76,7 +76,7 @@ SQLX_OFFLINE=true cargo build -p server
 
 LOCAL_MODE=true \
   INTERNAL_SERVICE_TOKEN=dev-token \
-  DATABASE_URL="postgresql://postgres:password@localhost:5432/fluxbase" \
+  DATABASE_URL="postgresql://postgres:password@localhost:5432/flux" \
   ./target/debug/server
 ```
 

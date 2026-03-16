@@ -1,59 +1,19 @@
 # API
 
-The API component is the operator-facing surface of Flux.
+Flux API is the operator-facing surface used by CLI workflows.
 
-It is where the CLI, dashboard, and automation surfaces go to inspect and manage the system.
+## Primary Uses
 
-## Responsibilities
-
-The API owns:
-
-- health and readiness endpoints
-- deployment and version metadata
-- trace and execution record queries
-- mutation and state history queries
-- debugging and incident workflows
-- project configuration and secrets management
-- operator-authenticated administrative actions
-
-It is not the main ingress path for user traffic. That belongs to the gateway.
-
-## Product Role
-
-Flux has two broad request categories:
-
-- product traffic that enters through the gateway
-- operator traffic that enters through the API
-
-The API exists so the CLI and dashboard can inspect and control the runtime without conflating operator actions with end-user request handling.
-
-## Why The API Matters
-
-The CLI experience depends on a coherent operator API for commands like:
-
-- `flux trace`
-- `flux why`
-- `flux deploy`
-- `flux state history`
-- `flux incident replay`
-- `flux trace diff`
-
-If the API is inconsistent, the CLI becomes inconsistent too.
-
-## Endpoint Groups
-
-The API exposes route groups for:
-
-- health and system status
-- functions and deployments
-- traces and debugging
-- database and mutation inspection
-- queue and schedule operations
-- gateway and route configuration
-- records, metrics, and operator views
-
-See [api-reference.md](api-reference.md) for the route map.
+- auth/token validation
+- execution list query (`flux logs`)
+- trace fetch (`flux trace`)
+- diagnosis endpoint (`flux why`)
+- replay/resume operations (`flux replay`, `flux resume`)
+- live event streaming (`flux tail`)
 
 ## Design Rule
 
-The API is the operator surface for the whole product, not a generic CRUD layer.
+Operator traffic is separate from user request traffic:
+
+- user calls hit runtime HTTP endpoints
+- operator commands hit server gRPC endpoints

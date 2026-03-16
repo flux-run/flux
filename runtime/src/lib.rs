@@ -1,41 +1,24 @@
-//! `runtime` library crate — sandboxed user-code execution.
+//! `runtime` library crate — executes JavaScript handlers in embedded V8 isolates.
 //!
-//! ## Mental model
-//!
-//! Runtime executes user code in sandboxed **V8** (Deno) or **WASM** (Wasmtime) isolates.
-//! It **never touches Postgres directly**. All state access goes through the `ctx` object
-//! which proxies to other services:
-//!
-//! - `ctx.db.*`       → POST data-engine `/db/query`
-//! - `ctx.queue.*`    → POST queue service `/jobs`
-//! - `ctx.secrets.*`  → `ApiDispatch::get_secrets` (with LRU cache)
-//! - `ctx.log()`      → `ApiDispatch::write_log` → `flux.platform_logs` (fire-and-forget)
-//!
-//! ## Execution paths
-//!
-//! ```text
-//! POST /execute (HTTP)
-//!        ↓
-//! execute_handler
-//!  ├─ BundleResolver (warm WASM → warm Deno → cold fetch → inline from DB)
-//!  ├─ SecretsClient (LRU cache, 30 s TTL)
-//!  └─ ExecutionRunner::run()
-//!       ├─ schema validation (input JSON Schema, if configured)
-//!       ├─ TraceEmitter::post_lifecycle("start")
-//!       ├─ IsolatePool::execute()   (Deno) — warm V8 isolate, function affinity
-//!       │   OR WasmPool::execute()  (WASM) — Wasmtime AOT + fuel limit
-//!       └─ TraceEmitter::emit_logs()  — fire-and-forget ctx.log() + execution_end span
-//! ```
+//! This crate is responsible for:
+//! - preparing artifacts,
+//! - running user code inside reused isolates,
+//! - exposing Rust-owned host I/O ops (for example intercepted `fetch`).
 
-pub mod bundle;
-pub mod config;
-pub mod dispatch;
-pub mod engine;
-pub mod execute;
-pub mod schema;
-pub mod secrets;
-pub mod state;
-pub mod trace;
+pub mod artifact;
+pub mod deno_runtime;
+pub mod http_runtime;
+pub mod isolate_pool;
+pub mod server_client;
 
-// Convenience re-exports at crate root.
-pub use state::AppState;
+pub use artifact::{
+	RuntimeArtifact,
+	RuntimeSubmitRequest,
+	build_artifact,
+	build_artifact_from_file,
+	sha256_hex,
+};
+pub use http_runtime::{
+	HttpRuntimeConfig,
+	run_http_runtime,
+};

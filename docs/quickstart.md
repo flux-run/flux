@@ -1,125 +1,69 @@
 # Quickstart
 
-This quickstart shows what happens when you start building with Flux.
-
-## 1. Build The CLI
-
-From the repository root:
+## 1) Build CLI
 
 ```bash
 cargo build -p cli
 ```
 
-The CLI binary is `target/debug/flux`.
-
-## 2. Initialize A Project
+Binary path:
 
 ```bash
-target/debug/flux init my-app
-cd my-app
+target/debug/flux
 ```
 
-The scaffold gives you a complete starting point:
-
-- `flux.toml`
-- `functions/`
-- `schemas/`
-- `middleware/`
-- `queues/`
-- `.env.example`
-- local `.flux/` state for generated files and dev metadata
-
-## 3. Start The Local Runtime
+## 2) Start Flux Server
 
 ```bash
-target/debug/flux dev
+target/debug/flux server start --database-url postgres://localhost:5432/postgres
 ```
 
-`flux dev` gives you:
-
-- one command starts the stack
-- Postgres is bootstrapped or connected automatically
-- framework and project schema are applied
-- the operator API and dashboard are reachable
-- the CLI prints the next commands you are likely to need
-
-## 4. Create A Function
+## 3) Initialize Auth Once
 
 ```bash
-target/debug/flux function create create_user
+target/debug/flux init
 ```
 
-Flux scaffolds a function that is ready to edit immediately.
+After this, commands work without repeating `--url` and `--token`.
 
-## 5. Invoke The System
+## 4) Start Runtime
 
 ```bash
-target/debug/flux invoke create_user --gateway --payload '{"email":"user@example.com"}'
+target/debug/flux serve index.ts
 ```
 
-The `--gateway` path is the most representative local path because it includes:
-
-- routing
-- middleware
-- auth and validation hooks
-- tracing and request IDs
-
-## 6. Inspect The Execution Record
+Runtime endpoint:
 
 ```bash
-target/debug/flux trace
-target/debug/flux trace <request_id>
-target/debug/flux why <request_id>
+POST http://127.0.0.1:3000/index
 ```
 
-After one request, the system already feels different from a logs-first stack:
-
-- you have one request record
-- you can inspect spans without stitching systems together manually
-- you can see which code version ran
-- you can connect the request to database mutations and downstream work
-
-## 7. Evolve The Database
-
-Update your schema or migration files, then apply them:
+## 5) Run One-Off Execution
 
 ```bash
-target/debug/flux db push
+target/debug/flux exec index.ts --payload '{"email":"user@example.com"}'
 ```
 
-Flux treats the database as part of the execution model, not as a separate debugging blind spot.
+For a focused smoke-test flow, see [examples/exec-smoke.md](examples/exec-smoke.md).
 
-## 8. Deploy
+## 6) Inspect
 
 ```bash
-target/debug/flux deploy
+target/debug/flux logs --limit 20
+target/debug/flux trace <execution_id> --verbose
+target/debug/flux why <execution_id>
 ```
 
-The deployment loop:
-
-- detects what changed
-- bundles and uploads code
-- records the deployment
-- attaches deploy metadata to future executions
-
-## 9. Debug A Real Incident
-
-The real product loop starts after the first failure:
+## 7) Replay / Compare
 
 ```bash
-target/debug/flux errors
-target/debug/flux debug
-target/debug/flux why <request_id>
-target/debug/flux incident replay --request-id <request_id>
-target/debug/flux trace diff <original_id> <replay_id>
+target/debug/flux replay <execution_id> --diff
+target/debug/flux resume <execution_id>
 ```
 
-## What This Quickstart Demonstrates
+## 8) Health Checks
 
-A new developer can:
-
-1. start a project without reading internal docs
-2. create and invoke one function without port confusion
-3. inspect one execution record immediately
-4. understand one failure with `flux why`
-5. feel that debugging is materially better than their existing stack
+```bash
+target/debug/flux ps
+target/debug/flux status
+```

@@ -1,196 +1,142 @@
-use crate::client::ApiClient;
-use colored::Colorize;
-use serde_json::Value;
+use anyhow::Result;
+use clap::Args;
+use chrono::{DateTime, Duration, Utc};
 
-// ── Formatting helpers ────────────────────────────────────────────────────
+use crate::config::resolve_auth;
+use crate::grpc::list_logs;
 
-fn format_timestamp(ts: &str) -> String {
-    // Input: RFC-3339 like "2026-03-09T10:01:12.000000Z"
-    // Output: "2026-03-09 10:01:12"
-    ts.get(..19)
-        .map(|s| s.replace('T', " "))
-        .unwrap_or_else(|| ts.to_string())
+#[derive(Debug, Args)]
+pub struct LogsArgs {
+    #[arg(long, value_name = "URL")]
+    pub url: Option<String>,
+    #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
+    pub token: Option<String>,
+    #[arg(long, default_value_t = 50)]
+    pub limit: u32,
+    #[arg(long, value_name = "STATUS")]
+    pub status: Option<String>,
+    #[arg(long, value_name = "PATH")]
+    pub path: Option<String>,
+    #[arg(long, value_name = "DURATION")]
+    pub since: Option<String>,
+    #[arg(long, value_name = "TEXT")]
+    pub search: Option<String>,
 }
 
-fn colorize_level(level: &str) -> colored::ColoredString {
-    match level.to_uppercase().as_str() {
-        "ERROR" | "ERR"      => level.to_uppercase().red().bold(),
-        "WARN"  | "WARNING"  => level.to_uppercase().yellow().bold(),
-        "DEBUG"              => level.to_uppercase().dimmed(),
-        _                    => level.to_uppercase().normal(),
+pub async fn execute(args: LogsArgs) -> Result<()> {
+    let auth = resolve_auth(args.url, args.token)?;
+    let fetch_limit = if args.status.is_some() || args.path.is_some() || args.since.is_some() || args.search.is_some() {
+        (args.limit.saturating_mul(10)).clamp(50, 500)
+    } else {
+        args.limit
+    };
+    let mut logs = list_logs(&auth.url, &auth.token, fetch_limit).await?;
+
+    if let Some(status_filter) = args.status.as_deref() {
+        let status_filter = status_filter.to_ascii_lowercase();
+        logs.retain(|row| row.status.eq_ignore_ascii_case(&status_filter));
     }
-}
 
-fn colorize_source(source: &str) -> colored::ColoredString {
-    match source {
-        "db"       => source.magenta(),
-        "workflow" => source.yellow(),
-        "queue"    => source.blue(),
-        "event"    => source.cyan(),
-        "system"   => source.dimmed(),
-        _          => source.green(),  // function (default)
+    if let Some(path_filter) = args.path.as_deref() {
+        logs.retain(|row| row.path.contains(path_filter));
     }
-}
 
-fn print_log_entries(entries: &[Value]) {
-    for entry in entries {
-        let ts       = entry["timestamp"].as_str().unwrap_or("?");
-        // Prefer new unified fields; fall back to legacy "function"
-        let source   = entry["source"].as_str().unwrap_or("function");
-        let resource = entry["resource"].as_str()
-            .or_else(|| entry["function"].as_str())
-            .unwrap_or("?");
-        let lvl      = entry["level"].as_str().unwrap_or("info");
-        let msg      = entry["message"].as_str().unwrap_or("");
+    if let Some(since_filter) = args.since.as_deref() {
+        if let Some(cutoff) = parse_since_cutoff(since_filter) {
+            logs.retain(|row| {
+                DateTime::parse_from_rfc3339(&row.timestamp)
+                    .map(|ts| ts.with_timezone(&Utc) >= cutoff)
+                    .unwrap_or(false)
+            });
+        }
+    }
+
+    if let Some(search) = args.search.as_deref() {
+        let search = search.to_ascii_lowercase();
+        logs.retain(|row| {
+            row.error.to_ascii_lowercase().contains(&search)
+                || row.path.to_ascii_lowercase().contains(&search)
+                || row.method.to_ascii_lowercase().contains(&search)
+                || row.execution_id.to_ascii_lowercase().contains(&search)
+                || row.request_id.to_ascii_lowercase().contains(&search)
+        });
+    }
+
+    logs.truncate(args.limit as usize);
+
+    if logs.is_empty() {
+        println!("\n  no executions matched\n");
+        return Ok(());
+    }
+
+    println!();
+    println!("  TIME      METHOD  PATH               STATUS   DURATION  ID");
+    for log in logs {
+        let short_id: String = log.execution_id.chars().take(8).collect();
+        let time = short_time(&log.timestamp);
+        let method = pad(&log.method, 6);
+        let path = pad(&log.path, 18);
+        let duration = format!("{}ms", log.duration_ms);
+        let status = status_label(&log.status, log.duration_ms);
 
         println!(
-            "{}  {}  {}  {}",
-            format_timestamp(ts).dimmed(),
-            format!("[{}/{}]", colorize_source(source), resource.bold()),
-            colorize_level(lvl),
-            msg
+            "  {}  {}  {}  {}  {:>8}  {}",
+            time,
+            method,
+            path,
+            status,
+            duration,
+            short_id,
         );
     }
-}
 
-// ── API fetch ─────────────────────────────────────────────────────────────
-
-/// Low-level fetch. Supports both the new (source + resource) and legacy
-/// (function=) query params.
-async fn fetch_logs(
-    client:   &ApiClient,
-    source:   Option<&str>,
-    resource: Option<&str>,
-    limit:    u64,
-    since:    Option<&str>,
-) -> anyhow::Result<Vec<Value>> {
-    let mut url = format!("{}/logs?limit={}", client.base_url, limit);
-
-    match (source, resource) {
-        (Some(s), Some(r)) => {
-            url.push_str(&format!("&source={s}&resource={r}"));
-        }
-        (None, Some(r)) => {
-            // Caller provided only a name — assume "function" for backward compat
-            url.push_str(&format!("&source=function&resource={r}"));
-        }
-        (Some(s), None) => {
-            url.push_str(&format!("&source={s}"));
-        }
-        (None, None) => {}
-    }
-
-    if let Some(s) = since {
-        url.push_str(&format!("&since={}", urlencoding_simple(s)));
-    }
-
-    let res = client.client.get(&url).send().await?;
-    if !res.status().is_success() {
-        anyhow::bail!("API error: {}", res.status());
-    }
-
-    let body: Value = res.json().await?;
-    Ok(body["data"]["logs"].as_array().cloned().unwrap_or_default())
-}
-
-/// Minimal percent-encoding for ':' in ISO timestamps so query params are valid.
-fn urlencoding_simple(s: &str) -> String {
-    s.replace(':', "%3A")
-}
-
-// ── Label helper ──────────────────────────────────────────────────────────
-
-fn display_label(source: Option<&str>, resource: Option<&str>) -> String {
-    match (source, resource) {
-        (Some(s), Some(r)) => format!("{}/{}", s, r),
-        (None,    Some(r)) => format!("function/{}", r),
-        (Some(s), None   ) => format!("{} (all)", s),
-        (None,    None   ) => "all".to_string(),
-    }
-}
-
-// ── Public entry points ───────────────────────────────────────────────────
-
-/// One-shot log fetch.
-///   flux logs                         → all logs in project
-///   flux logs function echo           → function/echo logs
-///   flux logs db users                → db/users logs
-///   flux logs echo                    → backward compat → function/echo
-pub async fn execute(
-    source:   Option<String>,
-    resource: Option<String>,
-    limit:    u64,
-) -> anyhow::Result<()> {
-    let client = ApiClient::new().await?;
-    let label  = display_label(source.as_deref(), resource.as_deref());
-
-    println!("\n  {} Logs for {}  (last {})\n", "▸".cyan(), label.bold(), limit);
-
-    let entries = fetch_logs(&client, source.as_deref(), resource.as_deref(), limit, None).await?;
-
-    if entries.is_empty() {
-        println!("  {}", "No logs found.".dimmed());
-    } else {
-        let mut ordered = entries;
-        ordered.reverse();  // API returns DESC when no `since`; display oldest-first
-        print_log_entries(&ordered);
-    }
     println!();
+    println!("  showing last {} — flux logs --limit 100 for more", args.limit);
+    println!();
+
     Ok(())
 }
 
-/// Streaming follow mode — polls every 1.5 s for new log lines.
-pub async fn execute_follow(
-    source:   Option<String>,
-    resource: Option<String>,
-    limit:    u64,
-) -> anyhow::Result<()> {
-    let client = ApiClient::new().await?;
-    let label  = display_label(source.as_deref(), resource.as_deref());
+fn pad(value: &str, width: usize) -> String {
+    let clipped: String = value.chars().take(width).collect();
+    format!("{:<width$}", clipped, width = width)
+}
 
-    println!("\n  {} Following logs for {}  (Ctrl+C to stop)\n", "▸".cyan(), label.bold());
-
-    let initial = fetch_logs(&client, source.as_deref(), resource.as_deref(), limit, None).await?;
-    let mut last_timestamp: Option<String> = None;
-
-    if !initial.is_empty() {
-        let mut ordered = initial;
-        ordered.reverse();
-        if let Some(last) = ordered.last() {
-            if let Some(ts) = last["timestamp"].as_str() {
-                last_timestamp = Some(ts.to_string());
-            }
-        }
-        print_log_entries(&ordered);
-    }
-
-    const MIN_POLL_MS: u64 = 1_500;
-    const MAX_POLL_MS: u64 = 10_000;
-    let mut poll_ms = MIN_POLL_MS;
-
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(poll_ms)).await;
-
-        let since = last_timestamp.as_deref();
-        let new_entries = match fetch_logs(&client, source.as_deref(), resource.as_deref(), 200, since).await {
-            Ok(e) => e,
-            Err(_) => {
-                poll_ms = (poll_ms * 2).min(MAX_POLL_MS);
-                continue;
-            }
-        };
-
-        if !new_entries.is_empty() {
-            if let Some(last) = new_entries.last() {
-                if let Some(ts) = last["timestamp"].as_str() {
-                    last_timestamp = Some(ts.to_string());
-                }
-            }
-            print_log_entries(&new_entries);
-            poll_ms = MIN_POLL_MS;
-        } else {
-            poll_ms = (poll_ms * 2).min(MAX_POLL_MS);
-        }
+fn short_time(ts: &str) -> String {
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(ts) {
+        parsed.with_timezone(&Utc).format("%H:%M:%S").to_string()
+    } else {
+        ts.to_string()
     }
 }
 
+fn parse_since_cutoff(input: &str) -> Option<DateTime<Utc>> {
+    let value = input.trim().to_ascii_lowercase();
+    if value.len() < 2 {
+        return None;
+    }
+    let (n, suffix) = value.split_at(value.len() - 1);
+    let amount: i64 = n.parse().ok()?;
+    let delta = match suffix {
+        "s" => Duration::seconds(amount),
+        "m" => Duration::minutes(amount),
+        "h" => Duration::hours(amount),
+        "d" => Duration::days(amount),
+        _ => return None,
+    };
+    Some(Utc::now() - delta)
+}
+
+fn status_label(status: &str, duration_ms: i32) -> String {
+    let lower = status.to_ascii_lowercase();
+    if lower == "error" {
+        return "\x1b[31m✗ error\x1b[0m".to_string();
+    }
+    if duration_ms > 500 {
+        return "\x1b[33m⚠ slow\x1b[0m".to_string();
+    }
+    if lower == "ok" || lower == "success" {
+        return "\x1b[32m✓ ok\x1b[0m".to_string();
+    }
+    format!("  {}", lower)
+}

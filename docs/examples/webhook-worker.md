@@ -1,46 +1,30 @@
 # Example: Webhook Worker
 
-This example shows Flux as an event-ingestion and background-processing system.
+A compact async example that crosses an intake/replay boundary.
 
-It is a good demonstration of why queues, retries, and mutation history belong in the same product as request tracing.
+## Goal
 
-## What The Example Covers
+- accept a webhook-style payload
+- inspect the failed execution
+- replay with field-level diff
 
-- a gateway endpoint for incoming webhooks
-- signature verification or auth checks
-- storing raw events for audit
-- enqueueing follow-up work
-- worker execution with retries
-- linked traces between intake and background jobs
-
-## Why This Example Matters
-
-Many real backend incidents cross an async boundary.
-
-The webhook example shows that Flux answers:
-
-- which webhook created this job?
-- which retry failed?
-- what state changed?
-- what did the follow-up worker do?
-
-This is a strong proof of the complete-system story.
-
-## Good Demo Flow
+## Steps
 
 ```bash
-flux init webhook-worker
-flux dev
-flux invoke receive_webhook --gateway --payload '{"provider":"stripe","event":"invoice.paid"}'
-flux trace
-flux why <request_id>
-flux queue
+flux server start --database-url postgres://localhost:5432/postgres
+flux init
+flux serve webhook.ts
+curl -sS -X POST http://127.0.0.1:3000/webhook \
+  -H 'content-type: application/json' \
+  -d '{"provider":"stripe","event":"invoice.paid"}'
+flux logs --path /webhook --limit 20
+flux trace <execution_id> --verbose
+flux replay <execution_id> --diff
+flux resume <execution_id>
 ```
 
-## What A Reader Should Learn
+## What to Look For
 
-This example shows:
-
-- why async work is part of Flux rather than an add-on
-- how parent and child executions stay linked
-- how retries and queue state fit into the debugging model
+- trace shows full request payload and response/error
+- replay output highlights changed JSON fields
+- resume continues from checkpointed call boundaries when supported

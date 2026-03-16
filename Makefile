@@ -1,21 +1,16 @@
-.PHONY: dev api dashboard server build migrate install clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types check-types
+.PHONY: dev api server build migrate install install-cli install-server clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types smoke-auth-runtime
 
 # ── Full stack ──────────────────────────────────────────────────────────────
-# Starts API + dashboard in parallel, printing labelled output.
+# Starts API.
 dev:
-	@echo "Starting Fluxbase dev stack…"
-	@make -j2 api dashboard
+	@echo "Starting Flux dev API…"
+	@make api
 
 # ── Individual services ─────────────────────────────────────────────────────
 api:
 	cd api && SQLX_OFFLINE=true cargo run
 
-# Runs the Next.js dev server (hot-reload).
-# Use `cargo build -p server` to get the *production* static export baked in.
-dashboard:
-	cd dashboard && npm run dev
-
-# Monolith — builds dashboard static export then compiles the server binary.
+# Monolith server.
 server:
 	SQLX_OFFLINE=true cargo build -p server
 
@@ -61,34 +56,35 @@ sqlx-prepare:
 	cd api && DATABASE_URL="$(DB_URL)" cargo sqlx prepare
 
 migrate:
-	sqlx migrate run --source schemas/api --ignore-missing
-	@DB_URL=$$(python3 -c "import re; [print(m.group(1)) for l in open('data-engine/env.yaml') for m in [re.match(r'.*DATABASE_URL: \"(.*)\"', l)] if m]"); \
-	  DATABASE_URL="$$DB_URL" sqlx migrate run --source schemas/data-engine --ignore-missing
+	psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -f schemas/v0.1.sql
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 install:
-	cd dashboard && npm install
+	@echo "No Node install step required."
+
+# Install flux CLI and server binaries to ~/.cargo/bin
+install-local:
+	./scripts/install-local.sh
+
+install-cli:
+	./scripts/install-local.sh --cli
+
+install-server:
+	./scripts/install-local.sh --server
 
 # ── Clean ────────────────────────────────────────────────────────────────────
 clean:
 	cd api && cargo clean
-	cd dashboard && rm -rf dist node_modules/.vite
 
 # ── API Types (TypeScript codegen) ──────────────────────────────────────────
 # Generates TypeScript bindings from Rust types via ts-rs.
-# Output: shared/api_contract/bindings/*.ts  (consumed by packages/api-types)
+# Output: shared/api_contract/bindings/*.ts
 generate-types:
 	cargo test -p api_contract --features ts
 	@echo "TypeScript bindings written to shared/api_contract/bindings/"
 
-# Verifies the dashboard compiles against the current contract types.
-# Run this after `make generate-types` to catch dashboard type mismatches.
-check-types:
-	cd dashboard && npx tsc --noEmit
-	@echo "Dashboard type check passed"
-
 # ── Async Wiring Test ───────────────────────────────────────────────────────
-# Runs deterministic staging wiring test for Gateway -> Queue -> Worker -> Runtime.
+# Runs deterministic staging wiring test for API/Runtime queue execution path.
 # Required env vars are documented in scripts/test_async_wiring.sh
 test-async-wiring:
 	./scripts/test_async_wiring.sh
@@ -102,3 +98,6 @@ test-product-loop:
 
 test-system:
 	./scripts/platform-tests/run_all.sh
+
+smoke-auth-runtime:
+	bash ./scripts/smoke_auth_runtime.sh

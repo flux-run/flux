@@ -1,171 +1,234 @@
-//! Runtime entry point — thin startup wrapper.
-//!
-//! All module declarations live in lib.rs; this file only owns the
-//! tokio::main startup task.
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use std::sync::Arc;
-use axum::{routing::{get, post}, Router};
-use tokio::net::TcpListener;
-use tracing::info;
+use anyhow::{Context, Result, bail};
+use clap::Parser;
 
-use runtime::config::settings::Settings;
-use runtime::secrets::client::SecretsClient;
-use runtime::dispatch::http_api::HttpApiDispatch;
-use runtime::dispatch::http_queue::HttpQueueDispatch;
-use runtime::engine::executor::PoolDispatchers;
-use runtime::engine::pool::IsolatePool;
-use runtime::engine::wasm_pool::WasmPool;
-use runtime::bundle::cache::BundleCache;
-use runtime::schema::cache::SchemaCache;
-use runtime::execute::handler::execute_handler;
-use runtime::execute::invalidate::invalidate_cache_handler;
-use runtime::AppState;
-use job_contract::dispatch::{ApiDispatch, DataEngineDispatch, QueueDispatch};
+#[derive(Parser, Debug)]
+#[command(name = "flux-runtime")]
+#[command(about = "Flux runtime — runs user JS handlers and streams execution records to flux-server")]
+struct Args {
+    /// Entry file to serve (JS, MJS, CJS, TS, or TSX).
+    #[arg(long, value_name = "FILE", default_value = "index.js")]
+    entry: String,
 
-/// HTTP implementation of DataEngineDispatch for the standalone runtime binary.
-struct HttpDataEngineDispatch {
-    client:          reqwest::Client,
-    data_engine_url: String,
-    service_token:   String,
+    /// URL of the flux-server gRPC endpoint.
+    #[arg(long, value_name = "URL", default_value = "http://127.0.0.1:50051")]
+    server_url: String,
+
+    /// Service token for authenticating with flux-server.
+    #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN", default_value = "")]
+    token: String,
+
+    /// HTTP listen host.
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// HTTP listen port.
+    #[arg(long, default_value_t = 3000)]
+    port: u16,
+
+    /// Number of V8 isolates to keep warm.
+    #[arg(long, default_value_t = 16)]
+    isolate_pool_size: usize,
+
+    /// Validate the entry file and print artifact info, then exit without serving.
+    #[arg(long)]
+    check_only: bool,
 }
-
-#[async_trait::async_trait]
-impl DataEngineDispatch for HttpDataEngineDispatch {
-    async fn execute_sql(
-        &self,
-        sql:        String,
-        params:     Vec<serde_json::Value>,
-        database:   String,
-        request_id: String,
-    ) -> Result<serde_json::Value, String> {
-        let url = format!("{}/db/query", self.data_engine_url);
-        let body = serde_json::json!({ "sql": sql, "params": params, "database": database });
-        let resp = self.client
-            .post(&url)
-            .header("X-Service-Token", &self.service_token)
-            .header("x-request-id", &request_id)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("data_engine_unreachable: {}", e))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| format!("data_engine parse error: {}", e))?;
-        if !status.is_success() {
-            return Err(format!("data_engine HTTP {}: {:?}", status, json));
-        }
-        Ok(json)
-    }
-}
-
-// ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let settings = Settings::load();
-    let port     = settings.port;
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info".into()),
+        )
+        .init();
 
-    let http_client = reqwest::Client::builder()
-        .pool_max_idle_per_host(4)
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .tcp_keepalive(std::time::Duration::from_secs(30))
-        .build()
-        .expect("failed to build HTTP client");
+    let args = Args::parse();
 
-    let api_dispatch: Arc<dyn ApiDispatch> = Arc::new(HttpApiDispatch {
-        client:  http_client.clone(),
-        api_url: settings.api_url.clone(),
-        token:   settings.service_token.clone(),
-    });
+    let entry = PathBuf::from(&args.entry);
+    if !entry.exists() {
+        bail!("entry file not found: {}", entry.display());
+    }
 
-    let queue_dispatch: Arc<dyn QueueDispatch> = Arc::new(HttpQueueDispatch {
-        client:    http_client.clone(),
-        queue_url: settings.queue_url.clone(),
-        token:     settings.service_token.clone(),
-    });
+    // Validate extension whitelist before doing anything else.
+    match extension(&entry).as_deref() {
+        Some("js") | Some("mjs") | Some("cjs") | Some("ts") | Some("tsx") => {}
+        _ => bail!("unsupported entry file extension: {}", entry.display()),
+    }
 
-    let data_engine_dispatch: Arc<dyn DataEngineDispatch> = Arc::new(HttpDataEngineDispatch {
-        client:          http_client.clone(),
-        data_engine_url: settings.data_engine_url.clone(),
-        service_token:   settings.service_token.clone(),
-    });
+    // Canonicalize and verify the entry file is within the current working directory
+    // to prevent path-traversal attacks (e.g. --entry ../../etc/passwd).
+    let canonical_entry = entry
+        .canonicalize()
+        .with_context(|| format!("failed to resolve entry path: {}", entry.display()))?;
+    let cwd = std::env::current_dir().context("failed to read current directory")?;
+    let canonical_cwd = cwd
+        .canonicalize()
+        .context("failed to resolve current directory")?;
+    if !canonical_entry.starts_with(&canonical_cwd) {
+        bail!(
+            "entry file must be within the working directory: {} is outside {}",
+            canonical_entry.display(),
+            canonical_cwd.display()
+        );
+    }
 
-    let dispatchers = PoolDispatchers {
-        api:         Arc::clone(&api_dispatch),
-        queue:       Arc::clone(&queue_dispatch),
-        data_engine: Arc::clone(&data_engine_dispatch),
-        runtime:     Arc::new(std::sync::OnceLock::new()),
-    };
+    let code = load_entry_code(&entry)?;
+    let name = entry
+        .file_name()
+        .and_then(|v| v.to_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid entry file name: {}", entry.display()))?;
+    let artifact = runtime::build_artifact(name, code);
 
-    let state = Arc::new(AppState {
-        secrets_client:  SecretsClient::new(Arc::clone(&api_dispatch)),
-        http_client:     http_client.clone(),
-        api:             api_dispatch,
-        queue:           queue_dispatch,
-        data_engine:     data_engine_dispatch,
-        service_token:   settings.service_token.clone(),
-        bundle_cache:    BundleCache::new(100),
-        schema_cache:    SchemaCache::new(200),
-        isolate_pool:    IsolatePool::new(settings.isolate_workers, settings.request_timeout_secs, dispatchers.clone()),
-        wasm_pool:       WasmPool::new(
-            std::thread::available_parallelism().map(|n| (n.get() * 2).clamp(2, 16)).unwrap_or(4),
-            settings.wasm_fuel_limit,
-            settings.request_timeout_secs,
-        ),
-        dispatchers,
-    });
+    let route_name = entry
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid entry file stem: {}", entry.display()))?
+        .to_string();
 
-    let workers = settings.isolate_workers;
-    let app = Router::new()
-        .route("/health",  get(health))
-        .route("/version", get(move || async move {
-            axum::Json(serde_json::json!({
-                "service": "runtime",
-                "commit":  std::env::var("GIT_SHA").unwrap_or_else(|_| "unknown".to_string()),
-                "isolate_workers": workers,
-            }))
-        }))
-        .route("/execute",                   post(execute_handler))
-        .route("/internal/cache/invalidate", post(invalidate_cache_handler))
-        .layer(axum::extract::DefaultBodyLimit::max(1 * 1024 * 1024))
-        .with_state(state);
+    println!("server:   {}", args.server_url);
+    println!("entry:    {}", entry.display());
+    println!("hash:     {}", artifact.sha256);
+    println!("bytes:    {}", artifact.size_bytes);
+    println!("runtime:  http://{}:{}/{}", args.host, args.port, route_name);
 
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = TcpListener::bind(&addr).await?;
-    info!(port, "runtime listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    if args.check_only {
+        println!("status:   ready for runtime execution and event streaming");
+        return Ok(());
+    }
+
+    println!("status:   serving");
+
+    runtime::run_http_runtime(
+        runtime::HttpRuntimeConfig {
+            host: args.host,
+            port: args.port,
+            route_name,
+            isolate_pool_size: args.isolate_pool_size,
+            server_url: args.server_url,
+            service_token: args.token,
+        },
+        artifact,
+    )
+    .await?;
+
     Ok(())
 }
 
-async fn health() -> axum::Json<serde_json::Value> {
-    axum::Json(serde_json::json!({ "status": "ok" }))
+fn load_entry_code(entry: &Path) -> Result<String> {
+    match extension(entry).as_deref() {
+        Some("js") | Some("mjs") | Some("cjs") => std::fs::read_to_string(entry)
+            .with_context(|| format!("failed to read {}", entry.display())),
+        Some("ts") | Some("tsx") => transpile_typescript(entry),
+        _ => bail!("unsupported entry type: {}", entry.display()),
+    }
 }
 
-/// Resolves on SIGTERM (Unix) or Ctrl-C — allows in-flight requests to drain.
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl-C handler");
-    };
+fn extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|v| v.to_str())
+        .map(|v| v.to_ascii_lowercase())
+}
 
-    #[cfg(unix)]
-    {
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        )
-        .expect("failed to install SIGTERM handler");
+fn transpile_typescript(entry: &Path) -> Result<String> {
+    let temp_root = std::env::temp_dir().join(format!(
+        "flux-ts-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&temp_root)
+        .with_context(|| format!("failed to create {}", temp_root.display()))?;
 
-        tokio::select! {
-            _ = ctrl_c         => {}
-            _ = sigterm.recv() => {}
+    let attempts: [(&str, &[&str]); 3] = [
+        (
+            "npx",
+            &[
+                "--yes",
+                "tsc",
+                "--pretty",
+                "false",
+                "--target",
+                "es2022",
+                "--module",
+                "es2022",
+                "--outDir",
+            ],
+        ),
+        (
+            "bunx",
+            &[
+                "tsc",
+                "--pretty",
+                "false",
+                "--target",
+                "es2022",
+                "--module",
+                "es2022",
+                "--outDir",
+            ],
+        ),
+        (
+            "tsc",
+            &[
+                "--pretty",
+                "false",
+                "--target",
+                "es2022",
+                "--module",
+                "es2022",
+                "--outDir",
+            ],
+        ),
+    ];
+
+    let mut last_error = String::new();
+    for (bin, prefix_args) in attempts {
+        let mut command = Command::new(bin);
+        command.args(prefix_args);
+        command.arg(&temp_root);
+        command.arg(entry);
+
+        match command.output() {
+            Ok(output) if output.status.success() => {
+                let js_path = temp_root.join(
+                    entry
+                        .file_stem()
+                        .and_then(|v| v.to_str())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "invalid TypeScript file name: {}",
+                                entry.display()
+                            )
+                        })?
+                        .to_string()
+                        + ".js",
+                );
+                let code = std::fs::read_to_string(&js_path).with_context(|| {
+                    format!("failed to read transpiled output {}", js_path.display())
+                })?;
+                let _ = std::fs::remove_dir_all(&temp_root);
+                return Ok(code);
+            }
+            Ok(output) => {
+                last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            }
+            Err(err) => {
+                last_error = err.to_string();
+            }
         }
     }
 
-    #[cfg(not(unix))]
-    ctrl_c.await;
-
-    tracing::info!("Runtime: shutdown signal received — draining in-flight requests");
+    let _ = std::fs::remove_dir_all(&temp_root);
+    bail!(
+        "failed to transpile TypeScript {}; tried npx, bunx, and tsc: {}",
+        entry.display(),
+        last_error
+    )
 }

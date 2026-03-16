@@ -1,13 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "api",
-    "runtime",
     "cli",
-    "gateway",
-    "queue",
-    "shared/job_contract",
-    "shared/api_contract",
-    "data-engine",
+    "runtime",
     "server",
+    "shared",
 ]

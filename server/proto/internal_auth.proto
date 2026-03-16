@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package flux.internal.v1;
+
+service InternalAuthService {
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
+  rpc RecordExecution(RecordExecutionRequest) returns (RecordExecutionResponse);
+  rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
+  rpc Why(WhyRequest) returns (WhyResponse);
+  rpc Tail(TailRequest) returns (stream TailEvent);
+  rpc Replay(ReplayRequest) returns (ReplayResponse);
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
+}
+
+message ValidateTokenRequest {}
+
+message ValidateTokenResponse {
+  bool ok = 1;
+  string auth_mode = 2;
+}
+
+message ListLogsRequest {
+  uint32 limit = 1;
+}
+
+message ListLogsResponse {
+  repeated LogEntry logs = 1;
+}
+
+message LogEntry {
+  string request_id = 1;
+  string code_version = 2;
+  string status = 3;
+  string timestamp = 4;
+}
+
+message CheckpointEntry {
+  uint32 call_index = 1;
+  string boundary = 2;
+  string url = 3;
+  string method = 4;
+  string request_json = 5;
+  string response_json = 6;
+  int32 duration_ms = 7;
+}
+
+message RecordExecutionRequest {
+  string execution_id = 1;
+  string request_id = 2;
+  string code_version = 3;
+  string method = 4;
+  string path = 5;
+  string status = 6;
+  string request_json = 7;
+  string response_json = 8;
+  string error = 9;
+  int32 duration_ms = 10;
+  repeated CheckpointEntry checkpoints = 11;
+}
+
+message RecordExecutionResponse {
+  bool ok = 1;
+}
+
+message GetTraceRequest {
+  string execution_id = 1;
+}
+
+message Checkpoint {
+  int32 call_index = 1;
+  string boundary = 2;
+  bytes request = 3;
+  bytes response = 4;
+  int32 duration_ms = 5;
+}
+
+message GetTraceResponse {
+  string execution_id = 1;
+  string method = 2;
+  string path = 3;
+  string status = 4;
+  int32 duration_ms = 5;
+  string error = 6;
+  repeated Checkpoint checkpoints = 7;
+}
+
+message WhyRequest {
+  string execution_id = 1;
+}
+
+message WhyResponse {
+  string execution_id = 1;
+  string reason = 2;
+  string suggestion = 3;
+}
+
+message TailRequest {
+  string project_id = 1;
+}
+
+message TailEvent {
+  string execution_id = 1;
+  string method = 2;
+  string path = 3;
+  string status = 4;
+  int32 duration_ms = 5;
+  string error = 6;
+  int64 started_at = 7;
+}
+
+message ReplayRequest {
+  string execution_id = 1;
+  bool commit = 2;
+  int32 from_index = 3;
+}
+
+message ReplayStep {
+  int32 call_index = 1;
+  string boundary = 2;
+  string url = 3;
+  bool used_recorded = 4;
+  int32 duration_ms = 5;
+}
+
+message ReplayResponse {
+  string execution_id = 1;
+  string status = 2;
+  string output = 3;
+  string error = 4;
+  int32 duration_ms = 5;
+  repeated ReplayStep steps = 6;
+}
+
+message ResumeRequest {
+  string execution_id = 1;
+  int32 from_index = 2;
+}
+
+message ResumeResponse {
+  string execution_id = 1;
+  string status = 2;
+  string output = 3;
+  string error = 4;
+  int32 duration_ms = 5;
+  int32 from_index = 6;
+  repeated ReplayStep steps = 7;
+}
