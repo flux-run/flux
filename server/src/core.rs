@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use tokio::sync::watch;
 use tracing::info;
 
@@ -102,8 +103,7 @@ impl CoreService {
             .tcp_keepalive(Duration::from_secs(30))
             .build()?;
 
-        api::config::init();
-        let pool = api::db::connection::init_pool().await?;
+        let pool = init_pool().await?;
         info!("Server connected to database (flux pool)");
 
         let (shutdown_tx, shutdown_rx) = watch::channel(());
@@ -122,19 +122,10 @@ impl CoreService {
         );
         let grpc_shutdown_rx = shutdown_rx.clone();
 
-        let base_url = format!("grpc://localhost:{}", config.grpc_port);
-        let api_state = Arc::new(api::AppState {
+        let api_dispatch_inproc: Arc<dyn ApiDispatch> = Arc::new(InProcessApiDispatch {
             pool: pool.clone(),
-            http_client: http_client.clone(),
-            data_engine_url: format!("{}/flux/data-engine", base_url),
-            gateway_url: base_url.clone(),
-            runtime_url: base_url.clone(),
             functions_dir: std::env::var("FLUX_FUNCTIONS_DIR")
                 .unwrap_or_else(|_| "./flux-functions".to_string()),
-        });
-
-        let api_dispatch_inproc: Arc<dyn ApiDispatch> = Arc::new(InProcessApiDispatch {
-            state: Arc::clone(&api_state),
         });
 
         let api_dispatch_runtime: Arc<dyn ApiDispatch> = Arc::clone(&api_dispatch_inproc);
@@ -206,9 +197,6 @@ impl CoreService {
             shutdown_rx.clone(),
         ));
 
-        tokio::spawn(api::routes::monitor::run_alert_evaluator(pool.clone()));
-        info!("Monitor alert evaluator started");
-
         let _ = runtime_state;
         let _ = runtime_dispatch_ref;
         let _ = queue_state;
@@ -226,6 +214,25 @@ fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
+}
+
+async fn init_pool() -> Result<PgPool, sqlx::Error> {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let max_connections = std::env::var("SERVER_DB_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(10);
+
+    let pool = PgPoolOptions::new()
+        .max_connections(max_connections)
+        .after_connect(|conn, _meta| Box::pin(async move {
+            sqlx::query("SET search_path = flux, public").execute(conn).await?;
+            Ok(())
+        }))
+        .connect(&database_url)
+        .await?;
+
+    Ok(pool)
 }
 
 async fn shutdown_signal() {
