@@ -117,6 +117,7 @@ async fn start_server_binary(
     Ok(())
 }
 
+#[cfg(unix)]
 async fn start_server_cargo(
     workspace_root: &Path,
     release: bool,

@@ -40,6 +40,9 @@ pub async fn execute(args: ServeArgs) -> Result<()> {
 
     let binary = find_runtime_binary(&workspace_root, args.release);
 
+    write_runtime_port(args.port)?;
+    write_runtime_entry(&args.entry)?;
+
     start_runtime(workspace_root, binary, &auth.url, &auth.token, &args).await
 }
 
@@ -53,7 +56,9 @@ async fn start_runtime(
 ) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
-    write_runtime_pid(std::process::id())?;
+    if !args.check_only {
+        write_runtime_pid(std::process::id())?;
+    }
 
     let prog_args = build_runtime_args(server_url, token, args);
 
@@ -98,8 +103,10 @@ async fn start_runtime(
     };
 
     let mut child = cmd.spawn().context("failed to spawn flux-runtime")?;
-    if let Some(pid) = child.id() {
+    if !args.check_only {
+        if let Some(pid) = child.id() {
         write_runtime_pid(pid)?;
+        }
     }
 
     let status = child.wait().await.context("flux-runtime exited unexpectedly")?;
@@ -170,4 +177,20 @@ fn write_runtime_pid(pid: u32) -> Result<()> {
         .with_context(|| format!("failed to create {}", dir.display()))?;
     std::fs::write(dir.join("runtime.pid"), pid.to_string())
         .context("failed to write ~/.flux/runtime.pid")
+}
+
+fn write_runtime_port(port: u16) -> Result<()> {
+    let dir = flux_dir();
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::write(dir.join("runtime.port"), port.to_string())
+        .context("failed to write ~/.flux/runtime.port")
+}
+
+fn write_runtime_entry(entry: &str) -> Result<()> {
+    let dir = flux_dir();
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::write(dir.join("runtime.entry"), entry)
+        .context("failed to write ~/.flux/runtime.entry")
 }

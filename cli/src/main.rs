@@ -6,10 +6,13 @@ mod config_cmd;
 mod grpc;
 mod init;
 mod logs;
+mod process_state;
+mod ps;
 mod replay;
 mod resume;
 mod serve;
 mod server;
+mod status;
 mod tail;
 mod trace;
 mod why;
@@ -36,6 +39,10 @@ enum Commands {
     },
     /// List recorded execution logs.
     Logs(logs::LogsArgs),
+    /// Show managed Flux processes.
+    Ps,
+    /// Show overall Flux health status.
+    Status,
     /// Show execution trace with checkpoints.
     Trace(trace::TraceArgs),
     /// Replay an execution using recorded checkpoints.
@@ -64,6 +71,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Auth(args) => auth::execute(args).await?,
         Commands::Config { command } => config_cmd::execute(command)?,
         Commands::Logs(args) => logs::execute(args).await?,
+        Commands::Ps => ps::execute().await?,
+        Commands::Status => status::execute().await?,
         Commands::Trace(args) => trace::execute(args).await?,
         Commands::Replay(args) => replay::execute(args).await?,
         Commands::Resume(args) => resume::execute(args).await?,
