@@ -14,23 +14,21 @@ Detailed subsystem and file-level audit:
 
 No test suite can create a literal `0%` production-breakage guarantee. What this repo can do is define a release bar that makes silent regressions in execution recording, traceability, and state auditability very hard to ship.
 
-## Test layers
-
 ## Subsystem matrix
 
 Every major Flux subsystem should have both a direct owner test and a cross-system test.
 
 | Subsystem | Direct coverage | Cross-system coverage |
 |---|---|---|
-| CLI | `cargo test -p cli why::tests` + [cli_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/cli_test.sh) | request inspection via `trace`, `why`, `doctor`, `records`, `invoke` |
-| Server | [server_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/server_test.sh) | monolith mounts `/health`, `/flux/api`, `/flux/dev/invoke` |
-| Runtime request handling | server/router tests + [server_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/server_test.sh) | request entry, readiness, route miss, function invoke |
-| Runtime | [runtime_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/runtime_test.sh) | direct `/execute` behavior |
-| Queue | crate route tests + [queue_service_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/queue_service_test.sh) | job create, get, list, cancel, stats |
-| Agents | schema parse tests + [agent_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/agent_test.sh) | deploy, list, get, delete |
-| API | middleware tests + [api_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/api_test.sh) | health, schema, spec, internal auth |
-| Database dispatch | mutation/history tests + [state_audit_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/state_audit_test.sh) | direct query execution and mutation auditability |
-| End-to-end record loop | [execution_record_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/execution_record_test.sh) + [state_audit_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/state_audit_test.sh) | traceability, logs, records, mutation history, replay window |
+| CLI | `cargo test -p cli why::tests` + [cli_test.sh](../../scripts/platform-tests/cli_test.sh) | request inspection via `trace`, `why`, `doctor`, `records`, `invoke` |
+| Server | [server_test.sh](../../scripts/platform-tests/server_test.sh) | monolith mounts `/health`, `/flux/api`, `/flux/dev/invoke` |
+| Runtime request handling | server/router tests + [server_test.sh](../../scripts/platform-tests/server_test.sh) | request entry, readiness, route miss, function invoke |
+| Runtime | [runtime_test.sh](../../scripts/platform-tests/runtime_test.sh) | execution path, span/log emission, dispatch integration |
+| Queue | crate route tests + [queue_service_test.sh](../../scripts/platform-tests/queue_service_test.sh) | enqueue -> run -> retry/dead-letter -> trace linkage |
+| Agents | schema parse tests + [agent_test.sh](../../scripts/platform-tests/agent_test.sh) | deploy, list, get, delete |
+| API | middleware tests + [api_test.sh](../../scripts/platform-tests/api_test.sh) | health, records, trace/debug/query surfaces |
+| Database dispatch | mutation/history tests + [state_audit_test.sh](../../scripts/platform-tests/state_audit_test.sh) | direct query execution and mutation auditability |
+| End-to-end loop | [execution_record_test.sh](../../scripts/platform-tests/execution_record_test.sh) + [state_audit_test.sh](../../scripts/platform-tests/state_audit_test.sh) | invoke -> request id -> trace -> why -> history |
 
 ### 1. Unit tests
 
@@ -81,8 +79,8 @@ These are the highest-value tests in the repo. They protect the thing users buy:
 
 Executable scripts in this repo:
 
-- [scripts/platform-tests/execution_record_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/execution_record_test.sh)
-- [scripts/platform-tests/state_audit_test.sh](/Users/shashisharma/code/self/flowbase/scripts/platform-tests/state_audit_test.sh)
+- [scripts/platform-tests/execution_record_test.sh](../../scripts/platform-tests/execution_record_test.sh)
+- [scripts/platform-tests/state_audit_test.sh](../../scripts/platform-tests/state_audit_test.sh)
 
 Run just the core product promise:
 
@@ -184,7 +182,7 @@ Passing criteria:
 - output must contain the request id or targeted row
 - failure paths must remain actionable, not generic
 
-### Queue, cron, and event lineage
+### Queue and background lineage
 
 Because Flux sells a complete system, background work must stay inside the same debugging model.
 
@@ -192,8 +190,6 @@ Required coverage before beta:
 
 - queue publish -> worker execution -> trace linkage
 - DLQ replay -> successful re-enqueue semantics
-- schedule create -> run now -> observable execution history
-- event publish -> subscription dispatch -> request-id continuity
 - background-triggered executions produce inspectable traces, not orphan work
 
 ### Security and isolation
