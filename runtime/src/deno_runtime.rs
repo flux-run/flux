@@ -852,10 +852,41 @@ globalThis.fetch = async function(url, init = {}) {
   };
 };
 
-// ── Date.now() ─────────────────────────────────────────────────────────────
+// ── Date.now() + new Date() ────────────────────────────────────────────────
 // In Replay mode op_now returns the timestamp recorded during the original
 // execution, making time deterministic without touching the system clock.
-Date.now = function() { return Deno.core.ops.op_now(); };
+//
+// IMPORTANT: `Date.now` alone is not enough. `new Date()` (no-args) calls
+// V8's internal clock directly, bypassing any JS-level Date.now override.
+// After weeks in production this causes silent replay corruption: the
+// constructor keeps returning live wall-clock time while .now() is frozen.
+// Fix: subclass Date so the no-arg constructor routes through op_now too.
+// `class extends` preserves instanceof checks and the full prototype chain.
+{
+  const _OrigDate = globalThis.Date;
+  class PatchedDate extends _OrigDate {
+    constructor(...args) {
+      if (args.length === 0) {
+        super(Deno.core.ops.op_now());
+      } else {
+        super(...args);
+      }
+    }
+  }
+  PatchedDate.now = function() { return Deno.core.ops.op_now(); };
+  // parse() and UTC() are deterministic — inherited automatically via class extends
+  globalThis.Date = PatchedDate;
+}
+
+// ── performance.now() ──────────────────────────────────────────────────────
+// performance.now() is a separate high-resolution monotonic clock that also
+// reads the system clock. If left unpatched, replay sees live wall time even
+// when Date.now is frozen. Route it through the same op_now so it shares the
+// same frozen timestamp in replay mode.
+if (globalThis.performance) {
+  const _origPerfNow = globalThis.performance.now.bind(globalThis.performance);
+  globalThis.performance.now = function() { return Deno.core.ops.op_now(); };
+}
 
 // ── console ────────────────────────────────────────────────────────────────
 // Capture all console output and link it to the current execution_id so
