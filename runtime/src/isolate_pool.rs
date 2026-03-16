@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry};
+use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry, NetRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
@@ -46,6 +46,9 @@ pub struct IsolatePool {
     next: AtomicUsize,
     queue_send_timeout: Duration,
     result_timeout: Duration,
+    /// True when all isolates in this pool run a `Deno.serve()` server app
+    /// instead of a one-shot exported handler.
+    pub is_server_mode: bool,
 }
 
 #[derive(Debug)]
@@ -57,16 +60,21 @@ struct WorkItem {
     payload: serde_json::Value,
     context: ExecutionContext,
     recorded_checkpoints: Vec<FetchCheckpoint>,
+    /// Some(_) means this is a server-mode HTTP dispatch, not a handler invocation.
+    net_request: Option<NetRequest>,
     result_tx: oneshot::Sender<ExecutionResult>,
 }
 
 impl IsolatePool {
     pub fn new(size: usize, user_code: &str) -> Result<Self> {
         let mut workers = Vec::with_capacity(size);
+        let mut is_server_mode = false;
         for id in 0..size {
-            workers.push(IsolateWorker {
-                sender: spawn_isolate_worker(id, user_code.to_string())?,
-            });
+            let (sender, server_mode) = spawn_isolate_worker(id, user_code.to_string())?;
+            if id == 0 {
+                is_server_mode = server_mode;
+            }
+            workers.push(IsolateWorker { sender });
         }
 
         Ok(Self {
@@ -74,6 +82,7 @@ impl IsolatePool {
             next: AtomicUsize::new(0),
             queue_send_timeout: Duration::from_secs(30),
             result_timeout: Duration::from_secs(120),
+            is_server_mode,
         })
     }
 
@@ -100,6 +109,43 @@ impl IsolatePool {
             payload,
             context: context.clone(),
             recorded_checkpoints,
+            net_request: None,
+            result_tx,
+        };
+
+        match tokio::time::timeout(self.queue_send_timeout, worker.sender.send(work)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => return error_result(context, "isolate worker is unavailable"),
+            Err(_) => return error_result(context, "timed out while waiting for isolate queue capacity"),
+        }
+
+        match tokio::time::timeout(self.result_timeout, result_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => error_result(context, "isolate worker dropped execution result"),
+            Err(_) => error_result(context, "timed out while waiting for isolate execution result"),
+        }
+    }
+
+    /// Dispatch a single HTTP request into a server-mode isolate pool.
+    /// The isolate's `Deno.serve` handler produces the response.
+    pub async fn execute_net_request(
+        &self,
+        context: ExecutionContext,
+        net_request: NetRequest,
+    ) -> ExecutionResult {
+        if self.workers.is_empty() {
+            return error_result(context, "isolate pool is empty");
+        }
+
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+        let worker = &self.workers[idx];
+
+        let (result_tx, result_rx) = oneshot::channel::<ExecutionResult>();
+        let work = WorkItem {
+            payload: serde_json::Value::Null,
+            context: context.clone(),
+            recorded_checkpoints: Vec::new(),
+            net_request: Some(net_request),
             result_tx,
         };
 
@@ -120,9 +166,9 @@ impl IsolatePool {
 fn spawn_isolate_worker(
     isolate_id: usize,
     user_code: String,
-) -> Result<mpsc::Sender<WorkItem>> {
+) -> Result<(mpsc::Sender<WorkItem>, bool)> {
     let (tx, mut rx) = mpsc::channel::<WorkItem>(32);
-    let (init_tx, init_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+    let (init_tx, init_rx) = std::sync::mpsc::channel::<std::result::Result<bool, String>>();
 
     std::thread::Builder::new()
         .name(format!("flux-isolate-{}", isolate_id))
@@ -141,14 +187,18 @@ fn spawn_isolate_worker(
             runtime.block_on(async move {
                 let mut isolate = match JsIsolate::new(&user_code, isolate_id) {
                     Ok(isolate) => {
-                        let _ = init_tx.send(Ok(()));
+                        let _ = init_tx.send(Ok(isolate.is_server_mode));
                         Some(isolate)
                     }
                     Err(err) => {
-                        let _ = init_tx.send(Err(err.to_string()));
+                        let _ = init_tx.send(Err(format!("{:#}", err)));
                         return;
                     }
                 };
+
+                // Capture the server-mode flag once — all requests through this
+                // worker use the same execution path for their entire lifetime.
+                let server_mode = isolate.as_ref().map(|i| i.is_server_mode).unwrap_or(false);
 
                 while let Some(work) = rx.recv().await {
                     let iso = match isolate.as_mut() {
@@ -160,7 +210,33 @@ fn spawn_isolate_worker(
                     };
                     let context = work.context.clone();
                     let started = std::time::Instant::now();
-                    let result = match iso.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
+                    let result = if server_mode {
+                        // Server-mode: dispatch request into the long-lived isolate.
+                        match work.net_request {
+                            Some(net_req) => match iso.dispatch_request(work.context.clone(), net_req).await {
+                                Ok(net_resp) => ExecutionResult {
+                                    execution_id: context.execution_id,
+                                    request_id: context.request_id,
+                                    code_version: context.code_version,
+                                    status: "ok".to_string(),
+                                    body: serde_json::json!({
+                                        "net_response": {
+                                            "status": net_resp.status,
+                                            "headers": net_resp.headers,
+                                            "body": net_resp.body,
+                                        }
+                                    }),
+                                    error: None,
+                                    duration_ms: started.elapsed().as_millis() as i32,
+                                    checkpoints: vec![],
+                                    logs: vec![],
+                                },
+                                Err(err) => error_result(work.context, err.to_string()),
+                            },
+                            None => error_result(work.context, "server-mode isolate received non-HTTP work item"),
+                        }
+                    } else {
+                        match iso.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
                         Ok(JsExecutionOutput {
                             output,
                             checkpoints,
@@ -202,27 +278,32 @@ fn spawn_isolate_worker(
                             checkpoints: vec![],
                             logs: vec![],
                         },
-                    };
+                    } // end match execute_with_recorded
+                    }; // end if server_mode
 
                     let _ = work.result_tx.send(result);
 
-                    // Drop the old V8 isolate BEFORE creating a new one.
-                    // V8 requires isolates to be dropped in reverse creation order.
-                    drop(isolate.take());
-                    isolate = match JsIsolate::new(&user_code, isolate_id) {
-                        Ok(fresh) => Some(fresh),
-                        Err(err) => {
-                            tracing::error!(%isolate_id, %err, "failed to re-create isolate; worker exiting");
-                            break;
-                        }
-                    };
+                    // In server mode the isolate is long-lived — do NOT recreate it.
+                    // In handler mode, drop and recreate so each request gets a clean heap.
+                    if !server_mode {
+                        // Drop the old V8 isolate BEFORE creating a new one.
+                        // V8 requires isolates to be dropped in reverse creation order.
+                        drop(isolate.take());
+                        isolate = match JsIsolate::new(&user_code, isolate_id) {
+                            Ok(fresh) => Some(fresh),
+                            Err(err) => {
+                                tracing::error!(%isolate_id, %err, "failed to re-create isolate; worker exiting");
+                                break;
+                            }
+                        };
+                    }
                 }
             });
         })
         .map_err(|err| anyhow::anyhow!("failed to spawn isolate worker thread: {err}"))?;
 
     match init_rx.recv() {
-        Ok(Ok(())) => Ok(tx),
+        Ok(Ok(is_server_mode)) => Ok((tx, is_server_mode)),
         Ok(Err(err)) => Err(anyhow::anyhow!("failed to initialize isolate worker: {err}")),
         Err(err) => Err(anyhow::anyhow!(
             "failed to receive isolate worker initialization status: {err}"

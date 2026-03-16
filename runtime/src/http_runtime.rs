@@ -2,14 +2,17 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::body::to_bytes;
+use axum::extract::{OriginalUri, Path, State};
+use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::artifact::RuntimeArtifact;
+use crate::deno_runtime::NetRequest;
 use crate::isolate_pool::{ExecutionContext, IsolatePool};
 
 #[derive(Debug, Clone)]
@@ -56,18 +59,30 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         bail!("isolate_pool_size must be greater than 0");
     }
 
+    let pool = Arc::new(IsolatePool::new(config.isolate_pool_size, &artifact.code)?);
+    let is_server_mode = pool.is_server_mode;
     let state = RuntimeState {
         route_name: config.route_name.clone(),
         code_version: artifact.sha256.clone(),
-        pool: Arc::new(IsolatePool::new(config.isolate_pool_size, &artifact.code)?),
+        pool,
         server_url: config.server_url,
         service_token: config.service_token,
     };
 
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/:route", post(handle_request))
-        .with_state(state);
+    let app: Router = if is_server_mode {
+        // Server-mode: a fallback catches every method + path not taken by
+        // the health check, and feeds it into the Deno.serve handler.
+        tracing::info!("server mode detected — routing all traffic through Deno.serve handler");
+        Router::new()
+            .route("/health", get(health))
+            .fallback(handle_net_request)
+            .with_state(state)
+    } else {
+        Router::new()
+            .route("/health", get(health))
+            .route("/:route", post(handle_request))
+            .with_state(state)
+    };
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -88,6 +103,7 @@ async fn health(State(state): State<RuntimeState>) -> Json<HealthResponse> {
     })
 }
 
+/// One-shot handler: POST /:route — runs the exported default handler function.
 async fn handle_request(
     Path(route): Path<String>,
     State(state): State<RuntimeState>,
@@ -96,15 +112,12 @@ async fn handle_request(
     if route != state.route_name {
         return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "route not found",
-            })),
+            Json(serde_json::json!({ "error": "route not found" })),
         )
             .into_response();
     }
 
     let request_payload = payload.clone();
-
     let result = state
         .pool
         .execute(payload, ExecutionContext::new(state.code_version.clone()))
@@ -150,6 +163,81 @@ async fn handle_request(
         })),
     )
         .into_response()
+}
+
+/// Server-mode handler: any method, any path — dispatches through Deno.serve.
+async fn handle_net_request(
+    OriginalUri(uri): OriginalUri,
+    State(state): State<RuntimeState>,
+    request: axum::extract::Request,
+) -> impl IntoResponse {
+    let method = request.method().to_string();
+
+    // Build the absolute URL the JS handler will see.
+    let url = format!("http://localhost:{}{}", state.route_name, uri.path_and_query().map(|pq| pq.as_str()).unwrap_or(""));
+
+    // Collect non-sensitive headers as [[name, value], ...] JSON.
+    let headers_list: Vec<[String; 2]> = request
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| {
+            let name = k.as_str();
+            // Never forward auth / internal tokens into user code.
+            if matches!(name, "authorization" | "x-service-token" | "x-internal-token") {
+                return None;
+            }
+            Some([name.to_string(), v.to_str().ok()?.to_string()])
+        })
+        .collect();
+    let headers_json = serde_json::to_string(&headers_list).unwrap_or_else(|_| "[]".to_string());
+
+    // Read body (cap at 10 MB).
+    let body_bytes = match to_bytes(request.into_body(), 10 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response();
+        }
+    };
+    let body = String::from_utf8_lossy(&body_bytes).into_owned();
+
+    let req_id = Uuid::new_v4().to_string();
+    let net_req = NetRequest { req_id, method, url, headers_json, body };
+    let context = ExecutionContext::new(state.code_version.clone());
+    let result = state.pool.execute_net_request(context, net_req).await;
+
+    if let Some(err) = &result.error {
+        return (StatusCode::INTERNAL_SERVER_ERROR, err.clone()).into_response();
+    }
+
+    // Unpack the net_response envelope written by the worker.
+    if let Some(nr) = result.body.get("net_response") {
+        let status_code = nr.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
+        let body_str = nr.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let raw_headers = nr.get("headers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+        let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let mut response = Response::new(body_str);
+        *response.status_mut() = status;
+
+        for entry in &raw_headers {
+            if let Some(arr) = entry.as_array() {
+                if arr.len() == 2 {
+                    let k = arr[0].as_str().unwrap_or("");
+                    let v = arr[1].as_str().unwrap_or("");
+                    if let (Ok(name), Ok(value)) = (
+                        k.parse::<HeaderName>(),
+                        v.parse::<HeaderValue>(),
+                    ) {
+                        response.headers_mut().insert(name, value);
+                    }
+                }
+            }
+        }
+
+        return response.into_response();
+    }
+
+    (StatusCode::INTERNAL_SERVER_ERROR, "handler produced no response").into_response()
 }
 
 async fn shutdown_signal() {
