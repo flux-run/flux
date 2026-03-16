@@ -92,7 +92,8 @@ jobs:
             arch:     amd64
             cross:    false
             ext:      ".exe"
-            cli_only: false
+            # server and runtime skipped: rusty_v8 has no reliable prebuilt for windows-msvc.
+            cli_only: true
 
           - runner:    windows-latest
             target:   aarch64-pc-windows-msvc
@@ -237,7 +238,6 @@ jobs:
             | macOS | amd64 | [flux-server-macos-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-server-macos-amd64) |
             | Linux | arm64 | [flux-server-linux-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-server-linux-arm64) |
             | Linux | amd64 | [flux-server-linux-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-server-linux-amd64) |
-            | Windows | amd64 | [flux-server-windows-amd64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-server-windows-amd64.exe) |
 
             ### `flux-runtime`
             | Platform | Architecture | Download |
@@ -246,7 +246,6 @@ jobs:
             | macOS | amd64 | [flux-runtime-macos-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-runtime-macos-amd64) |
             | Linux | arm64 | [flux-runtime-linux-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-runtime-linux-arm64) |
             | Linux | amd64 | [flux-runtime-linux-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-runtime-linux-amd64) |
-            | Windows | amd64 | [flux-runtime-windows-amd64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-runtime-windows-amd64.exe) |
 
             ${{ steps.notes.outputs.notes }}
           files: release-assets/*
