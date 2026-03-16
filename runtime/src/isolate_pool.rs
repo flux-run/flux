@@ -1,8 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::deno_runtime::{ExecutionMode, JsIsolate};
@@ -35,128 +36,74 @@ pub struct ExecutionResult {
 
 #[derive(Debug)]
 pub struct IsolatePool {
-    semaphore: Arc<Semaphore>,
-    available_ids: Arc<Mutex<Vec<usize>>>,
-    workers: Vec<mpsc::UnboundedSender<WorkerCommand>>,
+    workers: Vec<IsolateWorker>,
+    next: AtomicUsize,
+    queue_send_timeout: Duration,
+    result_timeout: Duration,
+}
+
+#[derive(Debug)]
+struct IsolateWorker {
+    sender: mpsc::Sender<WorkItem>,
+}
+
+struct WorkItem {
+    payload: serde_json::Value,
+    context: ExecutionContext,
+    result_tx: oneshot::Sender<ExecutionResult>,
 }
 
 impl IsolatePool {
     pub fn new(size: usize, user_code: &str) -> Result<Self> {
-        let mut ids = Vec::with_capacity(size);
         let mut workers = Vec::with_capacity(size);
-
         for id in 0..size {
-            ids.push(id);
-            workers.push(spawn_isolate_worker(id, user_code.to_string())?);
+            workers.push(IsolateWorker {
+                sender: spawn_isolate_worker(id, user_code.to_string())?,
+            });
         }
 
         Ok(Self {
-            semaphore: Arc::new(Semaphore::new(size)),
-            available_ids: Arc::new(Mutex::new(ids)),
             workers,
+            next: AtomicUsize::new(0),
+            queue_send_timeout: Duration::from_secs(30),
+            result_timeout: Duration::from_secs(120),
         })
     }
 
-    pub async fn acquire(self: &Arc<Self>) -> Result<PooledIsolate> {
-        let permit = self.semaphore.clone().acquire_owned().await?;
+    pub async fn execute(&self, payload: serde_json::Value, context: ExecutionContext) -> ExecutionResult {
+        if self.workers.is_empty() {
+            return error_result(context, "isolate pool is empty");
+        }
 
-        let isolate_id = {
-            let mut ids = self
-                .available_ids
-                .lock()
-                .map_err(|_| anyhow::anyhow!("isolate id pool poisoned"))?;
-            ids.pop().ok_or_else(|| anyhow::anyhow!("no isolate id available"))?
-        };
+        let idx = self.next.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+        let worker = &self.workers[idx];
 
-        Ok(PooledIsolate {
-            isolate_id,
-            worker: self.workers[isolate_id].clone(),
-            pool: self.clone(),
-            permit,
-            context: None,
-        })
-    }
-}
-
-pub struct PooledIsolate {
-    isolate_id: usize,
-    worker: mpsc::UnboundedSender<WorkerCommand>,
-    pool: Arc<IsolatePool>,
-    permit: OwnedSemaphorePermit,
-    context: Option<ExecutionContext>,
-}
-
-impl PooledIsolate {
-    pub fn set_context(&mut self, context: ExecutionContext) {
-        self.context = Some(context);
-    }
-
-    pub async fn run(&self, payload: serde_json::Value, _route: &str) -> ExecutionResult {
-        tokio::task::yield_now().await;
-
-        let context = self.context.clone().unwrap_or_else(|| ExecutionContext {
-            request_id: Uuid::new_v4().to_string(),
-            code_version: "unknown".to_string(),
-            mode: ExecutionMode::Live,
-        });
-
-        let (tx, rx) = oneshot::channel();
-        let sent = self.worker.send(WorkerCommand {
+        let (result_tx, result_rx) = oneshot::channel::<ExecutionResult>();
+        let work = WorkItem {
             payload,
             context: context.clone(),
-            reply: tx,
-        });
+            result_tx,
+        };
 
-        if sent.is_err() {
-            return ExecutionResult {
-                request_id: context.request_id,
-                code_version: context.code_version,
-                status: "error".to_string(),
-                body: serde_json::Value::Null,
-                error: Some("isolate worker is unavailable".to_string()),
-            };
+        match tokio::time::timeout(self.queue_send_timeout, worker.sender.send(work)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => return error_result(context, "isolate worker is unavailable"),
+            Err(_) => return error_result(context, "timed out while waiting for isolate queue capacity"),
         }
 
-        match rx.await {
-            Ok(Ok(body)) => ExecutionResult {
-                request_id: context.request_id,
-                code_version: context.code_version,
-                status: "ok".to_string(),
-                body: serde_json::json!({
-                    "isolate_id": self.isolate_id,
-                    "output": body,
-                }),
-                error: None,
-            },
-            Ok(Err(err)) => ExecutionResult {
-                request_id: context.request_id,
-                code_version: context.code_version,
-                status: "error".to_string(),
-                body: serde_json::Value::Null,
-                error: Some(err),
-            },
-            Err(err) => ExecutionResult {
-                request_id: context.request_id,
-                code_version: context.code_version,
-                status: "error".to_string(),
-                body: serde_json::Value::Null,
-                error: Some(format!("isolate worker dropped response: {err}")),
-            },
+        match tokio::time::timeout(self.result_timeout, result_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => error_result(context, "isolate worker dropped execution result"),
+            Err(_) => error_result(context, "timed out while waiting for isolate execution result"),
         }
     }
-}
-
-struct WorkerCommand {
-    payload: serde_json::Value,
-    context: ExecutionContext,
-    reply: oneshot::Sender<std::result::Result<serde_json::Value, String>>,
 }
 
 fn spawn_isolate_worker(
     isolate_id: usize,
     user_code: String,
-) -> Result<mpsc::UnboundedSender<WorkerCommand>> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<WorkerCommand>();
+) -> Result<mpsc::Sender<WorkItem>> {
+    let (tx, mut rx) = mpsc::channel::<WorkItem>(32);
     let (init_tx, init_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
 
     std::thread::Builder::new()
@@ -185,12 +132,29 @@ fn spawn_isolate_worker(
                     }
                 };
 
-                while let Some(command) = rx.recv().await {
-                    let result = isolate
-                        .execute(command.payload, command.context)
-                        .await
-                        .map_err(|err| err.to_string());
-                    let _ = command.reply.send(result);
+                while let Some(work) = rx.recv().await {
+                    let context = work.context.clone();
+                    let result = match isolate.execute(work.payload, work.context).await {
+                        Ok(body) => ExecutionResult {
+                            request_id: context.request_id,
+                            code_version: context.code_version,
+                            status: "ok".to_string(),
+                            body: serde_json::json!({
+                                "isolate_id": isolate_id,
+                                "output": body,
+                            }),
+                            error: None,
+                        },
+                        Err(err) => ExecutionResult {
+                            request_id: context.request_id,
+                            code_version: context.code_version,
+                            status: "error".to_string(),
+                            body: serde_json::Value::Null,
+                            error: Some(err.to_string()),
+                        },
+                    };
+
+                    let _ = work.result_tx.send(result);
                 }
             });
         })
@@ -205,11 +169,12 @@ fn spawn_isolate_worker(
     }
 }
 
-impl Drop for PooledIsolate {
-    fn drop(&mut self) {
-        let _ = &self.permit;
-        if let Ok(mut ids) = self.pool.available_ids.lock() {
-            ids.push(self.isolate_id);
-        }
+fn error_result(context: ExecutionContext, message: impl Into<String>) -> ExecutionResult {
+    ExecutionResult {
+        request_id: context.request_id,
+        code_version: context.code_version,
+        status: "error".to_string(),
+        body: serde_json::Value::Null,
+        error: Some(message.into()),
     }
 }

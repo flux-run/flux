@@ -95,21 +95,10 @@ async fn handle_request(
             .into_response();
     }
 
-    let mut isolate = match state.pool.acquire().await {
-        Ok(isolate) => isolate,
-        Err(err) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({
-                    "error": format!("failed to acquire isolate: {err}"),
-                })),
-            )
-                .into_response()
-        }
-    };
-
-    isolate.set_context(ExecutionContext::new(state.code_version.clone()));
-    let result = isolate.run(payload, &route).await;
+    let result = state
+        .pool
+        .execute(payload, ExecutionContext::new(state.code_version.clone()))
+        .await;
 
     if result.status != "ok" {
         return (
