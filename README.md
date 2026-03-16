@@ -46,6 +46,8 @@ curl -fsSL https://fluxbase.co/install | bash
 irm https://fluxbase.co/install.ps1 | iex
 ```
 
+onboarding (minimal): install with `cargo install --path cli`, run `flux server start` and `flux serve your-app.js`, then debug with `flux logs`, `flux trace <id>`, and `flux replay <id>`.
+
 ## Telemetry
 
 The CLI collects anonymous usage events (`flux dev`, `flux deploy`, `flux init`) to help us understand how Flux is used. **No personal data, code, or credentials are ever sent** — only CLI version, OS, and arch.

@@ -48,7 +48,7 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     );
 
     if !response.error.is_empty() {
-        println!("  error  {}", response.error);
+        println!("  error  {}", sanitize_replay_error(&response.error));
     }
 
     if !response.output.is_empty() && response.output != "null" {
@@ -75,4 +75,27 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
 
     println!();
     Ok(())
+}
+
+fn sanitize_replay_error(raw: &str) -> String {
+    let mut lines = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains("ext:core/") || trimmed.contains("flux:invoke") {
+            continue;
+        }
+        lines.push(trimmed.to_string());
+    }
+
+    if lines.is_empty() {
+        raw.lines()
+            .next()
+            .map(|line| line.trim().to_string())
+            .unwrap_or_else(|| raw.trim().to_string())
+    } else {
+        lines.join("\n         ")
+    }
 }

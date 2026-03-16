@@ -48,6 +48,7 @@ pub fn resolve_auth(url: Option<String>, token: Option<String>) -> Result<Resolv
 
     let url = url
         .or(config.url)
+        .or_else(load_server_url_from_port_file)
         .ok_or_else(|| anyhow::anyhow!("missing server URL: run `flux config set url <host:port>` first"))?;
 
     let token = token
@@ -58,6 +59,16 @@ pub fn resolve_auth(url: Option<String>, token: Option<String>) -> Result<Resolv
         url: normalize_grpc_url(&url),
         token,
     })
+}
+
+fn load_server_url_from_port_file() -> Option<String> {
+    let path = dirs::home_dir()?.join(".flux").join("server.port");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let port = raw.trim();
+    if port.is_empty() {
+        return None;
+    }
+    Some(format!("localhost:{}", port))
 }
 
 fn config_path() -> PathBuf {
