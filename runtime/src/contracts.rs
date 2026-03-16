@@ -43,17 +43,6 @@ pub trait ApiDispatch: Send + Sync {
 }
 
 #[async_trait]
-pub trait QueueDispatch: Send + Sync {
-    async fn push_job(
-        &self,
-        function_id: &str,
-        payload: Value,
-        delay_seconds: Option<u64>,
-        idempotency_key: Option<String>,
-    ) -> Result<(), String>;
-}
-
-#[async_trait]
 pub trait DataEngineDispatch: Send + Sync {
     async fn execute_sql(
         &self,

@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use job_contract::dispatch::DataEngineDispatch;
+use runtime::contracts::DataEngineDispatch;
 
 /// Executes SQL against the data-engine's pool in-process — used by the
 /// monolithic server so V8 `ctx.db.query()` never makes an HTTP call.

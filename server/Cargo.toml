@@ -2,61 +2,24 @@
 name          = "server"
 version       = "0.1.1"
 edition       = "2024"
-description   = "Monolithic single-binary — all Flux services in one process."
+description   = "Flux server — receives gRPC calls and writes to PostgreSQL."
 
 [[bin]]
 name = "server"
 path = "src/main.rs"
 
 [dependencies]
-# Internal service crates (library targets)
-runtime       = { path = "../runtime" }
-flux-queue = { path = "../queue" }
-job_contract  = { path = "../shared/job_contract" }
-api_contract  = { path = "../shared/api_contract" }
-
-# Async runtime
 tokio         = { version = "1", features = ["full"] }
-
-# DB
 sqlx          = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "uuid"] }
-
-# Serialization
-serde         = { version = "1", features = ["derive"] }
 serde_json    = "1"
-
-# Date/time
-chrono        = { version = "0.4", features = ["serde"] }
-
-# UUID
-uuid          = { version = "1", features = ["v4", "serde"] }
-
-# Tracing
 tracing          = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Async trait
-async-trait   = "0.1"
-
-# Metrics
-metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.16", default-features = false }
-
-# HTTP client (for inter-service calls)
-reqwest       = { version = "0.13", features = ["json", "rustls"], default-features = false }
-
-# .env file loading
 dotenvy       = "0.15"
-
-# gRPC (runtime ↔ server internal transport)
 tonic         = { version = "0.12", features = ["transport"] }
 prost         = "0.13"
-
-# Token verification helpers
 sha2          = "0.10"
 hex           = "0.4"
 subtle        = "2"
-base64        = "0.22"
 
 [build-dependencies]
 tonic-build          = "0.12"

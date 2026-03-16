@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use job_contract::dispatch::{ExecuteRequest, ExecuteResponse, RuntimeDispatch};
+use runtime::contracts::{ExecuteRequest, ExecuteResponse, RuntimeDispatch};
 use runtime::AppState as RuntimeState;
 
 /// Calls the runtime crate's execution service directly.

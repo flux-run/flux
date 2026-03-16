@@ -11,7 +11,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use job_contract::dispatch::{ApiDispatch, ResolvedFunction};
+use runtime::contracts::{ApiDispatch, ResolvedFunction};
 
 /// Calls `api` crate internals directly — used by the monolithic server binary.
 pub struct InProcessApiDispatch {

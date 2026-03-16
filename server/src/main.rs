@@ -1,5 +1,4 @@
 mod core;
-mod dispatch;
 mod grpc;
 
 #[tokio::main]
