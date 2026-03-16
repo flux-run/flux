@@ -21,7 +21,8 @@ pub enum ConfigCommand {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ConfigKey {
-    Server,
+    #[value(alias = "server")]
+    Url,
     Token,
 }
 
@@ -36,7 +37,7 @@ fn set(key: ConfigKey, value: String) -> Result<()> {
     let mut config = CliConfig::load()?;
 
     match key {
-        ConfigKey::Server => config.url = Some(normalize_grpc_url(&value)),
+        ConfigKey::Url => config.url = Some(normalize_grpc_url(&value)),
         ConfigKey::Token => config.token = Some(value),
     }
 
@@ -49,7 +50,7 @@ fn get(key: Option<ConfigKey>) -> Result<()> {
     let config = CliConfig::load()?;
 
     match key {
-        Some(ConfigKey::Server) => {
+        Some(ConfigKey::Url) => {
             if let Some(url) = config.url {
                 println!("{}", url);
             }
@@ -61,7 +62,7 @@ fn get(key: Option<ConfigKey>) -> Result<()> {
         }
         None => {
             if let Some(url) = config.url {
-                println!("server={}", url);
+                println!("url={}", url);
             }
             if let Some(token) = config.token {
                 println!("token={}", token);

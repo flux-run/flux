@@ -50,6 +50,8 @@ async fn op_fetch(
     #[serde] body: Option<serde_json::Value>,
     #[serde] headers: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, AnyError> {
+    let original_url = url;
+
     let (request_id, call_index, mode) = {
         let mut state_ref = state.borrow_mut();
         let execution = state_ref.borrow_mut::<RuntimeExecutionState>();
@@ -64,15 +66,19 @@ async fn op_fetch(
 
     match mode {
         ExecutionMode::Live => {
+            let resolved_url = original_url.clone();
             let request_json = serde_json::json!({
-                "url": url,
-                "method": method,
-                "body": body,
-                "headers": headers,
+                "url": original_url.clone(),
+                "resolved_url": resolved_url.clone(),
+                "method": method.clone(),
+                "body": body.clone(),
+                "headers": headers.clone(),
             });
 
             let started = std::time::Instant::now();
-            let response = make_http_request(&url, &method, body, headers).await?;
+            let target_url = resolved_url;
+
+            let response = make_http_request(&target_url, &method, body, headers).await?;
             let duration_ms = started.elapsed().as_millis() as i32;
 
             {
@@ -81,7 +87,7 @@ async fn op_fetch(
                 execution.checkpoints.push(FetchCheckpoint {
                     call_index,
                     boundary: "http".to_string(),
-                    url: url.clone(),
+                    url: original_url.clone(),
                     method: method.clone(),
                     request: request_json,
                     response: response.clone(),
@@ -89,7 +95,7 @@ async fn op_fetch(
                 });
             }
 
-            tracing::debug!(%request_id, %call_index, %url, "intercepted fetch");
+            tracing::debug!(%request_id, %call_index, original_url = %original_url, resolved_url = %target_url, "intercepted fetch");
             Ok(response)
         }
     }

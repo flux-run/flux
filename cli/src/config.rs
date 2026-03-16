@@ -48,7 +48,7 @@ pub fn resolve_auth(url: Option<String>, token: Option<String>) -> Result<Resolv
 
     let url = url
         .or(config.url)
-        .ok_or_else(|| anyhow::anyhow!("missing server URL: run `flux auth --url <host:port>` first"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing server URL: run `flux config set url <host:port>` first"))?;
 
     let token = token
         .or(config.token)
