@@ -700,16 +700,16 @@ impl JsIsolate {
     /// Two sub-modes, selected automatically:
     ///
     /// **Handler mode** — the file exports a default function.  Flux calls it
-    /// once with an empty payload `{}`, drains the event loop, and returns the
+    /// with `input` (defaults to `{}`), drains the event loop, and returns the
     /// output and any captured logs.
     ///
-    /// **Top-level mode** — no exported handler.  Flux simply drains the event
-    /// loop so that top-level `await` and `setTimeout` promises resolve, then
-    /// returns the captured logs.
+    /// **Top-level mode** — no exported handler.  `input` is ignored.  Flux
+    /// simply drains the event loop so that top-level `await` and `setTimeout`
+    /// promises resolve, then returns the captured logs.
     ///
     /// In both cases, `console.log/warn/error` output is streamed to
     /// stdout/stderr by `op_console` AND collected in the returned log vec.
-    pub async fn run_script(&mut self) -> Result<(Option<serde_json::Value>, Vec<LogEntry>)> {
+    pub async fn run_script(&mut self, input: serde_json::Value) -> Result<(Option<serde_json::Value>, Vec<LogEntry>)> {
         // Check whether the module registered a handler during initialisation.
         let has_handler = {
             let check = self.runtime
@@ -724,9 +724,9 @@ impl JsIsolate {
         };
 
         if has_handler {
-            // Handler mode: call it once with `{}`.
+            // Handler mode: call with the provided input.
             let context = ExecutionContext::new("__run__");
-            let output = self.execute(serde_json::json!({}), context).await?;
+            let output = self.execute(input, context).await?;
             if let Some(ref err) = output.error {
                 eprintln!("error: {err}");
             }

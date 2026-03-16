@@ -9,6 +9,11 @@ pub struct RunArgs {
     #[arg(value_name = "ENTRY", default_value = "index.js")]
     pub entry: String,
 
+    /// JSON input passed to the exported default handler, if present.
+    /// Equivalent to the payload in `flux exec`. Ignored for top-level scripts.
+    #[arg(long, value_name = "JSON", default_value = "{}")]
+    pub input: String,
+
     /// Flux server URL for recording the execution (optional).
     #[arg(long, value_name = "URL")]
     pub url: Option<String>,
@@ -27,6 +32,11 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     if !entry.exists() {
         bail!("entry file not found: {}", entry.display());
     }
+
+    // Validate the input JSON eagerly so we give a clear error before spawning
+    // the runtime process.
+    let _: serde_json::Value = serde_json::from_str(&args.input)
+        .with_context(|| format!("invalid --input JSON: {}", args.input))?;
 
     let workspace_root = find_workspace_root()
         .ok_or_else(|| anyhow::anyhow!("could not locate workspace root containing Cargo.toml"))?;
@@ -123,6 +133,8 @@ fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<Stri
         "--token".to_string(),
         token.to_string(),
         "--script-mode".to_string(),
+        "--script-input".to_string(),
+        args.input.clone(),
     ]
 }
 

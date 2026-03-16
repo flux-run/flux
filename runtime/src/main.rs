@@ -41,6 +41,11 @@ struct Args {
     /// Like `node index.js` — runs top-level code, drains the event loop, exits.
     #[arg(long)]
     script_mode: bool,
+
+    /// JSON input passed to the exported default handler in script mode.
+    /// Ignored when the entry file has no `export default` function.
+    #[arg(long, value_name = "JSON", default_value = "{}")]
+    script_input: String,
 }
 
 #[tokio::main]
@@ -97,9 +102,11 @@ async fn main() -> Result<()> {
 
     if args.script_mode {
         tracing::debug!(entry = %entry.display(), "script mode");
+        let input: serde_json::Value = serde_json::from_str(&args.script_input)
+            .with_context(|| format!("invalid --script-input JSON: {}", args.script_input))?;
         let mut isolate = runtime::JsIsolate::new_for_run(&artifact.code)
             .context("failed to create JS isolate")?;
-        let (output, _logs) = isolate.run_script().await
+        let (output, _logs) = isolate.run_script(input).await
             .context("script execution failed")?;
         if let Some(value) = output {
             if !value.is_null() {
