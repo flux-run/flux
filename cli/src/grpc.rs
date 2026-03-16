@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use tonic::Request;
 use tonic::metadata::MetadataValue;
+use tonic::Streaming;
 
 pub mod pb {
     tonic::include_proto!("flux.internal.v1");
@@ -131,6 +132,34 @@ pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<Tra
             })
             .collect(),
     })
+}
+
+pub async fn tail(
+    url: &str,
+    token: &str,
+    project_id: Option<String>,
+) -> Result<Streaming<pb::TailEvent>> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+        .await
+        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+
+    let mut request = Request::new(pb::TailRequest {
+        project_id: project_id.unwrap_or_default(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .tail(request)
+        .await
+        .context("tail request failed")?
+        .into_inner();
+
+    Ok(response)
 }
 
 pub fn normalize_grpc_url(url: &str) -> String {

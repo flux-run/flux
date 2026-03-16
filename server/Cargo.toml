@@ -17,6 +17,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy       = "0.15"
 tonic         = { version = "0.12", features = ["transport"] }
 prost         = "0.13"
+tokio-stream  = "0.1"
 sha2          = "0.10"
 hex           = "0.4"
 subtle        = "2"

@@ -7,6 +7,7 @@ mod grpc;
 mod logs;
 mod serve;
 mod server;
+mod tail;
 mod trace;
 
 #[derive(Parser)]
@@ -31,6 +32,8 @@ enum Commands {
     Logs(logs::LogsArgs),
     /// Show execution trace with checkpoints.
     Trace(trace::TraceArgs),
+    /// Stream live execution events.
+    Tail(tail::TailArgs),
     /// Prepare a JS/TS entry file for runtime execution.
     Serve(serve::ServeArgs),
     /// Manage the Flux server process.
@@ -49,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Config { command } => config_cmd::execute(command)?,
         Commands::Logs(args) => logs::execute(args).await?,
         Commands::Trace(args) => trace::execute(args).await?,
+        Commands::Tail(args) => tail::execute(args).await?,
         Commands::Serve(args) => serve::execute(args).await?,
         Commands::Server { command } => server::execute(command).await?,
     }

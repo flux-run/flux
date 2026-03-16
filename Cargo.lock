@@ -2341,6 +2341,7 @@ dependencies = [
  "sqlx",
  "subtle",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-build",
  "tracing",

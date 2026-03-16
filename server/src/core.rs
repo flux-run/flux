@@ -150,6 +150,32 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE OR REPLACE FUNCTION flux.notify_execution()
+         RETURNS trigger AS $$
+         BEGIN
+             IF (TG_OP = 'UPDATE' AND NEW.status IN ('ok', 'error', 'timeout')) THEN
+                 PERFORM pg_notify('flux_executions', row_to_json(NEW)::text);
+             END IF;
+             RETURN NEW;
+         END;
+         $$ LANGUAGE plpgsql",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("DROP TRIGGER IF EXISTS trg_execution_notify ON flux.executions")
+        .execute(pool)
+        .await?;
+
+    sqlx::query(
+        "CREATE TRIGGER trg_execution_notify
+         AFTER INSERT OR UPDATE ON flux.executions
+         FOR EACH ROW EXECUTE FUNCTION flux.notify_execution()",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 

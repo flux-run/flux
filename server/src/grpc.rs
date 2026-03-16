@@ -1,9 +1,11 @@
 use std::net::SocketAddr;
 
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgPool, postgres::PgListener};
 use subtle::ConstantTimeEq;
+use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 pub mod pb {
@@ -98,6 +100,8 @@ impl InternalAuthGrpc {
 
 #[tonic::async_trait]
 impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc {
+    type TailStream = ReceiverStream<Result<pb::TailEvent, Status>>;
+
     async fn validate_token(
         &self,
         request: Request<pb::ValidateTokenRequest>,
@@ -171,15 +175,32 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         sqlx::query(
             "INSERT INTO flux.executions
              (id, request_id, method, path, status, request, response, error, code_sha, duration_ms)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10)
-             ON CONFLICT (id) DO UPDATE SET
-               status = EXCLUDED.status,
-               response = EXCLUDED.response,
-               error = EXCLUDED.error,
-               duration_ms = EXCLUDED.duration_ms",
+             VALUES ($1, $2, $3, $4, 'running', $5, NULL, NULL, $6, 0)
+             ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
         .bind(request_id)
+        .bind(req.method.clone())
+        .bind(req.path.clone())
+        .bind(request_json.clone())
+        .bind(req.code_version.clone())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;
+
+        sqlx::query(
+            "UPDATE flux.executions
+             SET method = $2,
+                 path = $3,
+                 status = $4,
+                 request = $5,
+                 response = $6,
+                 error = NULLIF($7, ''),
+                 code_sha = $8,
+                 duration_ms = $9
+             WHERE id = $1",
+        )
+        .bind(execution_id)
         .bind(req.method)
         .bind(req.path)
         .bind(req.status)
@@ -190,7 +211,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(req.duration_ms)
         .execute(&mut *tx)
         .await
-        .map_err(|e| Status::internal(format!("failed to upsert execution: {e}")))?;
+        .map_err(|e| Status::internal(format!("failed to update execution: {e}")))?;
 
         for checkpoint in req.checkpoints {
             let request_json: serde_json::Value = serde_json::from_str(&checkpoint.request_json)
@@ -280,6 +301,96 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             error: error.unwrap_or_default(),
             checkpoints,
         }))
+    }
+
+    async fn tail(
+        &self,
+        request: Request<pb::TailRequest>,
+    ) -> Result<Response<Self::TailStream>, Status> {
+        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let pool = self.pool.clone();
+        let project_id = request.into_inner().project_id;
+
+        let (tx, rx) = mpsc::channel(32);
+
+        tokio::spawn(async move {
+            let mut listener = match PgListener::connect_with(&pool).await {
+                Ok(listener) => listener,
+                Err(err) => {
+                    tracing::error!(error = %err, "tail listener connect failed");
+                    return;
+                }
+            };
+
+            if let Err(err) = listener.listen("flux_executions").await {
+                tracing::error!(error = %err, "tail listener subscribe failed");
+                return;
+            }
+
+            loop {
+                match listener.recv().await {
+                    Ok(notification) => {
+                        let payload = notification.payload();
+                        let Ok(val) = serde_json::from_str::<serde_json::Value>(payload) else {
+                            continue;
+                        };
+
+                        if !project_id.is_empty() {
+                            let pid = val
+                                .get("project_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            if pid != project_id {
+                                continue;
+                            }
+                        }
+
+                        let event = pb::TailEvent {
+                            execution_id: val
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            method: val
+                                .get("method")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            path: val
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            status: val
+                                .get("status")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            duration_ms: val
+                                .get("duration_ms")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0) as i32,
+                            error: val
+                                .get("error")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            started_at: 0,
+                        };
+
+                        if tx.send(Ok(event)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "tail listener recv failed");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
 
