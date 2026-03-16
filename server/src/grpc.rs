@@ -98,6 +98,149 @@ impl InternalAuthGrpc {
     }
 }
 
+#[derive(Debug, Clone)]
+struct WhyExecution {
+    status: String,
+    duration_ms: i32,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct WhyCheckpoint {
+    call_index: i32,
+    boundary: String,
+    request: serde_json::Value,
+    response: serde_json::Value,
+    duration_ms: i32,
+}
+
+fn analyze_execution(exec: &WhyExecution, checkpoints: &[WhyCheckpoint]) -> (String, String) {
+    if exec.status == "error" {
+        if let Some(last) = checkpoints.last() {
+            if last.boundary == "http" {
+                let status = last
+                    .response
+                    .get("status")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let url = last
+                    .request
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
+                if status >= 500 {
+                    return (
+                        format!(
+                            "external service error\ncall    {} {}\nstatus  {}\nindex   {}",
+                            last.boundary.to_uppercase(),
+                            url,
+                            status,
+                            last.call_index
+                        ),
+                        "the upstream service returned a 5xx — not a bug in your code".to_string(),
+                    );
+                }
+
+                if status == 429 {
+                    return (
+                        format!("rate limited\ncall    {}", url),
+                        "add retry with exponential backoff".to_string(),
+                    );
+                }
+
+                if status == 401 || status == 403 {
+                    return (
+                        format!("auth failure\ncall    {}\nstatus  {}", url, status),
+                        "check credentials/token for this service".to_string(),
+                    );
+                }
+
+                if status == 0 {
+                    return (
+                        format!("network failure — no response received\ncall    {}", url),
+                        "check connectivity or add timeout handling".to_string(),
+                    );
+                }
+            }
+
+            if last.boundary == "db" {
+                let query = last
+                    .request
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown query");
+                let error = exec.error.as_deref().unwrap_or("");
+
+                if error.contains("duplicate key") || error.contains("unique") {
+                    return (
+                        format!(
+                            "duplicate key violation\nquery   {}\nerror   {}",
+                            query, error
+                        ),
+                        "check for existing record before inserting".to_string(),
+                    );
+                }
+
+                if error.contains("foreign key") {
+                    return (
+                        format!("foreign key violation\nquery   {}", query),
+                        "ensure referenced record exists first".to_string(),
+                    );
+                }
+
+                if error.contains("null") || error.contains("not-null") {
+                    return (
+                        format!("null constraint violation\nquery   {}", query),
+                        "check required fields are present in input".to_string(),
+                    );
+                }
+
+                return (
+                    format!("database error\nquery   {}\nerror   {}", query, error),
+                    String::new(),
+                );
+            }
+        }
+
+        return (
+            format!(
+                "function threw before any IO\nerror   {}",
+                exec.error.as_deref().unwrap_or("unknown error")
+            ),
+            "check input validation and early-exit logic".to_string(),
+        );
+    }
+
+    if exec.duration_ms > 1000 {
+        if let Some(slow) = checkpoints.iter().max_by_key(|c| c.duration_ms) {
+            let url = slow
+                .request
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+
+            return (
+                format!(
+                    "slow execution — {}ms total\nslowest call   [{}] {}  {}ms",
+                    exec.duration_ms, slow.call_index, url, slow.duration_ms
+                ),
+                "consider caching or parallelising this call".to_string(),
+            );
+        }
+    }
+
+    (
+        format!(
+            "no issues found\nstatus   {}\nduration {}ms\ncalls    {}",
+            exec.status,
+            exec.duration_ms,
+            checkpoints.len()
+        ),
+        String::new(),
+    )
+}
+
 #[tonic::async_trait]
 impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc {
     type TailStream = ReceiverStream<Result<pb::TailEvent, Status>>;
@@ -391,6 +534,67 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    async fn why(
+        &self,
+        request: Request<pb::WhyRequest>,
+    ) -> Result<Response<pb::WhyResponse>, Status> {
+        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let execution_id_raw = request.into_inner().execution_id;
+        let execution_id = uuid::Uuid::parse_str(&execution_id_raw)
+            .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
+
+        let execution: Option<(String, i32, Option<String>)> = sqlx::query_as(
+            "SELECT status, duration_ms, error
+             FROM flux.executions
+             WHERE id = $1",
+        )
+        .bind(execution_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch execution: {e}")))?;
+
+        let (status, duration_ms, error) = execution
+            .ok_or_else(|| Status::not_found("execution not found"))?;
+
+        let checkpoint_rows: Vec<(i32, String, serde_json::Value, serde_json::Value, i32)> =
+            sqlx::query_as(
+                "SELECT call_index, boundary, request, response, duration_ms
+                 FROM flux.checkpoints
+                 WHERE execution_id = $1
+                 ORDER BY call_index ASC",
+            )
+            .bind(execution_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
+
+        let checkpoints: Vec<WhyCheckpoint> = checkpoint_rows
+            .into_iter()
+            .map(|(call_index, boundary, request, response, duration_ms)| WhyCheckpoint {
+                call_index,
+                boundary,
+                request,
+                response,
+                duration_ms,
+            })
+            .collect();
+
+        let (reason, suggestion) = analyze_execution(
+            &WhyExecution {
+                status,
+                duration_ms,
+                error,
+            },
+            &checkpoints,
+        );
+
+        Ok(Response::new(pb::WhyResponse {
+            execution_id: execution_id_raw,
+            reason,
+            suggestion,
+        }))
     }
 }
 

@@ -9,6 +9,7 @@ mod serve;
 mod server;
 mod tail;
 mod trace;
+mod why;
 
 #[derive(Parser)]
 #[command(name = "flux")]
@@ -32,6 +33,8 @@ enum Commands {
     Logs(logs::LogsArgs),
     /// Show execution trace with checkpoints.
     Trace(trace::TraceArgs),
+    /// Explain why an execution failed or was slow.
+    Why(why::WhyArgs),
     /// Stream live execution events.
     Tail(tail::TailArgs),
     /// Prepare a JS/TS entry file for runtime execution.
@@ -52,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Config { command } => config_cmd::execute(command)?,
         Commands::Logs(args) => logs::execute(args).await?,
         Commands::Trace(args) => trace::execute(args).await?,
+        Commands::Why(args) => why::execute(args).await?,
         Commands::Tail(args) => tail::execute(args).await?,
         Commands::Serve(args) => serve::execute(args).await?,
         Commands::Server { command } => server::execute(command).await?,

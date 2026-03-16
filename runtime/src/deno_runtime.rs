@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use deno_core::error::AnyError;
 use deno_core::{JsRuntime, OpState, RuntimeOptions, op2};
 use reqwest::Client;
@@ -30,6 +30,7 @@ pub struct FetchCheckpoint {
 pub struct JsExecutionOutput {
     pub output: serde_json::Value,
     pub checkpoints: Vec<FetchCheckpoint>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -235,12 +236,6 @@ impl JsIsolate {
         let envelope: serde_json::Value = serde_json::from_str(&raw)
             .context("handler result envelope is not valid JSON")?;
 
-        if let Some(error) = envelope.get("error").and_then(|v| v.as_str()) {
-            if !error.is_empty() {
-                bail!(error.to_string());
-            }
-        }
-
         let checkpoints = {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
@@ -248,12 +243,20 @@ impl JsIsolate {
             std::mem::take(&mut execution.checkpoints)
         };
 
+        let error = envelope
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
         Ok(JsExecutionOutput {
             output: envelope
                 .get("result")
                 .cloned()
                 .unwrap_or(serde_json::Value::Null),
             checkpoints,
+            error,
         })
     }
 }

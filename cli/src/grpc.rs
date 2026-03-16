@@ -35,6 +35,13 @@ pub struct TraceView {
     pub checkpoints: Vec<TraceCheckpoint>,
 }
 
+#[derive(Debug, Clone)]
+pub struct WhyView {
+    pub execution_id: String,
+    pub reason: String,
+    pub suggestion: String,
+}
+
 pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
@@ -160,6 +167,34 @@ pub async fn tail(
         .into_inner();
 
     Ok(response)
+}
+
+pub async fn why(url: &str, token: &str, execution_id: &str) -> Result<WhyView> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+        .await
+        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+
+    let mut request = Request::new(pb::WhyRequest {
+        execution_id: execution_id.to_string(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .why(request)
+        .await
+        .context("why request failed")?
+        .into_inner();
+
+    Ok(WhyView {
+        execution_id: response.execution_id,
+        reason: response.reason,
+        suggestion: response.suggestion,
+    })
 }
 
 pub fn normalize_grpc_url(url: &str) -> String {

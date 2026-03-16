@@ -141,19 +141,34 @@ fn spawn_isolate_worker(
                     let context = work.context.clone();
                     let started = std::time::Instant::now();
                     let result = match isolate.execute(work.payload, work.context).await {
-                        Ok(JsExecutionOutput { output, checkpoints }) => ExecutionResult {
-                            execution_id: context.execution_id,
-                            request_id: context.request_id,
-                            code_version: context.code_version,
-                            status: "ok".to_string(),
-                            body: serde_json::json!({
-                                "isolate_id": isolate_id,
-                                "output": output,
-                            }),
-                            error: None,
-                            duration_ms: started.elapsed().as_millis() as i32,
+                        Ok(JsExecutionOutput {
+                            output,
                             checkpoints,
-                        },
+                            error,
+                        }) => {
+                            let (status, body, error) = match error {
+                                Some(err) => ("error".to_string(), serde_json::Value::Null, Some(err)),
+                                None => (
+                                    "ok".to_string(),
+                                    serde_json::json!({
+                                        "isolate_id": isolate_id,
+                                        "output": output,
+                                    }),
+                                    None,
+                                ),
+                            };
+
+                            ExecutionResult {
+                                execution_id: context.execution_id,
+                                request_id: context.request_id,
+                                code_version: context.code_version,
+                                status,
+                                body,
+                                error,
+                                duration_ms: started.elapsed().as_millis() as i32,
+                                checkpoints,
+                            }
+                        }
                         Err(err) => ExecutionResult {
                             execution_id: context.execution_id,
                             request_id: context.request_id,

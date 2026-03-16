@@ -7,6 +7,7 @@ service InternalAuthService {
   rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
   rpc RecordExecution(RecordExecutionRequest) returns (RecordExecutionResponse);
   rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
+  rpc Why(WhyRequest) returns (WhyResponse);
   rpc Tail(TailRequest) returns (stream TailEvent);
 }
 
@@ -80,6 +81,16 @@ message GetTraceResponse {
   int32 duration_ms = 5;
   string error = 6;
   repeated Checkpoint checkpoints = 7;
+}
+
+message WhyRequest {
+  string execution_id = 1;
+}
+
+message WhyResponse {
+  string execution_id = 1;
+  string reason = 2;
+  string suggestion = 3;
 }
 
 message TailRequest {
