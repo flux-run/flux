@@ -1,12 +1,13 @@
 use std::net::SocketAddr;
 
+use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use tokio::sync::watch;
 use tracing::info;
 
 pub struct ServerConfig {
     pub grpc_port: u16,
-    pub service_token: String,
+    pub service_token: Option<String>,
 }
 
 impl ServerConfig {
@@ -16,18 +17,7 @@ impl ServerConfig {
             .parse::<u16>()
             .expect("GRPC_PORT must be a valid u16");
 
-        let service_token = std::env::var("INTERNAL_SERVICE_TOKEN")
-            .unwrap_or_else(|_| {
-                if std::env::var("FLUX_ENV").as_deref() == Ok("production") {
-                    panic!(
-                        "[Flux] INTERNAL_SERVICE_TOKEN must be set in production."
-                    );
-                }
-                tracing::warn!(
-                    "[Flux] INTERNAL_SERVICE_TOKEN not set — using insecure default 'dev-service-token'."
-                );
-                "dev-service-token".to_string()
-            });
+        let service_token = std::env::var("INTERNAL_SERVICE_TOKEN").ok();
 
         Self { grpc_port, service_token }
     }
@@ -47,6 +37,17 @@ impl CoreService {
         let pool = init_pool().await?;
         info!("Server connected to database");
 
+        if let Some(token) = ensure_service_token(&pool).await? {
+            println!();
+            println!("Flux server started on :{}", config.grpc_port);
+            println!();
+            println!("Service token: {}", token);
+            println!();
+            println!("Store this token — it will not be shown again.");
+            println!("Set it on your runtimes: flux serve index.js --token {}", token);
+            println!();
+        }
+
         let (shutdown_tx, shutdown_rx) = watch::channel(());
         tokio::spawn(async move {
             shutdown_signal().await;
@@ -55,7 +56,10 @@ impl CoreService {
         });
 
         let grpc_addr = SocketAddr::from(([0, 0, 0, 0], config.grpc_port));
-        let grpc_service = crate::grpc::InternalAuthGrpc::new(pool, config.service_token);
+        let grpc_service = crate::grpc::InternalAuthGrpc::new(
+            pool,
+            config.service_token.unwrap_or_default(),
+        );
 
         info!(port = config.grpc_port, "Flux server listening (gRPC)");
         crate::grpc::serve(grpc_addr, grpc_service, shutdown_rx).await?;
@@ -79,6 +83,30 @@ async fn init_pool() -> Result<PgPool, sqlx::Error> {
         }))
         .connect(&database_url)
         .await
+}
+
+async fn ensure_service_token(pool: &PgPool) -> Result<Option<String>, sqlx::Error> {
+    let existing_hash: Option<String> = sqlx::query_scalar(
+        "SELECT token_hash FROM flux.service_tokens WHERE revoked_at IS NULL LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if existing_hash.is_some() {
+        return Ok(None);
+    }
+
+    let raw = format!("flux_sk_{}", uuid::Uuid::new_v4().simple());
+    let token_hash = hex::encode(Sha256::digest(raw.as_bytes()));
+
+    sqlx::query(
+        "INSERT INTO flux.service_tokens (service_name, token_hash) VALUES ('*', $1)",
+    )
+    .bind(token_hash)
+    .execute(pool)
+    .await?;
+
+    Ok(Some(raw))
 }
 
 async fn shutdown_signal() {

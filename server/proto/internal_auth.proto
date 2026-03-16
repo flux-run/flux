@@ -3,14 +3,12 @@ syntax = "proto3";
 package flux.internal.v1;
 
 service InternalAuthService {
-  rpc ValidateServiceToken(ValidateServiceTokenRequest) returns (ValidateServiceTokenResponse);
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
 }
 
-message ValidateServiceTokenRequest {
-  string service_name = 1;
-}
+message ValidateTokenRequest {}
 
-message ValidateServiceTokenResponse {
+message ValidateTokenResponse {
   bool ok = 1;
   string auth_mode = 2;
 }

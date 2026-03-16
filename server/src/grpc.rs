@@ -21,7 +21,7 @@ impl InternalAuthGrpc {
         Self { pool, expected_token }
     }
 
-    async fn is_db_token_valid(&self, service_name: &str, token: &str) -> Result<bool, sqlx::Error> {
+    async fn is_db_token_valid(&self, token: &str) -> Result<bool, sqlx::Error> {
         let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
 
         let exists: bool = sqlx::query_scalar(
@@ -30,75 +30,73 @@ impl InternalAuthGrpc {
                FROM flux.service_tokens\
                WHERE token_hash = $1\
                  AND revoked_at IS NULL\
-                 AND (service_name = $2 OR service_name = '*')\
             )",
         )
         .bind(token_hash)
-        .bind(service_name)
         .fetch_one(&self.pool)
         .await?;
 
         Ok(exists)
     }
+
+    fn read_bearer_token(metadata: &tonic::metadata::MetadataMap) -> Option<String> {
+        metadata
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
 }
 
 #[tonic::async_trait]
 impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc {
-    async fn validate_service_token(
+    async fn validate_token(
         &self,
-        request: Request<pb::ValidateServiceTokenRequest>,
-    ) -> Result<Response<pb::ValidateServiceTokenResponse>, Status> {
-        let provided_token = request
-            .metadata()
-            .get("x-service-token")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-
-        let service_name = request.into_inner().service_name;
-        if service_name.trim().is_empty() {
-            return Err(Status::invalid_argument("service_name is required"));
-        }
+        request: Request<pb::ValidateTokenRequest>,
+    ) -> Result<Response<pb::ValidateTokenResponse>, Status> {
+        let provided_token = Self::read_bearer_token(request.metadata())
+            .unwrap_or_default();
 
         if provided_token.is_empty() {
-            return Err(Status::unauthenticated("missing x-service-token metadata"));
+            return Err(Status::unauthenticated("missing authorization bearer token"));
         }
 
-        let env_match: bool = provided_token
-            .as_bytes()
-            .ct_eq(self.expected_token.as_bytes())
-            .into();
+        if !self.expected_token.is_empty() {
+            let env_match: bool = provided_token
+                .as_bytes()
+                .ct_eq(self.expected_token.as_bytes())
+                .into();
 
-        if env_match {
-            return Ok(Response::new(pb::ValidateServiceTokenResponse {
-                ok: true,
-                auth_mode: "env".to_string(),
-            }));
+            if env_match {
+                return Ok(Response::new(pb::ValidateTokenResponse {
+                    ok: true,
+                    auth_mode: "env".to_string(),
+                }));
+            }
         }
 
         let db_match = self
-            .is_db_token_valid(&service_name, &provided_token)
+            .is_db_token_valid(&provided_token)
             .await
             .map_err(|e| Status::internal(format!("token lookup failed: {e}")))?;
 
         if db_match {
             let token_hash = hex::encode(Sha256::digest(provided_token.as_bytes()));
             let pool = self.pool.clone();
-            let svc = service_name.clone();
 
             tokio::spawn(async move {
                 let _ = sqlx::query(
                     "UPDATE flux.service_tokens\
                      SET last_used_at = now()\
-                     WHERE token_hash = $1 AND service_name = $2 AND revoked_at IS NULL",
+                     WHERE token_hash = $1 AND revoked_at IS NULL",
                 )
                 .bind(token_hash)
-                .bind(svc)
                 .execute(&pool)
                 .await;
             });
 
-            return Ok(Response::new(pb::ValidateServiceTokenResponse {
+            return Ok(Response::new(pb::ValidateTokenResponse {
                 ok: true,
                 auth_mode: "db".to_string(),
             }));

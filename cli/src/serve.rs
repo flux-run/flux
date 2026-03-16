@@ -15,15 +15,13 @@ pub struct ServeArgs {
     pub entry: String,
     #[arg(long, value_name = "URL")]
     pub url: Option<String>,
-    #[arg(long, value_name = "SERVICE")]
-    pub service: Option<String>,
     #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
     pub token: Option<String>,
 }
 
 pub async fn execute(args: ServeArgs) -> Result<()> {
-    let auth = resolve_auth(args.url, args.service, args.token)?;
-    let auth_mode = validate_service_token(&auth.url, &auth.service, &auth.token).await?;
+    let auth = resolve_auth(args.url, args.token)?;
+    let auth_mode = validate_service_token(&auth.url, &auth.token).await?;
 
     let entry = PathBuf::from(&args.entry);
     if !entry.exists() {
@@ -39,7 +37,6 @@ pub async fn execute(args: ServeArgs) -> Result<()> {
 
     println!("runtime artifact prepared");
     println!("server:   {}", auth.url);
-    println!("service:  {}", auth.service);
     println!("auth:     {}", auth_mode);
     println!("entry:    {}", entry.display());
     println!("hash:     {}", artifact.sha256);

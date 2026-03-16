@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::grpc::normalize_grpc_url;
@@ -8,14 +8,12 @@ use crate::grpc::normalize_grpc_url;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CliConfig {
     pub url: Option<String>,
-    pub service: Option<String>,
     pub token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResolvedAuth {
     pub url: String,
-    pub service: String,
     pub token: String,
 }
 
@@ -45,28 +43,19 @@ impl CliConfig {
     }
 }
 
-pub fn resolve_auth(url: Option<String>, service: Option<String>, token: Option<String>) -> Result<ResolvedAuth> {
+pub fn resolve_auth(url: Option<String>, token: Option<String>) -> Result<ResolvedAuth> {
     let config = CliConfig::load()?;
 
     let url = url
         .or(config.url)
-        .ok_or_else(|| anyhow::anyhow!("missing server URL: run `flux auth --url <host:port> --service <name>` first"))?;
-
-    let service = service
-        .or(config.service)
-        .ok_or_else(|| anyhow::anyhow!("missing service name: run `flux auth --service <name>` first"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing server URL: run `flux auth --url <host:port>` first"))?;
 
     let token = token
         .or(config.token)
         .ok_or_else(|| anyhow::anyhow!("missing service token: run `flux auth` first or pass --token"))?;
 
-    if service.trim().is_empty() {
-        bail!("service name cannot be empty");
-    }
-
     Ok(ResolvedAuth {
         url: normalize_grpc_url(&url),
-        service,
         token,
     })
 }
