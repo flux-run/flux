@@ -70,3 +70,13 @@ examples/hello-csharp/functions/hello/obj/
 examples/hello-python/functions/hello/hello.wasm
 # Ruby: 47MB — build with: rbwasm pack ruby.wasm --dir .:/ -o hello-ruby.wasm
 examples/hello-ruby/functions/hello/*.wasm
+
+# ── External test corpora (cloned by setup-external-tests.sh, not committed) ──
+# Recreate with: cd runtime/scripts && bash setup-external-tests.sh all
+runtime/external-tests/test262/
+runtime/external-tests/node-core/
+runtime/external-tests/web-platform/
+
+# ── Generated test reports (written by runners, not committed) ────────────────
+runtime/reports/*.json
+runtime/reports/flux-integration

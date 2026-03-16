@@ -1,6 +1,6 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-16T15:02:44.619Z",
+  "timestamp": "2026-03-16T15:30:26.588Z",
   "engine": "node v22.20.0",
   "passed": 58,
   "failed": 0,
@@ -13,349 +13,349 @@
       "name": "GET /ping → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.005667000000130429
+      "duration": 0.006250000000363798
     },
     {
       "name": "GET /ping body has ok:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.003957999999784079
+      "duration": 0.004833999999846128
     },
     {
       "name": "POST /echo → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.004750000000058208
+      "duration": 0.0054169999998521234
     },
     {
       "name": "POST /echo reflects string field",
       "passed": true,
       "skipped": false,
-      "duration": 0.0036660000000665605
+      "duration": 0.004416000000219356
     },
     {
       "name": "POST /echo reflects numeric field",
       "passed": true,
       "skipped": false,
-      "duration": 0.0029589999999188876
+      "duration": 0.003667000000405096
     },
     {
       "name": "POST /echo/upper → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.004625000000032742
+      "duration": 0.021749999999883585
     },
     {
       "name": "POST /echo/upper uppercases strings",
       "passed": true,
       "skipped": false,
-      "duration": 0.0036250000000563887
+      "duration": 0.00687500000003638
     },
     {
       "name": "POST /echo/upper passes through numbers",
       "passed": true,
       "skipped": false,
-      "duration": 0.0029159999999137654
+      "duration": 0.004166999999597465
     },
     {
       "name": "POST /echo with bad JSON → 400",
       "passed": true,
       "skipped": false,
-      "duration": 0.0053339999999479915
+      "duration": 0.016833000000133325
     },
     {
       "name": "GET /types/null → value is null",
       "passed": true,
       "skipped": false,
-      "duration": 0.01908299999990959
+      "duration": 0.01679199999989578
     },
     {
       "name": "GET /types/bool → value is true",
       "passed": true,
       "skipped": false,
-      "duration": 0.01108299999987139
+      "duration": 0.01241600000003018
     },
     {
       "name": "GET /types/number → integer 42",
       "passed": true,
       "skipped": false,
-      "duration": 0.012665999999853739
+      "duration": 0.010166999999910331
     },
     {
       "name": "GET /types/number → float 3.14",
       "passed": true,
       "skipped": false,
-      "duration": 0.010125000000016371
+      "duration": 0.011750000000120053
     },
     {
       "name": "GET /types/string → 'hello flux'",
       "passed": true,
       "skipped": false,
-      "duration": 0.007499999999936335
+      "duration": 0.00741699999980483
     },
     {
       "name": "GET /types/array → array length 4",
       "passed": true,
       "skipped": false,
-      "duration": 0.014584000000013475
+      "duration": 0.009249999999610736
     },
     {
       "name": "GET /types/array → element types",
       "passed": true,
       "skipped": false,
-      "duration": 0.009000000000014552
+      "duration": 0.006957999999940512
     },
     {
       "name": "GET /types/nested → deep field",
       "passed": true,
       "skipped": false,
-      "duration": 0.005540999999993801
+      "duration": 0.006374999999934516
     },
     {
       "name": "GET /types/nested → nested array",
       "passed": true,
       "skipped": false,
-      "duration": 0.0042089999999461725
+      "duration": 0.004415999999764608
     },
     {
       "name": "GET /types/all → null field",
       "passed": true,
       "skipped": false,
-      "duration": 0.007834000000002561
+      "duration": 0.005166999999801192
     },
     {
       "name": "GET /types/all → bool false",
       "passed": true,
       "skipped": false,
-      "duration": 0.003249999999979991
+      "duration": 0.0028330000000096334
     },
     {
       "name": "GET /types/all → negative int",
       "passed": true,
       "skipped": false,
-      "duration": 0.003375000000005457
+      "duration": 0.0028330000000096334
     },
     {
       "name": "GET /types/all → UTF-8 string",
       "passed": true,
       "skipped": false,
-      "duration": 0.007499999999936335
+      "duration": 0.0072079999999914435
     },
     {
       "name": "GET /types/missing → 404",
       "passed": true,
       "skipped": false,
-      "duration": 0.005583999999998923
+      "duration": 0.00483299999996234
     },
     {
       "name": "GET /web/uuid → valid RFC-4122 UUID",
       "passed": true,
       "skipped": false,
-      "duration": 0.08762500000011642
+      "duration": 0.07799999999997453
     },
     {
       "name": "GET /web/uuid → valid:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.009082999999918684
+      "duration": 0.01079200000003766
     },
     {
       "name": "GET /web/date → timestamp is number",
       "passed": true,
       "skipped": false,
-      "duration": 0.0329589999998916
+      "duration": 0.012333000000126049
     },
     {
       "name": "GET /web/date → ISO string",
       "passed": true,
       "skipped": false,
-      "duration": 0.005916999999953987
+      "duration": 0.0032499999997526174
     },
     {
       "name": "GET /web/url → host",
       "passed": true,
       "skipped": false,
-      "duration": 0.010041999999884865
+      "duration": 0.006374999999934516
     },
     {
       "name": "GET /web/url → pathname",
       "passed": true,
       "skipped": false,
-      "duration": 0.0037500000000818545
+      "duration": 0.0026670000002013694
     },
     {
       "name": "GET /web/url → foo param",
       "passed": true,
       "skipped": false,
-      "duration": 0.003208000000086031
+      "duration": 0.0025829999999587017
     },
     {
       "name": "GET /web/url-build → href contains path",
       "passed": true,
       "skipped": false,
-      "duration": 0.01604100000008657
+      "duration": 0.010249999999814463
     },
     {
       "name": "GET /web/url-build → page param",
       "passed": true,
       "skipped": false,
-      "duration": 0.0052079999998113635
+      "duration": 0.002666999999746622
     },
     {
       "name": "GET /web/url-build → pathname",
       "passed": true,
       "skipped": false,
-      "duration": 0.0032079999998586572
+      "duration": 0.0021660000002157176
     },
     {
       "name": "GET /web/math → random in [0,1)",
       "passed": true,
       "skipped": false,
-      "duration": 0.006916000000046552
+      "duration": 0.010833999999704247
     },
     {
       "name": "GET /web/math → floor(3.9)=3",
       "passed": true,
       "skipped": false,
-      "duration": 0.0039590000001226144
+      "duration": 0.004999999999654392
     },
     {
       "name": "GET /web/math → ceil(3.1)=4",
       "passed": true,
       "skipped": false,
-      "duration": 0.0027919999999994616
+      "duration": 0.0028750000001309672
     },
     {
       "name": "GET /web/math → abs(-7)=7",
       "passed": true,
       "skipped": false,
-      "duration": 0.002416999999923064
+      "duration": 0.0020830000003115856
     },
     {
       "name": "GET /web/math → min(5,3,8)=3",
       "passed": true,
       "skipped": false,
-      "duration": 0.002124999999978172
+      "duration": 0.0019170000000485743
     },
     {
       "name": "GET /web/math → max(5,3,8)=8",
       "passed": true,
       "skipped": false,
-      "duration": 0.002124999999978172
+      "duration": 0.0017499999999017746
     },
     {
       "name": "GET /web/math → 2^10=1024",
       "passed": true,
       "skipped": false,
-      "duration": 0.0025830000001860753
+      "duration": 0.0019579999998313724
     },
     {
       "name": "GET /web/json → JSON round-trip match",
       "passed": true,
       "skipped": false,
-      "duration": 0.004749999999830834
+      "duration": 0.005041999999775726
     },
     {
       "name": "GET /web/json → json field is string",
       "passed": true,
       "skipped": false,
-      "duration": 0.0029999999999290594
+      "duration": 0.002624999999625288
     },
     {
       "name": "GET /async/await → result 3",
       "passed": true,
       "skipped": false,
-      "duration": 0.035541999999850304
+      "duration": 0.015332999999827734
     },
     {
       "name": "GET /async/promise-all → 3 items",
       "passed": true,
       "skipped": false,
-      "duration": 0.028416999999990367
+      "duration": 0.013958999999886146
     },
     {
       "name": "GET /async/promise-all → correct values",
       "passed": true,
       "skipped": false,
-      "duration": 0.007916999999906693
+      "duration": 0.008082999999714957
     },
     {
       "name": "GET /async/promise-race → fast wins",
       "passed": true,
       "skipped": false,
-      "duration": 0.013125000000172804
+      "duration": 0.008457999999791355
     },
     {
       "name": "GET /async/microtask → 2 items",
       "passed": true,
       "skipped": false,
-      "duration": 0.012249999999994543
+      "duration": 0.009875000000192813
     },
     {
       "name": "GET /async/microtask → ordering",
       "passed": true,
       "skipped": false,
-      "duration": 0.005415999999968335
+      "duration": 0.01025000000026921
     },
     {
       "name": "POST /async/pipeline → step1 = 10",
       "passed": true,
       "skipped": false,
-      "duration": 0.006333999999924345
+      "duration": 0.007333000000016909
     },
     {
       "name": "POST /async/pipeline → step2 = 20",
       "passed": true,
       "skipped": false,
-      "duration": 0.002334000000018932
+      "duration": 0.003666999999950349
     },
     {
       "name": "GET /error/not-found → 404",
       "passed": true,
       "skipped": false,
-      "duration": 0.029250000000047294
+      "duration": 0.024708999999802472
     },
     {
       "name": "GET /error/not-found → error field",
       "passed": true,
       "skipped": false,
-      "duration": 0.008125000000063665
+      "duration": 0.00829199999998309
     },
     {
       "name": "GET /error/bad-request → 400",
       "passed": true,
       "skipped": false,
-      "duration": 0.038000000000010914
+      "duration": 0.015082999999776803
     },
     {
       "name": "GET /error/sync-throw → 5xx",
       "passed": true,
       "skipped": false,
-      "duration": 0.017374999999901775
+      "duration": 0.011291999999684776
     },
     {
       "name": "GET /error/async-reject → 5xx",
       "passed": true,
       "skipped": false,
-      "duration": 0.00874999999996362
+      "duration": 0.0086660000001757
     },
     {
       "name": "POST /error/missing-field with empty body → 422",
       "passed": true,
       "skipped": false,
-      "duration": 0.025583999999980733
+      "duration": 0.013333000000329776
     },
     {
       "name": "POST /error/missing-field with name → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.009374999999863576
+      "duration": 0.011833000000024185
     },
     {
       "name": "POST /error/missing-field with name → greeting",
       "passed": true,
       "skipped": false,
-      "duration": 0.006041999999979453
+      "duration": 0.005499999999756255
     }
   ]
 }

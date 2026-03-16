@@ -97,15 +97,15 @@ function collectJs(dir: string, out: string[] = []): string[] {
 // ---------------------------------------------------------------------------
 
 const SHIM = `
-// Minimal WPT testharness shim for Node.js
+// Minimal WPT testharness shim — no Node.js process globals (runs in Flux isolate)
 const _failures = [];
 globalThis.test = function(fn, name) {
   try { fn(); }
-  catch(e) { _failures.push(name + ": " + e.message); }
+  catch(e) { _failures.push((name || "unknown") + ": " + e.message); }
 };
 globalThis.promise_test = async function(fn, name) {
   try { await fn(); }
-  catch(e) { _failures.push(name + ": " + e.message); }
+  catch(e) { _failures.push((name || "unknown") + ": " + e.message); }
 };
 globalThis.assert_equals          = (a, b, msg) => { if (a !== b) throw new Error(msg || \`\${a} !== \${b}\`); };
 globalThis.assert_not_equals      = (a, b, msg) => { if (a === b) throw new Error(msg || \`\${a} === \${b}\`); };
@@ -127,13 +127,10 @@ globalThis.assert_class_string     = () => {};
 globalThis.setup                   = () => {};
 globalThis.done                    = () => {};
 globalThis.add_result_callback     = () => {};
-// Post-test check
-process.on("exit", () => {
-  if (_failures.length) {
-    console.error(_failures.join("\\n"));
-    process.exitCode = 1;
-  }
-});
+// Checked synchronously after all top-level code runs (no process.on needed)
+globalThis.__wpt_check_failures = function() {
+  if (_failures.length) throw new Error(_failures.join("\\n"));
+};
 `;
 
 // Node.js's --require flag doesn't work for inline eval; use --eval + concat
@@ -153,11 +150,9 @@ async function runOneTest(filePath: string): Promise<TestResult> {
     return { name, passed: false, skipped: true, duration: 0 };
   }
 
-  // Write SHIM + test content to a temp file so `flux run` can execute both.
-  // (Previously, ["--eval", SHIM, filePath] only ran the SHIM — the test
-  // file content was never loaded, which was a bug.)
+  // Write SHIM + test content + failure check to a temp file so `flux run` can execute both.
   const tmpFile = join(TEMP_DIR, "test.js");
-  writeFileSync(tmpFile, SHIM + "\n" + src, "utf-8");
+  writeFileSync(tmpFile, SHIM + "\n" + src + "\n__wpt_check_failures();", "utf-8");
 
   const result = spawnSync(
     FLUX_CLI_BIN,

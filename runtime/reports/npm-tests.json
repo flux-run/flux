@@ -1,12 +1,12 @@
 {
   "suite": "NPM Ecosystem",
-  "timestamp": "2026-03-16T13:35:48.135Z",
+  "timestamp": "2026-03-16T15:30:46.357Z",
   "engine": "node v22.20.0",
   "passed": 68,
   "failed": 0,
   "skipped": 0,
   "total": 68,
-  "elapsedMs": 21,
+  "elapsedMs": 15,
   "passRate": "100.0%",
   "results": [
     {
@@ -25,13 +25,13 @@
       "name": "axios response wraps status, data, and headers",
       "passed": true,
       "skipped": false,
-      "duration": 0
+      "duration": 1
     },
     {
       "name": "axios throws AxiosError on 4xx status",
       "passed": true,
       "skipped": false,
-      "duration": 10
+      "duration": 6
     },
     {
       "name": "request config merges headers correctly",
@@ -235,7 +235,7 @@
       "name": "sign returns a three-part JWT string",
       "passed": true,
       "skipped": false,
-      "duration": 2
+      "duration": 1
     },
     {
       "name": "sign with HS256 algorithm produces valid header",

@@ -71,19 +71,23 @@ async fn main() -> Result<()> {
 
     // Canonicalize and verify the entry file is within the current working directory
     // to prevent path-traversal attacks (e.g. --entry ../../etc/passwd).
+    // In --script-mode the runner writes a temp file to the system temp dir, so
+    // the CWD restriction is intentionally skipped.
     let canonical_entry = entry
         .canonicalize()
         .with_context(|| format!("failed to resolve entry path: {}", entry.display()))?;
-    let cwd = std::env::current_dir().context("failed to read current directory")?;
-    let canonical_cwd = cwd
-        .canonicalize()
-        .context("failed to resolve current directory")?;
-    if !canonical_entry.starts_with(&canonical_cwd) {
-        bail!(
-            "entry file must be within the working directory: {} is outside {}",
-            canonical_entry.display(),
-            canonical_cwd.display()
-        );
+    if !args.script_mode {
+        let cwd = std::env::current_dir().context("failed to read current directory")?;
+        let canonical_cwd = cwd
+            .canonicalize()
+            .context("failed to resolve current directory")?;
+        if !canonical_entry.starts_with(&canonical_cwd) {
+            bail!(
+                "entry file must be within the working directory: {} is outside {}",
+                canonical_entry.display(),
+                canonical_cwd.display()
+            );
+        }
     }
 
     let code = load_entry_code(&entry)?;
