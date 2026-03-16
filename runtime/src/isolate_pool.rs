@@ -141,7 +141,7 @@ fn spawn_isolate_worker(
                 let mut isolate = match JsIsolate::new(&user_code, isolate_id) {
                     Ok(isolate) => {
                         let _ = init_tx.send(Ok(()));
-                        isolate
+                        Some(isolate)
                     }
                     Err(err) => {
                         let _ = init_tx.send(Err(err.to_string()));
@@ -150,9 +150,16 @@ fn spawn_isolate_worker(
                 };
 
                 while let Some(work) = rx.recv().await {
+                    let iso = match isolate.as_mut() {
+                        Some(iso) => iso,
+                        None => {
+                            let _ = work.result_tx.send(error_result(work.context, "isolate unavailable after failed re-creation"));
+                            continue;
+                        }
+                    };
                     let context = work.context.clone();
                     let started = std::time::Instant::now();
-                    let result = match isolate.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
+                    let result = match iso.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
                         Ok(JsExecutionOutput {
                             output,
                             checkpoints,
@@ -195,14 +202,16 @@ fn spawn_isolate_worker(
 
                     let _ = work.result_tx.send(result);
 
-                    // Create a fresh isolate to prevent global state leakage between requests.
-                    match JsIsolate::new(&user_code, isolate_id) {
-                        Ok(fresh) => isolate = fresh,
+                    // Drop the old V8 isolate BEFORE creating a new one.
+                    // V8 requires isolates to be dropped in reverse creation order.
+                    drop(isolate.take());
+                    isolate = match JsIsolate::new(&user_code, isolate_id) {
+                        Ok(fresh) => Some(fresh),
                         Err(err) => {
                             tracing::error!(%isolate_id, %err, "failed to re-create isolate; worker exiting");
                             break;
                         }
-                    }
+                    };
                 }
             });
         })
