@@ -97,10 +97,15 @@ async fn main() -> Result<()> {
 
     if args.script_mode {
         tracing::debug!(entry = %entry.display(), "script mode");
-        let mut isolate = runtime::JsIsolate::new(&artifact.code, 0)
+        let mut isolate = runtime::JsIsolate::new_for_run(&artifact.code)
             .context("failed to create JS isolate")?;
-        isolate.run_script().await
+        let (output, _logs) = isolate.run_script().await
             .context("script execution failed")?;
+        if let Some(value) = output {
+            if !value.is_null() {
+                println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
+            }
+        }
         return Ok(());
     }
 

@@ -457,6 +457,17 @@ pub struct JsIsolate {
 
 impl JsIsolate {
     pub fn new(user_code: &str, _isolate_id: usize) -> Result<Self> {
+        Self::new_internal(user_code, prepare_user_code(user_code))
+    }
+
+    /// Variant used by `flux run` / `--script-mode`.  Accepts plain top-level
+    /// scripts (no `export default` required) while still wiring up the handler
+    /// global when `export default` IS present.
+    pub fn new_for_run(user_code: &str) -> Result<Self> {
+        Self::new_internal(user_code, prepare_run_code(user_code))
+    }
+
+    fn new_internal(_user_code: &str, prepared: String) -> Result<Self> {
         let http_client = Client::new();
 
         let mut runtime = JsRuntime::new(RuntimeOptions {
@@ -494,7 +505,6 @@ impl JsIsolate {
             .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
             .context("failed to install fetch interceptor")?;
 
-        let prepared = prepare_user_code(user_code);
         runtime
             .execute_script("flux:user_code", prepared)
             .context("failed to load user code")?;
@@ -684,11 +694,46 @@ impl JsIsolate {
         })
     }
 
-    /// Run the entry module as a plain script — drain the event loop after
-    /// module initialisation and return captured log output.  Console output
-    /// is already streamed to stdout/stderr by `op_console`; this collects
-    /// the structured log vec for optional server-side recording.
-    pub async fn run_script(&mut self) -> Result<Vec<LogEntry>> {
+    /// Run the entry module in script mode — the `flux run` equivalent of
+    /// `node script.js`.
+    ///
+    /// Two sub-modes, selected automatically:
+    ///
+    /// **Handler mode** — the file exports a default function.  Flux calls it
+    /// once with an empty payload `{}`, drains the event loop, and returns the
+    /// output and any captured logs.
+    ///
+    /// **Top-level mode** — no exported handler.  Flux simply drains the event
+    /// loop so that top-level `await` and `setTimeout` promises resolve, then
+    /// returns the captured logs.
+    ///
+    /// In both cases, `console.log/warn/error` output is streamed to
+    /// stdout/stderr by `op_console` AND collected in the returned log vec.
+    pub async fn run_script(&mut self) -> Result<(Option<serde_json::Value>, Vec<LogEntry>)> {
+        // Check whether the module registered a handler during initialisation.
+        let has_handler = {
+            let check = self.runtime
+                .execute_script(
+                    "flux:check_handler",
+                    "typeof globalThis.__flux_user_handler === 'function'",
+                )
+                .context("failed to check for exported handler")?;
+            let scope = &mut self.runtime.handle_scope();
+            let local = deno_core::v8::Local::new(scope, check);
+            local.is_true()
+        };
+
+        if has_handler {
+            // Handler mode: call it once with `{}`.
+            let context = ExecutionContext::new("__run__");
+            let output = self.execute(serde_json::json!({}), context).await?;
+            if let Some(ref err) = output.error {
+                eprintln!("error: {err}");
+            }
+            return Ok((Some(output.output), output.logs));
+        }
+
+        // Top-level mode: drain the event loop.
         tokio::time::timeout(
             EXECUTION_TIMEOUT,
             self.runtime.run_event_loop(Default::default()),
@@ -700,7 +745,7 @@ impl JsIsolate {
         let state = self.runtime.op_state();
         let state = state.borrow();
         let exec = state.borrow::<RuntimeExecutionState>();
-        Ok(exec.logs.clone())
+        Ok((None, exec.logs.clone()))
     }
 }
 
@@ -999,7 +1044,32 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
 }
 
 fn prepare_user_code(code: &str) -> String {
-    let transformed = if code.contains("export default async function") {
+    let transformed = rewrite_export_default(code);
+
+    // In server mode (Deno.serve was called) __flux_net_handler is set instead
+    // of __flux_user_handler — skip the export guard in that case.
+    format!(
+        "{}\n\
+         if (typeof globalThis.__flux_net_handler !== 'function' && \
+             typeof globalThis.__flux_user_handler !== 'function') {{\n\
+           throw new Error('entry module must export default function or call Deno.serve()');\n\
+         }}",
+        transformed
+    )
+}
+
+/// Like `prepare_user_code` but without the mandatory-export guard, so plain
+/// top-level scripts (no `export default`) can run without throwing.
+/// Used exclusively by the `flux run` / `--script-mode` path.
+fn prepare_run_code(code: &str) -> String {
+    rewrite_export_default(code)
+}
+
+/// Rewrite `export default [async] function` / `export default <expr>` into
+/// `globalThis.__flux_user_handler = …` so the Rust host can invoke the
+/// handler without ES module machinery.
+fn rewrite_export_default(code: &str) -> String {
+    if code.contains("export default async function") {
         code.replacen(
             "export default async function",
             "globalThis.__flux_user_handler = async function",
@@ -1015,16 +1085,5 @@ fn prepare_user_code(code: &str) -> String {
         code.replacen("export default", "globalThis.__flux_user_handler =", 1)
     } else {
         code.to_string()
-    };
-
-    // In server mode (Deno.serve was called) __flux_net_handler is set instead
-    // of __flux_user_handler — skip the export guard in that case.
-    format!(
-        "{}\n\
-         if (typeof globalThis.__flux_net_handler !== 'function' && \
-             typeof globalThis.__flux_user_handler !== 'function') {{\n\
-           throw new Error('entry module must export default function or call Deno.serve()');\n\
-         }}",
-        transformed
-    )
+    }
 }
