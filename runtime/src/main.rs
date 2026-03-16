@@ -54,6 +54,29 @@ async fn main() -> Result<()> {
         bail!("entry file not found: {}", entry.display());
     }
 
+    // Validate extension whitelist before doing anything else.
+    match extension(&entry).as_deref() {
+        Some("js") | Some("mjs") | Some("cjs") | Some("ts") | Some("tsx") => {}
+        _ => bail!("unsupported entry file extension: {}", entry.display()),
+    }
+
+    // Canonicalize and verify the entry file is within the current working directory
+    // to prevent path-traversal attacks (e.g. --entry ../../etc/passwd).
+    let canonical_entry = entry
+        .canonicalize()
+        .with_context(|| format!("failed to resolve entry path: {}", entry.display()))?;
+    let cwd = std::env::current_dir().context("failed to read current directory")?;
+    let canonical_cwd = cwd
+        .canonicalize()
+        .context("failed to resolve current directory")?;
+    if !canonical_entry.starts_with(&canonical_cwd) {
+        bail!(
+            "entry file must be within the working directory: {} is outside {}",
+            canonical_entry.display(),
+            canonical_cwd.display()
+        );
+    }
+
     let code = load_entry_code(&entry)?;
     let name = entry
         .file_name()

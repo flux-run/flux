@@ -176,6 +176,16 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Performance indexes — idempotent with IF NOT EXISTS.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_executions_started_at ON flux.executions (started_at DESC)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_executions_status_started ON flux.executions (status, started_at DESC)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_executions_path_started ON flux.executions (path, started_at DESC)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_checkpoints_execution_call ON flux.checkpoints (execution_id, call_index)")
+        .execute(pool).await?;
+
     Ok(())
 }
 

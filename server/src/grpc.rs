@@ -681,12 +681,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
     ) -> Result<Response<pb::ReplayResponse>, Status> {
         let _auth_mode = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
-        let _commit = req.commit;
+        let commit = req.commit;
 
         let source_execution_id = uuid::Uuid::parse_str(&req.execution_id)
             .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
         let from_index = req.from_index.max(0);
 
+        // 1. Fetch original execution
         let source_execution: Option<(
             String,
             String,
@@ -706,9 +707,10 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .await
         .map_err(|e| Status::internal(format!("failed to fetch source execution: {e}")))?;
 
-        let (method, path, request_json, response_json, status, error, duration_ms, code_sha) =
+        let (method, path, request_json, _response_json, _status, _error, _duration_ms, code_sha) =
             source_execution.ok_or_else(|| Status::not_found("execution not found"))?;
 
+        // 2. Fetch all checkpoints from the original execution
         let checkpoint_rows: Vec<(
             i32,
             String,
@@ -729,14 +731,100 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .await
         .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
 
+        // 3. Re-execute through the runtime with recorded checkpoints injected.
+        //    The runtime's Replay mode returns recorded responses from op_fetch
+        //    instead of making live HTTP calls, so the JS runs the same code path
+        //    but with deterministic external responses.
+        //
+        //    We send the replay request to the runtime HTTP endpoint with the
+        //    original request body. The runtime re-runs the JS, op_fetch returns
+        //    the recorded checkpoint responses, and we get a fresh execution result.
+        //
+        //    For now, since the server doesn't hold a direct reference to the
+        //    runtime isolate pool, replay works by recording the original checkpoint
+        //    responses as the replay result. When the server and runtime are
+        //    in-process (single binary), this will call the isolate pool directly.
+
         let replay_execution_id = uuid::Uuid::new_v4();
         let replay_request_id = uuid::Uuid::new_v4();
 
+        let replay_started = std::time::Instant::now();
+
+        // Re-execute each checkpoint: for HTTP boundaries, make a live call to
+        // compare against the recorded result. For non-HTTP boundaries, carry
+        // forward the recorded data.
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|e| Status::internal(format!("failed to begin replay transaction: {e}")))?;
+
+        let mut steps = Vec::with_capacity(checkpoint_rows.len());
+        let mut replay_status = "ok".to_string();
+        let mut replay_error = String::new();
+        let mut replay_output = serde_json::Value::Null;
+
+        for (call_index, boundary, url, cp_method, cp_request, cp_response, checkpoint_duration_ms) in
+            &checkpoint_rows
+        {
+            let step_url = url.clone().unwrap_or_else(|| {
+                cp_request
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string()
+            });
+
+            // If commit is true, re-execute HTTP calls live; otherwise use recorded.
+            let (response_to_store, step_duration, used_recorded) = if commit && boundary == "http" {
+                match perform_live_http_call(cp_request).await {
+                    Ok((live_resp, dur)) => (live_resp, dur, false),
+                    Err(e) => {
+                        replay_status = "error".to_string();
+                        replay_error = format!("replay live call failed: {}", e.message());
+                        (cp_response.clone(), *checkpoint_duration_ms, true)
+                    }
+                }
+            } else {
+                (cp_response.clone(), *checkpoint_duration_ms, true)
+            };
+
+            sqlx::query(
+                "INSERT INTO flux.checkpoints
+                 (execution_id, call_index, boundary, url, method, request, response, duration_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(replay_execution_id)
+            .bind(*call_index)
+            .bind(boundary.clone())
+            .bind(step_url.clone())
+            .bind(cp_method.clone())
+            .bind(cp_request.clone())
+            .bind(response_to_store.clone())
+            .bind(step_duration)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(format!("failed to persist replay checkpoint: {e}")))?;
+
+            replay_output = response_to_store
+                .get("body")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            steps.push(pb::ReplayStep {
+                call_index: *call_index,
+                boundary: boundary.clone(),
+                url: step_url,
+                used_recorded,
+                duration_ms: step_duration,
+            });
+        }
+
+        let replay_duration_ms = replay_started.elapsed().as_millis() as i32;
+
+        // Record the replay execution
+        let output_json = serde_json::to_string(&replay_output)
+            .unwrap_or_else(|_| "null".to_string());
 
         sqlx::query(
             "INSERT INTO flux.executions
@@ -745,73 +833,28 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         )
         .bind(replay_execution_id)
         .bind(replay_request_id)
-        .bind(method.clone())
-        .bind(path.clone())
-        .bind(status.clone())
-        .bind(request_json.clone())
-        .bind(response_json.clone())
-        .bind(error.clone().unwrap_or_default())
+        .bind(method)
+        .bind(path)
+        .bind(replay_status.clone())
+        .bind(request_json)
+        .bind(replay_output)
+        .bind(replay_error.clone())
         .bind(code_sha)
-        .bind(duration_ms)
+        .bind(replay_duration_ms)
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to insert replay execution: {e}")))?;
-
-        let mut steps = Vec::with_capacity(checkpoint_rows.len());
-        for (call_index, boundary, url, method, request, response, checkpoint_duration_ms) in
-            checkpoint_rows
-        {
-            let step_url = url.unwrap_or_else(|| {
-                request
-                    .get("url")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string()
-            });
-
-            sqlx::query(
-                "INSERT INTO flux.checkpoints
-                 (execution_id, call_index, boundary, url, method, request, response, duration_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-            )
-            .bind(replay_execution_id)
-            .bind(call_index)
-            .bind(boundary.clone())
-            .bind(step_url.clone())
-            .bind(method)
-            .bind(request)
-            .bind(response)
-            .bind(checkpoint_duration_ms)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| Status::internal(format!("failed to persist replay checkpoint: {e}")))?;
-
-            steps.push(pb::ReplayStep {
-                call_index,
-                boundary,
-                url: step_url,
-                used_recorded: true,
-                duration_ms: checkpoint_duration_ms,
-            });
-        }
 
         tx.commit()
             .await
             .map_err(|e| Status::internal(format!("failed to commit replay execution: {e}")))?;
 
-        let output = response_json
-            .as_ref()
-            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "null".to_string()))
-            .unwrap_or_else(|| "null".to_string());
-
-        let replay_error = error.unwrap_or_default();
-
         Ok(Response::new(pb::ReplayResponse {
             execution_id: replay_execution_id.to_string(),
-            status,
-            output,
+            status: replay_status,
+            output: output_json,
             error: replay_error,
-            duration_ms,
+            duration_ms: replay_duration_ms,
             steps,
         }))
     }

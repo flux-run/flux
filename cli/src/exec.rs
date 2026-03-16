@@ -170,8 +170,6 @@ async fn spawn_runtime(
         args.entry.clone(),
         "--server-url".to_string(),
         server_url.to_string(),
-        "--token".to_string(),
-        token.to_string(),
         "--host".to_string(),
         "127.0.0.1".to_string(),
         "--port".to_string(),
@@ -194,6 +192,9 @@ async fn spawn_runtime(
         c.arg("--").args(&runtime_args);
         c
     };
+
+    // Pass token via env var instead of CLI args — prevents exposure in `ps` output.
+    command.env("FLUX_SERVICE_TOKEN", token);
 
     command
         .stdout(Stdio::null())

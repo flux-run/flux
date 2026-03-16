@@ -55,6 +55,7 @@ struct IsolateWorker {
 struct WorkItem {
     payload: serde_json::Value,
     context: ExecutionContext,
+    recorded_checkpoints: Vec<FetchCheckpoint>,
     result_tx: oneshot::Sender<ExecutionResult>,
 }
 
@@ -76,6 +77,16 @@ impl IsolatePool {
     }
 
     pub async fn execute(&self, payload: serde_json::Value, context: ExecutionContext) -> ExecutionResult {
+        self.execute_with_recorded(payload, context, Vec::new()).await
+    }
+
+    /// Execute user code with pre-recorded checkpoints for replay.
+    pub async fn execute_with_recorded(
+        &self,
+        payload: serde_json::Value,
+        context: ExecutionContext,
+        recorded_checkpoints: Vec<FetchCheckpoint>,
+    ) -> ExecutionResult {
         if self.workers.is_empty() {
             return error_result(context, "isolate pool is empty");
         }
@@ -87,6 +98,7 @@ impl IsolatePool {
         let work = WorkItem {
             payload,
             context: context.clone(),
+            recorded_checkpoints,
             result_tx,
         };
 
@@ -140,7 +152,7 @@ fn spawn_isolate_worker(
                 while let Some(work) = rx.recv().await {
                     let context = work.context.clone();
                     let started = std::time::Instant::now();
-                    let result = match isolate.execute(work.payload, work.context).await {
+                    let result = match isolate.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
                         Ok(JsExecutionOutput {
                             output,
                             checkpoints,
@@ -182,6 +194,15 @@ fn spawn_isolate_worker(
                     };
 
                     let _ = work.result_tx.send(result);
+
+                    // Create a fresh isolate to prevent global state leakage between requests.
+                    match JsIsolate::new(&user_code, isolate_id) {
+                        Ok(fresh) => isolate = fresh,
+                        Err(err) => {
+                            tracing::error!(%isolate_id, %err, "failed to re-create isolate; worker exiting");
+                            break;
+                        }
+                    }
                 }
             });
         })

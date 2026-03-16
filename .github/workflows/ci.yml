@@ -31,6 +31,23 @@ env:
   FLUX_POSTHOG_KEY: ${{ secrets.FLUX_POSTHOG_KEY }}
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-ci
+
+      - name: Run tests
+        run: cargo test --workspace
+        env:
+          SQLX_OFFLINE: "true"
+
   build:
     name: ${{ matrix.os-label }} / ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}

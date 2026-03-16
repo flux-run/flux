@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::rc::Rc;
 
 use anyhow::{Context, Result};
@@ -10,9 +11,65 @@ use serde::{Deserialize, Serialize};
 
 use crate::isolate_pool::ExecutionContext;
 
+/// Maximum response body size: 10 MB.
+const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Blocked metadata hostnames (cloud provider instance metadata endpoints).
+const BLOCKED_HOSTS: &[&str] = &[
+    "169.254.169.254",
+    "metadata.google.internal",
+    "169.254.170.2",
+];
+
+/// Validate that a URL is safe to fetch — blocks SSRF to cloud metadata and private IPs.
+fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), AnyError> {
+    let parsed = url::Url::parse(raw_url)
+        .map_err(|e| deno_core::error::custom_error("TypeError", format!("invalid URL: {e}")))?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| deno_core::error::custom_error("TypeError", "invalid URL: no host"))?;
+
+    for blocked in BLOCKED_HOSTS {
+        if host == *blocked {
+            return Err(deno_core::error::custom_error(
+                "PermissionDenied",
+                format!("fetch blocked: {host} is a restricted endpoint"),
+            ));
+        }
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if ip.is_loopback() || is_private_ip(&ip) {
+            return Err(deno_core::error::custom_error(
+                "PermissionDenied",
+                "fetch blocked: private/loopback IP addresses are not allowed",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn is_private_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private()          // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+            || v4.is_link_local()    // 169.254.0.0/16
+            || v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64 // 100.64.0.0/10 (CGNAT)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()     // ::1
+            || (v6.segments()[0] & 0xfe00) == 0xfc00  // fc00::/7 unique-local
+            || (v6.segments()[0] & 0xffc0) == 0xfe80  // fe80::/10 link-local
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExecutionMode {
     Live,
+    Replay,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +95,8 @@ struct RuntimeExecutionState {
     context: ExecutionContext,
     call_index: u32,
     checkpoints: Vec<FetchCheckpoint>,
+    /// Pre-recorded checkpoints for Replay mode, keyed by call_index.
+    recorded: HashMap<u32, FetchCheckpoint>,
 }
 
 deno_core::extension!(flux_runtime_ext, ops = [op_fetch]);
@@ -53,62 +112,91 @@ async fn op_fetch(
 ) -> Result<serde_json::Value, AnyError> {
     let original_url = url;
 
-    let (request_id, call_index, mode) = {
+    let (request_id, call_index, mode, recorded_checkpoint, client) = {
         let mut state_ref = state.borrow_mut();
-        let execution = state_ref.borrow_mut::<RuntimeExecutionState>();
-        let index = execution.call_index;
-        execution.call_index = execution.call_index.saturating_add(1);
-        (
-            execution.context.request_id.clone(),
-            index,
-            execution.context.mode.clone(),
-        )
+        let (request_id, index, mode, recorded) = {
+            let execution = state_ref.borrow_mut::<RuntimeExecutionState>();
+            let idx = execution.call_index;
+            execution.call_index = execution.call_index.saturating_add(1);
+            let rec = execution.recorded.remove(&idx);
+            (
+                execution.context.request_id.clone(),
+                idx,
+                execution.context.mode.clone(),
+                rec,
+            )
+        };
+        let http_client = state_ref.borrow::<Client>().clone();
+        (request_id, index, mode, recorded, http_client)
     };
 
-    match mode {
-        ExecutionMode::Live => {
-            let resolved_url = original_url.clone();
-            let request_json = serde_json::json!({
-                "url": original_url.clone(),
-                "resolved_url": resolved_url.clone(),
-                "method": method.clone(),
-                "body": body.clone(),
-                "headers": headers.clone(),
-            });
-
-            let started = std::time::Instant::now();
-            let target_url = resolved_url;
-
-            let response = make_http_request(&target_url, &method, body, headers).await?;
-            let duration_ms = started.elapsed().as_millis() as i32;
-
+    // In Replay mode, return the recorded response instead of making a live call.
+    if matches!(mode, ExecutionMode::Replay) {
+        if let Some(checkpoint) = recorded_checkpoint {
+            let response = checkpoint.response.clone();
             {
                 let mut state_ref = state.borrow_mut();
                 let execution = state_ref.borrow_mut::<RuntimeExecutionState>();
                 execution.checkpoints.push(FetchCheckpoint {
                     call_index,
-                    boundary: "http".to_string(),
-                    url: original_url.clone(),
-                    method: method.clone(),
-                    request: request_json,
+                    boundary: checkpoint.boundary,
+                    url: checkpoint.url,
+                    method: checkpoint.method,
+                    request: checkpoint.request,
                     response: response.clone(),
-                    duration_ms,
+                    duration_ms: checkpoint.duration_ms,
                 });
             }
-
-            tracing::debug!(%request_id, %call_index, original_url = %original_url, resolved_url = %target_url, "intercepted fetch");
-            Ok(response)
+            tracing::debug!(%request_id, %call_index, "replay: returned recorded response");
+            return Ok(response);
         }
+        // No recorded checkpoint for this index — fall through to live call.
+        tracing::warn!(%request_id, %call_index, "replay: no recorded checkpoint, making live call");
     }
+
+    // SSRF protection: block private/metadata IPs before making the request.
+    validate_fetch_url(&original_url)?;
+
+    let resolved_url = original_url.clone();
+    let request_json = serde_json::json!({
+        "url": original_url.clone(),
+        "resolved_url": resolved_url.clone(),
+        "method": method.clone(),
+        "body": body.clone(),
+        "headers": headers.clone(),
+    });
+
+    let started = std::time::Instant::now();
+    let target_url = resolved_url;
+
+    let response = make_http_request(&client, &target_url, &method, body, headers).await?;
+    let duration_ms = started.elapsed().as_millis() as i32;
+
+    {
+        let mut state_ref = state.borrow_mut();
+        let execution = state_ref.borrow_mut::<RuntimeExecutionState>();
+        execution.checkpoints.push(FetchCheckpoint {
+            call_index,
+            boundary: "http".to_string(),
+            url: original_url.clone(),
+            method: method.clone(),
+            request: request_json,
+            response: response.clone(),
+            duration_ms,
+        });
+    }
+
+    tracing::debug!(%request_id, %call_index, original_url = %original_url, resolved_url = %target_url, "intercepted fetch");
+    Ok(response)
 }
 
 async fn make_http_request(
+    client: &Client,
     url: &str,
     method: &str,
     body: Option<serde_json::Value>,
     headers: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, AnyError> {
-    let client = Client::new();
     let method = method
         .parse::<reqwest::Method>()
         .map_err(|err| deno_core::error::custom_error("TypeError", err.to_string()))?;
@@ -131,6 +219,16 @@ async fn make_http_request(
         deno_core::error::custom_error("TypeError", format!("fetch failed: {err}"))
     })?;
 
+    // Reject responses that advertise a body larger than our limit.
+    if let Some(len) = response.content_length() {
+        if len as usize > MAX_RESPONSE_BYTES {
+            return Err(deno_core::error::custom_error(
+                "TypeError",
+                format!("response too large: {len} bytes exceeds {MAX_RESPONSE_BYTES} byte limit"),
+            ));
+        }
+    }
+
     let status = response.status().as_u16();
     let response_headers = response
         .headers()
@@ -141,10 +239,23 @@ async fn make_http_request(
         })
         .collect::<HashMap<_, _>>();
 
-    let text = response
-        .text()
+    // Stream the body with a size cap to protect against missing/lying Content-Length.
+    let bytes = response
+        .bytes()
         .await
         .map_err(|err| deno_core::error::custom_error("TypeError", err.to_string()))?;
+
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        return Err(deno_core::error::custom_error(
+            "TypeError",
+            format!(
+                "response body too large: {} bytes exceeds {MAX_RESPONSE_BYTES} byte limit",
+                bytes.len()
+            ),
+        ));
+    }
+
+    let text = String::from_utf8_lossy(&bytes).into_owned();
 
     let parsed_body = serde_json::from_str::<serde_json::Value>(&text)
         .unwrap_or_else(|_| serde_json::Value::String(text));
@@ -156,14 +267,25 @@ async fn make_http_request(
     }))
 }
 
+/// Maximum V8 heap size: 128 MB.
+const V8_HEAP_LIMIT: usize = 128 * 1024 * 1024;
+
+/// Maximum execution time for a single function invocation.
+const EXECUTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub struct JsIsolate {
     runtime: JsRuntime,
+    http_client: Client,
 }
 
 impl JsIsolate {
     pub fn new(user_code: &str, _isolate_id: usize) -> Result<Self> {
         let mut runtime = JsRuntime::new(RuntimeOptions {
             extensions: vec![flux_runtime_ext::init_ops_and_esm()],
+            create_params: Some(
+                deno_core::v8::CreateParams::default()
+                    .heap_limits(0, V8_HEAP_LIMIT),
+            ),
             ..Default::default()
         });
 
@@ -176,7 +298,10 @@ impl JsIsolate {
             .execute_script("flux:user_code", prepared)
             .context("failed to load user code")?;
 
-        Ok(Self { runtime })
+        Ok(Self {
+            runtime,
+            http_client: Client::new(),
+        })
     }
 
     pub async fn execute(
@@ -184,6 +309,22 @@ impl JsIsolate {
         payload: serde_json::Value,
         context: ExecutionContext,
     ) -> Result<JsExecutionOutput> {
+        self.execute_with_recorded(payload, context, Vec::new()).await
+    }
+
+    /// Execute with pre-recorded checkpoints injected into OpState.
+    /// In Replay mode, op_fetch will return the recorded response for each call_index
+    /// instead of making a live HTTP call.
+    pub async fn execute_with_recorded(
+        &mut self,
+        payload: serde_json::Value,
+        context: ExecutionContext,
+        recorded_checkpoints: Vec<FetchCheckpoint>,
+    ) -> Result<JsExecutionOutput> {
+        let recorded: HashMap<u32, FetchCheckpoint> = recorded_checkpoints
+            .into_iter()
+            .map(|cp| (cp.call_index, cp))
+            .collect();
         {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
@@ -191,7 +332,9 @@ impl JsIsolate {
                 context,
                 call_index: 0,
                 checkpoints: Vec::new(),
+                recorded,
             });
+            state.put(self.http_client.clone());
         }
 
         let payload_json = serde_json::to_string(&payload).context("failed to encode payload")?;
@@ -213,10 +356,13 @@ impl JsIsolate {
             .execute_script("flux:invoke", invoke)
             .context("failed to invoke user handler")?;
 
-        self.runtime
-            .run_event_loop(Default::default())
-            .await
-            .context("failed while running JS event loop")?;
+        tokio::time::timeout(
+            EXECUTION_TIMEOUT,
+            self.runtime.run_event_loop(Default::default()),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("function execution timed out after {EXECUTION_TIMEOUT:?}"))?
+        .context("failed while running JS event loop")?;
 
         let result_value = self
             .runtime
