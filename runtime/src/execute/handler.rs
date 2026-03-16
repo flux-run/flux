@@ -2,25 +2,20 @@
 //!
 //! ## Responsibilities
 //!
-//! 1. Parse `x-request-id`, `x-parent-span-id`, and `X-Function-Runtime` headers.
+//! 1. Parse `x-request-id` and `x-parent-span-id` headers.
 //! 2. Build an `InvocationCtx` with a deterministic `execution_seed` (replay uses the
 //!    seed from the queue; live invocations generate a fresh one).
 //! 3. Construct a `TraceEmitter` for this invocation.
-//! 4. Delegate bundle resolution to `BundleResolver` (warm WASM → warm Deno → cold fetch).
+//! 4. Delegate bundle resolution to `BundleResolver` (warm Deno → cold fetch).
 //! 5. Delegate execution to `ExecutionRunner::run_response`.
 //!
 //! ## Bundle resolution order
 //!
 //! ```text
-//! ┌── warm WASM? (WasmPool has bytes for function_id, and runtime_hint ≠ "deno")
+//! ┌── warm Deno? (BundleCache has code for function_id)
 //! │      → yes: skip fetch, run immediately
-//! ├── warm Deno? (BundleCache has code for function_id, and runtime_hint ≠ "wasm")
-//! │      → yes: skip fetch, run immediately
-//! └── cold: fetch bundle from API (control plane → inline from DB), populate both caches
+//! └── cold: fetch bundle from API (control plane → inline from DB), populate cache
 //! ```
-//!
-//! `X-Function-Runtime` lets the gateway force a specific engine (useful when a function
-//! supports both JS and WASM variants with the same function_id).
 //!
 //! ## Single responsibility
 //!
@@ -44,7 +39,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::execute::bundle::{BundleResolver, ResolvedBundle, bundle_sha};
-use crate::execute::runner::{ExecutionRunner, allowed_wasm_http_hosts, project_schema_name};
+use crate::execute::runner::{ExecutionRunner, project_schema_name};
 use crate::execute::types::{ExecuteRequest, InvocationCtx};
 use crate::trace::emitter::TraceEmitter;
 
@@ -61,11 +56,6 @@ pub async fn execute_handler(
     let parent_span_id = headers.get("x-parent-span-id")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
-    let runtime_hint = headers.get("X-Function-Runtime")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
     // Deterministic replay seed — provided by queue for replay, fresh UUID for live.
     let seed_bytes = Uuid::new_v4().into_bytes();
     let execution_seed = req.execution_seed.unwrap_or_else(|| i64::from_le_bytes([
@@ -92,38 +82,22 @@ pub async fn execute_handler(
     let resolver = BundleResolver {
         bundle_cache: &state.bundle_cache,
         schema_cache: &state.schema_cache,
-        wasm_pool:    &state.wasm_pool,
         http_client:  &state.http_client,
         api:          &*state.api,
     };
     let runner = ExecutionRunner {
         isolate_pool:    &state.isolate_pool,
-        wasm_pool:       &state.wasm_pool,
         schema_cache:    &state.schema_cache,
-        http_client:     &state.http_client,
-        wasm_http_hosts: allowed_wasm_http_hosts(),
         database:        project_schema_name(),
         dispatchers:     &state.dispatchers,
     };
 
-    // ── Warm WASM path ────────────────────────────────────────────────────
-    if runtime_hint != "deno" {
-        if let Some(wasm_bytes) = resolver.warm_wasm(&ctx.function_id).await {
-            tracer.post_event("debug", "wasm bytes cache hit — skipping fetch".into());
-            tracer.code_sha = Some(bundle_sha(&wasm_bytes));
-            let secrets = match fetch_secrets(&state).await { Ok(s) => s, Err(r) => return r };
-            return runner.run_response(ResolvedBundle::Wasm { bytes: wasm_bytes.to_vec() }, secrets, &ctx, &tracer, start).await;
-        }
-    }
-
     // ── Warm Deno path ────────────────────────────────────────────────────
-    if runtime_hint != "wasm" {
-        if let Some(cached_code) = resolver.warm_deno(&ctx.function_id) {
-            tracer.post_event("debug", "bundle cache hit — skipping fetch".into());
-            tracer.code_sha = Some(bundle_sha(cached_code.as_bytes()));
-            let secrets = match fetch_secrets(&state).await { Ok(s) => s, Err(r) => return r };
-            return runner.run_response(ResolvedBundle::Deno { code: cached_code }, secrets, &ctx, &tracer, start).await;
-        }
+    if let Some(cached_code) = resolver.warm_deno(&ctx.function_id) {
+        tracer.post_event("debug", "bundle cache hit — skipping fetch".into());
+        tracer.code_sha = Some(bundle_sha(cached_code.as_bytes()));
+        let secrets = match fetch_secrets(&state).await { Ok(s) => s, Err(r) => return r };
+        return runner.run_response(ResolvedBundle::Deno { code: cached_code }, secrets, &ctx, &tracer, start).await;
     }
 
     // ── Cold path ─────────────────────────────────────────────────────────

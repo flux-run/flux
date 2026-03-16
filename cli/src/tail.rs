@@ -238,21 +238,6 @@ pub async fn execute(
                             if last_mutated.len() > 200 { last_mutated.clear(); }
                         }
 
-                        // ── auto-debug ───────────────────────────────────────
-                        if auto_debug && is_error && !id.is_empty() {
-                            println!();
-                            println!("{} {}",
-                                "Opening debugger for".yellow().bold(),
-                                id.cyan());
-                            println!("{}", "─".repeat(72).dimmed());
-                            if let Err(e) = crate::debug::execute_auto(id.clone()).await {
-                                eprintln!("{} auto-debug failed: {}", "✗".red(), e);
-                            }
-                            println!();
-                            println!("{}", "─".repeat(72).dimmed());
-                            println!("{}", "Resuming live stream...".dimmed());
-                            println!();
-                        }
                     }
 
                     // Advance cursor to the latest started_at we've seen

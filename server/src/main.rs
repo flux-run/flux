@@ -38,7 +38,6 @@ use api_contract::routes as R;
 use runtime::engine::executor::PoolDispatchers;
 use runtime::secrets::client::SecretsClient;
 use runtime::engine::pool::IsolatePool;
-use runtime::engine::wasm_pool::WasmPool;
 use runtime::bundle::cache::BundleCache;
 use runtime::schema::cache::SchemaCache;
 
@@ -183,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         env_parse("STATEMENT_TIMEOUT_MS", 5000),
     ));
 
-    // ── PoolDispatchers — shared by V8 ops and WASM host functions ────────
+    // ── PoolDispatchers — shared by V8 ops ───────────────────────────────
     let runtime_lock = Arc::new(std::sync::OnceLock::new());
     let dispatchers = PoolDispatchers {
         api:         Arc::clone(&api_dispatch),
@@ -207,7 +206,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bundle_cache:   BundleCache::new(100),
         schema_cache:   SchemaCache::new(200),
         isolate_pool:   IsolatePool::new(isolate_workers, request_timeout_secs, dispatchers.clone()),
-        wasm_pool:      WasmPool::default_sized(),
         dispatchers:    dispatchers.clone(),
     });
 

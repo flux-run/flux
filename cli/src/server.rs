@@ -4,7 +4,7 @@
 //! single `server` binary and communicate in-process — no HTTP between them.
 //!
 //! ```text
-//! $ flux serve                    # port 8080, debug binary
+//! $ flux serve index.js           # port 8080, debug binary
 //! $ flux serve --port 3000        # custom port
 //! $ flux serve --release          # release binary
 //! ```
@@ -67,6 +67,7 @@ fn find_workspace_root() -> Option<PathBuf> {
 }
 
 pub async fn execute(
+    entry:           String,
     port:            u16,
     prefer_release:  bool,
     no_color:        bool,
@@ -104,6 +105,7 @@ pub async fn execute(
     println!();
     println!("  {} {}", "flux server".bold(), env!("CARGO_PKG_VERSION").dimmed());
     println!("  {}  {}", "address  ".dimmed(), format!("http://localhost:{port}").cyan());
+    println!("  {}  {}", "entry    ".dimmed(), entry.dimmed());
     println!("  {}  {}", "database ".dimmed(), database_url.dimmed());
     println!("  {}  {}", "binary   ".dimmed(), bin.display().to_string().dimmed());
     println!();
@@ -118,6 +120,7 @@ pub async fn execute(
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new(&bin)
             .env("PORT",                   port.to_string())
+            .env("FLUX_ENTRY",             &entry)
             .env("DATABASE_URL",           &database_url)
             .env("INTERNAL_SERVICE_TOKEN", &token)
             .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
@@ -129,6 +132,7 @@ pub async fn execute(
     {
         let status = tokio::process::Command::new(&bin)
             .env("PORT",                   port.to_string())
+            .env("FLUX_ENTRY",             &entry)
             .env("DATABASE_URL",           &database_url)
             .env("INTERNAL_SERVICE_TOKEN", &token)
             .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))

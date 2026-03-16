@@ -79,11 +79,6 @@ async fn fetch_logs(
     Ok(body["data"]["logs"].as_array().cloned().unwrap_or_default())
 }
 
-/// Minimal percent-encoding for ':' in ISO timestamps so query params are valid.
-fn urlencoding_simple(s: &str) -> String {
-    s.replace(':', "%3A")
-}
-
 // ── Label helper ──────────────────────────────────────────────────────────
 
 fn display_label(source: Option<&str>, resource: Option<&str>) -> String {

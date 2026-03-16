@@ -12,7 +12,7 @@ use job_contract::dispatch::{ExecuteRequest, ExecuteResponse};
 
 use crate::AppState;
 use crate::execute::bundle::{BundleResolver, ResolvedBundle, bundle_sha};
-use crate::execute::runner::{ExecutionRunner, allowed_wasm_http_hosts, project_schema_name};
+use crate::execute::runner::{ExecutionRunner, project_schema_name};
 use crate::execute::types::InvocationCtx;
 use crate::trace::emitter::TraceEmitter;
 
@@ -48,46 +48,25 @@ pub async fn invoke(
     let resolver = BundleResolver {
         bundle_cache: &state.bundle_cache,
         schema_cache: &state.schema_cache,
-        wasm_pool:    &state.wasm_pool,
         http_client:  &state.http_client,
         api:          &*state.api,
     };
     let runner = ExecutionRunner {
         isolate_pool:    &state.isolate_pool,
-        wasm_pool:       &state.wasm_pool,
         schema_cache:    &state.schema_cache,
-        http_client:     &state.http_client,
-        wasm_http_hosts: allowed_wasm_http_hosts(),
         database:        project_schema_name(),
         dispatchers:     &state.dispatchers,
     };
 
-    let hints = req.runtime_hint.as_deref().unwrap_or("");
-
-    // ── Warm WASM path ────────────────────────────────────────────────────
-    if hints != "deno" {
-        if let Some(wasm_bytes) = resolver.warm_wasm(&ctx.function_id).await {
-            tracer.code_sha = Some(bundle_sha(&wasm_bytes));
-            let secrets = state.secrets_client.fetch_secrets().await?;
-            let (status, body) = runner.run(
-                ResolvedBundle::Wasm { bytes: wasm_bytes.to_vec() },
-                secrets, &ctx, &tracer, start,
-            ).await;
-            return Ok(ExecuteResponse { body, status: status.as_u16(), duration_ms: 0 });
-        }
-    }
-
     // ── Warm Deno path ────────────────────────────────────────────────────
-    if hints != "wasm" {
-        if let Some(cached_code) = resolver.warm_deno(&ctx.function_id) {
-            tracer.code_sha = Some(bundle_sha(cached_code.as_bytes()));
-            let secrets = state.secrets_client.fetch_secrets().await?;
-            let (status, body) = runner.run(
-                ResolvedBundle::Deno { code: cached_code },
-                secrets, &ctx, &tracer, start,
-            ).await;
-            return Ok(ExecuteResponse { body, status: status.as_u16(), duration_ms: 0 });
-        }
+    if let Some(cached_code) = resolver.warm_deno(&ctx.function_id) {
+        tracer.code_sha = Some(bundle_sha(cached_code.as_bytes()));
+        let secrets = state.secrets_client.fetch_secrets().await?;
+        let (status, body) = runner.run(
+            ResolvedBundle::Deno { code: cached_code },
+            secrets, &ctx, &tracer, start,
+        ).await;
+        return Ok(ExecuteResponse { body, status: status.as_u16(), duration_ms: 0 });
     }
 
     // ── Cold path ─────────────────────────────────────────────────────────

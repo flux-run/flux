@@ -63,23 +63,14 @@ impl ApiDispatch for InProcessApiDispatch {
         let r = row.ok_or_else(|| "HTTP 404: no active deployment found".to_string())?;
 
         // Read bundle from filesystem — bundles live at {FLUX_FUNCTIONS_DIR}/{name}.{ext}
-        let ext = if r.runtime == "wasm" { "wasm" } else { "js" };
+        let ext = "js";
         let functions_dir = &self.state.functions_dir;
         let bundle_path = std::path::Path::new(functions_dir).join(format!("{}.{}", r.name, ext));
 
-        // WASM bundles are binary — base64-encode for JSON transport.
-        // JS bundles are UTF-8 text — read directly.
-        let code = if r.runtime == "wasm" {
-            let bytes = std::fs::read(&bundle_path).map_err(|e| {
-                format!("HTTP 404: bundle file '{}' not found on filesystem: {}", bundle_path.display(), e)
-            })?;
-            use base64::Engine as _;
-            base64::engine::general_purpose::STANDARD.encode(&bytes)
-        } else {
-            std::fs::read_to_string(&bundle_path).map_err(|e| {
-                format!("HTTP 404: bundle file '{}' not found on filesystem: {}", bundle_path.display(), e)
-            })?
-        };
+        // JS bundles are UTF-8 text.
+        let code = std::fs::read_to_string(&bundle_path).map_err(|e| {
+            format!("HTTP 404: bundle file '{}' not found on filesystem: {}", bundle_path.display(), e)
+        })?;
 
         Ok(serde_json::json!({
             "deployment_id": r.id,
