@@ -1,7 +1,4 @@
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -27,168 +24,150 @@ pub struct ServeArgs {
     pub isolate_pool_size: usize,
     #[arg(long)]
     pub check_only: bool,
+    /// Use a release-mode flux-runtime binary if found.
+    #[arg(long)]
+    pub release: bool,
 }
 
 pub async fn execute(args: ServeArgs) -> Result<()> {
-    let auth = resolve_auth(args.url, args.token)?;
-    let auth_mode = if args.skip_verify {
-        "skipped".to_string()
+    let auth = resolve_auth(args.url.clone(), args.token.clone())?;
+    if !args.skip_verify {
+        validate_service_token(&auth.url, &auth.token).await?;
+    }
+
+    let workspace_root = find_workspace_root()
+        .ok_or_else(|| anyhow::anyhow!("could not locate workspace root containing Cargo.toml"))?;
+
+    let binary = find_runtime_binary(&workspace_root, args.release);
+
+    start_runtime(workspace_root, binary, &auth.url, &auth.token, &args).await
+}
+
+#[cfg(unix)]
+async fn start_runtime(
+    workspace_root: PathBuf,
+    binary: Option<PathBuf>,
+    server_url: &str,
+    token: &str,
+    args: &ServeArgs,
+) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    write_runtime_pid(std::process::id())?;
+
+    let prog_args = build_runtime_args(server_url, token, args);
+
+    let err = if let Some(bin) = binary {
+        std::process::Command::new(bin).args(&prog_args).exec()
     } else {
-        validate_service_token(&auth.url, &auth.token).await?
+        let mut cmd = std::process::Command::new("cargo");
+        cmd.current_dir(&workspace_root)
+            .args(["run", "-p", "runtime", "--bin", "flux-runtime"]);
+        if args.release {
+            cmd.arg("--release");
+        }
+        cmd.arg("--").args(&prog_args).exec()
     };
 
-    let entry = PathBuf::from(&args.entry);
-    if !entry.exists() {
-        bail!("entry file not found: {}", entry.display());
+    bail!("failed to exec flux-runtime: {}", err)
+}
+
+#[cfg(not(unix))]
+async fn start_runtime(
+    workspace_root: PathBuf,
+    binary: Option<PathBuf>,
+    server_url: &str,
+    token: &str,
+    args: &ServeArgs,
+) -> Result<()> {
+    let prog_args = build_runtime_args(server_url, token, args);
+
+    let mut cmd = if let Some(bin) = binary {
+        let mut c = tokio::process::Command::new(bin);
+        c.args(&prog_args);
+        c
+    } else {
+        let mut c = tokio::process::Command::new("cargo");
+        c.current_dir(&workspace_root)
+            .args(["run", "-p", "runtime", "--bin", "flux-runtime"]);
+        if args.release {
+            c.arg("--release");
+        }
+        c.arg("--").args(&prog_args);
+        c
+    };
+
+    let mut child = cmd.spawn().context("failed to spawn flux-runtime")?;
+    if let Some(pid) = child.id() {
+        write_runtime_pid(pid)?;
     }
 
-    let code = load_entry_code(&entry)?;
-    let name = entry
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid entry file name: {}", entry.display()))?;
-    let artifact = runtime::build_artifact(name, code);
-
-    println!("runtime artifact prepared");
-    println!("server:   {}", auth.url);
-    println!("auth:     {}", auth_mode);
-    println!("entry:    {}", entry.display());
-    println!("hash:     {}", artifact.sha256);
-    println!("bytes:    {}", artifact.size_bytes);
-    if args.check_only {
-        println!("status:   ready for runtime execution and event streaming");
-        return Ok(());
+    let status = child.wait().await.context("flux-runtime exited unexpectedly")?;
+    if !status.success() {
+        bail!("flux-runtime exited with {}", status);
     }
-
-    let route_name = entry
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid entry file stem: {}", entry.display()))?
-        .to_string();
-
-    let runtime_url = format!("http://{}:{}/{}", args.host, args.port, route_name);
-    println!("runtime:  {}", runtime_url);
-    println!("status:   serving");
-
-    runtime::run_http_runtime(
-        runtime::HttpRuntimeConfig {
-            host: args.host,
-            port: args.port,
-            route_name,
-            isolate_pool_size: args.isolate_pool_size,
-            server_url: auth.url,
-            service_token: auth.token,
-        },
-        artifact,
-    )
-    .await?;
 
     Ok(())
 }
 
-fn load_entry_code(entry: &Path) -> Result<String> {
-    match extension(entry).as_deref() {
-        Some("js") | Some("mjs") | Some("cjs") => fs::read_to_string(entry)
-            .with_context(|| format!("failed to read {}", entry.display())),
-        Some("ts") | Some("tsx") => transpile_typescript(entry),
-        _ => bail!("unsupported entry type: {}", entry.display()),
-    }
-}
-
-fn extension(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase())
-}
-
-fn transpile_typescript(entry: &Path) -> Result<String> {
-    let temp_root = std::env::temp_dir().join(format!(
-        "flux-ts-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&temp_root)
-        .with_context(|| format!("failed to create {}", temp_root.display()))?;
-
-    let attempts: [(&str, &[&str]); 3] = [
-        (
-            "npx",
-            &[
-                "--yes",
-                "tsc",
-                "--pretty",
-                "false",
-                "--target",
-                "es2022",
-                "--module",
-                "es2022",
-                "--outDir",
-            ],
-        ),
-        (
-            "bunx",
-            &[
-                "tsc",
-                "--pretty",
-                "false",
-                "--target",
-                "es2022",
-                "--module",
-                "es2022",
-                "--outDir",
-            ],
-        ),
-        (
-            "tsc",
-            &[
-                "--pretty",
-                "false",
-                "--target",
-                "es2022",
-                "--module",
-                "es2022",
-                "--outDir",
-            ],
-        ),
+fn build_runtime_args(server_url: &str, token: &str, args: &ServeArgs) -> Vec<String> {
+    let mut v = vec![
+        "--entry".to_string(),
+        args.entry.clone(),
+        "--server-url".to_string(),
+        server_url.to_string(),
+        "--token".to_string(),
+        token.to_string(),
+        "--host".to_string(),
+        args.host.clone(),
+        "--port".to_string(),
+        args.port.to_string(),
+        "--isolate-pool-size".to_string(),
+        args.isolate_pool_size.to_string(),
     ];
+    if args.check_only {
+        v.push("--check-only".to_string());
+    }
+    v
+}
 
-    let mut last_error = String::new();
-    for (bin, prefix_args) in attempts {
-        let mut command = Command::new(bin);
-        command.args(prefix_args);
-        command.arg(&temp_root);
-        command.arg(entry);
-
-        match command.output() {
-            Ok(output) if output.status.success() => {
-                let js_path = temp_root.join(
-                    entry.file_stem()
-                        .and_then(|value| value.to_str())
-                        .ok_or_else(|| anyhow::anyhow!("invalid TypeScript file name: {}", entry.display()))?
-                        .to_string() + ".js",
-                );
-
-                let code = fs::read_to_string(&js_path)
-                    .with_context(|| format!("failed to read transpiled output {}", js_path.display()))?;
-                let _ = std::fs::remove_dir_all(&temp_root);
-                return Ok(code);
-            }
-            Ok(output) => {
-                last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            }
-            Err(err) => {
-                last_error = err.to_string();
+fn find_workspace_root() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            let contents = std::fs::read_to_string(&cargo_toml).ok()?;
+            if contents.contains("[workspace]") {
+                return Some(dir);
             }
         }
+        if !dir.pop() {
+            return None;
+        }
     }
+}
 
-    let _ = std::fs::remove_dir_all(&temp_root);
-    bail!(
-        "failed to transpile TypeScript {}; tried npx, bunx, and tsc: {}",
-        entry.display(),
-        last_error
-    )
+fn find_runtime_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
+    let name = if cfg!(windows) { "flux-runtime.exe" } else { "flux-runtime" };
+    let primary = if release { "release" } else { "debug" };
+    let secondary = if release { "debug" } else { "release" };
+
+    [primary, secondary]
+        .into_iter()
+        .map(|profile| workspace_root.join("target").join(profile).join(name))
+        .find(|path| path.exists())
+}
+
+fn flux_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".flux")
+}
+
+fn write_runtime_pid(pid: u32) -> Result<()> {
+    let dir = flux_dir();
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::write(dir.join("runtime.pid"), pid.to_string())
+        .context("failed to write ~/.flux/runtime.pid")
 }

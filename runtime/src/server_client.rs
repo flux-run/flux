@@ -5,9 +5,7 @@ use tonic::metadata::MetadataValue;
 use crate::deno_runtime::FetchCheckpoint;
 use crate::isolate_pool::ExecutionResult;
 
-pub mod pb {
-    tonic::include_proto!("flux.internal.v1");
-}
+pub use shared::pb;
 
 pub struct ExecutionEnvelope {
     pub method: String,

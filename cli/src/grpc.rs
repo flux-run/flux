@@ -3,9 +3,7 @@ use tonic::Request;
 use tonic::metadata::MetadataValue;
 use tonic::Streaming;
 
-pub mod pb {
-    tonic::include_proto!("flux.internal.v1");
-}
+pub use shared::pb;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {

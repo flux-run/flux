@@ -117,7 +117,6 @@ async fn start_server_binary(
     Ok(())
 }
 
-#[cfg(unix)]
 async fn start_server_cargo(
     workspace_root: &Path,
     release: bool,
@@ -131,7 +130,7 @@ async fn start_server_cargo(
 
     let mut command = std::process::Command::new("cargo");
     command.current_dir(workspace_root);
-    command.arg("run").arg("-p").arg("server");
+    command.args(["run", "-p", "server", "--bin", "flux-server"]);
     if release {
         command.arg("--release");
     }
@@ -141,7 +140,7 @@ async fn start_server_cargo(
     command.env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()));
 
     let err = command.exec();
-    Err(anyhow::anyhow!("failed to exec `cargo run -p server`: {}", err))
+    Err(anyhow::anyhow!("failed to exec `cargo run -p server --bin flux-server`: {}", err))
 }
 
 #[cfg(not(unix))]
@@ -154,7 +153,7 @@ async fn start_server_cargo(
 ) -> Result<()> {
     let mut command = tokio::process::Command::new("cargo");
     command.current_dir(workspace_root);
-    command.arg("run").arg("-p").arg("server");
+    command.args(["run", "-p", "server", "--bin", "flux-server"]);
     if release {
         command.arg("--release");
     }
@@ -163,7 +162,7 @@ async fn start_server_cargo(
     command.env("INTERNAL_SERVICE_TOKEN", service_token);
     command.env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()));
 
-    let status = command.status().await.context("failed to start `cargo run -p server`")?;
+    let status = command.status().await.context("failed to start `cargo run -p server --bin flux-server`")?;
     if !status.success() {
         bail!("server exited with {}", status);
     }
@@ -189,7 +188,7 @@ fn find_workspace_root() -> Option<PathBuf> {
 }
 
 fn find_server_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "server.exe" } else { "server" };
+    let name = if cfg!(windows) { "flux-server.exe" } else { "flux-server" };
     let primary = if release { "release" } else { "debug" };
     let secondary = if release { "debug" } else { "release" };
 

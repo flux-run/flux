@@ -5,7 +5,7 @@ edition       = "2024"
 description   = "Flux server — receives gRPC calls and writes to PostgreSQL."
 
 [[bin]]
-name = "server"
+name = "flux-server"
 path = "src/main.rs"
 
 [dependencies]
@@ -23,7 +23,4 @@ hex           = "0.4"
 subtle        = "2"
 uuid          = { version = "1", features = ["v4"] }
 reqwest       = { version = "0.12", features = ["json", "rustls-tls"] }
-
-[build-dependencies]
-tonic-build          = "0.12"
-protoc-bin-vendored  = "3"
+shared        = { path = "../shared" }

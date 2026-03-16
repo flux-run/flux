@@ -10,9 +10,7 @@ use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-pub mod pb {
-    tonic::include_proto!("flux.internal.v1");
-}
+pub use shared::pb;
 
 #[derive(Clone)]
 pub struct InternalAuthGrpc {

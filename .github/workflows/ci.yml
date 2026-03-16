@@ -1,6 +1,6 @@
 # .github/workflows/ci.yml
-# Builds `cli` (flux) and `server` binaries on every push, pull request, and
-# version tag. Covers all 6 platform/architecture combinations:
+# Builds `flux`, `flux-server`, and `flux-runtime` binaries on every push,
+# pull request, and version tag.  Covers all 6 platform/architecture combinations:
 #   macOS   arm64  (native Apple Silicon runner)
 #   macOS   amd64  (cross-compiled on Apple Silicon runner)
 #   Linux   amd64  (native ubuntu runner)
@@ -17,7 +17,7 @@ on:
   push:
     branches: ["**"]
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]*"
+      - "v*.*.*"
   pull_request:
 
 permissions:
@@ -83,8 +83,8 @@ jobs:
             arch:     arm64
             cross:    false
             ext:      ".exe"
-            # server skipped: rusty_v8 (deno_core/runtime) has no prebuilt
-            # aarch64-pc-windows-msvc artifact; cli has no v8 dependency.
+            # server and runtime skipped: rusty_v8 (deno_core/runtime) has no prebuilt
+            # aarch64-pc-windows-msvc artifact; flux (cli) has no v8 dependency.
             cli_only: true
 
     steps:
@@ -111,7 +111,7 @@ jobs:
             cargo build --release --target ${{ matrix.target }} -p cli
           fi
 
-      - name: Build server
+      - name: Build flux-server
         if: ${{ matrix.cli_only != true }}
         shell: bash
         run: |
@@ -119,6 +119,16 @@ jobs:
             cross build --release --target ${{ matrix.target }} -p server
           else
             cargo build --release --target ${{ matrix.target }} -p server
+          fi
+
+      - name: Build flux-runtime
+        if: ${{ matrix.cli_only != true }}
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p runtime --bin flux-runtime
+          else
+            cargo build --release --target ${{ matrix.target }} -p runtime --bin flux-runtime
           fi
 
       - name: Stage artifacts
@@ -130,9 +140,10 @@ jobs:
           TARGET="${{ matrix.target }}"
 
           mkdir -p dist
-          cp "target/${TARGET}/release/flux${EXT}"   "dist/flux-${OS}-${ARCH}${EXT}"
+          cp "target/${TARGET}/release/flux${EXT}"          "dist/flux-${OS}-${ARCH}${EXT}"
           if [ "${{ matrix.cli_only }}" != "true" ]; then
-            cp "target/${TARGET}/release/server${EXT}" "dist/server-${OS}-${ARCH}${EXT}"
+            cp "target/${TARGET}/release/flux-server${EXT}"  "dist/flux-server-${OS}-${ARCH}${EXT}"
+            cp "target/${TARGET}/release/flux-runtime${EXT}" "dist/flux-runtime-${OS}-${ARCH}${EXT}"
           fi
 
       - uses: actions/upload-artifact@v4
@@ -144,7 +155,7 @@ jobs:
   # ─── Create GitHub Release on v*.*.* tags pushed from main ───────────────
   release:
     name: Create Release
-    if: startsWith(github.ref, 'refs/tags/v') && github.event.base_ref == 'refs/heads/main'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-22.04
     steps:
@@ -190,8 +201,9 @@ jobs:
             curl -fsSL https://fluxbase.co/install | bash
             ```
 
-            Or download a binary directly for your platform:
+            Or download binaries directly for your platform:
 
+            ### `flux` (CLI)
             | Platform | Architecture | Download |
             |---|---|---|
             | macOS | arm64 | [flux-macos-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-macos-arm64) |
@@ -200,6 +212,24 @@ jobs:
             | Linux | amd64 | [flux-linux-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-linux-amd64) |
             | Windows | arm64 | [flux-windows-arm64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-windows-arm64.exe) |
             | Windows | amd64 | [flux-windows-amd64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-windows-amd64.exe) |
+
+            ### `flux-server`
+            | Platform | Architecture | Download |
+            |---|---|---|
+            | macOS | arm64 | [flux-server-macos-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-server-macos-arm64) |
+            | macOS | amd64 | [flux-server-macos-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-server-macos-amd64) |
+            | Linux | arm64 | [flux-server-linux-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-server-linux-arm64) |
+            | Linux | amd64 | [flux-server-linux-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-server-linux-amd64) |
+            | Windows | amd64 | [flux-server-windows-amd64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-server-windows-amd64.exe) |
+
+            ### `flux-runtime`
+            | Platform | Architecture | Download |
+            |---|---|---|
+            | macOS | arm64 | [flux-runtime-macos-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-runtime-macos-arm64) |
+            | macOS | amd64 | [flux-runtime-macos-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-runtime-macos-amd64) |
+            | Linux | arm64 | [flux-runtime-linux-arm64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-runtime-linux-arm64) |
+            | Linux | amd64 | [flux-runtime-linux-amd64](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-runtime-linux-amd64) |
+            | Windows | amd64 | [flux-runtime-windows-amd64.exe](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/flux-runtime-windows-amd64.exe) |
 
             ${{ steps.notes.outputs.notes }}
           files: release-assets/*
