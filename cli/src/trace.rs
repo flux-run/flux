@@ -12,6 +12,8 @@ pub struct TraceArgs {
     pub url: Option<String>,
     #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
     pub token: Option<String>,
+    #[arg(long)]
+    pub verbose: bool,
 }
 
 pub async fn execute(args: TraceArgs) -> Result<()> {
@@ -31,12 +33,21 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
         println!("  error  {}", trace.error);
     }
 
+    println!();
+    println!("  request");
+    print_json_block(&trace.request_json, args.verbose);
+
+    println!();
+    println!("  response");
+    print_json_block(&trace.response_json, args.verbose);
+
     if trace.checkpoints.is_empty() {
         println!("\n  no checkpoints recorded\n");
         return Ok(());
     }
 
     println!();
+    println!("  checkpoints");
     for cp in trace.checkpoints {
         let req: serde_json::Value = serde_json::from_slice(&cp.request).unwrap_or_default();
         let res: serde_json::Value = serde_json::from_slice(&cp.response).unwrap_or_default();
@@ -58,8 +69,31 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
             cp.duration_ms,
             status
         );
+
+        if args.verbose {
+            let request_json = serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
+            let response_json = serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
+
+            println!("      request");
+            print_json_block(&request_json, true);
+            println!("      response");
+            print_json_block(&response_json, true);
+        }
     }
 
     println!();
     Ok(())
+}
+
+fn print_json_block(raw: &str, expanded: bool) {
+    if !expanded {
+        println!("    (hidden, use --verbose)");
+        return;
+    }
+
+    let value = serde_json::from_str::<serde_json::Value>(raw).unwrap_or(serde_json::Value::String(raw.to_string()));
+    let formatted = serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw.to_string());
+    for line in formatted.lines() {
+        println!("    {}", line);
+    }
 }

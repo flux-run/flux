@@ -20,14 +20,17 @@ pub struct ResolvedAuth {
 impl CliConfig {
     pub fn load() -> Result<Self> {
         let path = config_path();
-        if !path.exists() {
+        let legacy = legacy_config_path();
+        if !path.exists() && !legacy.exists() {
             return Ok(Self::default());
         }
 
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
+        let source_path = if path.exists() { path } else { legacy };
+
+        let raw = std::fs::read_to_string(&source_path)
+            .with_context(|| format!("failed to read {}", source_path.display()))?;
         toml::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", path.display()))
+            .with_context(|| format!("failed to parse {}", source_path.display()))
     }
 
     pub fn save(&self) -> Result<()> {
@@ -49,11 +52,11 @@ pub fn resolve_auth(url: Option<String>, token: Option<String>) -> Result<Resolv
     let url = url
         .or(config.url)
         .or_else(load_server_url_from_port_file)
-        .ok_or_else(|| anyhow::anyhow!("missing server URL: run `flux config set url <host:port>` first"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing server URL\n\nrun:\n  flux init"))?;
 
     let token = token
         .or(config.token)
-        .ok_or_else(|| anyhow::anyhow!("missing service token: run `flux auth` first or pass --token"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing service token\n\nrun:\n  flux init"))?;
 
     Ok(ResolvedAuth {
         url: normalize_grpc_url(&url),
@@ -72,6 +75,13 @@ fn load_server_url_from_port_file() -> Option<String> {
 }
 
 fn config_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".flux")
+        .join("config.toml")
+}
+
+fn legacy_config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".flux")

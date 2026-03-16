@@ -7,9 +7,14 @@ pub use shared::pb;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
+    pub execution_id: String,
     pub request_id: String,
+    pub method: String,
+    pub path: String,
     pub code_version: String,
     pub status: String,
+    pub duration_ms: i32,
+    pub error: String,
     pub timestamp: String,
 }
 
@@ -30,7 +35,27 @@ pub struct TraceView {
     pub status: String,
     pub duration_ms: i32,
     pub error: String,
+    pub request_json: String,
+    pub response_json: String,
     pub checkpoints: Vec<TraceCheckpoint>,
+}
+
+fn friendly_connect_error(endpoint: &str, err: tonic::transport::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "server not running\n\nfailed to connect to {} ({})\n\nstart it with:\n  flux server start --database-url postgres://...",
+        endpoint,
+        err,
+    )
+}
+
+fn friendly_status_error(action: &str, err: tonic::Status) -> anyhow::Error {
+    if err.code() == tonic::Code::Unauthenticated {
+        anyhow::anyhow!(
+            "authentication failed\n\ncheck your token with:\n  flux config get token\n\nreset with:\n  flux auth --url <host:port>"
+        )
+    } else {
+        anyhow::anyhow!("{} failed: {}", action, err.message())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +99,7 @@ pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
         .await
-        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+        .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ValidateTokenRequest {});
     request.metadata_mut().insert(
@@ -86,7 +111,7 @@ pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     let response = client
         .validate_token(request)
         .await
-        .context("service token validation failed")?
+        .map_err(|e| friendly_status_error("service token validation", e))?
         .into_inner();
 
     if !response.ok {
@@ -100,7 +125,7 @@ pub async fn list_logs(url: &str, token: &str, limit: u32) -> Result<Vec<LogEntr
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
         .await
-        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+        .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ListLogsRequest { limit });
     request.metadata_mut().insert(
@@ -112,16 +137,21 @@ pub async fn list_logs(url: &str, token: &str, limit: u32) -> Result<Vec<LogEntr
     let response = client
         .list_logs(request)
         .await
-        .context("list logs request failed")?
+        .map_err(|e| friendly_status_error("logs request", e))?
         .into_inner();
 
     Ok(response
         .logs
         .into_iter()
         .map(|log| LogEntry {
+            execution_id: log.execution_id,
             request_id: log.request_id,
+            method: log.method,
+            path: log.path,
             code_version: log.code_version,
             status: log.status,
+            duration_ms: log.duration_ms,
+            error: log.error,
             timestamp: log.timestamp,
         })
         .collect())
@@ -131,7 +161,7 @@ pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<Tra
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
         .await
-        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+        .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::GetTraceRequest {
         execution_id: execution_id.to_string(),
@@ -145,7 +175,7 @@ pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<Tra
     let response = client
         .get_trace(request)
         .await
-        .context("get trace request failed")?
+        .map_err(|e| friendly_status_error("trace request", e))?
         .into_inner();
 
     Ok(TraceView {
@@ -155,6 +185,8 @@ pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<Tra
         status: response.status,
         duration_ms: response.duration_ms,
         error: response.error,
+        request_json: response.request_json,
+        response_json: response.response_json,
         checkpoints: response
             .checkpoints
             .into_iter()
@@ -177,7 +209,7 @@ pub async fn tail(
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
         .await
-        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+        .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::TailRequest {
         project_id: project_id.unwrap_or_default(),
@@ -191,7 +223,7 @@ pub async fn tail(
     let response = client
         .tail(request)
         .await
-        .context("tail request failed")?
+        .map_err(|e| friendly_status_error("tail request", e))?
         .into_inner();
 
     Ok(response)
@@ -201,7 +233,7 @@ pub async fn why(url: &str, token: &str, execution_id: &str) -> Result<WhyView> 
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
         .await
-        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+        .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::WhyRequest {
         execution_id: execution_id.to_string(),
@@ -215,7 +247,7 @@ pub async fn why(url: &str, token: &str, execution_id: &str) -> Result<WhyView> 
     let response = client
         .why(request)
         .await
-        .context("why request failed")?
+        .map_err(|e| friendly_status_error("why request", e))?
         .into_inner();
 
     Ok(WhyView {
@@ -235,7 +267,7 @@ pub async fn replay(
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
         .await
-        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+        .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ReplayRequest {
         execution_id: execution_id.to_string(),
@@ -251,7 +283,7 @@ pub async fn replay(
     let response = client
         .replay(request)
         .await
-        .context("replay request failed")?
+        .map_err(|e| friendly_status_error("replay request", e))?
         .into_inner();
 
     Ok(ReplayView {
@@ -283,7 +315,7 @@ pub async fn resume(
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
         .await
-        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+        .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ResumeRequest {
         execution_id: execution_id.to_string(),
@@ -298,7 +330,7 @@ pub async fn resume(
     let response = client
         .resume(request)
         .await
-        .context("resume request failed")?
+        .map_err(|e| friendly_status_error("resume request", e))?
         .into_inner();
 
     Ok(ResumeView {

@@ -330,11 +330,16 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let _auth_mode = self.authenticate(request.metadata()).await?;
         let limit = request.into_inner().limit.max(1).min(500) as i64;
 
-        let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, String, String, String, String, i32, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
             "SELECT
+                id::text,
                 request_id::text,
-                code_sha,
+                method,
+                path,
                 status,
+                duration_ms,
+                code_sha,
+                error,
                 to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')
              FROM flux.executions
              ORDER BY started_at DESC
@@ -347,10 +352,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let logs = rows
             .into_iter()
-            .map(|(request_id, code_version, status, timestamp)| pb::LogEntry {
+            .map(|(execution_id, request_id, method, path, status, duration_ms, code_version, error, timestamp)| pb::LogEntry {
+                execution_id,
                 request_id,
-                code_version,
+                method,
+                path,
+                code_version: code_version.unwrap_or_default(),
                 status,
+                duration_ms,
+                error: error.unwrap_or_default(),
                 timestamp: timestamp.unwrap_or_default(),
             })
             .collect();
@@ -465,8 +475,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let execution_id = uuid::Uuid::parse_str(&execution_id_raw)
             .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
 
-        let execution: Option<(String, String, String, i32, Option<String>)> = sqlx::query_as(
-            "SELECT method, path, status, duration_ms, error
+        let execution: Option<(String, String, String, i32, Option<String>, serde_json::Value, serde_json::Value)> = sqlx::query_as(
+            "SELECT method, path, status, duration_ms, error, request, response
              FROM flux.executions
              WHERE id = $1",
         )
@@ -475,7 +485,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .await
         .map_err(|e| Status::internal(format!("failed to fetch execution: {e}")))?;
 
-        let (method, path, status, duration_ms, error) = execution
+        let (method, path, status, duration_ms, error, request_json, response_json) = execution
             .ok_or_else(|| Status::not_found("execution not found"))?;
 
         let checkpoint_rows: Vec<(i32, String, serde_json::Value, serde_json::Value, i32)> =
@@ -509,6 +519,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             duration_ms,
             error: error.unwrap_or_default(),
             checkpoints,
+            request_json: serde_json::to_string(&request_json).unwrap_or_else(|_| "null".to_string()),
+            response_json: serde_json::to_string(&response_json).unwrap_or_else(|_| "null".to_string()),
         }))
     }
 

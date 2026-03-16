@@ -4,6 +4,7 @@ mod auth;
 mod config;
 mod config_cmd;
 mod grpc;
+mod init;
 mod logs;
 mod replay;
 mod resume;
@@ -24,6 +25,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// First-time setup (server URL + token) saved to config.
+    Init,
     /// Save and verify runtime auth against a Flux server.
     Auth(auth::AuthArgs),
     /// Manage local Flux CLI config values.
@@ -57,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Init => init::execute().await?,
         Commands::Auth(args) => auth::execute(args).await?,
         Commands::Config { command } => config_cmd::execute(command)?,
         Commands::Logs(args) => logs::execute(args).await?,
