@@ -409,6 +409,31 @@ fn local_file_dependency<'a>(manifest: &'a PackageManifest, package_name: &str) 
         .filter(|value| value.starts_with("file:"))
 }
 
+fn resolve_node_modules_bare_import(
+    package_name: &str,
+    subpath: Option<&str>,
+    base_path: &Path,
+) -> Result<Option<String>> {
+    for ancestor in base_path.ancestors().skip(1) {
+        let package_dir = ancestor.join("node_modules").join(package_name);
+        if !package_dir.exists() {
+            continue;
+        }
+
+        let target = if let Some(subpath) = subpath {
+            resolve_existing_module_path(&package_dir.join(subpath))?
+        } else if let Some(package_entry) = resolve_package_entry(&package_dir)? {
+            package_entry
+        } else {
+            resolve_existing_module_path(&package_dir)?
+        };
+
+        return Ok(Some(file_url_string(&target)?));
+    }
+
+    Ok(None)
+}
+
 fn resolve_local_bare_import(specifier: &str, base_specifier: &str) -> Result<Option<String>> {
     let (package_name, subpath) = match bare_package_parts(specifier) {
         Some(parts) => parts,
@@ -448,7 +473,7 @@ fn resolve_local_bare_import(specifier: &str, base_specifier: &str) -> Result<Op
         return Ok(Some(file_url_string(&target)?));
     }
 
-    Ok(None)
+    resolve_node_modules_bare_import(&package_name, subpath.as_deref(), &base_path)
 }
 
 struct GraphBuilder {
@@ -1249,6 +1274,41 @@ mod tests {
             .diagnostics
             .iter()
             .any(|diag| diag.code == "parse_failed" || diag.code == "node_import"));
+    }
+
+    #[tokio::test]
+    async fn analysis_resolves_bare_imports_from_local_node_modules() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let node_modules = temp.path().join("node_modules").join("local-pkg");
+        fs::create_dir_all(&node_modules).expect("create node_modules package");
+        fs::write(
+            node_modules.join("package.json"),
+            r#"{
+  "name": "local-pkg",
+  "module": "./index.js"
+}
+"#,
+        )
+        .expect("write local package manifest");
+        fs::write(node_modules.join("index.js"), "export const value = 42;\n")
+            .expect("write local package entry");
+        fs::write(
+            temp.path().join("index.ts"),
+            "import { value } from 'local-pkg';\nexport default value;\n",
+        )
+        .expect("write entry");
+
+        let analysis = analyze_project(&temp.path().join("index.ts"))
+            .await
+            .expect("analysis");
+
+        assert!(!has_errors(&analysis.diagnostics));
+        assert!(analysis
+            .artifact
+            .modules
+            .iter()
+            .any(|module| module.specifier.contains("/node_modules/local-pkg/index.js")));
+        assert!(analysis.npm_reports.is_empty());
     }
 
     #[test]

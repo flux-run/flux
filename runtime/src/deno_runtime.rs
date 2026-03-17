@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Once;
@@ -34,6 +34,13 @@ use uuid::Uuid;
 use crate::isolate_pool::ExecutionContext;
 
 const FLUX_PG_SPECIFIER: &str = "flux:pg";
+const MODULE_FILE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "json"];
+
+#[derive(Debug, Default, Deserialize)]
+struct RuntimePackageManifest {
+    main: Option<String>,
+    module: Option<String>,
+}
 
 /// Per-isolate map of in-flight execution states, keyed by execution_id.
 /// Stored once in `OpState`; each concurrent execution owns its own slot.
@@ -2729,6 +2736,150 @@ fn artifact_media_type(media_type: ArtifactMediaType) -> MediaType {
     }
 }
 
+fn canonicalize_existing_path(path: &Path) -> Result<PathBuf> {
+    if !path.exists() {
+        anyhow::bail!("entry file not found: {}", path.display());
+    }
+    path.canonicalize()
+        .with_context(|| format!("failed to resolve {}", path.display()))
+}
+
+fn resolve_existing_module_path(path: &Path) -> Result<PathBuf> {
+    if path.is_file() {
+        return canonicalize_existing_path(path);
+    }
+
+    if path.extension().is_none() {
+        for extension in MODULE_FILE_EXTENSIONS {
+            let candidate = path.with_extension(extension);
+            if candidate.is_file() {
+                return canonicalize_existing_path(&candidate);
+            }
+        }
+    }
+
+    if path.is_dir() {
+        if let Some(package_entry) = resolve_runtime_package_entry(path)? {
+            return Ok(package_entry);
+        }
+    }
+
+    if path.extension().is_none() {
+        for extension in MODULE_FILE_EXTENSIONS {
+            let candidate = path.join(format!("index.{extension}"));
+            if candidate.is_file() {
+                return canonicalize_existing_path(&candidate);
+            }
+        }
+    }
+
+    anyhow::bail!("entry file not found: {}", path.display())
+}
+
+fn read_runtime_package_manifest(path: &Path) -> Result<RuntimePackageManifest> {
+    let source = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&source)
+        .with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn resolve_runtime_package_entry(package_dir: &Path) -> Result<Option<PathBuf>> {
+    let manifest_path = package_dir.join("package.json");
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+
+    let manifest = read_runtime_package_manifest(&manifest_path)?;
+    for candidate in [manifest.module.as_deref(), manifest.main.as_deref()].into_iter().flatten() {
+        let resolved = resolve_existing_module_path(&package_dir.join(candidate))?;
+        return Ok(Some(resolved));
+    }
+
+    for extension in MODULE_FILE_EXTENSIONS {
+        let candidate = package_dir.join(format!("index.{extension}"));
+        if candidate.is_file() {
+            return Ok(Some(canonicalize_existing_path(&candidate)?));
+        }
+    }
+
+    Ok(None)
+}
+
+fn runtime_bare_package_parts(specifier: &str) -> Option<(String, Option<String>)> {
+    if specifier.is_empty()
+        || specifier.starts_with("./")
+        || specifier.starts_with("../")
+        || specifier.starts_with('/')
+        || specifier.starts_with("file://")
+        || specifier.starts_with("https://")
+        || specifier.starts_with("http://")
+        || specifier.starts_with("npm:")
+        || specifier.starts_with("node:")
+    {
+        return None;
+    }
+
+    if let Some(stripped) = specifier.strip_prefix('@') {
+        let mut parts = stripped.split('/');
+        let scope = parts.next()?;
+        let name = parts.next()?;
+        let package_name = format!("@{scope}/{name}");
+        let remainder = parts.collect::<Vec<_>>().join("/");
+        return if remainder.is_empty() {
+            Some((package_name, None))
+        } else {
+            Some((package_name, Some(remainder)))
+        };
+    }
+
+    let mut parts = specifier.split('/');
+    let package_name = parts.next()?.to_string();
+    let remainder = parts.collect::<Vec<_>>().join("/");
+    if remainder.is_empty() {
+        Some((package_name, None))
+    } else {
+        Some((package_name, Some(remainder)))
+    }
+}
+
+fn resolve_local_node_module_specifier(specifier: &str, referrer: &str) -> Result<Option<ModuleSpecifier>> {
+    let (package_name, subpath) = match runtime_bare_package_parts(specifier) {
+        Some(parts) => parts,
+        None => return Ok(None),
+    };
+
+    let referrer_url = Url::parse(referrer)
+        .with_context(|| format!("invalid referrer: {referrer}"))?;
+    if referrer_url.scheme() != "file" {
+        return Ok(None);
+    }
+
+    let referrer_path = referrer_url
+        .to_file_path()
+        .map_err(|_| anyhow::anyhow!("invalid file referrer: {referrer}"))?;
+
+    for ancestor in referrer_path.ancestors().skip(1) {
+        let package_dir = ancestor.join("node_modules").join(&package_name);
+        if !package_dir.exists() {
+            continue;
+        }
+
+        let target = if let Some(subpath) = subpath.as_deref() {
+            resolve_existing_module_path(&package_dir.join(subpath))?
+        } else if let Some(package_entry) = resolve_runtime_package_entry(&package_dir)? {
+            package_entry
+        } else {
+            resolve_existing_module_path(&package_dir)?
+        };
+
+        return Url::from_file_path(&target)
+            .map_err(|_| anyhow::anyhow!("failed to convert {} to file URL", target.display()))
+            .map(Some);
+    }
+
+    Ok(None)
+}
+
 impl ModuleLoader for TypescriptModuleLoader {
     fn resolve(
         &self,
@@ -2740,6 +2891,12 @@ impl ModuleLoader for TypescriptModuleLoader {
             return Url::parse(FLUX_PG_SPECIFIER)
                 .map_err(JsErrorBox::from_err)
                 .map_err(Into::into);
+        }
+
+        if let Some(local_specifier) = resolve_local_node_module_specifier(specifier, referrer)
+            .map_err(|err| JsErrorBox::generic(err.to_string()))?
+        {
+            return Ok(local_specifier);
         }
 
         resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)
