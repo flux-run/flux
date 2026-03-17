@@ -3724,7 +3724,11 @@ impl JsIsolate {
     ///
     /// In both cases, `console.log/warn/error` output is streamed to
     /// stdout/stderr by `op_console` AND collected in the returned log vec.
-    pub async fn run_script(&mut self, input: serde_json::Value) -> Result<(Option<serde_json::Value>, Vec<LogEntry>)> {
+    pub async fn run_script(
+        &mut self,
+        input: serde_json::Value,
+        context: ExecutionContext,
+    ) -> Result<JsExecutionOutput> {
         // Check whether the module registered a handler during initialisation.
         let has_handler = {
             let check = self.runtime
@@ -3739,25 +3743,20 @@ impl JsIsolate {
         };
 
         if has_handler {
-            let context = ExecutionContext::new("__run__");
-            let output = self
+            return self
                 .execute_handler_with_recorded(input, context, Vec::new(), false)
-                .await?;
-            if let Some(ref err) = output.error {
-                eprintln!("error: {err}");
-            }
-            return Ok((Some(output.output), output.logs));
+                .await;
         }
 
         // Top-level mode: register a transient state slot so ops don't panic,
         // then drain the event loop.
-        let execution_id = "__script__".to_string();
+        let execution_id = context.execution_id.clone();
         {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
             let map = state.borrow_mut::<RuntimeStateMap>();
             map.insert(execution_id.clone(), RuntimeExecutionState {
-                context: ExecutionContext::new("__script__"),
+                context,
                 call_index: 0,
                 checkpoints: Vec::new(),
                 recorded: HashMap::new(),
@@ -3791,11 +3790,16 @@ impl JsIsolate {
         let state = self.runtime.op_state();
         let mut state = state.borrow_mut();
         let map = state.borrow_mut::<RuntimeStateMap>();
-        let logs = map
-            .remove(&execution_id)
-            .map(|e| e.logs)
-            .unwrap_or_default();
-        Ok((None, logs))
+        let execution = map.remove(&execution_id);
+        Ok(JsExecutionOutput {
+            output: serde_json::Value::Null,
+            checkpoints: execution
+                .as_ref()
+                .map(|e| e.checkpoints.clone())
+                .unwrap_or_default(),
+            error: None,
+            logs: execution.map(|e| e.logs).unwrap_or_default(),
+        })
     }
 }
 

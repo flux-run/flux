@@ -238,6 +238,30 @@ function extractCommandOutput(stdout: string): string {
   return cleaned.slice(start + 1).trim();
 }
 
+function extractExecutionId(stdout: string): string {
+  const match = stripAnsi(stdout).match(/^\s*execution_id:\s*([0-9a-f-]+)\s*$/mi);
+  if (!match) {
+    throw new Error(`could not find execution_id in CLI output\n${stdout}`);
+  }
+
+  return match[1];
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`);
+    return `{${entries.join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
 function ensureDrizzleExampleDependencies(): void {
   const drizzleOrmPackage = resolve(DRIZZLE_DIR, "node_modules", "drizzle-orm", "package.json");
   if (existsSync(drizzleOrmPackage)) {
@@ -706,6 +730,76 @@ const SUITES: Suite[] = [
         assert(ctx, "flux run examples/drizzle/transaction.ts → updated row", () => payload.txResult?.updated?.id === payload.txResult?.inserted?.id && payload.txResult?.updated?.status === "running");
         assert(ctx, "flux run examples/drizzle/transaction.ts → final persisted row", () => Array.isArray(payload.finalRows) && payload.finalRows.length === 1 && payload.finalRows[0]?.status === "running");
       } finally {
+        postgres.stop();
+      }
+    },
+  },
+  {
+    name: "drizzle-replay",
+    async execute(ctx) {
+      ensureDrizzleExampleDependencies();
+
+      const databasePort = allocateDatabasePort();
+      const serverPort = allocateServerPort();
+      const serviceToken = "dev-service-token";
+      const postgres = await startDrizzlePostgres(databasePort);
+      const server = await startServer(serverPort, {
+        databaseUrl: postgres.databaseUrl,
+        serviceToken,
+      });
+
+      try {
+        const stdout = runCheckedCommand(
+          FLUX_CLI_BIN,
+          [
+            "run",
+            "--url",
+            server.url,
+            "--input",
+            JSON.stringify({ input: { connectionString: postgres.databaseUrl } }),
+            resolve(DRIZZLE_DIR, "crud.ts"),
+          ],
+          {
+            cwd: WORKSPACE_ROOT,
+            env: {
+              FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+              FLUX_SERVICE_TOKEN: serviceToken,
+            },
+          },
+        );
+
+        const executionId = extractExecutionId(stdout);
+        const payload = JSON.parse(extractCommandOutput(stdout)) as {
+          inserted?: { id?: number; title?: string; state?: string };
+          selected?: { id?: number; title?: string; state?: string };
+          updated?: { id?: number; title?: string; state?: string };
+        };
+
+        assert(ctx, "flux run examples/drizzle/crud.ts with recording → execution id emitted", () => executionId.length > 0);
+        assert(ctx, "flux run examples/drizzle/crud.ts with recording → output captured", () => payload.updated?.state === "done");
+
+        const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
+          "replay",
+          executionId,
+          "--url",
+          server.url,
+          "--token",
+          serviceToken,
+          "--diff",
+        ]));
+
+        const replayPayload = JSON.parse(extractReplayOutput(replayStdout)) as {
+          inserted?: { id?: number; title?: string; state?: string };
+          selected?: { id?: number; title?: string; state?: string };
+          updated?: { id?: number; title?: string; state?: string };
+        };
+
+        assert(ctx, "flux replay for drizzle CRUD → ok", () => replayStdout.includes("ok"));
+        assert(ctx, "flux replay for drizzle CRUD → same JSON output", () => stableJson(replayPayload) === stableJson(payload));
+        assert(ctx, "flux replay for drizzle CRUD → Postgres recorded", () => replayStdout.includes("POSTGRES") && replayStdout.includes("(recorded)"));
+        assert(ctx, "flux replay for drizzle CRUD → writes suppressed", () => replayStdout.includes("db writes suppressed"));
+      } finally {
+        await server.stop();
         postgres.stop();
       }
     },

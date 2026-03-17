@@ -175,8 +175,11 @@ HTTP suites start a `flux serve` process on a unique port (3100–3199), send re
 | `crud-replay` | `examples/crud_app/main_flux.ts` | HTTP CRUD flow plus `flux replay --diff` verification |
 | `drizzle-crud` | `examples/drizzle/crud.ts` | direct `flux run`, Drizzle insert/select/update against disposable Postgres |
 | `drizzle-transaction` | `examples/drizzle/transaction.ts` | direct `flux run`, Drizzle transaction semantics against disposable Postgres |
+| `drizzle-replay` | `examples/drizzle/crud.ts` | recorded `flux run` plus `flux replay --diff` verification for Drizzle + Postgres |
 
 HTTP handler files live in `runtime/external-tests/flux-handlers/`. They use `Deno.serve(...)` so they are valid `flux serve` entry targets. The Drizzle suites run the checked-in examples from `examples/drizzle/` after installing their local `node_modules` with `npm ci` when needed.
+
+When a command suite is executed with a Flux server URL and token, `flux run` prints an `execution_id:` line before the final JSON payload. Integration replay suites capture that ID and assert the stored execution can be replayed deterministically.
 
 ### Binary management
 

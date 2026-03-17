@@ -1,55 +1,91 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-17T19:56:55.463Z",
+  "timestamp": "2026-03-17T20:02:43.920Z",
   "engine": "node v22.20.0",
-  "passed": 7,
+  "passed": 13,
   "failed": 0,
   "skipped": 0,
-  "total": 7,
-  "elapsedMs": 0,
+  "total": 13,
+  "elapsedMs": 5,
   "passRate": "100.0%",
   "results": [
     {
       "name": "flux run examples/drizzle/crud.ts → inserted row",
       "passed": true,
       "skipped": false,
-      "duration": 0.017708000000084212
+      "duration": 0.019583000000011452
     },
     {
       "name": "flux run examples/drizzle/crud.ts → selected row",
       "passed": true,
       "skipped": false,
-      "duration": 0.0064589999999498104
+      "duration": 0.005959000000075321
     },
     {
       "name": "flux run examples/drizzle/crud.ts → updated row",
       "passed": true,
       "skipped": false,
-      "duration": 0.004124999999930878
+      "duration": 0.004000000000132786
     },
     {
       "name": "flux run examples/drizzle/transaction.ts → inserted row",
       "passed": true,
       "skipped": false,
-      "duration": 0.04133300000012241
+      "duration": 0.039791999999579275
     },
     {
       "name": "flux run examples/drizzle/transaction.ts → selected row",
       "passed": true,
       "skipped": false,
-      "duration": 0.007375000000138243
+      "duration": 0.007749999999759893
     },
     {
       "name": "flux run examples/drizzle/transaction.ts → updated row",
       "passed": true,
       "skipped": false,
-      "duration": 0.00483299999996234
+      "duration": 0.005333000000064203
     },
     {
       "name": "flux run examples/drizzle/transaction.ts → final persisted row",
       "passed": true,
       "skipped": false,
-      "duration": 0.011750000000120053
+      "duration": 0.011541999999735708
+    },
+    {
+      "name": "flux run examples/drizzle/crud.ts with recording → execution id emitted",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.014000000000123691
+    },
+    {
+      "name": "flux run examples/drizzle/crud.ts with recording → output captured",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.005834000000504602
+    },
+    {
+      "name": "flux replay for drizzle CRUD → ok",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.012750000000778527
+    },
+    {
+      "name": "flux replay for drizzle CRUD → same JSON output",
+      "passed": true,
+      "skipped": false,
+      "duration": 4.994458000000122
+    },
+    {
+      "name": "flux replay for drizzle CRUD → Postgres recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.017375000000356522
+    },
+    {
+      "name": "flux replay for drizzle CRUD → writes suppressed",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0039999999999054126
     }
   ]
 }

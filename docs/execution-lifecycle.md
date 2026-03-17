@@ -37,6 +37,7 @@ This is the plain script path.
    - invokes the exported handler with the provided input, or
    - drains top-level async work and exits
 7. If the script uses Flux-owned ops like `fetch`, `Date.now`, `Math.random`, or logging, those stay inside [runtime/src/deno_runtime.rs](runtime/src/deno_runtime.rs).
+8. When `flux run` is given a server URL and service token, [runtime/src/main.rs](runtime/src/main.rs) records the completed script execution through [runtime/src/server_client.rs](runtime/src/server_client.rs) and prints the execution ID for later trace or replay.
 
 ### Debug Start Points
 

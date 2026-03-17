@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use deno_ast::{EmitOptions, MediaType, ParseParams, TranspileModuleOptions, TranspileOptions};
 use clap::Parser;
+use runtime::isolate_pool::{ExecutionContext, ExecutionResult};
 
 #[derive(Parser, Debug)]
 #[command(name = "flux-runtime")]
@@ -156,15 +158,49 @@ async fn main() -> Result<()> {
         tracing::debug!(entry = %effective_entry.display(), "script mode");
         let input: serde_json::Value = serde_json::from_str(&args.script_input)
             .with_context(|| format!("invalid --script-input JSON: {}", args.script_input))?;
+        let context = ExecutionContext::new(artifact.code_version().to_string());
         let mut isolate = runtime::JsIsolate::new_for_run_entry(&effective_entry)
             .await
             .context("failed to create JS isolate")?;
-        let (output, _logs) = isolate.run_script(input).await
+        let started = Instant::now();
+        let execution = isolate.run_script(input.clone(), context.clone()).await
             .context("script execution failed")?;
-        if let Some(value) = output {
-            if !value.is_null() {
-                println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
+
+        if !args.token.is_empty() {
+            let result = ExecutionResult {
+                execution_id: context.execution_id.clone(),
+                request_id: context.request_id.clone(),
+                code_version: context.code_version.clone(),
+                status: if execution.error.is_some() { "error".to_string() } else { "ok".to_string() },
+                body: execution.output.clone(),
+                error: execution.error.clone(),
+                duration_ms: started.elapsed().as_millis() as i32,
+                checkpoints: execution.checkpoints.clone(),
+                logs: execution.logs.clone(),
+            };
+
+            match runtime::server_client::record_execution(
+                &args.server_url,
+                &args.token,
+                runtime::server_client::ExecutionEnvelope {
+                    method: "RUN".to_string(),
+                    path: effective_entry.display().to_string(),
+                    request_json: input.clone(),
+                    result,
+                },
+            )
+            .await {
+                Ok(()) => println!("execution_id: {}", context.execution_id),
+                Err(error) => eprintln!("warning: failed to record script execution: {error}"),
             }
+        }
+
+        if let Some(error) = execution.error.as_ref() {
+            eprintln!("error: {error}");
+        }
+
+        if !execution.output.is_null() {
+            println!("{}", serde_json::to_string_pretty(&execution.output).unwrap_or_default());
         }
         return Ok(());
     }
