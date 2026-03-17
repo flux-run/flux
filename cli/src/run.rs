@@ -1,7 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+
+use crate::runtime_process::{exec_runtime, find_runtime_binary, find_workspace_root};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -56,72 +58,9 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         .or_else(|| read_config_token())
         .unwrap_or_default();
 
-    start_script(workspace_root, binary, &server_url, &token, &args).await
-}
+    let prog_args = build_runtime_args(&server_url, &token, &args);
 
-#[cfg(unix)]
-async fn start_script(
-    workspace_root: PathBuf,
-    binary: Option<PathBuf>,
-    server_url: &str,
-    token: &str,
-    args: &RunArgs,
-) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-
-    let prog_args = build_runtime_args(server_url, token, args);
-
-    let err = if let Some(bin) = binary {
-        std::process::Command::new(bin).args(&prog_args).exec()
-    } else {
-        let mut cmd = std::process::Command::new("cargo");
-        cmd.current_dir(&workspace_root)
-            .args(["run", "-p", "runtime", "--bin", "flux-runtime"]);
-        if args.release {
-            cmd.arg("--release");
-        }
-        cmd.arg("--").args(&prog_args).exec()
-    };
-
-    bail!("failed to exec flux-runtime: {}", err)
-}
-
-#[cfg(not(unix))]
-async fn start_script(
-    workspace_root: PathBuf,
-    binary: Option<PathBuf>,
-    server_url: &str,
-    token: &str,
-    args: &RunArgs,
-) -> Result<()> {
-    let prog_args = build_runtime_args(server_url, token, args);
-
-    let mut cmd = if let Some(bin) = binary {
-        let mut c = tokio::process::Command::new(bin);
-        c.args(&prog_args);
-        c
-    } else {
-        let mut c = tokio::process::Command::new("cargo");
-        c.current_dir(&workspace_root)
-            .args(["run", "-p", "runtime", "--bin", "flux-runtime"]);
-        if args.release {
-            c.arg("--release");
-        }
-        c.arg("--").args(&prog_args);
-        c
-    };
-
-    let status = cmd.spawn()
-        .context("failed to spawn flux-runtime")?
-        .wait()
-        .await
-        .context("flux-runtime exited unexpectedly")?;
-
-    if !status.success() {
-        bail!("flux-runtime exited with {}", status);
-    }
-
-    Ok(())
+    exec_runtime(workspace_root, binary, args.release, &prog_args).await
 }
 
 fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<String> {
@@ -136,33 +75,6 @@ fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<Stri
         "--script-input".to_string(),
         args.input.clone(),
     ]
-}
-
-fn find_workspace_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let cargo_toml = dir.join("Cargo.toml");
-        if cargo_toml.exists() {
-            let contents = std::fs::read_to_string(&cargo_toml).ok()?;
-            if contents.contains("[workspace]") {
-                return Some(dir);
-            }
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-fn find_runtime_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "flux-runtime.exe" } else { "flux-runtime" };
-    let primary = if release { "release" } else { "debug" };
-    let secondary = if release { "debug" } else { "release" };
-
-    [primary, secondary]
-        .into_iter()
-        .map(|profile| workspace_root.join("target").join(profile).join(name))
-        .find(|path| path.exists())
 }
 
 fn flux_config_path() -> PathBuf {

@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Args;
 
 use crate::config::resolve_optional_auth;
 use crate::grpc::validate_service_token;
 use crate::project::{resolve_built_artifact, resolve_entry_path};
+use crate::runtime_process::{exec_runtime, find_runtime_binary, find_workspace_root};
 
 #[derive(Debug, Args)]
 pub struct ServeArgs {
@@ -46,80 +47,12 @@ pub async fn execute(args: ServeArgs) -> Result<()> {
     write_runtime_port(args.port)?;
     write_runtime_entry(&entry.to_string_lossy())?;
 
-    start_runtime(workspace_root, binary, &auth.url, &auth.token, &built_artifact, &args).await
-}
-
-#[cfg(unix)]
-async fn start_runtime(
-    workspace_root: PathBuf,
-    binary: Option<PathBuf>,
-    server_url: &str,
-    token: &str,
-    built_artifact: &Path,
-    args: &ServeArgs,
-) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-
     if !args.check_only {
         write_runtime_pid(std::process::id())?;
     }
 
-    let prog_args = build_runtime_args(server_url, token, built_artifact, args);
-
-    let err = if let Some(bin) = binary {
-        std::process::Command::new(bin).args(&prog_args).exec()
-    } else {
-        let mut cmd = std::process::Command::new("cargo");
-        cmd.current_dir(&workspace_root)
-            .args(["run", "-p", "runtime", "--bin", "flux-runtime"]);
-        if args.release {
-            cmd.arg("--release");
-        }
-        cmd.arg("--").args(&prog_args).exec()
-    };
-
-    bail!("failed to exec flux-runtime: {}", err)
-}
-
-#[cfg(not(unix))]
-async fn start_runtime(
-    workspace_root: PathBuf,
-    binary: Option<PathBuf>,
-    server_url: &str,
-    token: &str,
-    built_artifact: &Path,
-    args: &ServeArgs,
-) -> Result<()> {
-    let prog_args = build_runtime_args(server_url, token, built_artifact, args);
-
-    let mut cmd = if let Some(bin) = binary {
-        let mut c = tokio::process::Command::new(bin);
-        c.args(&prog_args);
-        c
-    } else {
-        let mut c = tokio::process::Command::new("cargo");
-        c.current_dir(&workspace_root)
-            .args(["run", "-p", "runtime", "--bin", "flux-runtime"]);
-        if args.release {
-            c.arg("--release");
-        }
-        c.arg("--").args(&prog_args);
-        c
-    };
-
-    let mut child = cmd.spawn().context("failed to spawn flux-runtime")?;
-    if !args.check_only {
-        if let Some(pid) = child.id() {
-        write_runtime_pid(pid)?;
-        }
-    }
-
-    let status = child.wait().await.context("flux-runtime exited unexpectedly")?;
-    if !status.success() {
-        bail!("flux-runtime exited with {}", status);
-    }
-
-    Ok(())
+    let prog_args = build_runtime_args(&auth.url, &auth.token, &built_artifact, &args);
+    exec_runtime(workspace_root, binary, args.release, &prog_args).await
 }
 
 fn build_runtime_args(server_url: &str, token: &str, built_artifact: &Path, args: &ServeArgs) -> Vec<String> {
@@ -141,33 +74,6 @@ fn build_runtime_args(server_url: &str, token: &str, built_artifact: &Path, args
         v.push("--check-only".to_string());
     }
     v
-}
-
-fn find_workspace_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let cargo_toml = dir.join("Cargo.toml");
-        if cargo_toml.exists() {
-            let contents = std::fs::read_to_string(&cargo_toml).ok()?;
-            if contents.contains("[workspace]") {
-                return Some(dir);
-            }
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-fn find_runtime_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "flux-runtime.exe" } else { "flux-runtime" };
-    let primary = if release { "release" } else { "debug" };
-    let secondary = if release { "debug" } else { "release" };
-
-    [primary, secondary]
-        .into_iter()
-        .map(|profile| workspace_root.join("target").join(profile).join(name))
-        .find(|path| path.exists())
 }
 
 fn flux_dir() -> PathBuf {

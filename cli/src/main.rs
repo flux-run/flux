@@ -15,6 +15,7 @@ mod dev;
 mod replay;
 mod resume;
 mod run;
+mod runtime_process;
 mod serve;
 mod server;
 mod status;
