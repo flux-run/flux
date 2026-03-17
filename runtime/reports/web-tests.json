@@ -1,26 +1,26 @@
 {
   "suite": "Web Platform Tests (url · fetch · encoding)",
-  "timestamp": "2026-03-17T05:58:19.845Z",
+  "timestamp": "2026-03-17T06:08:58.172Z",
   "engine": "node v22.20.0",
-  "passed": 10,
-  "failed": 11,
+  "passed": 14,
+  "failed": 7,
   "skipped": 9,
   "total": 30,
-  "elapsedMs": 3166,
-  "passRate": "47.6%",
+  "elapsedMs": 2792,
+  "passRate": "66.7%",
   "results": [
     {
       "name": "IdnaTestV2-removed.window.js",
       "passed": true,
       "skipped": false,
-      "duration": 2701
+      "duration": 2328
     },
     {
       "name": "IdnaTestV2.window.js",
       "passed": false,
       "skipped": false,
       "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: ToASCII(\"xn--xn--a--gua.pt\") V4; V2 (ignored): Expected TypeError but got Error\n       ToASCII(\"xn--xn---epa\") V4; V2 (ignored): Expected TypeError but got Error\n           at globalThis",
-      "duration": 84
+      "duration": 88
     },
     {
       "name": "historical.any.js",
@@ -68,22 +68,21 @@
       "name": "url-constructor.any.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Parsing: <http://user:pass@foo:21/bar;par?b#c> against <http://example.org/foo/bar>: href\n       Parsing: <http://f:21/ b ? d # e > against <http://example.org/foo/bar>: href\n       Pars",
-      "duration": 47
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Parsing: <:#> against <http://example.org/foo/bar>: hash\n       Parsing: <#> against <http://example.org/foo/bar>: hash\n       Parsing: <?> against <http://example.org/foo/bar>: search\n ",
+      "duration": 44
     },
     {
       "name": "url-origin.any.js",
       "passed": false,
       "skipped": false,
       "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Origin parsing: <blob:blob:https://example.org/> without base: origin\n       Origin parsing: <blob:ftp://host/path> without base: origin\n       Origin parsing: <blob:ws://example.org/> w",
-      "duration": 39
+      "duration": 37
     },
     {
       "name": "url-searchparams.any.js",
-      "passed": false,
+      "passed": true,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: URL.searchParams setter, invalid values: Expected TypeError but got Error\n       URL.searchParams and URL.search setters, update propagation: ?%3Fa=b&c=d !== ??a=b&c=d\n           at glob",
-      "duration": 20
+      "duration": 17
     },
     {
       "name": "url-setters-a-area.window.js",
@@ -96,7 +95,7 @@
       "passed": false,
       "skipped": false,
       "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Setting protocol with leading U+0000 (https:): invalid URL: relative URL without a base\n       Setting protocol with U+0000 before inserted colon (https:): invalid URL: relative URL with",
-      "duration": 30
+      "duration": 26
     },
     {
       "name": "url-setters.any.js",
@@ -108,52 +107,51 @@
       "name": "url-statics-canparse.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 15
+      "duration": 17
     },
     {
       "name": "url-statics-parse.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 15
+      "duration": 16
     },
     {
       "name": "url-tojson.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 15
+      "duration": 17
     },
     {
       "name": "urlencoded-parser.any.js",
       "passed": false,
       "skipped": false,
       "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: URLSearchParams constructed with: %FE%FF: URI malformed\n       URLSearchParams constructed with: %FF%FE: URI malformed\n       URLSearchParams constructed with: %C2: URI malformed\n       ",
-      "duration": 17
+      "duration": 19
     },
     {
       "name": "urlsearchparams-append.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 15
+      "duration": 17
     },
     {
       "name": "urlsearchparams-constructor.any.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: URLSearchParams constructor, DOMException as argument:  !== INDEX_SIZE_ERR=1&DOMSTRING_SIZE_ERR=2&HIERARCHY_REQUEST_ERR=3&WRONG_DOCUMENT_ERR=4&INVALID_CHARACTER_ERR=5&NO_DATA_ALLOWED_ERR",
-      "duration": 19
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: URLSearchParams constructor, FormData.: FormData is not defined\n       Construct with 2 unpaired surrogates (no trailing): [\"\\ud835x\",\"1\"] !== [\"�x\",\"3\"]\n       Construct with 3 unpaired",
+      "duration": 17
     },
     {
       "name": "urlsearchparams-delete.any.js",
       "passed": false,
       "skipped": false,
       "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Changing the query of a URL with an opaque path with trailing spaces: space !== space   %20\n       Changing the query of a URL with an opaque path with trailing spaces and a fragment: sp",
-      "duration": 16
+      "duration": 17
     },
     {
       "name": "urlsearchparams-foreach.any.js",
-      "passed": false,
+      "passed": true,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: For-of Check: [\"b\",\"2\"] !== [\"y\",\"2\"]\n       delete next param during iteration: [\"param1\",\"1\"] !== [\"param2\",\"2\"]\n       delete current param during iteration: [\"param1\",\"1\"] !== [\"para",
       "duration": 17
     },
     {
@@ -170,35 +168,33 @@
     },
     {
       "name": "urlsearchparams-has.any.js",
-      "passed": false,
+      "passed": true,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Two-argument has() respects undefined as second arg: expected true\n           at globalThis.__wpt_check_failures (file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/web",
       "duration": 17
     },
     {
       "name": "urlsearchparams-set.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 15
+      "duration": 16
     },
     {
       "name": "urlsearchparams-size.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 15
+      "duration": 16
     },
     {
       "name": "urlsearchparams-sort.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 16
+      "duration": 17
     },
     {
       "name": "urlsearchparams-stringifier.any.js",
-      "passed": false,
+      "passed": true,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: URLSearchParams connected to URL: http://www.example.com/?a=b%2Cc !== http://www.example.com/?a=b,c\n           at globalThis.__wpt_check_failures (file:///Users/shashisharma/code/self/fl",
-      "duration": 16
+      "duration": 17
     }
   ]
 }

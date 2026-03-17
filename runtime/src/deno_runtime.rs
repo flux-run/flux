@@ -1418,27 +1418,98 @@ function __fluxEncodeFormComponent(value) {
     return encodeURIComponent(String(value)).replace(/%20/g, "+");
 }
 
+const __fluxDomExceptionCodeByName = {
+    IndexSizeError: 1,
+    DOMStringSizeError: 2,
+    HierarchyRequestError: 3,
+    WrongDocumentError: 4,
+    InvalidCharacterError: 5,
+    NoDataAllowedError: 6,
+    NoModificationAllowedError: 7,
+    NotFoundError: 8,
+    NotSupportedError: 9,
+    InUseAttributeError: 10,
+    InvalidStateError: 11,
+    SyntaxError: 12,
+    InvalidModificationError: 13,
+    NamespaceError: 14,
+    InvalidAccessError: 15,
+    ValidationError: 16,
+    TypeMismatchError: 17,
+    SecurityError: 18,
+    NetworkError: 19,
+    AbortError: 20,
+    URLMismatchError: 21,
+    QuotaExceededError: 22,
+    TimeoutError: 23,
+    InvalidNodeTypeError: 24,
+    DataCloneError: 25,
+};
+
+const __fluxDomExceptionLegacyConstants = [
+    ["INDEX_SIZE_ERR", 1],
+    ["DOMSTRING_SIZE_ERR", 2],
+    ["HIERARCHY_REQUEST_ERR", 3],
+    ["WRONG_DOCUMENT_ERR", 4],
+    ["INVALID_CHARACTER_ERR", 5],
+    ["NO_DATA_ALLOWED_ERR", 6],
+    ["NO_MODIFICATION_ALLOWED_ERR", 7],
+    ["NOT_FOUND_ERR", 8],
+    ["NOT_SUPPORTED_ERR", 9],
+    ["INUSE_ATTRIBUTE_ERR", 10],
+    ["INVALID_STATE_ERR", 11],
+    ["SYNTAX_ERR", 12],
+    ["INVALID_MODIFICATION_ERR", 13],
+    ["NAMESPACE_ERR", 14],
+    ["INVALID_ACCESS_ERR", 15],
+    ["VALIDATION_ERR", 16],
+    ["TYPE_MISMATCH_ERR", 17],
+    ["SECURITY_ERR", 18],
+    ["NETWORK_ERR", 19],
+    ["ABORT_ERR", 20],
+    ["URL_MISMATCH_ERR", 21],
+    ["QUOTA_EXCEEDED_ERR", 22],
+    ["TIMEOUT_ERR", 23],
+    ["INVALID_NODE_TYPE_ERR", 24],
+    ["DATA_CLONE_ERR", 25],
+];
+
 class DOMException extends Error {
     constructor(message = "", name = "Error") {
         super(String(message));
         this.name = String(name);
+        this.code = __fluxDomExceptionCodeByName[this.name] || 0;
     }
+}
+
+for (const [constantName, constantValue] of __fluxDomExceptionLegacyConstants) {
+    Object.defineProperty(DOMException, constantName, {
+        value: constantValue,
+        enumerable: true,
+        configurable: false,
+        writable: false,
+    });
+    Object.defineProperty(DOMException.prototype, constantName, {
+        value: constantValue,
+        enumerable: true,
+        configurable: false,
+        writable: false,
+    });
 }
 
 class URLSearchParams {
     constructor(init = "", update = null) {
         this._pairs = [];
         this._update = typeof update === "function" ? update : null;
+        this._suspendUpdates = 0;
 
-        if (init instanceof URLSearchParams) {
-            this._pairs = [...init._pairs];
-            return;
-        }
+        this._withUpdatesSuspended(() => {
+            this._initialize(init);
+        });
+    }
 
-        if (Array.isArray(init)) {
-            for (const [key, value] of init) {
-                this.append(key, value);
-            }
+    _initialize(init) {
+        if (init == null) {
             return;
         }
 
@@ -1447,21 +1518,63 @@ class URLSearchParams {
             if (!query) return;
             for (const pair of query.split("&")) {
                 if (!pair) continue;
-                const [rawKey, rawValue = ""] = pair.split("=");
-                this.append(__fluxDecodeFormComponent(rawKey), __fluxDecodeFormComponent(rawValue));
+                const separatorIndex = pair.indexOf("=");
+                const rawKey = separatorIndex === -1 ? pair : pair.slice(0, separatorIndex);
+                const rawValue = separatorIndex === -1 ? "" : pair.slice(separatorIndex + 1);
+                this._appendPair(__fluxDecodeFormComponent(rawKey), __fluxDecodeFormComponent(rawValue));
             }
             return;
         }
 
-        if (init && typeof init === "object") {
+        if (typeof init === "object" || typeof init === "function") {
+            if (init === DOMException.prototype) {
+                throw new TypeError("Invalid URLSearchParams initializer");
+            }
+
+            const iterator = init[Symbol.iterator];
+            if (typeof iterator === "function") {
+                for (const entry of iterator.call(init)) {
+                    const pair = Array.from(entry || []);
+                    if (pair.length !== 2) {
+                        throw new TypeError("Expected sequence pair");
+                    }
+                    this._appendPair(pair[0], pair[1]);
+                }
+                return;
+            }
+
             for (const [key, value] of Object.entries(init)) {
-                this.append(key, value);
+                this._appendPair(key, value);
             }
         }
     }
 
-    append(name, value) {
+    _appendPair(name, value) {
         this._pairs.push([String(name), String(value)]);
+    }
+
+    _withUpdatesSuspended(callback) {
+        this._suspendUpdates += 1;
+        try {
+            return callback();
+        } finally {
+            this._suspendUpdates -= 1;
+        }
+    }
+
+    _replacePairs(nextPairs) {
+        this._pairs.splice(0, this._pairs.length, ...nextPairs.map(([key, value]) => [String(key), String(value)]));
+    }
+
+    _resetFromQuery(query) {
+        this._withUpdatesSuspended(() => {
+            const nextParams = new URLSearchParams(query);
+            this._replacePairs(nextParams._pairs);
+        });
+    }
+
+    append(name, value) {
+        this._appendPair(name, value);
         this._commit();
     }
 
@@ -1480,7 +1593,7 @@ class URLSearchParams {
 
     has(name, value = undefined) {
         const key = String(name);
-        if (arguments.length > 1) {
+        if (arguments.length > 1 && value !== undefined) {
             const expected = String(value);
             return this._pairs.some(([candidate, currentValue]) => candidate === key && currentValue === expected);
         }
@@ -1490,51 +1603,81 @@ class URLSearchParams {
     set(name, value) {
         const key = String(name);
         const nextValue = String(value);
-        const nextPairs = [];
         let replaced = false;
 
-        for (const [candidate, currentValue] of this._pairs) {
-            if (candidate === key) {
-                if (!replaced) {
-                    nextPairs.push([key, nextValue]);
-                    replaced = true;
-                }
+        for (let index = 0; index < this._pairs.length;) {
+            const [candidate] = this._pairs[index];
+            if (candidate !== key) {
+                index += 1;
                 continue;
             }
-            nextPairs.push([candidate, currentValue]);
+
+            if (!replaced) {
+                this._pairs[index][1] = nextValue;
+                replaced = true;
+                index += 1;
+            } else {
+                this._pairs.splice(index, 1);
+            }
         }
 
         if (!replaced) {
-            nextPairs.push([key, nextValue]);
+            this._appendPair(key, nextValue);
         }
 
-        this._pairs = nextPairs;
         this._commit();
     }
 
     delete(name, value = undefined) {
         const key = String(name);
-        if (arguments.length > 1) {
-            const expected = String(value);
-            this._pairs = this._pairs.filter(([candidate, currentValue]) => !(candidate === key && currentValue === expected));
-        } else {
-            this._pairs = this._pairs.filter(([candidate]) => candidate !== key);
+        const expected = arguments.length > 1 && value !== undefined ? String(value) : null;
+        for (let index = 0; index < this._pairs.length;) {
+            const [candidate, currentValue] = this._pairs[index];
+            const matches = arguments.length > 1 && value !== undefined
+                ? candidate === key && currentValue === expected
+                : candidate === key;
+
+            if (matches) {
+                this._pairs.splice(index, 1);
+            } else {
+                index += 1;
+            }
         }
         this._commit();
     }
 
     forEach(callback, thisArg = undefined) {
-        for (const [key, value] of this._pairs) {
+        for (const [key, value] of this) {
             callback.call(thisArg, value, key, this);
         }
     }
 
     keys() {
-        return this._pairs.map(([key]) => key)[Symbol.iterator]();
+        const entries = this.entries();
+        return {
+            [Symbol.iterator]() {
+                return this;
+            },
+            next() {
+                const nextEntry = entries.next();
+                if (nextEntry.done) return nextEntry;
+                return { value: nextEntry.value[0], done: false };
+            },
+        };
     }
 
     values() {
-        return this._pairs.map(([, value]) => value)[Symbol.iterator]();
+        const entries = this.entries();
+        return {
+            [Symbol.iterator]() {
+                return this;
+            },
+            next() {
+                const nextEntry = entries.next();
+                if (nextEntry.done) return nextEntry;
+                return { value: nextEntry.value[1], done: false };
+            },
+        };
     }
 
     sort() {
@@ -1551,13 +1694,27 @@ class URLSearchParams {
     }
 
     _commit() {
-        if (this._update) {
+        if (this._update && this._suspendUpdates === 0) {
             this._update(this.toString());
         }
     }
 
     entries() {
-        return this._pairs[Symbol.iterator]();
+        const params = this;
+        let index = 0;
+        return {
+            [Symbol.iterator]() {
+                return this;
+            },
+            next() {
+                if (index >= params._pairs.length) {
+                    return { value: undefined, done: true };
+                }
+                const value = params._pairs[index];
+                index += 1;
+                return { value, done: false };
+            },
+        };
     }
 
     [Symbol.iterator]() {
@@ -1575,8 +1732,14 @@ class URL {
     constructor(input, base = undefined) {
         const parsed = Deno.core.ops.op_flux_parse_url(String(input), base == null ? "" : String(base));
         this._applyParsed(parsed);
-        this.searchParams = new URLSearchParams(this._search, (nextSearchParams) => {
+        const searchParams = new URLSearchParams(this._search, (nextSearchParams) => {
             this.search = nextSearchParams ? `?${nextSearchParams}` : "";
+        });
+        Object.defineProperty(this, "searchParams", {
+            value: searchParams,
+            writable: false,
+            enumerable: true,
+            configurable: true,
         });
     }
 
@@ -1619,7 +1782,7 @@ class URL {
         const nextHref = `${parts.protocol}${authority}${parts.pathname}${parts.search}${parts.hash}`;
         this._applyParsed(Deno.core.ops.op_flux_parse_url(nextHref, ""));
         if (this.searchParams) {
-            this.searchParams._pairs = new URLSearchParams(this._search)._pairs;
+            this.searchParams._resetFromQuery(this._search);
         }
     }
 
@@ -1630,7 +1793,7 @@ class URL {
     set href(value) {
         this._applyParsed(Deno.core.ops.op_flux_parse_url(String(value), ""));
         if (this.searchParams) {
-            this.searchParams._pairs = new URLSearchParams(this._search)._pairs;
+            this.searchParams._resetFromQuery(this._search);
         }
     }
 
