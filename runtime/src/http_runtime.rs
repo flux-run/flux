@@ -209,10 +209,40 @@ async fn handle_net_request(
     };
     let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
+    let request_payload = serde_json::json!({
+        "method": method,
+        "url": url,
+        "headers": headers_list,
+        "body": body,
+    });
+
     let req_id = Uuid::new_v4().to_string();
-    let net_req = NetRequest { req_id, method, url, headers_json, body };
+    let net_req = NetRequest {
+        req_id,
+        method: request_payload["method"].as_str().unwrap_or("GET").to_string(),
+        url: request_payload["url"].as_str().unwrap_or_default().to_string(),
+        headers_json,
+        body: request_payload["body"].as_str().unwrap_or_default().to_string(),
+    };
     let context = ExecutionContext::new(state.code_version.clone());
     let result = state.pool.execute_net_request(context, net_req).await;
+
+    if !state.service_token.is_empty() {
+        let _ = crate::server_client::record_execution(
+            &state.server_url,
+            &state.service_token,
+            crate::server_client::ExecutionEnvelope {
+                method: request_payload["method"].as_str().unwrap_or("GET").to_string(),
+                path: uri
+                    .path_and_query()
+                    .map(|value| value.as_str().to_string())
+                    .unwrap_or_else(|| uri.path().to_string()),
+                request_json: request_payload.clone(),
+                result: result.clone(),
+            },
+        )
+        .await;
+    }
 
     if let Some(err) = &result.error {
         return (StatusCode::INTERNAL_SERVER_ERROR, err.clone()).into_response();

@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::artifact::RuntimeArtifact;
-use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry, NetRequest};
+use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry, NetRequest, NetRequestExecution};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
@@ -227,7 +227,7 @@ fn spawn_isolate_worker(
                     let result = if server_mode {
                         match work.net_request {
                             Some(net_req) => match isolate.dispatch_request(work.context.clone(), net_req).await {
-                                Ok(net_resp) => ExecutionResult {
+                                Ok(NetRequestExecution { response: net_resp, checkpoints, logs }) => ExecutionResult {
                                     execution_id: context.execution_id,
                                     request_id: context.request_id,
                                     code_version: context.code_version,
@@ -241,8 +241,8 @@ fn spawn_isolate_worker(
                                     }),
                                     error: None,
                                     duration_ms: started.elapsed().as_millis() as i32,
-                                    checkpoints: vec![],
-                                    logs: vec![],
+                                    checkpoints,
+                                    logs,
                                 },
                                 Err(err) => error_result(work.context, err.to_string()),
                             },

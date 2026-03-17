@@ -166,6 +166,13 @@ pub struct NetResponse {
 }
 
 #[derive(Debug, Clone)]
+pub struct NetRequestExecution {
+    pub response: NetResponse,
+    pub checkpoints: Vec<FetchCheckpoint>,
+    pub logs: Vec<LogEntry>,
+}
+
+#[derive(Debug, Clone)]
 pub struct JsExecutionOutput {
     pub output: serde_json::Value,
     pub checkpoints: Vec<FetchCheckpoint>,
@@ -1175,7 +1182,7 @@ impl JsIsolate {
         &mut self,
         context: ExecutionContext,
         req: NetRequest,
-    ) -> Result<NetResponse> {
+    ) -> Result<NetRequestExecution> {
         let execution_id = context.execution_id.clone();
         let request_id = context.request_id.clone();
 
@@ -1230,10 +1237,17 @@ impl JsIsolate {
         let exec = map
             .remove(&execution_id)
             .ok_or_else(|| anyhow::anyhow!("state slot missing for execution {execution_id}"))?;
-        exec.pending_responses
+        let response = exec
+            .pending_responses
             .into_values()
             .next()
-            .ok_or_else(|| anyhow::anyhow!("handler did not call op_net_respond for req {} (request_id={})", req.req_id, request_id))
+            .ok_or_else(|| anyhow::anyhow!("handler did not call op_net_respond for req {} (request_id={})", req.req_id, request_id))?;
+
+        Ok(NetRequestExecution {
+            response,
+            checkpoints: exec.checkpoints,
+            logs: exec.logs,
+        })
     }
 
     pub async fn execute(
@@ -1729,6 +1743,29 @@ function __fluxEncodeFormComponent(value) {
     return encodeURIComponent(__fluxToUSVString(value)).replace(/%20/g, "+");
 }
 
+function __fluxAbortError(reason = undefined) {
+    if (reason instanceof DOMException && reason.name === "AbortError") {
+        return reason;
+    }
+    if (reason instanceof Error) {
+        return reason;
+    }
+    if (reason === undefined) {
+        return new DOMException("This operation was aborted", "AbortError");
+    }
+    return new DOMException(String(reason), "AbortError");
+}
+
+function __fluxInvokeEventListener(listener, event) {
+    if (typeof listener === "function") {
+        listener.call(event.currentTarget, event);
+        return;
+    }
+    if (listener && typeof listener.handleEvent === "function") {
+        listener.handleEvent(event);
+    }
+}
+
 const __fluxDomExceptionCodeByName = {
     IndexSizeError: 1,
     DOMStringSizeError: 2,
@@ -1790,6 +1827,78 @@ class DOMException extends Error {
         super(String(message));
         this.name = String(name);
         this.code = __fluxDomExceptionCodeByName[this.name] || 0;
+    }
+}
+
+class AbortSignal {
+    constructor() {
+        this.aborted = false;
+        this.reason = undefined;
+        this.onabort = null;
+        this._listeners = new Set();
+    }
+
+    addEventListener(type, listener) {
+        if (type !== "abort" || listener == null) return;
+        if (this.aborted) {
+            __fluxInvokeEventListener(listener, {
+                type: "abort",
+                target: this,
+                currentTarget: this,
+            });
+            return;
+        }
+        this._listeners.add(listener);
+    }
+
+    removeEventListener(type, listener) {
+        if (type !== "abort" || listener == null) return;
+        this._listeners.delete(listener);
+    }
+
+    throwIfAborted() {
+        if (this.aborted) {
+            throw __fluxAbortError(this.reason);
+        }
+    }
+
+    _abort(reason = undefined) {
+        if (this.aborted) return;
+        this.aborted = true;
+        this.reason = reason === undefined
+            ? new DOMException("This operation was aborted", "AbortError")
+            : reason;
+
+        const event = {
+            type: "abort",
+            target: this,
+            currentTarget: this,
+        };
+
+        if (typeof this.onabort === "function") {
+            __fluxInvokeEventListener(this.onabort, event);
+        }
+
+        for (const listener of [...this._listeners]) {
+            __fluxInvokeEventListener(listener, event);
+        }
+        this._listeners.clear();
+    }
+
+    static abort(reason = undefined) {
+        const controller = new AbortController();
+        controller.abort(reason);
+        return controller.signal;
+    }
+}
+
+class AbortController {
+    constructor() {
+        this.signal = new AbortSignal();
+    }
+
+    abort(reason = undefined) {
+        this.signal._abort(reason);
     }
 }
 
@@ -2331,6 +2440,11 @@ class Request {
         this.url = source ? source.url : String(input);
         this.method = String(options.method || (source ? source.method : "GET")).toUpperCase();
         this.headers = new Headers(options.headers || (source ? source.headers : undefined));
+        this.signal = options.signal !== undefined
+            ? options.signal
+            : source
+                ? source.signal
+                : null;
         this._bodyState = __fluxCreateBodyState(options.body !== undefined
             ? __fluxBodyToText(options.body)
             : source
@@ -2429,6 +2543,8 @@ class Response {
 globalThis.URLSearchParams = globalThis.URLSearchParams || URLSearchParams;
 globalThis.URL = globalThis.URL || URL;
 globalThis.DOMException = globalThis.DOMException || DOMException;
+globalThis.AbortSignal = globalThis.AbortSignal || AbortSignal;
+globalThis.AbortController = globalThis.AbortController || AbortController;
 globalThis.Headers = Headers;
 globalThis.FormData = globalThis.FormData || FormData;
 globalThis.Request = Request;
@@ -2450,6 +2566,14 @@ globalThis.crypto.randomUUID = () => Deno.core.ops.op_random_uuid(__flux_eid());
 // ── fetch ──────────────────────────────────────────────────────────────────
 globalThis.fetch = async function(input, init = undefined) {
     const request = input instanceof Request ? input : new Request(input, init);
+    const signal = request.signal || null;
+    if (signal) {
+        if (typeof signal.throwIfAborted === "function") {
+            signal.throwIfAborted();
+        } else if (signal.aborted) {
+            throw __fluxAbortError(signal.reason);
+        }
+    }
     const method = request.method || "GET";
     const headers = Object.fromEntries(request.headers.entries());
     const body = (method === "GET" || method === "HEAD") ? null : await request.text();
@@ -2503,6 +2627,16 @@ console.info  = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a)
 console.warn  = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), false);
 console.error = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), true);
 console.debug = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), false);
+console.assert = (condition, ...a) => {
+    if (condition) return;
+    const message = a.length > 0 ? `Assertion failed: ${_flux_fmt(...a)}` : "Assertion failed";
+    Deno.core.ops.op_console(__flux_eid(), message, true);
+};
+console.trace = (...a) => {
+    const message = a.length > 0 ? _flux_fmt(...a) : "Trace";
+    const err = new Error(message);
+    Deno.core.ops.op_console(__flux_eid(), err.stack || message, true);
+};
 
 // ── setTimeout / setInterval ────────────────────────────────────────────────
 const _origSetTimeout  = globalThis.setTimeout;
@@ -2517,26 +2651,104 @@ Math.random = () => Deno.core.ops.op_random(__flux_eid());
 
 // ── Deno.serve (server mode) ─────────────────────────────────────────────────
 globalThis.__flux_net_handler = null;
+globalThis.__flux_net_server = null;
 
-Deno.serve = function(handlerOrOptions) {
-  let handler;
-  if (typeof handlerOrOptions === "function") {
-    handler = handlerOrOptions;
-  } else if (handlerOrOptions && typeof handlerOrOptions.fetch === "function") {
-    handler = handlerOrOptions.fetch.bind(handlerOrOptions);
-  }
+function __flux_close_server(serverState, reason = undefined) {
+    if (!serverState || serverState.closed) return;
+    serverState.closed = true;
+    serverState.reason = reason;
+    if (typeof serverState.resolveFinished === "function") {
+        serverState.resolveFinished();
+        serverState.resolveFinished = null;
+    }
+}
+
+Deno.serve = function(optionsOrHandler, maybeHandler = undefined) {
+    let options = null;
+    let handler;
+
+    if (typeof optionsOrHandler === "function") {
+        handler = optionsOrHandler;
+    } else if (optionsOrHandler && typeof maybeHandler === "function") {
+        options = optionsOrHandler;
+        handler = maybeHandler;
+    } else if (optionsOrHandler && typeof optionsOrHandler.fetch === "function") {
+        options = optionsOrHandler;
+        handler = optionsOrHandler.fetch.bind(optionsOrHandler);
+    } else if (optionsOrHandler && typeof optionsOrHandler.handler === "function") {
+        options = optionsOrHandler;
+        handler = optionsOrHandler.handler;
+    }
+
   if (!handler) throw new TypeError("Deno.serve: expected a handler function or { fetch } object");
 
-  globalThis.__flux_net_handler = handler;
+    const signal = options && options.signal !== undefined ? options.signal : null;
+    let resolveFinished = null;
+    const finished = new Promise((resolve) => {
+        resolveFinished = resolve;
+    });
+
+    const server = {
+        finished,
+        ref() { return server; },
+        unref() { return server; },
+        shutdown(reason = undefined) {
+            __flux_close_server(serverState, reason);
+            return finished;
+        },
+    };
+
+    const serverState = {
+        handler,
+        closed: false,
+        reason: undefined,
+        resolveFinished,
+        finished,
+        server,
+    };
+
+    globalThis.__flux_net_server = serverState;
+    globalThis.__flux_net_handler = handler;
+
+    if (signal && signal.aborted) {
+        __flux_close_server(serverState, signal.reason);
+        return server;
+    }
+
   Deno.core.ops.op_net_listen(__flux_eid(), 0);
 
-  return { ref() {}, unref() {}, shutdown() {}, finished: Promise.resolve() };
+    if (options && typeof options.onListen === "function") {
+        if (Object.prototype.hasOwnProperty.call(options, "path")) {
+            options.onListen({ path: String(options.path) });
+        } else {
+            options.onListen({
+                hostname: String(options.hostname ?? "0.0.0.0"),
+                port: Number(options.port ?? 8000),
+            });
+        }
+    }
+
+    if (signal && typeof signal.addEventListener === "function") {
+        signal.addEventListener("abort", () => {
+            __flux_close_server(serverState, signal.reason);
+        });
+    }
+
+    return server;
 };
 
 // Called by Rust (via execute_script) for each incoming HTTP request.
 globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJson, body) {
   const __eid = globalThis.__FLUX_EXECUTION_ID__;
-  const handler = globalThis.__flux_net_handler;
+    const serverState = globalThis.__flux_net_server;
+    const handler = serverState && !serverState.closed
+        ? serverState.handler
+        : globalThis.__flux_net_handler;
+    if (serverState && serverState.closed) {
+        const message = serverState.reason == null ? "Server closed" : String(serverState.reason);
+        Deno.core.ops.op_net_respond(__eid, reqId, 503, "[]", message);
+        return;
+    }
   if (!handler) {
     Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", "No Deno.serve handler registered");
     return;
@@ -2575,6 +2787,10 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
     Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", msg);
     return;
   }
+
+    if (!(response instanceof Response)) {
+        response = new Response(response == null ? "" : response);
+    }
 
   let responseBody;
   try { responseBody = await response.text(); } catch { responseBody = ""; }
