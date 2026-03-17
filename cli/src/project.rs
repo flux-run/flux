@@ -20,6 +20,8 @@ use shared::project::{
 use url::Url;
 
 const DEFAULT_ENTRY_FILE: &str = "index.ts";
+const MODULE_FILE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "json"];
+const FLUX_PG_SPECIFIER: &str = "flux:pg";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiagnosticSeverity {
@@ -74,6 +76,19 @@ struct LoadedModule {
     media_type: ArtifactMediaType,
     source: String,
     npm_snapshot: Option<NpmPackageSnapshot>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PackageManifest {
+    main: Option<String>,
+    module: Option<String>,
+    dependencies: Option<BTreeMap<String, String>>,
+    #[serde(rename = "devDependencies")]
+    dev_dependencies: Option<BTreeMap<String, String>>,
+    #[serde(rename = "optionalDependencies")]
+    optional_dependencies: Option<BTreeMap<String, String>>,
+    #[serde(rename = "peerDependencies")]
+    peer_dependencies: Option<BTreeMap<String, String>>,
 }
 
 pub fn default_entry_path() -> PathBuf {
@@ -293,6 +308,149 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf> {
         .with_context(|| format!("failed to resolve {}", path.display()))
 }
 
+fn resolve_existing_module_path(path: &Path) -> Result<PathBuf> {
+    if path.is_file() {
+        return canonicalize_existing_path(path);
+    }
+
+    if path.extension().is_none() {
+        for extension in MODULE_FILE_EXTENSIONS {
+            let candidate = path.with_extension(extension);
+            if candidate.is_file() {
+                return canonicalize_existing_path(&candidate);
+            }
+        }
+    }
+
+    if path.is_dir() {
+        if let Some(package_entry) = resolve_package_entry(path)? {
+            return Ok(package_entry);
+        }
+    }
+
+    if path.extension().is_none() {
+        for extension in MODULE_FILE_EXTENSIONS {
+            let candidate = path.join(format!("index.{extension}"));
+            if candidate.is_file() {
+                return canonicalize_existing_path(&candidate);
+            }
+        }
+    }
+
+    bail!("entry file not found: {}", path.display())
+}
+
+fn read_package_manifest(path: &Path) -> Result<PackageManifest> {
+    let source = fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&source)
+        .with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn resolve_package_entry(package_dir: &Path) -> Result<Option<PathBuf>> {
+    let manifest_path = package_dir.join("package.json");
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+
+    let manifest = read_package_manifest(&manifest_path)?;
+    for candidate in [manifest.module.as_deref(), manifest.main.as_deref()].into_iter().flatten() {
+        let resolved = resolve_existing_module_path(&package_dir.join(candidate))?;
+        return Ok(Some(resolved));
+    }
+
+    for extension in MODULE_FILE_EXTENSIONS {
+        let candidate = package_dir.join(format!("index.{extension}"));
+        if candidate.is_file() {
+            return Ok(Some(canonicalize_existing_path(&candidate)?));
+        }
+    }
+
+    Ok(None)
+}
+
+fn bare_package_parts(specifier: &str) -> Option<(String, Option<String>)> {
+    if !is_bare_package_import(specifier) {
+        return None;
+    }
+
+    if let Some(stripped) = specifier.strip_prefix('@') {
+        let mut parts = stripped.split('/');
+        let scope = parts.next()?;
+        let name = parts.next()?;
+        let package_name = format!("@{scope}/{name}");
+        let remainder = parts.collect::<Vec<_>>().join("/");
+        return if remainder.is_empty() {
+            Some((package_name, None))
+        } else {
+            Some((package_name, Some(remainder)))
+        };
+    }
+
+    let mut parts = specifier.split('/');
+    let package_name = parts.next()?.to_string();
+    let remainder = parts.collect::<Vec<_>>().join("/");
+    if remainder.is_empty() {
+        Some((package_name, None))
+    } else {
+        Some((package_name, Some(remainder)))
+    }
+}
+
+fn local_file_dependency<'a>(manifest: &'a PackageManifest, package_name: &str) -> Option<&'a str> {
+    manifest
+        .dependencies
+        .as_ref()
+        .and_then(|deps| deps.get(package_name))
+        .or_else(|| manifest.dev_dependencies.as_ref().and_then(|deps| deps.get(package_name)))
+        .or_else(|| manifest.optional_dependencies.as_ref().and_then(|deps| deps.get(package_name)))
+        .or_else(|| manifest.peer_dependencies.as_ref().and_then(|deps| deps.get(package_name)))
+        .map(String::as_str)
+        .filter(|value| value.starts_with("file:"))
+}
+
+fn resolve_local_bare_import(specifier: &str, base_specifier: &str) -> Result<Option<String>> {
+    let (package_name, subpath) = match bare_package_parts(specifier) {
+        Some(parts) => parts,
+        None => return Ok(None),
+    };
+
+    let base = Url::parse(base_specifier)
+        .with_context(|| format!("invalid base specifier: {}", base_specifier))?;
+    if base.scheme() != "file" {
+        return Ok(None);
+    }
+
+    let base_path = base
+        .to_file_path()
+        .map_err(|_| anyhow::anyhow!("invalid base path for bare import resolution"))?;
+
+    for ancestor in base_path.ancestors().skip(1) {
+        let manifest_path = ancestor.join("package.json");
+        if !manifest_path.is_file() {
+            continue;
+        }
+
+        let manifest = read_package_manifest(&manifest_path)?;
+        let Some(file_target) = local_file_dependency(&manifest, &package_name) else {
+            continue;
+        };
+
+        let package_dir = ancestor.join(file_target.trim_start_matches("file:"));
+        let target = if let Some(subpath) = &subpath {
+            resolve_existing_module_path(&package_dir.join(subpath))?
+        } else if let Some(package_entry) = resolve_package_entry(&package_dir)? {
+            package_entry
+        } else {
+            resolve_existing_module_path(&package_dir)?
+        };
+
+        return Ok(Some(file_url_string(&target)?));
+    }
+
+    Ok(None)
+}
+
 struct GraphBuilder {
     client: reqwest::Client,
     modules: BTreeMap<String, ArtifactModule>,
@@ -356,16 +514,6 @@ impl GraphBuilder {
                                     if let Some(owner) = npm_owner.as_deref() {
                                         self.mark_npm(owner, NpmCompatibility::Incompatible);
                                     }
-                                    continue;
-                                }
-
-                                if is_bare_package_import(&import.specifier) {
-                                    self.push_diagnostic(
-                                        DiagnosticSeverity::Error,
-                                        "bare_import",
-                                        &loaded.specifier,
-                                        format!("bare package imports are not supported: {}", import.specifier),
-                                    );
                                     continue;
                                 }
 
@@ -456,6 +604,17 @@ impl GraphBuilder {
     }
 
     async fn load_module(&self, specifier: &str) -> Result<LoadedModule> {
+        if specifier == FLUX_PG_SPECIFIER {
+            return Ok(LoadedModule {
+                specifier: FLUX_PG_SPECIFIER.to_string(),
+                base_specifier: FLUX_PG_SPECIFIER.to_string(),
+                source_kind: ArtifactSourceKind::Local,
+                media_type: ArtifactMediaType::JavaScript,
+                npm_snapshot: None,
+                source: flux_pg_module_source().to_string(),
+            });
+        }
+
         if specifier.starts_with("npm:") {
             let fetch_url = format!("https://esm.sh/{}", specifier.trim_start_matches("npm:"));
             let response = self
@@ -767,6 +926,10 @@ impl Visit for ImportCollector {
 }
 
 fn resolve_dependency_specifier(specifier: &str, base_specifier: &str) -> Result<String> {
+    if specifier == "pg" {
+        return Ok(FLUX_PG_SPECIFIER.to_string());
+    }
+
     if specifier.starts_with("node:") {
         return Ok(specifier.to_string());
     }
@@ -781,11 +944,14 @@ fn resolve_dependency_specifier(specifier: &str, base_specifier: &str) -> Result
         let path = url
             .to_file_path()
             .map_err(|_| anyhow::anyhow!("invalid file URL import"))?;
-        let canonical = canonicalize_existing_path(&path)?;
+        let canonical = resolve_existing_module_path(&path)?;
         return file_url_string(&canonical);
     }
     if is_bare_package_import(specifier) {
-        return Ok(specifier.to_string());
+        if let Some(local) = resolve_local_bare_import(specifier, base_specifier)? {
+            return Ok(local);
+        }
+        return Ok(format!("npm:{specifier}"));
     }
 
     let base = Url::parse(base_specifier)
@@ -798,7 +964,7 @@ fn resolve_dependency_specifier(specifier: &str, base_specifier: &str) -> Result
         let path = joined
             .to_file_path()
             .map_err(|_| anyhow::anyhow!("invalid resolved local path"))?;
-        let canonical = canonicalize_existing_path(&path)?;
+        let canonical = resolve_existing_module_path(&path)?;
         return file_url_string(&canonical);
     }
 
@@ -867,6 +1033,115 @@ fn contains_identifier(source: &str, needle: &str) -> bool {
         }
     }
     false
+}
+
+fn flux_pg_module_source() -> &'static str {
+        r#"
+const __fluxPg = globalThis.Flux?.postgres;
+
+if (!__fluxPg || !__fluxPg.NodePgPool || !__fluxPg.nodePgTypes) {
+    throw new Error("Flux pg shim is unavailable");
+}
+
+function __fluxPgNormalizeConfig(config = {}) {
+    const ssl = config?.ssl;
+    return {
+        connectionString: String(config?.connectionString ?? ""),
+        tls: !!ssl,
+        caCertPem: ssl && typeof ssl === "object" && ssl.ca != null ? String(ssl.ca) : null,
+    };
+}
+
+class Client {
+    constructor(config = {}) {
+        this._config = __fluxPgNormalizeConfig(config);
+        this._inner = null;
+        this._released = false;
+    }
+
+    static __fromInner(inner, config = {}) {
+        const client = new Client(config);
+        client._inner = inner;
+        return client;
+    }
+
+    async connect() {
+        if (this._released) {
+            throw new Error("pg Client has already been closed");
+        }
+        if (this._inner) {
+            return this;
+        }
+        const pool = new __fluxPg.NodePgPool(this._config);
+        this._pool = pool;
+        this._inner = await pool.connect();
+        return this;
+    }
+
+    async query(queryOrConfig, values = undefined) {
+        if (!this._inner) {
+            await this.connect();
+        }
+        return this._inner.query(queryOrConfig, values);
+    }
+
+    async release() {
+        if (this._released) {
+            return undefined;
+        }
+        this._released = true;
+        if (this._inner) {
+            await this._inner.release();
+            this._inner = null;
+        }
+        if (this._pool) {
+            await this._pool.end();
+            this._pool = null;
+        }
+        return undefined;
+    }
+
+    async end() {
+        return this.release();
+    }
+}
+
+class Pool {
+    constructor(config = {}) {
+        this.options = { ...config };
+        this._config = __fluxPgNormalizeConfig(config);
+        this._inner = new __fluxPg.NodePgPool(this._config);
+    }
+
+    async query(queryOrConfig, values = undefined) {
+        return this._inner.query(queryOrConfig, values);
+    }
+
+    async connect() {
+        const inner = await this._inner.connect();
+        return Client.__fromInner(inner, this.options);
+    }
+
+    async end() {
+        return this._inner.end();
+    }
+}
+
+const types = __fluxPg.nodePgTypes;
+const defaults = {};
+const native = null;
+
+class DatabaseError extends Error {
+    constructor(message, details = {}) {
+        super(message);
+        this.name = "DatabaseError";
+        Object.assign(this, details);
+    }
+}
+
+export { Client, DatabaseError, Pool, defaults, native, types };
+export default { Client, DatabaseError, Pool, defaults, native, types };
+"#
 }
 
 fn is_identifier_byte(value: u8) -> bool {

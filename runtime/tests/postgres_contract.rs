@@ -551,6 +551,89 @@ export default async function handler({ input }) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_pg_module_alias_supports_pool_default_and_types() -> Result<()> {
+    let _lock = postgres_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let (port, shutdown_tx, server_task) = spawn_mock_postgres_transaction_server().await?;
+
+    let code = r#"
+import pg, { Pool, types } from "pg";
+
+export default async function handler({ input }) {
+    const pool = new Pool({ connectionString: input.connectionString });
+    const client = await pool.connect();
+
+    await client.query("begin");
+    const result = await client.query({
+        text: input.sql,
+        rowMode: "array",
+        values: input.params,
+    });
+    await client.query("commit");
+    await client.release();
+    await pool.end();
+
+    return {
+        defaultPoolMatches: pg.Pool === Pool,
+        defaultTypesMatch: pg.types === types,
+        rows: result.rows,
+        rowCount: result.rowCount,
+        command: result.command,
+        fieldNames: result.fields.map((field) => field.name),
+        builtinDate: types.builtins.DATE,
+    };
+}
+"#;
+
+    let payload = serde_json::json!({
+        "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
+        "sql": "select $1::text as value",
+        "params": ["hello"],
+    });
+
+    let module_path = std::env::temp_dir().join(format!(
+        "flux-pg-module-alias-{}-{}.ts",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    ));
+    std::fs::write(&module_path, code).context("failed to write pg module alias entry")?;
+
+    let mut isolate = JsIsolate::new_for_run_entry(&module_path)
+        .await
+        .context("failed to create pg module alias isolate")?;
+    let live_output = isolate
+        .execute(payload, ExecutionContext::new("postgres-pg-module-live"))
+        .await
+        .context("pg module alias execution failed")?;
+
+    std::fs::remove_file(&module_path).ok();
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("mock postgres transaction server task failed")??;
+
+    assert_eq!(live_output.error, None);
+    assert_eq!(
+        live_output.output,
+        serde_json::json!({
+            "defaultPoolMatches": true,
+            "defaultTypesMatch": true,
+            "rows": [["hello"]],
+            "rowCount": 1,
+            "command": "QUERY",
+            "fieldNames": ["value"],
+            "builtinDate": 1082,
+        })
+    );
+    assert_eq!(live_output.checkpoints.len(), 3);
+    assert!(live_output.checkpoints.iter().all(|cp| cp.boundary == "postgres"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_node_pg_pool_applies_json_and_array_type_parsers() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");

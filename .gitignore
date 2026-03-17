@@ -77,6 +77,9 @@ runtime/external-tests/test262/
 runtime/external-tests/node-core/
 runtime/external-tests/web-platform/
 
+# ── Cloned external apps (local evaluation only, not committed) ─────────────
+examples/madmonkey-backend/
+
 # ── Generated test reports (written by runners, not committed) ────────────────
 runtime/reports/*.json
 runtime/reports/flux-integration

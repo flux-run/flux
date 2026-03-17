@@ -33,6 +33,8 @@ use uuid::Uuid;
 
 use crate::isolate_pool::ExecutionContext;
 
+const FLUX_PG_SPECIFIER: &str = "flux:pg";
+
 /// Per-isolate map of in-flight execution states, keyed by execution_id.
 /// Stored once in `OpState`; each concurrent execution owns its own slot.
 type RuntimeStateMap = HashMap<String, RuntimeExecutionState>;
@@ -917,6 +919,11 @@ fn op_flux_postgres_simple_query(
                 "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
                 "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
                 "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
+                "rowCount": response
+                    .get("rowCount")
+                    .cloned()
+                    .or_else(|| response.get("row_count").cloned())
+                    .unwrap_or_else(|| serde_json::json!(0)),
                 "replay": true,
             }));
         }
@@ -945,6 +952,7 @@ fn op_flux_postgres_simple_query(
         "rows": live_response.rows,
         "fields": postgres_fields_json(&live_response.fields),
         "command": live_response.command,
+        "rowCount": live_response.row_count,
         "row_count": live_response.row_count,
         "replay": false,
     });
@@ -970,6 +978,10 @@ fn op_flux_postgres_simple_query(
         "rows": response_json.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
         "fields": response_json.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
         "command": response_json.get("command").cloned().unwrap_or(serde_json::Value::Null),
+        "rowCount": response_json
+            .get("rowCount")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!(0)),
         "replay": false,
     }))
 }
@@ -1029,6 +1041,11 @@ fn op_flux_postgres_session_query(
                 "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
                 "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
                 "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
+                "rowCount": response
+                    .get("rowCount")
+                    .cloned()
+                    .or_else(|| response.get("row_count").cloned())
+                    .unwrap_or_else(|| serde_json::json!(0)),
                 "replay": true,
             }));
         }
@@ -1069,6 +1086,7 @@ fn op_flux_postgres_session_query(
         "rows": live_response.rows,
         "fields": postgres_fields_json(&live_response.fields),
         "command": live_response.command,
+        "rowCount": live_response.row_count,
         "row_count": live_response.row_count,
         "replay": false,
     });
@@ -1094,6 +1112,10 @@ fn op_flux_postgres_session_query(
         "rows": response_json.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
         "fields": response_json.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
         "command": response_json.get("command").cloned().unwrap_or(serde_json::Value::Null),
+        "rowCount": response_json
+            .get("rowCount")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!(0)),
         "replay": false,
     }))
 }
@@ -1166,6 +1188,11 @@ fn op_flux_postgres_query(
                 "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
                 "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
                 "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
+                "rowCount": response
+                    .get("rowCount")
+                    .cloned()
+                    .or_else(|| response.get("row_count").cloned())
+                    .unwrap_or_else(|| serde_json::json!(0)),
                 "replay": true,
             }));
         }
@@ -1196,6 +1223,7 @@ fn op_flux_postgres_query(
         "rows": live_response.rows,
         "fields": postgres_fields_json(&live_response.fields),
         "command": live_response.command,
+        "rowCount": live_response.row_count,
         "row_count": live_response.row_count,
         "replay": false,
     });
@@ -1221,6 +1249,10 @@ fn op_flux_postgres_query(
         "rows": response_json.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
         "fields": response_json.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
         "command": response_json.get("command").cloned().unwrap_or(serde_json::Value::Null),
+        "rowCount": response_json
+            .get("rowCount")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!(0)),
         "replay": false,
     }))
 }
@@ -2642,6 +2674,12 @@ impl ModuleLoader for TypescriptModuleLoader {
         referrer: &str,
         _kind: ResolutionKind,
     ) -> std::result::Result<ModuleSpecifier, deno_core::error::ModuleLoaderError> {
+        if specifier == "pg" {
+            return Url::parse(FLUX_PG_SPECIFIER)
+                .map_err(JsErrorBox::from_err)
+                .map_err(Into::into);
+        }
+
         resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)
     }
 
@@ -2659,6 +2697,15 @@ impl ModuleLoader for TypescriptModuleLoader {
             module_specifier: &ModuleSpecifier,
             options: &ModuleLoadOptions,
         ) -> std::result::Result<ModuleSource, deno_core::error::ModuleLoaderError> {
+            if module_specifier.as_str() == FLUX_PG_SPECIFIER {
+                return Ok(ModuleSource::new(
+                    ModuleType::JavaScript,
+                    ModuleSourceCode::String(flux_pg_module_js().to_string().into()),
+                    module_specifier,
+                    None,
+                ));
+            }
+
             let path = module_specifier
                 .to_file_path()
                 .map_err(|_| JsErrorBox::generic("Only file:// URLs are supported."))?;
@@ -2728,6 +2775,20 @@ impl ModuleLoader for ArtifactModuleLoader {
         referrer: &str,
         _kind: ResolutionKind,
     ) -> std::result::Result<ModuleSpecifier, deno_core::error::ModuleLoaderError> {
+        if let Some(module) = self.modules.get(referrer) {
+            if let Some(dependency) = module
+                .dependencies
+                .iter()
+                .find(|dependency| dependency.specifier == specifier)
+            {
+                let resolved = Url::parse(&dependency.resolved_specifier)
+                    .map_err(JsErrorBox::from_err)?;
+                if self.modules.contains_key(resolved.as_str()) {
+                    return Ok(resolved);
+                }
+            }
+        }
+
         if specifier.starts_with("npm:") {
             let resolved = Url::parse(specifier).map_err(JsErrorBox::from_err)?;
             if self.modules.contains_key(resolved.as_str()) {
@@ -2815,6 +2876,115 @@ impl ModuleLoader for ArtifactModuleLoader {
             .get(specifier)
             .map(|value| value.clone().into())
     }
+}
+
+fn flux_pg_module_js() -> &'static str {
+        r#"
+const __fluxPg = globalThis.Flux?.postgres;
+
+if (!__fluxPg || !__fluxPg.NodePgPool || !__fluxPg.nodePgTypes) {
+    throw new Error("Flux pg shim is unavailable");
+}
+
+function __fluxPgNormalizeConfig(config = {}) {
+    const ssl = config?.ssl;
+    return {
+        connectionString: String(config?.connectionString ?? ""),
+        tls: !!ssl,
+        caCertPem: ssl && typeof ssl === "object" && ssl.ca != null ? String(ssl.ca) : null,
+    };
+}
+
+class Client {
+    constructor(config = {}) {
+        this._config = __fluxPgNormalizeConfig(config);
+        this._inner = null;
+        this._released = false;
+    }
+
+    static __fromInner(inner, config = {}) {
+        const client = new Client(config);
+        client._inner = inner;
+        return client;
+    }
+
+    async connect() {
+        if (this._released) {
+            throw new Error("pg Client has already been closed");
+        }
+        if (this._inner) {
+            return this;
+        }
+        const pool = new __fluxPg.NodePgPool(this._config);
+        this._pool = pool;
+        this._inner = await pool.connect();
+        return this;
+    }
+
+    async query(queryOrConfig, values = undefined) {
+        if (!this._inner) {
+            await this.connect();
+        }
+        return this._inner.query(queryOrConfig, values);
+    }
+
+    async release() {
+        if (this._released) {
+            return undefined;
+        }
+        this._released = true;
+        if (this._inner) {
+            await this._inner.release();
+            this._inner = null;
+        }
+        if (this._pool) {
+            await this._pool.end();
+            this._pool = null;
+        }
+        return undefined;
+    }
+
+    async end() {
+        return this.release();
+    }
+}
+
+class Pool {
+    constructor(config = {}) {
+        this.options = { ...config };
+        this._config = __fluxPgNormalizeConfig(config);
+        this._inner = new __fluxPg.NodePgPool(this._config);
+    }
+
+    async query(queryOrConfig, values = undefined) {
+        return this._inner.query(queryOrConfig, values);
+    }
+
+    async connect() {
+        const inner = await this._inner.connect();
+        return Client.__fromInner(inner, this.options);
+    }
+
+    async end() {
+        return this._inner.end();
+    }
+}
+
+const types = __fluxPg.nodePgTypes;
+const defaults = {};
+const native = null;
+
+class DatabaseError extends Error {
+    constructor(message, details = {}) {
+        super(message);
+        this.name = "DatabaseError";
+        Object.assign(this, details);
+    }
+}
+
+export { Client, DatabaseError, Pool, defaults, native, types };
+export default { Client, DatabaseError, Pool, defaults, native, types };
+"#
 }
 
 pub struct JsIsolate {
@@ -4594,6 +4764,58 @@ if (!("self" in globalThis) || globalThis.self !== globalThis) {
     });
 }
 
+if (!("global" in globalThis) || globalThis.global !== globalThis) {
+    Object.defineProperty(globalThis, "global", {
+        value: globalThis,
+        writable: true,
+        enumerable: false,
+        configurable: true,
+    });
+}
+
+const __fluxProcessEnv = new Proxy({}, {
+    get(_target, prop) {
+        if (typeof prop !== "string") return undefined;
+        return Deno.core.ops.op_flux_env_get(prop);
+    },
+    has(_target, prop) {
+        if (typeof prop !== "string") return false;
+        return Deno.core.ops.op_flux_env_get(prop) != null;
+    },
+    ownKeys() {
+        return [];
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+        if (typeof prop !== "string") return undefined;
+        const value = Deno.core.ops.op_flux_env_get(prop);
+        if (value == null) return undefined;
+        return {
+            configurable: true,
+            enumerable: true,
+            writable: false,
+            value,
+        };
+    },
+});
+
+if (typeof globalThis.process !== "object" || globalThis.process === null) {
+    Object.defineProperty(globalThis, "process", {
+        value: {
+            env: __fluxProcessEnv,
+            argv: [],
+            cwd: () => "/",
+            platform: "linux",
+            versions: { node: "20.0.0", flux: "1" },
+            nextTick: (callback, ...args) => queueMicrotask(() => callback(...args)),
+        },
+        writable: true,
+        enumerable: false,
+        configurable: true,
+    });
+} else if (typeof globalThis.process.env !== "object" || globalThis.process.env === null) {
+    globalThis.process.env = __fluxProcessEnv;
+}
+
 const __fluxNavigator = typeof globalThis.navigator === "object" && globalThis.navigator !== null
     ? globalThis.navigator
     : {};
@@ -4826,7 +5048,7 @@ class FluxNodePgClient {
         const rows = __flux_node_pg_rows(response.rows, fields, normalized.rowMode);
         return {
             command: response.command ?? null,
-            rowCount: rows.length,
+            rowCount: Number(response.rowCount ?? response.row_count ?? rows.length),
             rows,
             fields,
         };
@@ -4868,7 +5090,7 @@ class FluxNodePgPool {
         const rows = __flux_node_pg_rows(response.rows, fields, normalized.rowMode);
         return {
             command: response.command ?? null,
-            rowCount: rows.length,
+            rowCount: Number(response.rowCount ?? response.row_count ?? rows.length),
             rows,
             fields,
         };
@@ -4915,6 +5137,7 @@ globalThis.Flux.postgres.query = function(options = {}) {
         rows: Array.isArray(response.rows) ? response.rows : [],
         fields: Array.isArray(response.fields) ? response.fields : [],
         command: response.command ?? null,
+        rowCount: Number(response.rowCount ?? response.row_count ?? 0),
         replay: !!response.replay,
     };
 };
@@ -4931,6 +5154,7 @@ globalThis.Flux.postgres.simpleQuery = function(options = {}) {
         rows: Array.isArray(response.rows) ? response.rows : [],
         fields: Array.isArray(response.fields) ? response.fields : [],
         command: response.command ?? null,
+        rowCount: Number(response.rowCount ?? response.row_count ?? 0),
         replay: !!response.replay,
     };
 };
