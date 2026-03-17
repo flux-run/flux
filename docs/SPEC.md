@@ -4,6 +4,8 @@
 
 Flux provides a backend execution runtime focused on deterministic debugging.
 
+Its core product primitive is the execution record: input, output, and ordered checkpoints captured at Flux-owned side-effect boundaries.
+
 The shipping surface is three binaries:
 
 - `flux` — developer and operator CLI
@@ -21,6 +23,18 @@ The shipping surface is three binaries:
 - replay and compare behaviour (`flux replay --diff`)
 - resume from checkpoint boundary (`flux resume --from`)
 - one-off execution without long-running runtime (`flux exec`)
+
+## Determinism Contract
+
+Flux should preserve this invariant for deterministic replay paths:
+
+- same code
+- same input
+- same recorded checkpoints at the same boundary indices
+
+should yield the same externally observed result.
+
+Replay and resume paths that intentionally perform live side effects are continuation flows, not pure deterministic replay, and should be documented as such.
 
 ## UX Constraints
 

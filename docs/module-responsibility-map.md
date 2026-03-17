@@ -24,6 +24,13 @@ For `flux run`, responsibility flows in one direction:
 
 For `flux serve`, the split is the same after the CLI handoff: process bootstrapping stays in `runtime/src/main.rs`, while execution semantics stay in `runtime/src/deno_runtime.rs` and the runtime library.
 
+Within the runtime library, responsibility splits again:
+
+1. `runtime/src/http_runtime.rs` accepts HTTP traffic and converts it into execution requests.
+2. `runtime/src/isolate_pool.rs` schedules work onto isolates and returns execution envelopes.
+3. `runtime/src/server_client.rs` sends recorded execution data to `flux-server`.
+4. `runtime/src/deno_runtime.rs` remains the only place that executes user JavaScript and exposes host behavior into that JavaScript environment.
+
 ## File Ownership
 
 ### cli/src/run.rs
@@ -82,6 +89,62 @@ Do not put these here:
 - config file lookup
 - broad browser or Node API expansion that bypasses Flux recording
 
+### runtime/src/http_runtime.rs
+
+Owns the HTTP-facing bridge into the runtime.
+
+Safe changes here:
+
+- define health and execution routes
+- parse inbound HTTP requests and bodies
+- filter sensitive headers before user-code dispatch
+- translate `ExecutionResult` into HTTP responses
+- wire execution recording after request completion
+
+Do not put these here:
+
+- JS runtime semantics
+- replay policy
+- isolate scheduling logic
+- gRPC transport details
+
+### runtime/src/isolate_pool.rs
+
+Owns concurrency and scheduling for isolate execution.
+
+Safe changes here:
+
+- worker creation and teardown
+- queue sizing, send timeouts, and result timeouts
+- execution scheduling policy
+- dispatch rules for one-shot execution versus server-mode requests
+- execution result envelopes returned to callers
+
+Do not put these here:
+
+- HTTP routing
+- CLI argument handling
+- external recording transport
+- new host-side JS APIs
+
+### runtime/src/server_client.rs
+
+Owns communication with `flux-server`.
+
+Safe changes here:
+
+- gRPC endpoint normalization
+- auth metadata attachment
+- protobuf request construction
+- serialization of already-decided execution data
+
+Do not put these here:
+
+- logic for deciding what runtime behavior should be recorded
+- HTTP server concerns
+- isolate scheduling
+- user-code execution
+
 ## Decision Rules
 
 When a change request arrives, use this routing logic:
@@ -89,6 +152,19 @@ When a change request arrives, use this routing logic:
 1. If it changes how `flux run` is invoked, validated, or forwarded, start in `cli/src/run.rs`.
 2. If it changes how `flux-runtime` starts, resolves entries, or selects mode, start in `runtime/src/main.rs`.
 3. If it changes JS execution semantics, host ops, replay behavior, or compatibility shims, start in `runtime/src/deno_runtime.rs`.
+4. If it changes HTTP bridging, request shaping, or response shaping around execution, start in `runtime/src/http_runtime.rs`.
+5. If it changes concurrency, worker lifecycle, queueing, or scheduling, start in `runtime/src/isolate_pool.rs`.
+6. If it changes outbound recording transport or protobuf serialization, start in `runtime/src/server_client.rs`.
+
+## Forbidden Cross-Layer Access
+
+- `cli/src/run.rs` must not call runtime internals directly beyond launching `flux-runtime`.
+- `runtime/src/main.rs` must not grow runtime semantics that belong in the runtime library.
+- `runtime/src/deno_runtime.rs` must not depend on CLI modules or perform config discovery.
+- `runtime/src/http_runtime.rs` must not become a second execution engine.
+- `runtime/src/isolate_pool.rs` must not perform direct user-visible side effects outside Flux-controlled ops.
+- `runtime/src/server_client.rs` must not decide execution semantics or replay policy.
+- No single file should both execute user JavaScript and perform real external side effects outside the op boundary.
 
 ## Compatibility Policy
 

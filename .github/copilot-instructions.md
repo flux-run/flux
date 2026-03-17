@@ -33,6 +33,31 @@ Owns the deterministic host/runtime boundary.
 - Do not move CLI concerns, process orchestration, or config loading into this file.
 - Do not expose new side effects here unless they satisfy the determinism rules above.
 
+### runtime/src/http_runtime.rs
+
+Owns the HTTP request/response bridge around runtime execution.
+
+- Keep Axum routing, health endpoints, request parsing, and response shaping here.
+- Keep the translation between inbound HTTP traffic and `IsolatePool` execution here.
+- Keep request-header filtering for user-code safety here.
+- Do not implement JS execution semantics, replay rules, or host ops here.
+
+### runtime/src/isolate_pool.rs
+
+Owns isolate concurrency, worker lifecycle, queueing, and execution scheduling.
+
+- Keep worker creation, queue timeouts, result timeouts, and round-robin scheduling here.
+- Keep execution envelopes and server-mode dispatch scheduling here.
+- Do not implement HTTP routing, CLI contracts, or new host APIs here.
+
+### runtime/src/server_client.rs
+
+Owns outbound recording transport to `flux-server`.
+
+- Keep gRPC connection setup, auth metadata, and execution-record serialization here.
+- Keep protobuf mapping and endpoint normalization here.
+- Do not execute JS, own runtime semantics, or decide what should be recorded here.
+
 ### runtime/src/main.rs
 
 Owns flux-runtime process bootstrapping and mode selection.
@@ -52,6 +77,14 @@ Owns the flux run CLI contract.
 - Translate CLI arguments into the flux-runtime invocation contract.
 - Keep this file focused on process handoff.
 - Do not duplicate runtime semantics or implement host APIs here.
+
+## Cross-Layer Rules
+
+- `cli/src/run.rs` must not call runtime internals directly beyond process handoff.
+- `runtime/src/deno_runtime.rs` must not depend on CLI modules, config lookup, or command parsing.
+- `runtime/src/http_runtime.rs` must not implement JS platform behavior or deterministic host ops.
+- `runtime/src/isolate_pool.rs` must not perform direct external side effects on behalf of user code.
+- No file should both execute user JavaScript and perform real side effects outside Flux-controlled ops.
 
 ## Change Heuristics
 
