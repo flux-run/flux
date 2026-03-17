@@ -2,6 +2,8 @@ use anyhow::{Result, bail};
 use clap::Args;
 use std::collections::BTreeSet;
 
+const REPLAY_DIVERGENCE_EXIT_CODE: i32 = 2;
+
 use crate::config::resolve_auth;
 use crate::grpc::{get_trace, replay};
 
@@ -106,14 +108,14 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
 
     println!();
     for step in &response.steps {
-        let source = if step.used_recorded { "recorded" } else { "live" };
+        let validation_state = if step.validated { ", validated" } else { "" };
         println!(
             "  [{}] {}  {}  {}ms  ({})",
             step.call_index,
             step.boundary.to_uppercase(),
             step.url,
             step.duration_ms,
-            source
+            format!("{}{}", step.source, validation_state)
         );
 
         if args.diff {
@@ -152,6 +154,11 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     }
 
     println!();
+
+    if args.validate && response.divergence.is_some() {
+        std::process::exit(REPLAY_DIVERGENCE_EXIT_CODE);
+    }
+
     Ok(())
 }
 

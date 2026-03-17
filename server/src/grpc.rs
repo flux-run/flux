@@ -824,6 +824,9 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 (cp_response.clone(), *checkpoint_duration_ms, true)
             };
 
+            let source = if used_recorded { "recorded" } else { "live" };
+            let validated = validate && boundary == "http" && !used_recorded && response_to_store == *cp_response;
+
             sqlx::query(
                 "INSERT INTO flux.checkpoints
                  (execution_id, call_index, boundary, url, method, request, response, duration_ms)
@@ -852,6 +855,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 url: step_url.clone(),
                 used_recorded,
                 duration_ms: step_duration,
+                source: source.to_string(),
+                validated,
             });
 
             if validate && boundary == "http" && !used_recorded && response_to_store != *cp_response {
@@ -1030,6 +1035,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                     url: step_url,
                     used_recorded: true,
                     duration_ms: 0,
+                    source: "recorded".to_string(),
+                    validated: false,
                 });
 
                 continue;
@@ -1061,6 +1068,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 url: step_url,
                 used_recorded: false,
                 duration_ms,
+                source: "live".to_string(),
+                validated: false,
             });
 
             final_output = live_response

@@ -72,6 +72,8 @@ pub struct ReplayStepView {
     pub url: String,
     pub used_recorded: bool,
     pub duration_ms: i32,
+    pub source: String,
+    pub validated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -313,6 +315,8 @@ pub async fn replay(
                 url: step.url,
                 used_recorded: step.used_recorded,
                 duration_ms: step.duration_ms,
+                source: step.source,
+                validated: step.validated,
             })
             .collect(),
         divergence: response.divergence.map(|divergence| ReplayDivergenceView {
@@ -368,6 +372,8 @@ pub async fn resume(
                 url: step.url,
                 used_recorded: step.used_recorded,
                 duration_ms: step.duration_ms,
+                source: step.source,
+                validated: step.validated,
             })
             .collect(),
     })
