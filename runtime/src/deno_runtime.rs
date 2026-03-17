@@ -1269,6 +1269,10 @@ struct PostgresFieldMetadata {
 
 struct PostgresNumericText(String);
 
+struct PostgresJsonText(String);
+
+struct PostgresArrayText(String);
+
 impl<'a> FromSql<'a> for PostgresNumericText {
     fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(Self(std::str::from_utf8(raw)?.to_string()))
@@ -1276,6 +1280,37 @@ impl<'a> FromSql<'a> for PostgresNumericText {
 
     fn accepts(ty: &PostgresType) -> bool {
         *ty == postgres::types::Type::NUMERIC
+    }
+}
+
+impl<'a> FromSql<'a> for PostgresJsonText {
+    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &PostgresType) -> bool {
+        *ty == postgres::types::Type::JSON || *ty == postgres::types::Type::JSONB
+    }
+}
+
+impl<'a> FromSql<'a> for PostgresArrayText {
+    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &PostgresType) -> bool {
+        matches!(
+            *ty,
+            postgres::types::Type::BOOL_ARRAY
+                | postgres::types::Type::INT2_ARRAY
+                | postgres::types::Type::INT4_ARRAY
+                | postgres::types::Type::INT8_ARRAY
+                | postgres::types::Type::FLOAT4_ARRAY
+                | postgres::types::Type::FLOAT8_ARRAY
+                | postgres::types::Type::TEXT_ARRAY
+                | postgres::types::Type::VARCHAR_ARRAY
+                | postgres::types::Type::NUMERIC_ARRAY
+        )
     }
 }
 
@@ -1569,58 +1604,102 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .try_get::<_, Option<serde_json::Value>>(name)
             .ok()
             .flatten()
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresJsonText>>(name)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| serde_json::from_str::<serde_json::Value>(&value.0).ok())
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::BOOL_ARRAY => row
             .try_get::<_, Option<Vec<bool>>>(name)
             .ok()
             .flatten()
             .map(|values| serde_json::Value::Array(values.into_iter().map(serde_json::Value::Bool).collect()))
-            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, parse_postgres_bool_array_element)))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresArrayText>>(name)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| parse_postgres_text_array(&value.0, parse_postgres_bool_array_element))
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::INT2_ARRAY => row
             .try_get::<_, Option<Vec<i16>>>(name)
             .ok()
             .flatten()
             .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
-            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<i16>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresArrayText>>(name)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<i16>().ok().map(|parsed| serde_json::json!(parsed))))
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::INT4_ARRAY => row
             .try_get::<_, Option<Vec<i32>>>(name)
             .ok()
             .flatten()
             .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
-            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<i32>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresArrayText>>(name)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<i32>().ok().map(|parsed| serde_json::json!(parsed))))
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::INT8_ARRAY => row
             .try_get::<_, Option<Vec<i64>>>(name)
             .ok()
             .flatten()
             .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
-            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<i64>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresArrayText>>(name)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<i64>().ok().map(|parsed| serde_json::json!(parsed))))
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::FLOAT4_ARRAY => row
             .try_get::<_, Option<Vec<f32>>>(name)
             .ok()
             .flatten()
             .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
-            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<f32>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresArrayText>>(name)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<f32>().ok().map(|parsed| serde_json::json!(parsed))))
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::FLOAT8_ARRAY => row
             .try_get::<_, Option<Vec<f64>>>(name)
             .ok()
             .flatten()
             .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
-            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<f64>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresArrayText>>(name)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<f64>().ok().map(|parsed| serde_json::json!(parsed))))
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::TEXT_ARRAY | postgres::types::Type::VARCHAR_ARRAY => row
             .try_get::<_, Option<Vec<String>>>(name)
             .ok()
             .flatten()
             .map(|values| serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect()))
-            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| Some(serde_json::Value::String(item.to_string())))))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresArrayText>>(name)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| parse_postgres_text_array(&value.0, |item| Some(serde_json::Value::String(item.to_string()))))
+            })
             .unwrap_or(serde_json::Value::Null),
-        postgres::types::Type::NUMERIC_ARRAY => string_value()
-            .and_then(|value| parse_postgres_text_array(&value, |item| Some(serde_json::Value::String(item.to_string()))))
+        postgres::types::Type::NUMERIC_ARRAY => row
+            .try_get::<_, Option<PostgresArrayText>>(name)
+            .ok()
+            .flatten()
+            .and_then(|value| parse_postgres_text_array(&value.0, |item| Some(serde_json::Value::String(item.to_string()))))
             .unwrap_or(serde_json::Value::Null),
         _ => string_value()
             .map(serde_json::Value::String)

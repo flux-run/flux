@@ -51,6 +51,8 @@ const { types } = pg;
 types.setTypeParser(types.builtins.NUMERIC, (value) => value);
 ```
 
+- The same OID-based parser path now applies to JSONB and one-dimensional array fields on extended queries, so custom `pg` parsers can reshape those values too.
+
 Important compatibility note:
 
 - Flux still does not support direct bare package imports in the runtime artifact path. This shim is the database-driver side of the integration, not the full package-loading story. It is most useful for bundled builds or for the next runtime slice that adds broader package compatibility.

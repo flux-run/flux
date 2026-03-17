@@ -550,6 +550,90 @@ export default async function handler({ input }) {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_node_pg_pool_applies_json_and_array_type_parsers() -> Result<()> {
+    let _lock = postgres_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let (port, shutdown_tx, server_task) = spawn_mock_postgres_json_array_result_server().await?;
+
+    let code = r#"
+export default async function handler({ input }) {
+    const types = Flux.postgres.nodePgTypes;
+    types.setTypeParser(types.builtins.JSONB, (value) => {
+        const payload = typeof value === "string" ? JSON.parse(value) : value;
+        return {
+            ok: !!payload.ok,
+            label: String(payload.label ?? "").toUpperCase(),
+        };
+    });
+    types.setTypeParser(types.builtins.INT8_ARRAY, (value) => {
+        const values = Array.isArray(value) ? value : String(value).slice(1, -1).split(",");
+        return values.map((item) => Number(item) + 1);
+    });
+    types.setTypeParser(types.builtins.TEXT_ARRAY, (value) => {
+        const values = Array.isArray(value) ? value : String(value).slice(1, -1).split(",");
+        return values.join("|");
+    });
+
+    const pool = Flux.postgres.createNodePgPool({
+        connectionString: input.connectionString,
+    });
+    const result = await pool.query(input.sql);
+    await pool.end();
+
+    return {
+        rows: result.rows,
+        fields: result.fields,
+    };
+}
+"#;
+
+    let payload = serde_json::json!({
+        "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
+        "sql": "select '{\"ok\":true,\"label\":\"json\"}'::jsonb as payload, '{1,2,3}'::int8[] as ids, '{\"alpha\",\"beta\"}'::text[] as tags",
+    });
+
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg json-array parser isolate")?;
+    let live_output = isolate
+        .execute(payload.clone(), ExecutionContext::new("postgres-node-pg-json-array-live"))
+        .await
+        .context("node-pg json-array parser execution failed")?;
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("mock postgres json-array server task failed")??;
+
+    assert_eq!(live_output.error, None);
+    assert_eq!(
+        live_output.output,
+        serde_json::json!({
+            "rows": [{
+                "payload": { "ok": true, "label": "JSON" },
+                "ids": [2, 3, 4],
+                "tags": "alpha|beta",
+            }],
+            "fields": [
+                { "name": "payload", "dataTypeID": 3802, "format": "text" },
+                { "name": "ids", "dataTypeID": 1016, "format": "text" },
+                { "name": "tags", "dataTypeID": 1009, "format": "text" },
+            ],
+        })
+    );
+
+    let recorded = live_output.checkpoints.clone();
+    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create node-pg json-array replay isolate")?;
+    let mut replay_context = ExecutionContext::new("postgres-node-pg-json-array-replay");
+    replay_context.mode = ExecutionMode::Replay;
+    let replay_output = replay_isolate
+        .execute_with_recorded(payload, replay_context, recorded)
+        .await
+        .context("node-pg json-array parser replay failed")?;
+
+    assert_eq!(replay_output.error, None);
+    assert_eq!(replay_output.output, live_output.output);
+
+    Ok(())
+}
+
 async fn spawn_mock_postgres_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -809,6 +893,68 @@ async fn spawn_mock_postgres_numeric_result_server() -> Result<(u16, oneshot::Se
                     "select 12.3400::numeric as amount",
                     &[],
                     Some((&[(b"amount".as_slice(), 1700)], vec![Some(b"12.3400".as_slice())])),
+                    b"SELECT 1",
+                ).await?;
+
+                let next = read_typed_message(&mut socket).await?;
+                if next.tag == b'C' {
+                    let sync = read_typed_message(&mut socket).await?;
+                    if sync.tag != b'S' {
+                        anyhow::bail!("expected Sync after Close, got {:?}", sync.tag as char);
+                    }
+                    write_message(&mut socket, b'3', |_| {}).await?;
+                    write_ready_for_query(&mut socket).await?;
+
+                    let terminate = read_typed_message(&mut socket).await?;
+                    if terminate.tag != b'X' {
+                        anyhow::bail!("expected Terminate message, got {:?}", terminate.tag as char);
+                    }
+                } else if next.tag != b'X' {
+                    anyhow::bail!("expected Close or Terminate message, got {:?}", next.tag as char);
+                }
+
+                Ok(())
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx, task))
+}
+
+async fn spawn_mock_postgres_json_array_result_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind mock postgres json-array listener")?;
+    let port = listener
+        .local_addr()
+        .context("failed to get mock postgres json-array addr")?
+        .port();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = &mut shutdown_rx => Ok(()),
+            accepted = listener.accept() => {
+                let (mut socket, _) = accepted.context("failed to accept postgres json-array client")?;
+
+                let _startup = read_startup_message(&mut socket).await?;
+                write_authentication_ok(&mut socket).await?;
+                write_parameter_status(&mut socket, b"client_encoding", b"UTF8").await?;
+                write_parameter_status(&mut socket, b"server_version", b"16.0").await?;
+                write_backend_key_data(&mut socket).await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let parse = read_typed_message(&mut socket).await?;
+                if parse.tag != b'P' {
+                    anyhow::bail!("expected Parse message, got {:?}", parse.tag as char);
+                }
+
+                handle_extended_query_columns(
+                    &mut socket,
+                    parse,
+                    "select '{\"ok\":true,\"label\":\"json\"}'::jsonb as payload, '{1,2,3}'::int8[] as ids, '{\"alpha\",\"beta\"}'::text[] as tags",
+                    &[],
+                    Some((&[(b"payload".as_slice(), 3802), (b"ids".as_slice(), 1016), (b"tags".as_slice(), 1009)], vec![Some(b"{\"ok\":true,\"label\":\"json\"}".as_slice()), Some(b"{1,2,3}".as_slice()), Some(b"{\"alpha\",\"beta\"}".as_slice())])),
                     b"SELECT 1",
                 ).await?;
 
