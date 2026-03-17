@@ -157,6 +157,14 @@ It is instead:
 
 That distinction should stay explicit in both code and docs.
 
+### Replay Validation Mode Today
+
+Flux also supports a stricter validation mode for live replay.
+
+When commit replay is run with validation enabled, live HTTP checkpoint results must match the recorded checkpoint results. If they diverge, replay must fail loudly instead of silently accepting drift.
+
+That mode is not pure deterministic replay, but it is a useful enforcement tool for checking whether the outside world still behaves consistently with recorded history.
+
 ## Replay Contract
 
 The replay contract for Flux should be written as two modes.

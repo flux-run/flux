@@ -107,9 +107,12 @@ flux why <execution_id>
 ```bash
 flux replay <execution_id>
 flux replay <execution_id> --from-index 1 --diff
+flux replay <execution_id> --commit --validate
 flux resume <execution_id>
 flux resume <execution_id> --from 2
 ```
+
+`flux replay --commit --validate` turns live replay divergence into a loud failure: if a live HTTP checkpoint result differs from the recorded checkpoint result, replay is marked as an error instead of silently drifting.
 
 ## One-Off Local Run
 

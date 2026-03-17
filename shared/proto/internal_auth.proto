@@ -120,6 +120,7 @@ message ReplayRequest {
   string execution_id = 1;
   bool commit = 2;
   int32 from_index = 3;
+  bool validate = 4;
 }
 
 message ReplayStep {

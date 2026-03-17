@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::Args;
 use std::collections::BTreeSet;
 
@@ -11,6 +11,8 @@ pub struct ReplayArgs {
     pub execution_id: String,
     #[arg(long)]
     pub commit: bool,
+    #[arg(long)]
+    pub validate: bool,
     #[arg(long, value_name = "INDEX")]
     pub from_index: Option<i32>,
     #[arg(long, value_name = "URL")]
@@ -22,6 +24,10 @@ pub struct ReplayArgs {
 }
 
 pub async fn execute(args: ReplayArgs) -> Result<()> {
+    if args.validate && !args.commit {
+        bail!("--validate requires --commit so replay can compare live checkpoint results against recorded checkpoints");
+    }
+
     let auth = resolve_auth(args.url, args.token)?;
     let from_index = args.from_index.unwrap_or(0).max(0);
     let original = if args.diff {
@@ -46,6 +52,7 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         &args.execution_id,
         args.commit,
         from_index,
+        args.validate,
     )
     .await?;
 
@@ -58,6 +65,10 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         "  {}  {}  {}ms",
         status_symbol, response.status, response.duration_ms
     );
+
+    if args.validate {
+        println!("  validation  live checkpoints must match recorded checkpoints");
+    }
 
     if let Some(original) = &original {
         println!();

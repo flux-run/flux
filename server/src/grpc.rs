@@ -307,6 +307,24 @@ async fn perform_live_http_call(request: &serde_json::Value) -> Result<(serde_js
     ))
 }
 
+fn summarize_http_response(value: &serde_json::Value) -> String {
+    let status = value
+        .get("status")
+        .and_then(|v| v.as_i64())
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let body = value.get("body").cloned().unwrap_or(serde_json::Value::Null);
+    let body_text = serde_json::to_string(&body).unwrap_or_else(|_| "null".to_string());
+    let shortened_body = if body_text.len() > 160 {
+        format!("{}...", &body_text[..160])
+    } else {
+        body_text
+    };
+
+    format!("status={} body={}", status, shortened_body)
+}
+
 #[tonic::async_trait]
 impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc {
     type TailStream = ReceiverStream<Result<pb::TailEvent, Status>>;
@@ -682,6 +700,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let _auth_mode = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
         let commit = req.commit;
+        let validate = req.validate;
+
+        if validate && !commit {
+            return Err(Status::invalid_argument(
+                "replay validation requires commit mode so live checkpoint results can be compared",
+            ));
+        }
 
         let source_execution_id = uuid::Uuid::parse_str(&req.execution_id)
             .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
@@ -818,6 +843,17 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 used_recorded,
                 duration_ms: step_duration,
             });
+
+            if validate && boundary == "http" && !used_recorded && response_to_store != *cp_response {
+                replay_status = "error".to_string();
+                replay_error = format!(
+                    "replay validation failed at checkpoint {}: live HTTP response diverged from recorded checkpoint\nrecorded  {}\nlive      {}",
+                    call_index,
+                    summarize_http_response(cp_response),
+                    summarize_http_response(&response_to_store),
+                );
+                break;
+            }
         }
 
         let replay_duration_ms = replay_started.elapsed().as_millis() as i32;

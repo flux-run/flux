@@ -263,6 +263,7 @@ pub async fn replay(
     execution_id: &str,
     commit: bool,
     from_index: i32,
+    validate: bool,
 ) -> Result<ReplayView> {
     let endpoint = normalize_grpc_url(url);
     let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
@@ -273,6 +274,7 @@ pub async fn replay(
         execution_id: execution_id.to_string(),
         commit,
         from_index,
+        validate,
     });
     request.metadata_mut().insert(
         "authorization",
