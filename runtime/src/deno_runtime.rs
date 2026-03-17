@@ -18,7 +18,7 @@ use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResp
 use deno_error::JsErrorBox;
 use postgres::config::SslMode as PostgresSslMode;
 use postgres::{Client as PostgresClient, Config as PostgresConfig, NoTls, SimpleQueryMessage};
-use postgres::types::ToSql;
+use postgres::types::{FromSql, ToSql, Type as PostgresType};
 use postgres_rustls::MakeTlsConnector as PostgresMakeTlsConnector;
 use rand::Rng;
 use rustls::pki_types::ServerName;
@@ -903,6 +903,7 @@ fn op_flux_postgres_simple_query(
             tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: returned recorded postgres query");
             return Ok(serde_json::json!({
                 "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
+                "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
                 "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
                 "replay": true,
             }));
@@ -930,6 +931,7 @@ fn op_flux_postgres_simple_query(
     });
     let response_json = serde_json::json!({
         "rows": live_response.rows,
+        "fields": postgres_fields_json(&live_response.fields),
         "command": live_response.command,
         "row_count": live_response.row_count,
         "replay": false,
@@ -954,6 +956,7 @@ fn op_flux_postgres_simple_query(
 
     Ok(serde_json::json!({
         "rows": response_json.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "fields": response_json.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
         "command": response_json.get("command").cloned().unwrap_or(serde_json::Value::Null),
         "replay": false,
     }))
@@ -1012,6 +1015,7 @@ fn op_flux_postgres_session_query(
             tracing::debug!(%request_id, %call_index, session_id = %session_id, "replay: returned recorded postgres session query");
             return Ok(serde_json::json!({
                 "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
+                "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
                 "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
                 "replay": true,
             }));
@@ -1051,6 +1055,7 @@ fn op_flux_postgres_session_query(
     });
     let response_json = serde_json::json!({
         "rows": live_response.rows,
+        "fields": postgres_fields_json(&live_response.fields),
         "command": live_response.command,
         "row_count": live_response.row_count,
         "replay": false,
@@ -1075,6 +1080,7 @@ fn op_flux_postgres_session_query(
 
     Ok(serde_json::json!({
         "rows": response_json.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "fields": response_json.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
         "command": response_json.get("command").cloned().unwrap_or(serde_json::Value::Null),
         "replay": false,
     }))
@@ -1146,6 +1152,7 @@ fn op_flux_postgres_query(
             tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: returned recorded postgres prepared query");
             return Ok(serde_json::json!({
                 "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
+                "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
                 "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
                 "replay": true,
             }));
@@ -1175,6 +1182,7 @@ fn op_flux_postgres_query(
     });
     let response_json = serde_json::json!({
         "rows": live_response.rows,
+        "fields": postgres_fields_json(&live_response.fields),
         "command": live_response.command,
         "row_count": live_response.row_count,
         "replay": false,
@@ -1199,6 +1207,7 @@ fn op_flux_postgres_query(
 
     Ok(serde_json::json!({
         "rows": response_json.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "fields": response_json.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
         "command": response_json.get("command").cloned().unwrap_or(serde_json::Value::Null),
         "replay": false,
     }))
@@ -1252,8 +1261,28 @@ fn op_flux_postgres_close_session(
 }
 
 #[derive(Debug)]
+struct PostgresFieldMetadata {
+    name: String,
+    data_type_id: u32,
+    format: String,
+}
+
+struct PostgresNumericText(String);
+
+impl<'a> FromSql<'a> for PostgresNumericText {
+    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &PostgresType) -> bool {
+        *ty == postgres::types::Type::NUMERIC
+    }
+}
+
+#[derive(Debug)]
 struct PostgresSimpleQueryResponse {
     rows: Vec<serde_json::Value>,
+    fields: Vec<PostgresFieldMetadata>,
     command: Option<String>,
     row_count: usize,
 }
@@ -1303,6 +1332,7 @@ fn perform_postgres_simple_query_with_client(
         .map_err(|err| format!("postgres query failed: {err}"))?;
 
     let mut rows = Vec::new();
+    let mut fields = Vec::new();
     let mut command = None;
     let command_name = sql
         .split_whitespace()
@@ -1326,6 +1356,16 @@ fn perform_postgres_simple_query_with_client(
             SimpleQueryMessage::CommandComplete(count) => {
                 command = Some(format!("{} {}", command_name, count));
             }
+            SimpleQueryMessage::RowDescription(columns) => {
+                fields = columns
+                    .iter()
+                    .map(|column| PostgresFieldMetadata {
+                        name: column.name().to_string(),
+                        data_type_id: postgres::types::Type::TEXT.oid(),
+                        format: "text".to_string(),
+                    })
+                    .collect();
+            }
             _ => {}
         }
     }
@@ -1333,6 +1373,7 @@ fn perform_postgres_simple_query_with_client(
     Ok(PostgresSimpleQueryResponse {
         row_count: rows.len(),
         rows,
+        fields,
         command,
     })
 }
@@ -1355,6 +1396,19 @@ fn perform_postgres_query_with_client(
         .query(sql, &refs)
         .map_err(|err| format!("postgres query failed: {err}"))?;
 
+    let fields = query_rows
+        .first()
+        .map(|row| {
+            row.columns()
+                .iter()
+                .map(|column| PostgresFieldMetadata {
+                    name: column.name().to_string(),
+                    data_type_id: column.type_().oid(),
+                    format: "text".to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let mut rows = Vec::new();
     for row in query_rows {
         let mut object = serde_json::Map::new();
@@ -1369,6 +1423,7 @@ fn perform_postgres_query_with_client(
     Ok(PostgresSimpleQueryResponse {
         row_count: rows.len(),
         rows,
+        fields,
         command: Some("QUERY".to_string()),
     })
 }
@@ -1503,8 +1558,12 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .map(|value| serde_json::json!(value))
             .or_else(|| string_value().and_then(|value| value.parse::<f64>().ok().map(|parsed| serde_json::json!(parsed))))
             .unwrap_or(serde_json::Value::Null),
-        postgres::types::Type::NUMERIC => string_value()
-            .map(serde_json::Value::String)
+        postgres::types::Type::NUMERIC => row
+            .try_get::<_, Option<PostgresNumericText>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::Value::String(value.0))
+            .or_else(|| string_value().map(serde_json::Value::String))
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::JSON | postgres::types::Type::JSONB => row
             .try_get::<_, Option<serde_json::Value>>(name)
@@ -1567,6 +1626,21 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .map(serde_json::Value::String)
             .unwrap_or(serde_json::Value::Null),
     }
+}
+
+fn postgres_fields_json(fields: &[PostgresFieldMetadata]) -> serde_json::Value {
+    serde_json::Value::Array(
+        fields
+            .iter()
+            .map(|field| {
+                serde_json::json!({
+                    "name": field.name,
+                    "dataTypeID": field.data_type_id,
+                    "format": field.format,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn parse_postgres_bool_array_element(item: &str) -> Option<serde_json::Value> {
@@ -4256,16 +4330,52 @@ globalThis.Flux = globalThis.Flux || {};
 globalThis.Flux.postgres = globalThis.Flux.postgres || {};
 globalThis.Flux.net = globalThis.Flux.net || {};
 const __flux_pg_builtin_types = Object.freeze({
+    BOOL: 16,
+    INT8: 20,
+    INT2: 21,
+    INT4: 23,
+    TEXT: 25,
+    OID: 26,
+    JSON: 114,
+    FLOAT4: 700,
+    FLOAT8: 701,
+    VARCHAR: 1043,
+    BOOL_ARRAY: 1000,
+    INT2_ARRAY: 1005,
+    INT4_ARRAY: 1007,
+    TEXT_ARRAY: 1009,
+    INT8_ARRAY: 1016,
+    FLOAT4_ARRAY: 1021,
+    FLOAT8_ARRAY: 1022,
     DATE: 1082,
     TIMESTAMP: 1114,
     TIMESTAMPTZ: 1184,
     INTERVAL: 1186,
+    VARCHAR_ARRAY: 1015,
+    NUMERIC: 1700,
+    NUMERIC_ARRAY: 1231,
+    JSONB: 3802,
 });
+const __flux_pg_type_parsers = new Map();
+function __flux_pg_parser_key(typeId, format) {
+    return `${String(typeId)}:${format === "binary" ? "binary" : "text"}`;
+}
+function __flux_pg_set_type_parser(typeId, formatOrParser, parserMaybe) {
+    const parser = typeof parserMaybe === "function" ? parserMaybe : formatOrParser;
+    const format = typeof parserMaybe === "function"
+        ? (formatOrParser === "binary" ? "binary" : "text")
+        : "text";
+    if (typeof parser !== "function") {
+        throw new TypeError("Flux.postgres.nodePgTypes.setTypeParser expects a parser function");
+    }
+    __flux_pg_type_parsers.set(__flux_pg_parser_key(typeId, format), parser);
+}
 globalThis.Flux.postgres.nodePgTypes = Object.freeze({
     builtins: __flux_pg_builtin_types,
-    getTypeParser(_typeId, _format) {
-        return (value) => value;
+    getTypeParser(typeId, format = "text") {
+        return __flux_pg_type_parsers.get(__flux_pg_parser_key(typeId, format)) ?? ((value) => value);
     },
+    setTypeParser: __flux_pg_set_type_parser,
 });
 function __flux_normalize_node_pg_query(queryOrConfig, params) {
     if (typeof queryOrConfig === "string") {
@@ -4290,7 +4400,15 @@ function __flux_normalize_node_pg_query(queryOrConfig, params) {
         rowMode: queryOrConfig.rowMode === "array" ? "array" : null,
     };
 }
-function __flux_node_pg_field_list(rows) {
+function __flux_node_pg_field_list(fields, rows) {
+    if (Array.isArray(fields) && fields.length > 0) {
+        return fields.map((field) => ({
+            name: String(field?.name ?? ""),
+            dataTypeID: Number(field?.dataTypeID ?? 0),
+            format: field?.format === "binary" ? "binary" : "text",
+        }));
+    }
+
     const first = Array.isArray(rows) ? rows[0] : null;
     if (!first || typeof first !== "object" || Array.isArray(first)) return [];
     return Object.keys(first).map((name) => ({
@@ -4299,12 +4417,24 @@ function __flux_node_pg_field_list(rows) {
         format: "text",
     }));
 }
-function __flux_node_pg_rows(rows, rowMode) {
+function __flux_node_pg_apply_field_parsers(row, fields) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return row;
+    const parsed = {};
+    for (const field of fields) {
+        const name = String(field?.name ?? "");
+        const parser = globalThis.Flux.postgres.nodePgTypes.getTypeParser(field?.dataTypeID ?? 0, field?.format ?? "text");
+        const value = row[name];
+        parsed[name] = value == null ? value : parser(value);
+    }
+    return parsed;
+}
+function __flux_node_pg_rows(rows, fields, rowMode) {
     if (!Array.isArray(rows)) return [];
-    if (rowMode !== "array") return rows;
-    return rows.map((row) => {
+    const parsedRows = rows.map((row) => __flux_node_pg_apply_field_parsers(row, fields));
+    if (rowMode !== "array") return parsedRows;
+    return parsedRows.map((row) => {
         if (!row || typeof row !== "object" || Array.isArray(row)) return [];
-        return Object.values(row);
+        return fields.map((field) => row[String(field?.name ?? "")]);
     });
 }
 class FluxNodePgClient {
@@ -4325,8 +4455,8 @@ class FluxNodePgClient {
             sql: normalized.text,
             params: normalized.params,
         });
-        const fields = __flux_node_pg_field_list(response.rows);
-        const rows = __flux_node_pg_rows(response.rows, normalized.rowMode);
+        const fields = __flux_node_pg_field_list(response.fields, response.rows);
+        const rows = __flux_node_pg_rows(response.rows, fields, normalized.rowMode);
         return {
             command: response.command ?? null,
             rowCount: rows.length,
@@ -4367,8 +4497,8 @@ class FluxNodePgPool {
             tls: this.tls,
             caCertPem: this.caCertPem,
         });
-        const fields = __flux_node_pg_field_list(response.rows);
-        const rows = __flux_node_pg_rows(response.rows, normalized.rowMode);
+        const fields = __flux_node_pg_field_list(response.fields, response.rows);
+        const rows = __flux_node_pg_rows(response.rows, fields, normalized.rowMode);
         return {
             command: response.command ?? null,
             rowCount: rows.length,
@@ -4416,6 +4546,7 @@ globalThis.Flux.postgres.query = function(options = {}) {
 
     return {
         rows: Array.isArray(response.rows) ? response.rows : [],
+        fields: Array.isArray(response.fields) ? response.fields : [],
         command: response.command ?? null,
         replay: !!response.replay,
     };
@@ -4431,6 +4562,7 @@ globalThis.Flux.postgres.simpleQuery = function(options = {}) {
 
     return {
         rows: Array.isArray(response.rows) ? response.rows : [],
+        fields: Array.isArray(response.fields) ? response.fields : [],
         command: response.command ?? null,
         replay: !!response.replay,
     };

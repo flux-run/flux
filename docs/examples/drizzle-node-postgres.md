@@ -38,7 +38,18 @@ What this shim supports today:
 - `client.query(...)` on that connected client
 - `client.release()`
 - `pool.end()`
-- `types.builtins` and `types.getTypeParser(...)` for the basic surface Drizzle references
+- `types.builtins`, `types.getTypeParser(...)`, and `types.setTypeParser(...)`
+- query `fields` with real Postgres `dataTypeID` values for extended queries
+
+Numeric compatibility note:
+
+- Flux preserves `NUMERIC` values exactly by default as strings.
+- If you want app-specific parsing, register a parser just like `pg`:
+
+```js
+const { types } = pg;
+types.setTypeParser(types.builtins.NUMERIC, (value) => value);
+```
 
 Important compatibility note:
 
