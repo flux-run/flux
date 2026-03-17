@@ -245,6 +245,49 @@ export default async function handler() {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wintertc_minimum_common_globals_are_available() -> Result<()> {
+    let _lock = polyfill_test_lock().lock().await;
+    let code = r#"
+export default async function handler() {
+  reportError(new Error("wintertc report"));
+
+  return {
+    selfIsGlobal: self === globalThis,
+    navigatorType: typeof navigator,
+    userAgent: navigator.userAgent,
+    reportErrorType: typeof reportError,
+    encoded: btoa("Flux"),
+    decoded: atob("Rmx1eA=="),
+  };
+}
+"#;
+
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create isolate")?;
+    let output = isolate
+        .execute(serde_json::json!({}), ExecutionContext::new("wintertc-min-common"))
+        .await
+        .context("wintertc globals execution failed")?;
+
+    assert_eq!(output.error, None);
+    assert_eq!(
+        output.output,
+        serde_json::json!({
+            "selfIsGlobal": true,
+            "navigatorType": "object",
+            "userAgent": "Flux Runtime",
+            "reportErrorType": "function",
+            "encoded": "Rmx1eA==",
+            "decoded": "Flux",
+        })
+    );
+    assert!(output.checkpoints.is_empty(), "wintertc globals should not create checkpoints");
+    assert_eq!(output.logs.len(), 1, "reportError should emit exactly one console error");
+    assert!(output.logs[0].message.contains("wintertc report"));
+
+    Ok(())
+}
+
 fn polyfill_test_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))

@@ -3420,6 +3420,7 @@ globalThis.TextDecoder = globalThis.TextDecoder || TextDecoder;
 
 const __fluxEncoder = new globalThis.TextEncoder();
 const __fluxDecoder = new globalThis.TextDecoder();
+const __fluxBase64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 function __fluxNormalizeHeaderName(name) {
     return String(name).toLowerCase();
@@ -3511,6 +3512,77 @@ function __fluxDecodeFormComponent(value) {
     }
 
     return __fluxDecoder.decode(new Uint8Array(bytes));
+}
+
+function __fluxBase64Encode(input) {
+    const source = String(input);
+    const bytes = [];
+
+    for (let index = 0; index < source.length; index++) {
+        const codePoint = source.charCodeAt(index);
+        if (codePoint > 0xFF) {
+            throw new DOMException(
+                "The string to be encoded contains characters outside of the Latin1 range.",
+                "InvalidCharacterError",
+            );
+        }
+        bytes.push(codePoint);
+    }
+
+    let output = "";
+    for (let index = 0; index < bytes.length; index += 3) {
+        const byte1 = bytes[index];
+        const byte2 = index + 1 < bytes.length ? bytes[index + 1] : undefined;
+        const byte3 = index + 2 < bytes.length ? bytes[index + 2] : undefined;
+        const chunk = (byte1 << 16) | ((byte2 ?? 0) << 8) | (byte3 ?? 0);
+
+        output += __fluxBase64Alphabet[(chunk >> 18) & 0x3F];
+        output += __fluxBase64Alphabet[(chunk >> 12) & 0x3F];
+        output += byte2 === undefined ? "=" : __fluxBase64Alphabet[(chunk >> 6) & 0x3F];
+        output += byte3 === undefined ? "=" : __fluxBase64Alphabet[chunk & 0x3F];
+    }
+
+    return output;
+}
+
+function __fluxBase64Decode(input) {
+    const source = String(input).replace(/[\t\n\f\r ]+/g, "");
+    if (source.length % 4 === 1) {
+        throw new DOMException("The string to be decoded is not correctly encoded.", "InvalidCharacterError");
+    }
+    if (/[^A-Za-z0-9+/=]/.test(source) || /=[^=]/.test(source) || /={3,}/.test(source)) {
+        throw new DOMException("The string to be decoded is not correctly encoded.", "InvalidCharacterError");
+    }
+
+    let output = "";
+    for (let index = 0; index < source.length; index += 4) {
+        const chunk = source.slice(index, index + 4);
+        if (chunk.length === 0) break;
+
+        const char1 = chunk[0] ?? "A";
+        const char2 = chunk[1] ?? "A";
+        const char3 = chunk[2] ?? "A";
+        const char4 = chunk[3] ?? "A";
+        const value1 = __fluxBase64Alphabet.indexOf(char1);
+        const value2 = __fluxBase64Alphabet.indexOf(char2);
+        const value3 = char3 === "=" ? 0 : __fluxBase64Alphabet.indexOf(char3);
+        const value4 = char4 === "=" ? 0 : __fluxBase64Alphabet.indexOf(char4);
+
+        if (value1 === -1 || value2 === -1 || (char3 !== "=" && value3 === -1) || (char4 !== "=" && value4 === -1)) {
+            throw new DOMException("The string to be decoded is not correctly encoded.", "InvalidCharacterError");
+        }
+
+        const combined = (value1 << 18) | (value2 << 12) | (value3 << 6) | value4;
+        output += String.fromCharCode((combined >> 16) & 0xFF);
+        if (char3 !== "=") {
+            output += String.fromCharCode((combined >> 8) & 0xFF);
+        }
+        if (char4 !== "=") {
+            output += String.fromCharCode(combined & 0xFF);
+        }
+    }
+
+    return output;
 }
 
 function __fluxEncodeFormComponent(value) {
@@ -4411,6 +4483,56 @@ console.trace = (...a) => {
     const err = new Error(message);
     Deno.core.ops.op_console(__flux_eid(), err.stack || message, true);
 };
+
+// ── WinterTC minimum-common globals ────────────────────────────────────────
+if (typeof globalThis.btoa !== "function") {
+    globalThis.btoa = (input) => __fluxBase64Encode(input);
+}
+
+if (typeof globalThis.atob !== "function") {
+    globalThis.atob = (input) => __fluxBase64Decode(input);
+}
+
+if (!("self" in globalThis) || globalThis.self !== globalThis) {
+    Object.defineProperty(globalThis, "self", {
+        value: globalThis,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+    });
+}
+
+const __fluxNavigator = typeof globalThis.navigator === "object" && globalThis.navigator !== null
+    ? globalThis.navigator
+    : {};
+
+if (typeof __fluxNavigator.userAgent !== "string" || __fluxNavigator.userAgent.length === 0) {
+    Object.defineProperty(__fluxNavigator, "userAgent", {
+        value: "Flux Runtime",
+        writable: false,
+        enumerable: true,
+        configurable: true,
+    });
+}
+
+if (globalThis.navigator !== __fluxNavigator) {
+    Object.defineProperty(globalThis, "navigator", {
+        value: __fluxNavigator,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+    });
+}
+
+if (typeof globalThis.reportError !== "function") {
+    globalThis.reportError = (error) => {
+        if (error instanceof Error) {
+            console.error(error.stack || `${error.name}: ${error.message}`);
+            return;
+        }
+        console.error(error);
+    };
+}
 
 // ── setTimeout / setInterval ────────────────────────────────────────────────
 let __flux_timer_id = 1;
