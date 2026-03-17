@@ -852,7 +852,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .await
         .map_err(|e| Status::internal(format!("failed to fetch source execution: {e}")))?;
 
-        let (method, path, request_json, _response_json, _status, _error, _duration_ms, code_sha) =
+        let (method, path, request_json, response_json, _status, _error, _duration_ms, code_sha) =
             source_execution.ok_or_else(|| Status::not_found("execution not found"))?;
 
         // 2. Fetch all checkpoints from the original execution
@@ -907,7 +907,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let mut steps = Vec::with_capacity(checkpoint_rows.len());
         let mut replay_status = "ok".to_string();
         let mut replay_error = String::new();
-        let mut replay_output = serde_json::Value::Null;
+        let replay_output = response_json.clone().unwrap_or(serde_json::Value::Null);
         let mut divergence: Option<pb::ReplayDivergence> = None;
 
         for (call_index, boundary, url, cp_method, cp_request, cp_response, checkpoint_duration_ms) in
@@ -954,11 +954,6 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .execute(&mut *tx)
             .await
             .map_err(|e| Status::internal(format!("failed to persist replay checkpoint: {e}")))?;
-
-            replay_output = response_to_store
-                .get("body")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
 
             steps.push(pb::ReplayStep {
                 call_index: *call_index,

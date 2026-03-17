@@ -54,6 +54,18 @@ struct HealthResponse {
     code_version: String,
 }
 
+fn attach_execution_headers<T>(response: &mut Response<T>, execution_id: &str, request_id: &str, code_version: &str) {
+    if let Ok(value) = HeaderValue::from_str(execution_id) {
+        response.headers_mut().insert(HeaderName::from_static("x-flux-execution-id"), value);
+    }
+    if let Ok(value) = HeaderValue::from_str(request_id) {
+        response.headers_mut().insert(HeaderName::from_static("x-flux-request-id"), value);
+    }
+    if let Ok(value) = HeaderValue::from_str(code_version) {
+        response.headers_mut().insert(HeaderName::from_static("x-flux-code-version"), value);
+    }
+}
+
 pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifact) -> Result<()> {
     if config.isolate_pool_size == 0 {
         bail!("isolate_pool_size must be greater than 0");
@@ -138,7 +150,7 @@ async fn handle_request(
     }
 
     if result.status != "ok" {
-        return (
+        let mut response = (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "execution_id": result.execution_id,
@@ -149,9 +161,11 @@ async fn handle_request(
             })),
         )
             .into_response();
+        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+        return response;
     }
 
-    (
+    let mut response = (
         StatusCode::OK,
         Json(serde_json::json!({
             "execution_id": result.execution_id,
@@ -162,7 +176,9 @@ async fn handle_request(
             "error": result.error,
         })),
     )
-        .into_response()
+        .into_response();
+    attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+    response
 }
 
 /// Server-mode handler: any method, any path — dispatches through Deno.serve.
@@ -245,7 +261,9 @@ async fn handle_net_request(
     }
 
     if let Some(err) = &result.error {
-        return (StatusCode::INTERNAL_SERVER_ERROR, err.clone()).into_response();
+        let mut response = (StatusCode::INTERNAL_SERVER_ERROR, err.clone()).into_response();
+        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+        return response;
     }
 
     // Unpack the net_response envelope written by the worker.
@@ -273,10 +291,14 @@ async fn handle_net_request(
             }
         }
 
+        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+
         return response.into_response();
     }
 
-    (StatusCode::INTERNAL_SERVER_ERROR, "handler produced no response").into_response()
+    let mut response = (StatusCode::INTERNAL_SERVER_ERROR, "handler produced no response").into_response();
+    attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+    response
 }
 
 async fn shutdown_signal() {

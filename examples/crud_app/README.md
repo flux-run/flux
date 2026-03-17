@@ -72,6 +72,40 @@ Or run it in containers:
 docker compose up --build
 ```
 
+## Replay demo
+
+To record and replay this app through `flux-server`, start the app database, then start a Flux server against the same Postgres instance:
+
+```sh
+docker compose up -d postgres
+target/debug/flux server start --database-url postgres://postgres:postgres@localhost:5432/crud_app --service-token dev-service-token
+```
+
+Serve the app with recording enabled:
+
+```sh
+export FLUX_SERVICE_TOKEN=dev-service-token
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/crud_app
+export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+target/debug/flux serve --host 127.0.0.1 --port 8000 main_flux.ts
+```
+
+Create a todo and capture the execution ID from the response headers:
+
+```sh
+curl -i -X POST http://127.0.0.1:8000/todos \
+  -H 'content-type: application/json' \
+  -d '{"title":"Ship Flux","description":"Replay demo"}'
+```
+
+Look for the `x-flux-execution-id` header, then replay it:
+
+```sh
+target/debug/flux replay <execution_id> --url http://127.0.0.1:50051 --token dev-service-token --diff
+```
+
+The replay should return the same app response and show recorded steps for the stored Postgres checkpoints.
+
 Build the Flux artifact:
 
 ```sh

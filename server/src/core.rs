@@ -116,6 +116,18 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
         .await?;
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS flux.service_tokens (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            service_name TEXT NOT NULL,
+            token_hash TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            revoked_at TIMESTAMPTZ
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS flux.executions (
             id UUID PRIMARY KEY,
             request_id UUID NOT NULL,
