@@ -1,0 +1,47 @@
+name: Integration (Replay Guarantee)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SQLX_OFFLINE: "true"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: runtime/runners/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        working-directory: runtime/runners
+        run: npm ci
+
+      - name: Build Flux (CLI + runtime + server)
+        run: cargo build -p cli -p runtime -p server
+
+      - name: Run integration suite (includes replay guarantee)
+        working-directory: runtime/runners
+        run: npm run test:integration -- --skip-build
