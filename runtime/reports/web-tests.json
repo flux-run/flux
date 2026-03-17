@@ -1,26 +1,26 @@
 {
   "suite": "Web Platform Tests (url · fetch · encoding)",
-  "timestamp": "2026-03-17T06:08:58.172Z",
+  "timestamp": "2026-03-17T06:27:56.012Z",
   "engine": "node v22.20.0",
-  "passed": 14,
-  "failed": 7,
+  "passed": 16,
+  "failed": 5,
   "skipped": 9,
   "total": 30,
-  "elapsedMs": 2792,
-  "passRate": "66.7%",
+  "elapsedMs": 2829,
+  "passRate": "76.2%",
   "results": [
     {
       "name": "IdnaTestV2-removed.window.js",
       "passed": true,
       "skipped": false,
-      "duration": 2328
+      "duration": 2350
     },
     {
       "name": "IdnaTestV2.window.js",
       "passed": false,
       "skipped": false,
       "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: ToASCII(\"xn--xn--a--gua.pt\") V4; V2 (ignored): Expected TypeError but got Error\n       ToASCII(\"xn--xn---epa\") V4; V2 (ignored): Expected TypeError but got Error\n           at globalThis",
-      "duration": 88
+      "duration": 83
     },
     {
       "name": "historical.any.js",
@@ -69,20 +69,20 @@
       "passed": false,
       "skipped": false,
       "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Parsing: <:#> against <http://example.org/foo/bar>: hash\n       Parsing: <#> against <http://example.org/foo/bar>: hash\n       Parsing: <?> against <http://example.org/foo/bar>: search\n ",
-      "duration": 44
+      "duration": 48
     },
     {
       "name": "url-origin.any.js",
       "passed": false,
       "skipped": false,
       "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Origin parsing: <blob:blob:https://example.org/> without base: origin\n       Origin parsing: <blob:ftp://host/path> without base: origin\n       Origin parsing: <blob:ws://example.org/> w",
-      "duration": 37
+      "duration": 38
     },
     {
       "name": "url-searchparams.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 17
+      "duration": 19
     },
     {
       "name": "url-setters-a-area.window.js",
@@ -95,7 +95,7 @@
       "passed": false,
       "skipped": false,
       "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Setting protocol with leading U+0000 (https:): invalid URL: relative URL without a base\n       Setting protocol with U+0000 before inserted colon (https:): invalid URL: relative URL with",
-      "duration": 26
+      "duration": 27
     },
     {
       "name": "url-setters.any.js",
@@ -113,7 +113,7 @@
       "name": "url-statics-parse.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 16
+      "duration": 18
     },
     {
       "name": "url-tojson.any.js",
@@ -123,9 +123,8 @@
     },
     {
       "name": "urlencoded-parser.any.js",
-      "passed": false,
+      "passed": true,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: URLSearchParams constructed with: %FE%FF: URI malformed\n       URLSearchParams constructed with: %FF%FE: URI malformed\n       URLSearchParams constructed with: %C2: URI malformed\n       ",
       "duration": 19
     },
     {
@@ -136,10 +135,9 @@
     },
     {
       "name": "urlsearchparams-constructor.any.js",
-      "passed": false,
+      "passed": true,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: URLSearchParams constructor, FormData.: FormData is not defined\n       Construct with 2 unpaired surrogates (no trailing): [\"\\ud835x\",\"1\"] !== [\"�x\",\"3\"]\n       Construct with 3 unpaired",
-      "duration": 17
+      "duration": 19
     },
     {
       "name": "urlsearchparams-delete.any.js",
@@ -152,13 +150,13 @@
       "name": "urlsearchparams-foreach.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 17
+      "duration": 18
     },
     {
       "name": "urlsearchparams-get.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 16
+      "duration": 18
     },
     {
       "name": "urlsearchparams-getall.any.js",
@@ -170,13 +168,13 @@
       "name": "urlsearchparams-has.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 17
+      "duration": 16
     },
     {
       "name": "urlsearchparams-set.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 16
+      "duration": 17
     },
     {
       "name": "urlsearchparams-size.any.js",
@@ -188,13 +186,13 @@
       "name": "urlsearchparams-sort.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 17
+      "duration": 18
     },
     {
       "name": "urlsearchparams-stringifier.any.js",
       "passed": true,
       "skipped": false,
-      "duration": 17
+      "duration": 18
     }
   ]
 }

@@ -1288,24 +1288,138 @@ function __flux_eid() {
   return globalThis.__FLUX_EXECUTION_ID__ || "__unknown__";
 }
 
-function __fluxEncodeUtf8(input) {
-    const encoded = unescape(encodeURIComponent(String(input)));
-    const bytes = new Uint8Array(encoded.length);
-    for (let i = 0; i < encoded.length; i++) {
-        bytes[i] = encoded.charCodeAt(i);
+function __fluxToUSVString(value) {
+    const input = String(value);
+    let output = "";
+
+    for (let index = 0; index < input.length; index++) {
+        const codeUnit = input.charCodeAt(index);
+
+        if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {
+            const nextCodeUnit = index + 1 < input.length ? input.charCodeAt(index + 1) : 0;
+            if (nextCodeUnit >= 0xDC00 && nextCodeUnit <= 0xDFFF) {
+                output += input[index] + input[index + 1];
+                index += 1;
+            } else {
+                output += "\uFFFD";
+            }
+            continue;
+        }
+
+        if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {
+            output += "\uFFFD";
+            continue;
+        }
+
+        output += input[index];
     }
-    return bytes;
+
+    return output;
+}
+
+function __fluxEncodeUtf8(input) {
+    const normalized = __fluxToUSVString(input);
+    const bytes = [];
+
+    for (let index = 0; index < normalized.length; index++) {
+        const codePoint = normalized.codePointAt(index);
+        if (codePoint > 0xFFFF) {
+            index += 1;
+        }
+
+        if (codePoint <= 0x7F) {
+            bytes.push(codePoint);
+        } else if (codePoint <= 0x7FF) {
+            bytes.push(
+                0xC0 | (codePoint >> 6),
+                0x80 | (codePoint & 0x3F),
+            );
+        } else if (codePoint <= 0xFFFF) {
+            bytes.push(
+                0xE0 | (codePoint >> 12),
+                0x80 | ((codePoint >> 6) & 0x3F),
+                0x80 | (codePoint & 0x3F),
+            );
+        } else {
+            bytes.push(
+                0xF0 | (codePoint >> 18),
+                0x80 | ((codePoint >> 12) & 0x3F),
+                0x80 | ((codePoint >> 6) & 0x3F),
+                0x80 | (codePoint & 0x3F),
+            );
+        }
+    }
+
+    return new Uint8Array(bytes);
 }
 
 function __fluxDecodeUtf8(input) {
     const bytes = input instanceof Uint8Array ? input : new Uint8Array(input ?? []);
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-        const chunk = bytes.subarray(i, i + chunkSize);
-        binary += String.fromCharCode(...chunk);
+    let output = "";
+
+    for (let index = 0; index < bytes.length;) {
+        const byte1 = bytes[index];
+
+        if (byte1 <= 0x7F) {
+            output += String.fromCodePoint(byte1);
+            index += 1;
+            continue;
+        }
+
+        let needed = 0;
+        let codePoint = 0;
+        let minimum = 0;
+
+        if (byte1 >= 0xC2 && byte1 <= 0xDF) {
+            needed = 1;
+            codePoint = byte1 & 0x1F;
+            minimum = 0x80;
+        } else if (byte1 >= 0xE0 && byte1 <= 0xEF) {
+            needed = 2;
+            codePoint = byte1 & 0x0F;
+            minimum = 0x800;
+        } else if (byte1 >= 0xF0 && byte1 <= 0xF4) {
+            needed = 3;
+            codePoint = byte1 & 0x07;
+            minimum = 0x10000;
+        } else {
+            output += "\uFFFD";
+            index += 1;
+            continue;
+        }
+
+        if (index + needed >= bytes.length) {
+            output += "\uFFFD";
+            index += 1;
+            continue;
+        }
+
+        let valid = true;
+        for (let offset = 1; offset <= needed; offset++) {
+            const nextByte = bytes[index + offset];
+            if ((nextByte & 0xC0) !== 0x80) {
+                valid = false;
+                break;
+            }
+            codePoint = (codePoint << 6) | (nextByte & 0x3F);
+        }
+
+        if (
+            !valid ||
+            codePoint < minimum ||
+            codePoint > 0x10FFFF ||
+            (codePoint >= 0xD800 && codePoint <= 0xDFFF)
+        ) {
+            output += "\uFFFD";
+            index += 1;
+            continue;
+        }
+
+        output += String.fromCodePoint(codePoint);
+        index += needed + 1;
     }
-    return decodeURIComponent(escape(binary));
+
+    return output;
 }
 
 class TextEncoder {
@@ -1392,30 +1506,35 @@ function __fluxCreateBodyStream(state) {
 
 function __fluxDecodeFormComponent(value) {
     const normalized = String(value).replace(/\+/g, " ");
-    try {
-        return decodeURIComponent(normalized);
-    } catch {
-        const bytes = [];
-        for (let index = 0; index < normalized.length; index++) {
-            const char = normalized[index];
-            if (
-                char === "%" &&
-                index + 2 < normalized.length &&
-                /[0-9a-fA-F]{2}/.test(normalized.slice(index + 1, index + 3))
-            ) {
-                bytes.push(parseInt(normalized.slice(index + 1, index + 3), 16));
-                index += 2;
-            } else {
-                bytes.push(char.charCodeAt(0));
-            }
+    const bytes = [];
+
+    for (let index = 0; index < normalized.length; index++) {
+        const codePoint = normalized.codePointAt(index);
+        const char = String.fromCodePoint(codePoint);
+        if (codePoint > 0xFFFF) {
+            index += 1;
+        }
+        if (
+            char === "%" &&
+            index + 2 < normalized.length &&
+            /[0-9a-fA-F]{2}/.test(normalized.slice(index + 1, index + 3))
+        ) {
+            bytes.push(parseInt(normalized.slice(index + 1, index + 3), 16));
+            index += 2;
+            continue;
         }
 
-        return new TextDecoder().decode(new Uint8Array(bytes));
+        const encoded = __fluxEncoder.encode(char);
+        for (const byte of encoded) {
+            bytes.push(byte);
+        }
     }
+
+    return __fluxDecoder.decode(new Uint8Array(bytes));
 }
 
 function __fluxEncodeFormComponent(value) {
-    return encodeURIComponent(String(value)).replace(/%20/g, "+");
+    return encodeURIComponent(__fluxToUSVString(value)).replace(/%20/g, "+");
 }
 
 const __fluxDomExceptionCodeByName = {
@@ -1543,14 +1662,19 @@ class URLSearchParams {
                 return;
             }
 
+            const normalizedRecord = Object.create(null);
             for (const [key, value] of Object.entries(init)) {
+                normalizedRecord[__fluxToUSVString(key)] = __fluxToUSVString(value);
+            }
+
+            for (const [key, value] of Object.entries(normalizedRecord)) {
                 this._appendPair(key, value);
             }
         }
     }
 
     _appendPair(name, value) {
-        this._pairs.push([String(name), String(value)]);
+        this._pairs.push([__fluxToUSVString(name), __fluxToUSVString(value)]);
     }
 
     _withUpdatesSuspended(callback) {
@@ -1601,8 +1725,8 @@ class URLSearchParams {
     }
 
     set(name, value) {
-        const key = String(name);
-        const nextValue = String(value);
+        const key = __fluxToUSVString(name);
+        const nextValue = __fluxToUSVString(value);
         let replaced = false;
 
         for (let index = 0; index < this._pairs.length;) {
@@ -1629,8 +1753,8 @@ class URLSearchParams {
     }
 
     delete(name, value = undefined) {
-        const key = String(name);
-        const expected = arguments.length > 1 && value !== undefined ? String(value) : null;
+        const key = __fluxToUSVString(name);
+        const expected = arguments.length > 1 && value !== undefined ? __fluxToUSVString(value) : null;
         for (let index = 0; index < this._pairs.length;) {
             const [candidate, currentValue] = this._pairs[index];
             const matches = arguments.length > 1 && value !== undefined
@@ -1726,6 +1850,38 @@ class URLSearchParams {
             .map(([key, value]) => `${__fluxEncodeFormComponent(key)}=${__fluxEncodeFormComponent(value)}`)
             .join("&");
     }
+}
+
+class FormData {
+    constructor() {
+        this._entries = [];
+    }
+
+    append(name, value) {
+        this._entries.push([__fluxToUSVString(name), __fluxToUSVString(value)]);
+    }
+
+    has(name) {
+        const key = __fluxToUSVString(name);
+        return this._entries.some(([candidate]) => candidate === key);
+    }
+
+    entries() {
+        return this._entries[Symbol.iterator]();
+    }
+
+    [Symbol.iterator]() {
+        return this.entries();
+    }
+}
+
+function __fluxParseFormData(text) {
+    const params = new URLSearchParams(text);
+    const formData = new FormData();
+    for (const [key, value] of params) {
+        formData.append(key, value);
+    }
+    return formData;
 }
 
 class URL {
@@ -2010,6 +2166,10 @@ class Request {
     async json() {
         return JSON.parse(await this.text());
     }
+
+    async formData() {
+        return __fluxParseFormData(await this.text());
+    }
 }
 
 class Response {
@@ -2058,6 +2218,10 @@ class Response {
         return JSON.parse(await this.text());
     }
 
+    async formData() {
+        return __fluxParseFormData(await this.text());
+    }
+
     clone() {
         if (this.bodyUsed) {
             throw new TypeError("Body already consumed");
@@ -2074,6 +2238,7 @@ globalThis.URLSearchParams = globalThis.URLSearchParams || URLSearchParams;
 globalThis.URL = globalThis.URL || URL;
 globalThis.DOMException = globalThis.DOMException || DOMException;
 globalThis.Headers = Headers;
+globalThis.FormData = globalThis.FormData || FormData;
 globalThis.Request = Request;
 globalThis.Response = Response;
 
