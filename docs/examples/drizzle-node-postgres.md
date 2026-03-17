@@ -1,42 +1,21 @@
-# Drizzle Node-Postgres Shim
+# Drizzle Node-Postgres Compatibility
 
-Flux now exposes a small `pg`-shaped shim on top of `Flux.postgres.query(...)` for Drizzle's normal query path.
+Flux now exposes a real `pg` import surface for Drizzle-style apps.
 
-Use this through the bundled-artifact workflow:
-
-```bash
-flux build app.ts
-flux serve app.ts
-```
-
-Use the included example module at [examples/flux-pg.js](../../examples/flux-pg.js):
+Preferred app shape:
 
 ```js
-import pg from "../../examples/flux-pg.js";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 
-const pool = new pg.Pool({
+const pool = new Pool({
   connectionString: "postgres://user:pass@db.internal/app",
-  tls: true,
-  caCertPem: Deno.env.get("APP_DB_CA_PEM"),
 });
 
 const db = drizzle(pool);
-
-const client = await pool.connect();
-try {
-  await client.query("begin");
-  await client.query({ text: "select 1", rowMode: "array" });
-  await client.query("commit");
-} catch (err) {
-  await client.query("rollback");
-  throw err;
-} finally {
-  await client.release();
-}
 ```
 
-What this shim supports today:
+What the compatibility layer supports today:
 
 - `new Pool({ connectionString, tls, caCertPem })`
 - `pool.query(sql, params)`
@@ -47,6 +26,8 @@ What this shim supports today:
 - `pool.end()`
 - `types.builtins`, `types.getTypeParser(...)`, and `types.setTypeParser(...)`
 - query `fields` with real Postgres `dataTypeID` values for extended queries
+- structured database errors including `code`, `detail`, `constraint`, `schema`, `table`, and `column`
+- integer parameter binding against both `int4` and `int8` targets
 
 Numeric compatibility note:
 
@@ -62,6 +43,7 @@ types.setTypeParser(types.builtins.NUMERIC, (value) => value);
 - Date, time, timetz, timestamp, timestamptz, interval, and UUID fields now use that same parser path as exact text values, which matches the common `pg` pattern of registering app-specific parsers in JavaScript.
 - BYTEA fields now surface as exact `\x...` hex strings by default, so custom `pg` parsers can convert them into byte arrays or other application-specific binary shapes.
 
-Important compatibility note:
+Package-loading note:
 
-- Flux still does not support direct bare package imports in the runtime artifact path. This shim is the database-driver side of the integration, not the full package-loading story. It is most useful for bundled builds or for the next runtime slice that adds broader package compatibility.
+- Flux now prefers locally installed `node_modules` packages for this path.
+- The old [examples/flux-pg.js](../../examples/flux-pg.js) helper remains as a small compatibility example, but it is no longer the preferred Drizzle path.

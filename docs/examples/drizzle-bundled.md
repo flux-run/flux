@@ -1,49 +1,50 @@
 # Bundled Drizzle Example
 
-This example keeps Drizzle on the correct seam for Flux v1:
+Flux now supports the direct package shape that real Drizzle apps use:
 
 ```text
-Drizzle -> pg-compatible Flux shim -> Rust ops -> Postgres
+Drizzle -> import { Pool } from "pg" -> Flux pg layer -> Postgres
 ```
 
-Example entry: [examples/drizzle-basic.ts](../../examples/drizzle-basic.ts)
+Official example directory: [examples/drizzle](../../examples/drizzle)
 
-```ts
-import { drizzle } from "npm:drizzle-orm/node-postgres";
-import { sql } from "npm:drizzle-orm";
-import pg from "./flux-pg.js";
+Example entries:
 
-export default async function handler({ input }) {
-  const pool = new pg.Pool({
-    connectionString: String(input.connectionString),
-  });
+- [examples/drizzle/crud.ts](../../examples/drizzle/crud.ts)
+- [examples/drizzle/transaction.ts](../../examples/drizzle/transaction.ts)
 
-  const db = drizzle(pool);
-
-  try {
-    const result = await db.execute(
-      sql`select ${String(input.name ?? "flux")}::text as name`,
-    );
-
-    return {
-      rows: result.rows,
-    };
-  } finally {
-    await pool.end();
-  }
-}
-```
-
-Build it:
+Install the local package graph once:
 
 ```bash
-flux build examples/drizzle-basic.ts
+cd examples/drizzle
+npm install
 ```
 
-This example is intentionally handler-shaped instead of server-shaped:
+Run the CRUD proof:
 
-- it keeps the database seam explicit
-- it avoids relying on unsupported runtime env access
-- it proves the `npm:drizzle-orm/node-postgres` import path can be bundled into a Flux artifact
+```bash
+cd /path/to/flowbase
+export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
 
-Use [examples/flux-pg.js](../../examples/flux-pg.js) as the blessed adapter until the runtime exposes a more polished first-party package surface.
+flux run \
+  --input '{"input":{"connectionString":"postgres://user:pass@127.0.0.1:5432/app"}}' \
+  examples/drizzle/crud.ts
+```
+
+Run the transaction proof:
+
+```bash
+cd /path/to/flowbase
+export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+
+flux run \
+  --input '{"input":{"connectionString":"postgres://user:pass@127.0.0.1:5432/app"}}' \
+  examples/drizzle/transaction.ts
+```
+
+This is intentionally local-`node_modules` based:
+
+- it preserves the exact package version the app installed
+- it avoids esm.sh export skew
+- it uses the same `pg` import shape as Node and Bun apps
+- it matches the current production path better than the older adapter example
