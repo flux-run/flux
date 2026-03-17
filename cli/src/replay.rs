@@ -88,6 +88,18 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         println!("  error  {}", sanitize_replay_error(&response.error));
     }
 
+    if let Some(divergence) = &response.divergence {
+        println!("  divergence");
+        println!(
+            "    checkpoint  [{}] {}  {}",
+            divergence.checkpoint_index,
+            divergence.boundary.to_uppercase(),
+            divergence.url,
+        );
+        println!("    expected    {}", divergence.expected_json);
+        println!("    actual      {}", divergence.actual_json);
+    }
+
     if !response.output.is_empty() && response.output != "null" {
         println!("  output {}", response.output);
     }

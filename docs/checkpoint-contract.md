@@ -163,6 +163,14 @@ Flux also supports a stricter validation mode for live replay.
 
 When commit replay is run with validation enabled, live HTTP checkpoint results must match the recorded checkpoint results. If they diverge, replay must fail loudly instead of silently accepting drift.
 
+The first divergence should be surfaced as structured data, not only as a formatted error string. At minimum that means:
+
+- checkpoint index
+- boundary type
+- boundary URL or equivalent target
+- expected recorded payload
+- actual live payload
+
 That mode is not pure deterministic replay, but it is a useful enforcement tool for checking whether the outside world still behaves consistently with recorded history.
 
 ## Replay Contract

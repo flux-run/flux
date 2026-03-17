@@ -325,6 +325,15 @@ fn summarize_http_response(value: &serde_json::Value) -> String {
     format!("status={} body={}", status, shortened_body)
 }
 
+fn compact_json(value: &serde_json::Value) -> String {
+    let rendered = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+    if rendered.len() > 240 {
+        format!("{}...", &rendered[..240])
+    } else {
+        rendered
+    }
+}
+
 #[tonic::async_trait]
 impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc {
     type TailStream = ReceiverStream<Result<pb::TailEvent, Status>>;
@@ -788,6 +797,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let mut replay_status = "ok".to_string();
         let mut replay_error = String::new();
         let mut replay_output = serde_json::Value::Null;
+        let mut divergence: Option<pb::ReplayDivergence> = None;
 
         for (call_index, boundary, url, cp_method, cp_request, cp_response, checkpoint_duration_ms) in
             &checkpoint_rows
@@ -839,13 +849,20 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             steps.push(pb::ReplayStep {
                 call_index: *call_index,
                 boundary: boundary.clone(),
-                url: step_url,
+                url: step_url.clone(),
                 used_recorded,
                 duration_ms: step_duration,
             });
 
             if validate && boundary == "http" && !used_recorded && response_to_store != *cp_response {
                 replay_status = "error".to_string();
+                divergence = Some(pb::ReplayDivergence {
+                    checkpoint_index: *call_index,
+                    boundary: boundary.clone(),
+                    url: step_url.clone(),
+                    expected_json: compact_json(cp_response),
+                    actual_json: compact_json(&response_to_store),
+                });
                 replay_error = format!(
                     "replay validation failed at checkpoint {}: live HTTP response diverged from recorded checkpoint\nrecorded  {}\nlive      {}",
                     call_index,
@@ -892,6 +909,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             error: replay_error,
             duration_ms: replay_duration_ms,
             steps,
+            divergence,
         }))
     }
 

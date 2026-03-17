@@ -131,6 +131,14 @@ message ReplayStep {
   int32 duration_ms = 5;
 }
 
+message ReplayDivergence {
+  int32 checkpoint_index = 1;
+  string boundary = 2;
+  string url = 3;
+  string expected_json = 4;
+  string actual_json = 5;
+}
+
 message ReplayResponse {
   string execution_id = 1;
   string status = 2;
@@ -138,6 +146,7 @@ message ReplayResponse {
   string error = 4;
   int32 duration_ms = 5;
   repeated ReplayStep steps = 6;
+  ReplayDivergence divergence = 7;
 }
 
 message ResumeRequest {

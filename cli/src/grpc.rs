@@ -75,6 +75,15 @@ pub struct ReplayStepView {
 }
 
 #[derive(Debug, Clone)]
+pub struct ReplayDivergenceView {
+    pub checkpoint_index: i32,
+    pub boundary: String,
+    pub url: String,
+    pub expected_json: String,
+    pub actual_json: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReplayView {
     pub execution_id: String,
     pub status: String,
@@ -82,6 +91,7 @@ pub struct ReplayView {
     pub error: String,
     pub duration_ms: i32,
     pub steps: Vec<ReplayStepView>,
+    pub divergence: Option<ReplayDivergenceView>,
 }
 
 #[derive(Debug, Clone)]
@@ -305,6 +315,13 @@ pub async fn replay(
                 duration_ms: step.duration_ms,
             })
             .collect(),
+        divergence: response.divergence.map(|divergence| ReplayDivergenceView {
+            checkpoint_index: divergence.checkpoint_index,
+            boundary: divergence.boundary,
+            url: divergence.url,
+            expected_json: divergence.expected_json,
+            actual_json: divergence.actual_json,
+        }),
     })
 }
 
