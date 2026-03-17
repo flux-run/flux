@@ -159,6 +159,80 @@ export default function handler({ input }) {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_query_supports_params_and_replay() -> Result<()> {
+    let _lock = postgres_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let (port, shutdown_tx, server_task) = spawn_mock_postgres_param_server().await?;
+
+    let code = r#"
+export default function handler({ input }) {
+  const result = Flux.postgres.query({
+    connectionString: input.connectionString,
+    sql: input.sql,
+    params: input.params,
+  });
+
+  return {
+    rows: result.rows,
+    command: result.command,
+    replay: result.replay,
+  };
+}
+"#;
+
+    let payload = serde_json::json!({
+        "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
+        "sql": "select $1::text as value",
+        "params": ["hello"],
+    });
+
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create postgres param isolate")?;
+    let live_output = isolate
+        .execute(payload.clone(), ExecutionContext::new("postgres-param-live"))
+        .await
+        .context("live postgres param execution failed")?;
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("mock postgres param server task failed")??;
+
+    assert_eq!(live_output.error, None);
+    assert_eq!(
+        live_output.output,
+        serde_json::json!({
+            "rows": [{ "value": "hello" }],
+            "command": "QUERY",
+            "replay": false,
+        })
+    );
+    assert_eq!(live_output.checkpoints.len(), 1);
+    assert_eq!(live_output.checkpoints[0].boundary, "postgres");
+    assert_eq!(live_output.checkpoints[0].method, "query");
+
+    let recorded = live_output.checkpoints.clone();
+    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create postgres param replay isolate")?;
+    let mut replay_context = ExecutionContext::new("postgres-param-replay");
+    replay_context.mode = ExecutionMode::Replay;
+    let replay_output = replay_isolate
+        .execute_with_recorded(payload, replay_context, recorded)
+        .await
+        .context("replay postgres param execution failed")?;
+
+    assert_eq!(replay_output.error, None);
+    assert_eq!(
+        replay_output.output,
+        serde_json::json!({
+            "rows": [{ "value": "hello" }],
+            "command": "QUERY",
+            "replay": true,
+        })
+    );
+    assert_eq!(replay_output.checkpoints.len(), 1);
+    assert_eq!(replay_output.checkpoints[0].boundary, "postgres");
+
+    Ok(())
+}
+
 async fn spawn_mock_postgres_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -200,6 +274,94 @@ async fn spawn_mock_postgres_server() -> Result<(u16, oneshot::Sender<()>, tokio
                 let terminate = read_typed_message(&mut socket).await?;
                 if terminate.tag != b'X' {
                     anyhow::bail!("expected Terminate message, got {:?}", terminate.tag as char);
+                }
+                Ok(())
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx, task))
+}
+
+async fn spawn_mock_postgres_param_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind mock postgres param listener")?;
+    let port = listener
+        .local_addr()
+        .context("failed to get mock postgres param addr")?
+        .port();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = &mut shutdown_rx => Ok(()),
+            accepted = listener.accept() => {
+                let (mut socket, _) = accepted.context("failed to accept postgres param client")?;
+
+                let _startup = read_startup_message(&mut socket).await?;
+                write_authentication_ok(&mut socket).await?;
+                write_parameter_status(&mut socket, b"client_encoding", b"UTF8").await?;
+                write_parameter_status(&mut socket, b"server_version", b"16.0").await?;
+                write_backend_key_data(&mut socket).await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let parse = read_typed_message(&mut socket).await?;
+                if parse.tag != b'P' {
+                    anyhow::bail!("expected Parse message, got {:?}", parse.tag as char);
+                }
+                let describe = read_typed_message(&mut socket).await?;
+                if describe.tag != b'D' {
+                    anyhow::bail!("expected Describe message, got {:?}", describe.tag as char);
+                }
+                let sync = read_typed_message(&mut socket).await?;
+                if sync.tag != b'S' {
+                    anyhow::bail!("expected Sync after Parse/Describe, got {:?}", sync.tag as char);
+                }
+
+                write_message(&mut socket, b'1', |_| {}).await?;
+                write_parameter_description(&mut socket, &[25]).await?;
+                write_row_description(&mut socket, b"value").await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let bind = read_typed_message(&mut socket).await?;
+                if bind.tag != b'B' {
+                    anyhow::bail!("expected Bind message, got {:?}", bind.tag as char);
+                }
+                let param_value = parse_bind_first_text_param(&bind.payload)?;
+                if param_value != "hello" {
+                    anyhow::bail!("unexpected bound parameter: {param_value}");
+                }
+
+                let execute = read_typed_message(&mut socket).await?;
+                if execute.tag != b'E' {
+                    anyhow::bail!("expected Execute message, got {:?}", execute.tag as char);
+                }
+                let sync = read_typed_message(&mut socket).await?;
+                if sync.tag != b'S' {
+                    anyhow::bail!("expected Sync after Execute, got {:?}", sync.tag as char);
+                }
+
+                write_message(&mut socket, b'2', |_| {}).await?;
+                write_data_row(&mut socket, &[b"hello"]).await?;
+                write_command_complete(&mut socket, b"SELECT 1").await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let next = read_typed_message(&mut socket).await?;
+                if next.tag == b'C' {
+                    let sync = read_typed_message(&mut socket).await?;
+                    if sync.tag != b'S' {
+                        anyhow::bail!("expected Sync after Close, got {:?}", sync.tag as char);
+                    }
+                    write_message(&mut socket, b'3', |_| {}).await?;
+                    write_ready_for_query(&mut socket).await?;
+
+                    let terminate = read_typed_message(&mut socket).await?;
+                    if terminate.tag != b'X' {
+                        anyhow::bail!("expected Terminate message, got {:?}", terminate.tag as char);
+                    }
+                } else if next.tag != b'X' {
+                    anyhow::bail!("expected Close or Terminate message, got {:?}", next.tag as char);
                 }
                 Ok(())
             }
@@ -251,6 +413,16 @@ async fn write_backend_key_data(socket: &mut tokio::net::TcpStream) -> Result<()
     .await
 }
 
+async fn write_parameter_description(socket: &mut tokio::net::TcpStream, oids: &[u32]) -> Result<()> {
+    write_message(socket, b't', |buf| {
+        buf.extend_from_slice(&(oids.len() as u16).to_be_bytes());
+        for oid in oids {
+            buf.extend_from_slice(&oid.to_be_bytes());
+        }
+    })
+    .await
+}
+
 async fn write_ready_for_query(socket: &mut tokio::net::TcpStream) -> Result<()> {
     write_message(socket, b'Z', |buf| buf.push(b'I')).await
 }
@@ -287,6 +459,67 @@ async fn write_command_complete(socket: &mut tokio::net::TcpStream, tag: &[u8]) 
         buf.push(0);
     })
     .await
+}
+
+fn parse_bind_first_text_param(payload: &[u8]) -> Result<String> {
+    let mut idx = 0usize;
+    idx = skip_c_string(payload, idx)?;
+    idx = skip_c_string(payload, idx)?;
+
+    let format_count = read_u16(payload, &mut idx)? as usize;
+    idx = idx.saturating_add(format_count * 2);
+
+    let param_count = read_u16(payload, &mut idx)? as usize;
+    if param_count == 0 {
+        anyhow::bail!("bind payload contained no parameters");
+    }
+
+    let param_len = read_i32(payload, &mut idx)?;
+    if param_len < 0 {
+        anyhow::bail!("first bind parameter was null");
+    }
+    let len = param_len as usize;
+    let end = idx.saturating_add(len);
+    if end > payload.len() {
+        anyhow::bail!("bind payload parameter truncated");
+    }
+    let value = String::from_utf8(payload[idx..end].to_vec()).context("invalid bind parameter utf8")?;
+    Ok(value)
+}
+
+fn skip_c_string(payload: &[u8], mut idx: usize) -> Result<usize> {
+    while idx < payload.len() {
+        if payload[idx] == 0 {
+            return Ok(idx + 1);
+        }
+        idx += 1;
+    }
+    anyhow::bail!("unterminated c-string in postgres payload")
+}
+
+fn read_u16(payload: &[u8], idx: &mut usize) -> Result<u16> {
+    let end = idx.saturating_add(2);
+    if end > payload.len() {
+        anyhow::bail!("short postgres payload reading u16");
+    }
+    let value = u16::from_be_bytes([payload[*idx], payload[*idx + 1]]);
+    *idx = end;
+    Ok(value)
+}
+
+fn read_i32(payload: &[u8], idx: &mut usize) -> Result<i32> {
+    let end = idx.saturating_add(4);
+    if end > payload.len() {
+        anyhow::bail!("short postgres payload reading i32");
+    }
+    let value = i32::from_be_bytes([
+        payload[*idx],
+        payload[*idx + 1],
+        payload[*idx + 2],
+        payload[*idx + 3],
+    ]);
+    *idx = end;
+    Ok(value)
 }
 
 async fn write_message<F>(socket: &mut tokio::net::TcpStream, tag: u8, build: F) -> Result<()>

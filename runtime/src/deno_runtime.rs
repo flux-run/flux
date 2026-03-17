@@ -15,6 +15,7 @@ use deno_ast::{EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileMo
 use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind, RuntimeOptions, op2, resolve_import, resolve_path};
 use deno_error::JsErrorBox;
 use postgres::{Client as PostgresClient, NoTls, SimpleQueryMessage};
+use postgres::types::ToSql;
 use rand::Rng;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -220,6 +221,8 @@ struct PostgresQueryRequestPayload {
     execution_id: String,
     connection_string: String,
     sql: String,
+    #[serde(default)]
+    params: Vec<serde_json::Value>,
 }
 
 fn default_tcp_read_mode() -> String {
@@ -292,6 +295,7 @@ deno_core::extension!(flux_runtime_ext, ops = [
     op_flux_fetch,
     op_flux_tcp_exchange,
     op_flux_postgres_simple_query,
+    op_flux_postgres_query,
     op_flux_now,
     op_flux_parse_url,
     op_console,
@@ -606,6 +610,7 @@ fn op_flux_postgres_simple_query(
         execution_id,
         connection_string,
         sql,
+        params: _,
     } = serde_json::from_value(request)
         .map_err(|err| JsErrorBox::type_error(format!("invalid postgres query request: {err}")))?;
 
@@ -707,6 +712,119 @@ fn op_flux_postgres_simple_query(
     }))
 }
 
+#[op2]
+#[serde]
+fn op_flux_postgres_query(
+    state: &mut OpState,
+    #[serde] request: serde_json::Value,
+) -> Result<serde_json::Value, JsErrorBox> {
+    let PostgresQueryRequestPayload {
+        execution_id,
+        connection_string,
+        sql,
+        params,
+    } = serde_json::from_value(request)
+        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres query request: {err}")))?;
+
+    let parsed_url = Url::parse(&connection_string)
+        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres connection string: {err}")))?;
+    if !matches!(parsed_url.scheme(), "postgres" | "postgresql") {
+        return Err(JsErrorBox::type_error("postgres connection string must use postgres:// or postgresql://"));
+    }
+    let host = parsed_url
+        .host_str()
+        .ok_or_else(|| JsErrorBox::type_error("postgres connection string missing host"))?;
+    let port = parsed_url.port().unwrap_or(5432);
+    validate_outbound_host(host, port, "postgres connect", "FLOWBASE_ALLOW_LOOPBACK_POSTGRES")?;
+
+    let (request_id, call_index, mode, recorded_checkpoint) = {
+        let map = state.borrow_mut::<RuntimeStateMap>();
+        let execution = map.get_mut(&execution_id).ok_or_else(|| {
+            JsErrorBox::new(
+                "InternalError",
+                format!("op_flux_postgres_query: execution_id '{execution_id}' not found"),
+            )
+        })?;
+        let idx = execution.call_index;
+        execution.call_index = execution.call_index.saturating_add(1);
+        let recorded = execution.recorded.remove(&idx);
+        (
+            execution.context.request_id.clone(),
+            idx,
+            execution.context.mode.clone(),
+            recorded,
+        )
+    };
+
+    if matches!(mode, ExecutionMode::Replay) {
+        if let Some(checkpoint) = recorded_checkpoint {
+            let response = checkpoint.response.clone();
+            {
+                let map = state.borrow_mut::<RuntimeStateMap>();
+                if let Some(execution) = map.get_mut(&execution_id) {
+                    execution.checkpoints.push(FetchCheckpoint {
+                        call_index,
+                        boundary: checkpoint.boundary,
+                        url: checkpoint.url,
+                        method: checkpoint.method,
+                        request: checkpoint.request,
+                        response: response.clone(),
+                        duration_ms: checkpoint.duration_ms,
+                    });
+                }
+            }
+            tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: returned recorded postgres prepared query");
+            return Ok(serde_json::json!({
+                "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
+                "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
+                "replay": true,
+            }));
+        }
+        tracing::warn!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded postgres prepared-query checkpoint, making live query");
+    }
+
+    let started = std::time::Instant::now();
+    let live_response = perform_postgres_query(&connection_string, &sql, &params)?;
+    let duration_ms = started.elapsed().as_millis() as i32;
+
+    let request_json = serde_json::json!({
+        "url": format!("postgres://{}:{}/{}", host, port, parsed_url.path().trim_start_matches('/')),
+        "host": host,
+        "port": port,
+        "sql": sql,
+        "params": params,
+    });
+    let response_json = serde_json::json!({
+        "rows": live_response.rows,
+        "command": live_response.command,
+        "row_count": live_response.row_count,
+        "replay": false,
+    });
+
+    {
+        let map = state.borrow_mut::<RuntimeStateMap>();
+        if let Some(execution) = map.get_mut(&execution_id) {
+            execution.checkpoints.push(FetchCheckpoint {
+                call_index,
+                boundary: "postgres".to_string(),
+                url: format!("postgres://{}:{}/{}", host, port, parsed_url.path().trim_start_matches('/')),
+                method: "query".to_string(),
+                request: request_json,
+                response: response_json.clone(),
+                duration_ms,
+            });
+        }
+    }
+
+    tracing::debug!(%request_id, %call_index, host = %host, port = %port, "intercepted postgres prepared query");
+
+    Ok(serde_json::json!({
+        "rows": response_json.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "command": response_json.get("command").cloned().unwrap_or(serde_json::Value::Null),
+        "replay": false,
+    }))
+}
+
 #[derive(Debug)]
 struct PostgresSimpleQueryResponse {
     rows: Vec<serde_json::Value>,
@@ -760,6 +878,77 @@ fn perform_postgres_simple_query(
     })
     .join()
     .map_err(|_| JsErrorBox::generic("postgres query thread panicked"))?
+}
+
+fn perform_postgres_query(
+    connection_string: &str,
+    sql: &str,
+    params: &[serde_json::Value],
+) -> Result<PostgresSimpleQueryResponse, JsErrorBox> {
+    let connection_string = connection_string.to_string();
+    let sql = sql.to_string();
+    let params = params.to_vec();
+    std::thread::spawn(move || {
+        let mut client = PostgresClient::connect(&connection_string, NoTls)
+            .map_err(|err| JsErrorBox::type_error(format!("postgres connect failed: {err}")))?;
+
+        let mut boxed_params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
+        for param in params {
+            boxed_params.push(box_postgres_param(param)?);
+        }
+        let refs: Vec<&(dyn ToSql + Sync)> = boxed_params
+            .iter()
+            .map(|value| value.as_ref() as &(dyn ToSql + Sync))
+            .collect();
+
+        let query_rows = client
+            .query(&sql, &refs)
+            .map_err(|err| JsErrorBox::type_error(format!("postgres query failed: {err}")))?;
+
+        let mut rows = Vec::new();
+        for row in query_rows {
+            let mut object = serde_json::Map::new();
+            for column in row.columns() {
+                let key = column.name().to_string();
+                let value = if let Ok(value) = row.try_get::<_, String>(column.name()) {
+                    serde_json::Value::String(value)
+                } else if let Ok(value) = row.try_get::<_, i64>(column.name()) {
+                    serde_json::json!(value)
+                } else if let Ok(value) = row.try_get::<_, i32>(column.name()) {
+                    serde_json::json!(value)
+                } else if let Ok(value) = row.try_get::<_, bool>(column.name()) {
+                    serde_json::json!(value)
+                } else if let Ok(value) = row.try_get::<_, f64>(column.name()) {
+                    serde_json::json!(value)
+                } else {
+                    serde_json::Value::Null
+                };
+                object.insert(key, value);
+            }
+            rows.push(serde_json::Value::Object(object));
+        }
+
+        Ok(PostgresSimpleQueryResponse {
+            row_count: rows.len(),
+            rows,
+            command: Some("QUERY".to_string()),
+        })
+    })
+    .join()
+    .map_err(|_| JsErrorBox::generic("postgres query thread panicked"))?
+}
+
+fn box_postgres_param(param: serde_json::Value) -> Result<Box<dyn ToSql + Sync>, JsErrorBox> {
+    match param {
+        serde_json::Value::Null => Ok(Box::new(Option::<String>::None)),
+        serde_json::Value::String(value) => Ok(Box::new(value)),
+        serde_json::Value::Bool(value) => Ok(Box::new(value.to_string())),
+        serde_json::Value::Number(value) => Ok(Box::new(value.to_string())),
+        other => Err(JsErrorBox::type_error(format!(
+            "unsupported postgres parameter type: {}",
+            other
+        ))),
+    }
 }
 
 fn decode_checkpoint_bytes(
@@ -3334,6 +3523,20 @@ Math.random = () => Deno.core.ops.op_random(__flux_eid());
 globalThis.Flux = globalThis.Flux || {};
 globalThis.Flux.postgres = globalThis.Flux.postgres || {};
 globalThis.Flux.net = globalThis.Flux.net || {};
+globalThis.Flux.postgres.query = function(options = {}) {
+    const response = Deno.core.ops.op_flux_postgres_query({
+        execution_id: __flux_eid(),
+        connection_string: String(options.connectionString ?? ""),
+        sql: String(options.sql ?? ""),
+        params: Array.isArray(options.params) ? options.params : [],
+    });
+
+    return {
+        rows: Array.isArray(response.rows) ? response.rows : [],
+        command: response.command ?? null,
+        replay: !!response.replay,
+    };
+};
 globalThis.Flux.postgres.simpleQuery = function(options = {}) {
     const response = Deno.core.ops.op_flux_postgres_simple_query({
         execution_id: __flux_eid(),

@@ -25,7 +25,7 @@ flux why <id>                     # get a root-cause summary
 
 ## Checkpoints
 
-During execution, `flux-runtime` records **checkpoint spans** at IO boundaries — for example buffered outbound HTTP calls, deterministic TCP/TLS exchanges, and native Postgres queries capture the request, response, and duration.
+During execution, `flux-runtime` records **checkpoint spans** at IO boundaries — for example buffered outbound HTTP calls, deterministic TCP/TLS exchanges, and native Postgres queries with recorded SQL, parameters, results, and duration.
 
 This enables:
 

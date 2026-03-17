@@ -19,7 +19,7 @@ Flux records every execution as a single unit:
 
 - the input, output, and error
 - every outbound IO call with its request, response, and duration
-	- currently includes buffered HTTP fetches, deterministic TCP/TLS exchanges, and native Postgres simple queries
+	- currently includes buffered HTTP fetches, deterministic TCP/TLS exchanges, and native Postgres queries
 - the total duration and HTTP status
 
 Debugging starts from one execution ID:
