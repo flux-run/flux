@@ -1052,6 +1052,32 @@ function __fluxPgNormalizeConfig(config = {}) {
     };
 }
 
+class DatabaseError extends Error {
+    constructor(message, details = {}) {
+        super(message);
+        this.name = "DatabaseError";
+        Object.assign(this, details);
+    }
+}
+
+function __fluxPgWrapDatabaseError(error) {
+    if (error instanceof DatabaseError) {
+        return error;
+    }
+    if (error && typeof error === "object" && (error.name === "DatabaseError" || error.code != null)) {
+        return new DatabaseError(String(error.message ?? "postgres query failed"), error);
+    }
+    return error;
+}
+
+async function __fluxPgWrapQueryError(runQuery) {
+    try {
+        return await runQuery();
+    } catch (error) {
+        throw __fluxPgWrapDatabaseError(error);
+    }
+}
+
 class Client {
     constructor(config = {}) {
         this._config = __fluxPgNormalizeConfig(config);
@@ -1082,7 +1108,7 @@ class Client {
         if (!this._inner) {
             await this.connect();
         }
-        return this._inner.query(queryOrConfig, values);
+        return __fluxPgWrapQueryError(() => this._inner.query(queryOrConfig, values));
     }
 
     async release() {
@@ -1114,7 +1140,7 @@ class Pool {
     }
 
     async query(queryOrConfig, values = undefined) {
-        return this._inner.query(queryOrConfig, values);
+        return __fluxPgWrapQueryError(() => this._inner.query(queryOrConfig, values));
     }
 
     async connect() {
@@ -1130,14 +1156,6 @@ class Pool {
 const types = __fluxPg.nodePgTypes;
 const defaults = {};
 const native = null;
-
-class DatabaseError extends Error {
-    constructor(message, details = {}) {
-        super(message);
-        this.name = "DatabaseError";
-        Object.assign(this, details);
-    }
-}
 
 export { Client, DatabaseError, Pool, defaults, native, types };
 export default { Client, DatabaseError, Pool, defaults, native, types };

@@ -634,6 +634,102 @@ export default async function handler({ input }) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_pg_module_alias_surfaces_unique_violation_error_shape() -> Result<()> {
+    let _lock = postgres_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let (port, shutdown_tx, server_task) = spawn_mock_postgres_unique_violation_server().await?;
+
+    let code = r#"
+import { DatabaseError, Pool } from "pg";
+
+export default async function handler({ input }) {
+    const pool = new Pool({ connectionString: input.connectionString });
+
+    try {
+        await pool.query("insert into users (email) values ('a@test.com')");
+        return { ok: false };
+    } catch (err) {
+        await pool.end();
+        return {
+            ok: true,
+            name: err?.name ?? null,
+            message: err?.message ?? null,
+            code: err?.code ?? null,
+            detail: err?.detail ?? null,
+            constraint: err?.constraint ?? null,
+            schema: err?.schema ?? null,
+            table: err?.table ?? null,
+            column: err?.column ?? null,
+            instanceOfDatabaseError: err instanceof DatabaseError,
+        };
+    }
+}
+"#;
+
+    let payload = serde_json::json!({
+        "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
+    });
+
+    let module_path = std::env::temp_dir().join(format!(
+        "flux-pg-module-error-{}-{}.ts",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    ));
+    std::fs::write(&module_path, code).context("failed to write pg module error entry")?;
+
+    let mut isolate = JsIsolate::new_for_run_entry(&module_path)
+        .await
+        .context("failed to create pg module error isolate")?;
+    let live_output = isolate
+        .execute(payload.clone(), ExecutionContext::new("postgres-pg-error-live"))
+        .await
+        .context("pg module error execution failed")?;
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("mock postgres unique violation server task failed")??;
+
+    assert_eq!(live_output.error, None);
+    assert_eq!(
+        live_output.output,
+        serde_json::json!({
+            "ok": true,
+            "name": "DatabaseError",
+            "message": "duplicate key value violates unique constraint \"users_email_key\"",
+            "code": "23505",
+            "detail": "Key (email)=(a@test.com) already exists.",
+            "constraint": "users_email_key",
+            "schema": "public",
+            "table": "users",
+            "column": serde_json::Value::Null,
+            "instanceOfDatabaseError": true,
+        })
+    );
+    assert_eq!(live_output.checkpoints.len(), 1);
+    assert!(live_output.checkpoints.iter().all(|cp| cp.boundary == "postgres"));
+
+    let recorded = live_output.checkpoints.clone();
+    let mut replay_isolate = JsIsolate::new_for_run_entry(&module_path)
+        .await
+        .context("failed to create pg module error replay isolate")?;
+    let mut replay_context = ExecutionContext::new("postgres-pg-error-replay");
+    replay_context.mode = ExecutionMode::Replay;
+    let replay_output = replay_isolate
+        .execute_with_recorded(payload, replay_context, recorded)
+        .await
+        .context("pg module error replay failed")?;
+
+    std::fs::remove_file(&module_path).ok();
+
+    assert_eq!(replay_output.error, None);
+    assert_eq!(replay_output.output, live_output.output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_node_pg_pool_applies_json_and_array_type_parsers() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
@@ -1111,6 +1207,58 @@ async fn spawn_mock_postgres_transaction_server() -> Result<(u16, oneshot::Sende
                         other => anyhow::bail!("unexpected postgres transaction message: {:?}", other as char),
                     }
                 }
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx, task))
+}
+
+async fn spawn_mock_postgres_unique_violation_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind mock postgres unique-violation listener")?;
+    let port = listener
+        .local_addr()
+        .context("failed to get mock postgres unique-violation addr")?
+        .port();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = &mut shutdown_rx => Ok(()),
+            accepted = listener.accept() => {
+                let (mut socket, _) = accepted.context("failed to accept postgres unique-violation client")?;
+
+                let _startup = read_startup_message(&mut socket).await?;
+                write_authentication_ok(&mut socket).await?;
+                write_parameter_status(&mut socket, b"client_encoding", b"UTF8").await?;
+                write_parameter_status(&mut socket, b"server_version", b"16.0").await?;
+                write_backend_key_data(&mut socket).await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let duplicate_insert = read_next_parse_message(&mut socket, "duplicate insert").await?;
+                handle_extended_query_error(
+                    &mut socket,
+                    duplicate_insert,
+                    "insert into users (email) values ('a@test.com')",
+                    None,
+                    &[
+                        (b"S", b"ERROR"),
+                        (b"C", b"23505"),
+                        (b"M", b"duplicate key value violates unique constraint \"users_email_key\""),
+                        (b"D", b"Key (email)=(a@test.com) already exists."),
+                        (b"n", b"users_email_key"),
+                        (b"s", b"public"),
+                        (b"t", b"users"),
+                    ],
+                ).await?;
+
+                let terminate = read_next_message_after_optional_close(&mut socket).await?;
+                if terminate.tag != b'X' {
+                    anyhow::bail!("expected Terminate message, got {:?}", terminate.tag as char);
+                }
+                Ok(())
             }
         }
     });
@@ -1695,6 +1843,53 @@ where
     .await
 }
 
+async fn write_error_response<S>(socket: &mut S, fields: &[(&[u8], &[u8])]) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    write_message(socket, b'E', |buf| {
+        for (field_type, value) in fields {
+            if field_type.len() != 1 {
+                return;
+            }
+            buf.push(field_type[0]);
+            buf.extend_from_slice(value);
+            buf.push(0);
+        }
+        buf.push(0);
+    })
+    .await
+}
+
+async fn read_next_message_after_optional_close<S>(socket: &mut S) -> Result<TypedMessage>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let next = read_typed_message(socket).await?;
+    if next.tag != b'C' {
+        return Ok(next);
+    }
+
+    let sync = read_typed_message(socket).await?;
+    if sync.tag != b'S' {
+        anyhow::bail!("expected Sync after Close, got {:?}", sync.tag as char);
+    }
+    write_message(socket, b'3', |_| {}).await?;
+    write_ready_for_query(socket).await?;
+    read_typed_message(socket).await
+}
+
+async fn read_next_parse_message<S>(socket: &mut S, label: &str) -> Result<TypedMessage>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let next = read_next_message_after_optional_close(socket).await?;
+    if next.tag != b'P' {
+        anyhow::bail!("expected Parse for {label}, got {:?}", next.tag as char);
+    }
+    Ok(next)
+}
+
 fn parse_bind_first_text_param(payload: &[u8]) -> Result<String> {
     let mut idx = 0usize;
     idx = skip_c_string(payload, idx)?;
@@ -1932,6 +2127,61 @@ where
         write_data_row_opt(socket, &values).await?;
     }
     write_command_complete(socket, command_complete).await?;
+    write_ready_for_query(socket).await?;
+    Ok(())
+}
+
+async fn handle_extended_query_error<S>(
+    socket: &mut S,
+    parse: TypedMessage,
+    expected_sql: &str,
+    expected_param: Option<&str>,
+    error_fields: &[(&[u8], &[u8])],
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let sql = parse_parse_sql(&parse.payload)?;
+    if sql != expected_sql {
+        anyhow::bail!("unexpected extended-query SQL: {sql}");
+    }
+
+    let describe = read_typed_message(socket).await?;
+    if describe.tag != b'D' {
+        anyhow::bail!("expected Describe message, got {:?}", describe.tag as char);
+    }
+    let sync = read_typed_message(socket).await?;
+    if sync.tag != b'S' {
+        anyhow::bail!("expected Sync after Parse/Describe, got {:?}", sync.tag as char);
+    }
+
+    write_message(socket, b'1', |_| {}).await?;
+    write_parameter_description(socket, if expected_param.is_some() { &[25] } else { &[] }).await?;
+    write_message(socket, b'n', |_| {}).await?;
+    write_ready_for_query(socket).await?;
+
+    let bind = read_typed_message(socket).await?;
+    if bind.tag != b'B' {
+        anyhow::bail!("expected Bind message, got {:?}", bind.tag as char);
+    }
+    let actual_param = parse_bind_first_text_param_opt(&bind.payload)?;
+    match (expected_param, actual_param.as_deref()) {
+        (Some(expected), Some(actual)) if expected == actual => {}
+        (None, None) => {}
+        (expected, actual) => anyhow::bail!("unexpected bound parameter: expected {:?}, got {:?}", expected, actual),
+    }
+
+    let execute = read_typed_message(socket).await?;
+    if execute.tag != b'E' {
+        anyhow::bail!("expected Execute message, got {:?}", execute.tag as char);
+    }
+    let sync = read_typed_message(socket).await?;
+    if sync.tag != b'S' {
+        anyhow::bail!("expected Sync after Execute, got {:?}", sync.tag as char);
+    }
+
+    write_message(socket, b'2', |_| {}).await?;
+    write_error_response(socket, error_fields).await?;
     write_ready_for_query(socket).await?;
     Ok(())
 }

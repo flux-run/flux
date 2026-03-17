@@ -281,9 +281,64 @@ enum PostgresSessionCommand {
     Query {
         sql: String,
         params: Vec<serde_json::Value>,
-        reply: mpsc::Sender<std::result::Result<PostgresSimpleQueryResponse, String>>,
+        reply: mpsc::Sender<std::result::Result<PostgresSimpleQueryResponse, PostgresDriverError>>,
     },
     Close,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PostgresDriverError {
+    message: String,
+    code: Option<String>,
+    detail: Option<String>,
+    constraint: Option<String>,
+    schema: Option<String>,
+    table: Option<String>,
+    column: Option<String>,
+}
+
+impl PostgresDriverError {
+    fn from_postgres_error(err: postgres::Error, default_prefix: &str) -> Self {
+        if let Some(db_error) = err.as_db_error() {
+            Self {
+                message: db_error.message().to_string(),
+                code: Some(db_error.code().code().to_string()),
+                detail: db_error.detail().map(str::to_string),
+                constraint: db_error.constraint().map(str::to_string),
+                schema: db_error.schema().map(str::to_string),
+                table: db_error.table().map(str::to_string),
+                column: db_error.column().map(str::to_string),
+            }
+        } else {
+            Self {
+                message: format!("{default_prefix}: {err}"),
+                code: None,
+                detail: None,
+                constraint: None,
+                schema: None,
+                table: None,
+                column: None,
+            }
+        }
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "message": self.message,
+            "code": self.code,
+            "detail": self.detail,
+            "constraint": self.constraint,
+            "schema": self.schema,
+            "table": self.table,
+            "column": self.column,
+        })
+    }
+}
+
+#[derive(Debug)]
+enum PostgresQueryOutcome {
+    Success(PostgresSimpleQueryResponse),
+    Error(PostgresDriverError),
 }
 
 struct PostgresSessionHandle {
@@ -359,7 +414,7 @@ impl PostgresSessionHandle {
         &self,
         sql: &str,
         params: &[serde_json::Value],
-    ) -> Result<PostgresSimpleQueryResponse, JsErrorBox> {
+    ) -> Result<PostgresQueryOutcome, JsErrorBox> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.sender
             .send(PostgresSessionCommand::Query {
@@ -370,8 +425,8 @@ impl PostgresSessionHandle {
             .map_err(|_| JsErrorBox::generic("postgres session is closed"))?;
 
         match reply_rx.recv() {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(err)) => Err(JsErrorBox::type_error(err)),
+            Ok(Ok(response)) => Ok(PostgresQueryOutcome::Success(response)),
+            Ok(Err(err)) => Ok(PostgresQueryOutcome::Error(err)),
             Err(_) => Err(JsErrorBox::generic("postgres session worker exited unexpectedly")),
         }
     }
@@ -915,23 +970,13 @@ fn op_flux_postgres_simple_query(
                 }
             }
             tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: returned recorded postgres query");
-            return Ok(serde_json::json!({
-                "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
-                "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
-                "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
-                "rowCount": response
-                    .get("rowCount")
-                    .cloned()
-                    .or_else(|| response.get("row_count").cloned())
-                    .unwrap_or_else(|| serde_json::json!(0)),
-                "replay": true,
-            }));
+            return Ok(postgres_checkpoint_response_json(&response, true));
         }
         tracing::warn!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded postgres checkpoint, making live query");
     }
 
     let started = std::time::Instant::now();
-    let live_response = perform_postgres_simple_query(
+    let live_outcome = perform_postgres_simple_query(
         &connection_string,
         &sql,
         &PostgresTlsOptions {
@@ -948,14 +993,7 @@ fn op_flux_postgres_simple_query(
         "sql": sql,
         "tls": tls,
     });
-    let response_json = serde_json::json!({
-        "rows": live_response.rows,
-        "fields": postgres_fields_json(&live_response.fields),
-        "command": live_response.command,
-        "rowCount": live_response.row_count,
-        "row_count": live_response.row_count,
-        "replay": false,
-    });
+    let response_json = postgres_outcome_json(live_outcome, false);
 
     {
         let map = state.borrow_mut::<RuntimeStateMap>();
@@ -974,16 +1012,7 @@ fn op_flux_postgres_simple_query(
 
     tracing::debug!(%request_id, %call_index, host = %host, port = %port, "intercepted postgres query");
 
-    Ok(serde_json::json!({
-        "rows": response_json.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
-        "fields": response_json.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
-        "command": response_json.get("command").cloned().unwrap_or(serde_json::Value::Null),
-        "rowCount": response_json
-            .get("rowCount")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!(0)),
-        "replay": false,
-    }))
+    Ok(response_json)
 }
 
 #[op2]
@@ -1037,22 +1066,12 @@ fn op_flux_postgres_session_query(
                 }
             }
             tracing::debug!(%request_id, %call_index, session_id = %session_id, "replay: returned recorded postgres session query");
-            return Ok(serde_json::json!({
-                "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
-                "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
-                "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
-                "rowCount": response
-                    .get("rowCount")
-                    .cloned()
-                    .or_else(|| response.get("row_count").cloned())
-                    .unwrap_or_else(|| serde_json::json!(0)),
-                "replay": true,
-            }));
+            return Ok(postgres_checkpoint_response_json(&response, true));
         }
         tracing::warn!(%request_id, %call_index, session_id = %session_id, "replay: no recorded postgres session-query checkpoint, making live query");
     }
 
-    let (target, tls_enabled, live_response, duration_ms) = {
+    let (target, tls_enabled, live_outcome, duration_ms) = {
         let started = std::time::Instant::now();
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
@@ -1082,14 +1101,7 @@ fn op_flux_postgres_session_query(
         "tls": tls_enabled,
         "session": true,
     });
-    let response_json = serde_json::json!({
-        "rows": live_response.rows,
-        "fields": postgres_fields_json(&live_response.fields),
-        "command": live_response.command,
-        "rowCount": live_response.row_count,
-        "row_count": live_response.row_count,
-        "replay": false,
-    });
+    let response_json = postgres_outcome_json(live_outcome, false);
 
     {
         let map = state.borrow_mut::<RuntimeStateMap>();
@@ -1184,23 +1196,13 @@ fn op_flux_postgres_query(
                 }
             }
             tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: returned recorded postgres prepared query");
-            return Ok(serde_json::json!({
-                "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
-                "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
-                "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
-                "rowCount": response
-                    .get("rowCount")
-                    .cloned()
-                    .or_else(|| response.get("row_count").cloned())
-                    .unwrap_or_else(|| serde_json::json!(0)),
-                "replay": true,
-            }));
+            return Ok(postgres_checkpoint_response_json(&response, true));
         }
         tracing::warn!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded postgres prepared-query checkpoint, making live query");
     }
 
     let started = std::time::Instant::now();
-    let live_response = perform_postgres_query(
+    let live_outcome = perform_postgres_query(
         &connection_string,
         &sql,
         &params,
@@ -1219,14 +1221,7 @@ fn op_flux_postgres_query(
         "params": params,
         "tls": tls,
     });
-    let response_json = serde_json::json!({
-        "rows": live_response.rows,
-        "fields": postgres_fields_json(&live_response.fields),
-        "command": live_response.command,
-        "rowCount": live_response.row_count,
-        "row_count": live_response.row_count,
-        "replay": false,
-    });
+    let response_json = postgres_outcome_json(live_outcome, false);
 
     {
         let map = state.borrow_mut::<RuntimeStateMap>();
@@ -1245,16 +1240,7 @@ fn op_flux_postgres_query(
 
     tracing::debug!(%request_id, %call_index, host = %host, port = %port, "intercepted postgres prepared query");
 
-    Ok(serde_json::json!({
-        "rows": response_json.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
-        "fields": response_json.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
-        "command": response_json.get("command").cloned().unwrap_or(serde_json::Value::Null),
-        "rowCount": response_json
-            .get("rowCount")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!(0)),
-        "replay": false,
-    }))
+    Ok(response_json)
 }
 
 #[op2]
@@ -1404,14 +1390,16 @@ fn perform_postgres_simple_query(
     connection_string: &str,
     sql: &str,
     tls: &PostgresTlsOptions,
-) -> Result<PostgresSimpleQueryResponse, JsErrorBox> {
+) -> Result<PostgresQueryOutcome, JsErrorBox> {
     let connection_string = connection_string.to_string();
     let sql = sql.to_string();
     let tls = tls.clone();
     std::thread::spawn(move || {
         let mut client = connect_postgres_client(&connection_string, &tls)?;
-        perform_postgres_simple_query_with_client(&mut client, &sql)
-            .map_err(JsErrorBox::type_error)
+        Ok(match perform_postgres_simple_query_with_client(&mut client, &sql) {
+            Ok(response) => PostgresQueryOutcome::Success(response),
+            Err(err) => PostgresQueryOutcome::Error(err),
+        })
     })
     .join()
     .map_err(|_| JsErrorBox::generic("postgres query thread panicked"))?
@@ -1422,15 +1410,17 @@ fn perform_postgres_query(
     sql: &str,
     params: &[serde_json::Value],
     tls: &PostgresTlsOptions,
-) -> Result<PostgresSimpleQueryResponse, JsErrorBox> {
+) -> Result<PostgresQueryOutcome, JsErrorBox> {
     let connection_string = connection_string.to_string();
     let sql = sql.to_string();
     let params = params.to_vec();
     let tls = tls.clone();
     std::thread::spawn(move || {
         let mut client = connect_postgres_client(&connection_string, &tls)?;
-        perform_postgres_query_with_client(&mut client, &sql, &params)
-            .map_err(JsErrorBox::type_error)
+        Ok(match perform_postgres_query_with_client(&mut client, &sql, &params) {
+            Ok(response) => PostgresQueryOutcome::Success(response),
+            Err(err) => PostgresQueryOutcome::Error(err),
+        })
     })
     .join()
     .map_err(|_| JsErrorBox::generic("postgres query thread panicked"))?
@@ -1439,10 +1429,10 @@ fn perform_postgres_query(
 fn perform_postgres_simple_query_with_client(
     client: &mut PostgresClient,
     sql: &str,
-) -> std::result::Result<PostgresSimpleQueryResponse, String> {
+) -> std::result::Result<PostgresSimpleQueryResponse, PostgresDriverError> {
     let messages = client
         .simple_query(sql)
-        .map_err(|err| format!("postgres query failed: {err}"))?;
+        .map_err(|err| PostgresDriverError::from_postgres_error(err, "postgres query failed"))?;
 
     let mut rows = Vec::new();
     let mut fields = Vec::new();
@@ -1495,10 +1485,18 @@ fn perform_postgres_query_with_client(
     client: &mut PostgresClient,
     sql: &str,
     params: &[serde_json::Value],
-) -> std::result::Result<PostgresSimpleQueryResponse, String> {
+) -> std::result::Result<PostgresSimpleQueryResponse, PostgresDriverError> {
     let mut boxed_params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
     for param in params.iter().cloned() {
-        boxed_params.push(box_postgres_param(param).map_err(|err| err.to_string())?);
+        boxed_params.push(box_postgres_param(param).map_err(|err| PostgresDriverError {
+            message: err.to_string(),
+            code: None,
+            detail: None,
+            constraint: None,
+            schema: None,
+            table: None,
+            column: None,
+        })?);
     }
     let refs: Vec<&(dyn ToSql + Sync)> = boxed_params
         .iter()
@@ -1507,7 +1505,7 @@ fn perform_postgres_query_with_client(
 
     let query_rows = client
         .query(sql, &refs)
-        .map_err(|err| format!("postgres query failed: {err}"))?;
+        .map_err(|err| PostgresDriverError::from_postgres_error(err, "postgres query failed"))?;
 
     let fields = query_rows
         .first()
@@ -1539,6 +1537,70 @@ fn perform_postgres_query_with_client(
         fields,
         command: Some("QUERY".to_string()),
     })
+}
+
+fn postgres_success_json(response: PostgresSimpleQueryResponse, replay: bool) -> serde_json::Value {
+    serde_json::json!({
+        "rows": response.rows,
+        "fields": postgres_fields_json(&response.fields),
+        "command": response.command,
+        "rowCount": response.row_count,
+        "row_count": response.row_count,
+        "error": serde_json::Value::Null,
+        "replay": replay,
+    })
+}
+
+fn postgres_error_json(error: PostgresDriverError, replay: bool) -> serde_json::Value {
+    serde_json::json!({
+        "rows": [],
+        "fields": [],
+        "command": serde_json::Value::Null,
+        "rowCount": 0,
+        "row_count": 0,
+        "error": error.to_json(),
+        "replay": replay,
+    })
+}
+
+fn postgres_outcome_json(outcome: PostgresQueryOutcome, replay: bool) -> serde_json::Value {
+    match outcome {
+        PostgresQueryOutcome::Success(response) => postgres_success_json(response, replay),
+        PostgresQueryOutcome::Error(error) => postgres_error_json(error, replay),
+    }
+}
+
+fn postgres_checkpoint_response_json(response: &serde_json::Value, replay: bool) -> serde_json::Value {
+    let recorded_error = response.get("error").cloned().unwrap_or(serde_json::Value::Null);
+    if !recorded_error.is_null() {
+        serde_json::json!({
+            "rows": [],
+            "fields": [],
+            "command": serde_json::Value::Null,
+            "rowCount": 0,
+            "row_count": 0,
+            "error": recorded_error,
+            "replay": replay,
+        })
+    } else {
+        serde_json::json!({
+            "rows": response.get("rows").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "fields": response.get("fields").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "command": response.get("command").cloned().unwrap_or(serde_json::Value::Null),
+            "rowCount": response
+                .get("rowCount")
+                .cloned()
+                .or_else(|| response.get("row_count").cloned())
+                .unwrap_or_else(|| serde_json::json!(0)),
+            "row_count": response
+                .get("row_count")
+                .cloned()
+                .or_else(|| response.get("rowCount").cloned())
+                .unwrap_or_else(|| serde_json::json!(0)),
+            "error": serde_json::Value::Null,
+            "replay": replay,
+        })
+    }
 }
 
 fn parse_postgres_target(connection_string: &str) -> Result<PostgresConnectionTarget, JsErrorBox> {
@@ -2895,6 +2957,32 @@ function __fluxPgNormalizeConfig(config = {}) {
     };
 }
 
+class DatabaseError extends Error {
+    constructor(message, details = {}) {
+        super(message);
+        this.name = "DatabaseError";
+        Object.assign(this, details);
+    }
+}
+
+function __fluxPgWrapDatabaseError(error) {
+    if (error instanceof DatabaseError) {
+        return error;
+    }
+    if (error && typeof error === "object" && (error.name === "DatabaseError" || error.code != null)) {
+        return new DatabaseError(String(error.message ?? "postgres query failed"), error);
+    }
+    return error;
+}
+
+async function __fluxPgWrapQueryError(runQuery) {
+    try {
+        return await runQuery();
+    } catch (error) {
+        throw __fluxPgWrapDatabaseError(error);
+    }
+}
+
 class Client {
     constructor(config = {}) {
         this._config = __fluxPgNormalizeConfig(config);
@@ -2925,7 +3013,7 @@ class Client {
         if (!this._inner) {
             await this.connect();
         }
-        return this._inner.query(queryOrConfig, values);
+        return __fluxPgWrapQueryError(() => this._inner.query(queryOrConfig, values));
     }
 
     async release() {
@@ -2957,7 +3045,7 @@ class Pool {
     }
 
     async query(queryOrConfig, values = undefined) {
-        return this._inner.query(queryOrConfig, values);
+        return __fluxPgWrapQueryError(() => this._inner.query(queryOrConfig, values));
     }
 
     async connect() {
@@ -2973,14 +3061,6 @@ class Pool {
 const types = __fluxPg.nodePgTypes;
 const defaults = {};
 const native = null;
-
-class DatabaseError extends Error {
-    constructor(message, details = {}) {
-        super(message);
-        this.name = "DatabaseError";
-        Object.assign(this, details);
-    }
-}
 
 export { Client, DatabaseError, Pool, defaults, native, types };
 export default { Client, DatabaseError, Pool, defaults, native, types };
@@ -5026,6 +5106,26 @@ function __flux_node_pg_rows(rows, fields, rowMode) {
         return fields.map((field) => row[String(field?.name ?? "")]);
     });
 }
+function __flux_node_pg_error(errorLike) {
+    if (!errorLike || typeof errorLike !== "object") {
+        return new Error("postgres query failed");
+    }
+
+    const error = new Error(String(errorLike.message ?? "postgres query failed"));
+    error.name = "DatabaseError";
+    for (const key of ["code", "detail", "constraint", "schema", "table", "column"]) {
+        if (errorLike[key] != null) {
+            error[key] = String(errorLike[key]);
+        }
+    }
+    return error;
+}
+function __flux_node_pg_response_or_throw(response) {
+    if (response?.error && typeof response.error === "object") {
+        throw __flux_node_pg_error(response.error);
+    }
+    return response ?? {};
+}
 class FluxNodePgClient {
     constructor(pool, sessionId) {
         this.pool = pool;
@@ -5044,6 +5144,7 @@ class FluxNodePgClient {
             sql: normalized.text,
             params: normalized.params,
         });
+        __flux_node_pg_response_or_throw(response);
         const fields = __flux_node_pg_field_list(response.fields, response.rows);
         const rows = __flux_node_pg_rows(response.rows, fields, normalized.rowMode);
         return {
@@ -5086,6 +5187,7 @@ class FluxNodePgPool {
             tls: this.tls,
             caCertPem: this.caCertPem,
         });
+        __flux_node_pg_response_or_throw(response);
         const fields = __flux_node_pg_field_list(response.fields, response.rows);
         const rows = __flux_node_pg_rows(response.rows, fields, normalized.rowMode);
         return {
@@ -5132,6 +5234,7 @@ globalThis.Flux.postgres.query = function(options = {}) {
         tls: !!options.tls,
         ca_cert_pem: options.caCertPem == null ? null : String(options.caCertPem),
     });
+    __flux_node_pg_response_or_throw(response);
 
     return {
         rows: Array.isArray(response.rows) ? response.rows : [],
@@ -5149,6 +5252,7 @@ globalThis.Flux.postgres.simpleQuery = function(options = {}) {
         tls: !!options.tls,
         ca_cert_pem: options.caCertPem == null ? null : String(options.caCertPem),
     });
+    __flux_node_pg_response_or_throw(response);
 
     return {
         rows: Array.isArray(response.rows) ? response.rows : [],
