@@ -174,7 +174,16 @@ async fn handle_net_request(
     let method = request.method().to_string();
 
     // Build the absolute URL the JS handler will see.
-    let url = format!("http://localhost:{}{}", state.route_name, uri.path_and_query().map(|pq| pq.as_str()).unwrap_or(""));
+    let host = request
+        .headers()
+        .get("host")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("localhost");
+    let url = format!(
+        "http://{}{}",
+        host,
+        uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("")
+    );
 
     // Collect non-sensitive headers as [[name, value], ...] JSON.
     let headers_list: Vec<[String; 2]> = request

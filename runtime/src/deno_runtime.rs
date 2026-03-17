@@ -1,15 +1,11 @@
-use std::sync::Arc;
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::Read;
 use std::net::IpAddr;
-use std::rc::Rc;
 
 use anyhow::{Context, Result};
-use deno_core::url::Url;
 use deno_core::{JsRuntime, OpState, RuntimeOptions, op2};
 use deno_error::JsErrorBox;
 use rand::Rng;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -48,7 +44,11 @@ fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), JsErrorBox> {
     }
 
     if let Ok(ip) = host.parse::<IpAddr>() {
-        if ip.is_loopback() || is_private_ip(&ip) {
+        let allow_loopback = std::env::var("FLOWBASE_ALLOW_LOOPBACK_FETCH")
+            .map(|value| value == "1")
+            .unwrap_or(false);
+
+        if (ip.is_loopback() && !allow_loopback) || is_private_ip(&ip) {
             return Err(JsErrorBox::new(
                 "PermissionDenied",
                 "fetch blocked: private/loopback IP addresses are not allowed",
@@ -95,6 +95,15 @@ pub struct FetchCheckpoint {
 pub struct LogEntry {
     pub level: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FetchRequestPayload {
+    execution_id: String,
+    url: String,
+    method: String,
+    body: Option<String>,
+    headers: HashMap<String, String>,
 }
 
 /// A virtual HTTP request fed into a server-mode isolate by the Rust host.
@@ -153,8 +162,9 @@ struct RuntimeExecutionState {
 deno_core::extension!(flux_runtime_ext, ops = [
     op_begin_execution,
     op_end_execution,
-    op_fetch,
-    op_now,
+    op_flux_fetch,
+    op_flux_now,
+    op_flux_parse_url,
     op_console,
     op_timer_delay,
     op_random,
@@ -232,26 +242,28 @@ fn op_end_execution(state: &mut OpState, #[string] execution_id: String) -> Stri
     }
 }
 
-#[op2(async(lazy))]
+#[op2]
 #[serde]
-async fn op_fetch(
-    state: Rc<RefCell<OpState>>,
-    #[string] execution_id: String,
-    #[string] url: String,
-    #[string] method: String,
-    #[serde] body: Option<serde_json::Value>,
-    #[serde] headers: Option<serde_json::Value>,
+fn op_flux_fetch(
+    state: &mut OpState,
+    #[serde] request: serde_json::Value,
 ) -> Result<serde_json::Value, JsErrorBox> {
-    let original_url = url;
+    let FetchRequestPayload {
+        execution_id,
+        url: original_url,
+        method,
+        body,
+        headers,
+    } = serde_json::from_value(request)
+        .map_err(|err| JsErrorBox::type_error(format!("invalid fetch request: {err}")))?;
 
-    let (request_id, call_index, mode, recorded_checkpoint, client) = {
-        let mut state_ref = state.borrow_mut();
+    let (request_id, call_index, mode, recorded_checkpoint) = {
         let (request_id, index, mode, recorded) = {
-            let map = state_ref.borrow_mut::<RuntimeStateMap>();
+            let map = state.borrow_mut::<RuntimeStateMap>();
             let execution = map.get_mut(&execution_id).ok_or_else(|| {
                 JsErrorBox::new(
                     "InternalError",
-                    format!("op_fetch: execution_id '{execution_id}' not found"),
+                    format!("op_flux_fetch: execution_id '{execution_id}' not found"),
                 )
             })?;
             let idx = execution.call_index;
@@ -264,8 +276,7 @@ async fn op_fetch(
                 rec,
             )
         };
-        let http_client = state_ref.borrow::<Client>().clone();
-        (request_id, index, mode, recorded, http_client)
+        (request_id, index, mode, recorded)
     };
 
     // In Replay mode, return the recorded response instead of making a live call.
@@ -273,8 +284,7 @@ async fn op_fetch(
         if let Some(checkpoint) = recorded_checkpoint {
             let response = checkpoint.response.clone();
             {
-                let mut state_ref = state.borrow_mut();
-                let map = state_ref.borrow_mut::<RuntimeStateMap>();
+                let map = state.borrow_mut::<RuntimeStateMap>();
                 if let Some(execution) = map.get_mut(&execution_id) {
                     execution.checkpoints.push(FetchCheckpoint {
                         call_index,
@@ -302,18 +312,17 @@ async fn op_fetch(
         "resolved_url": resolved_url.clone(),
         "method": method.clone(),
         "body": body.clone(),
-        "headers": headers.clone(),
+        "headers": headers,
     });
 
     let started = std::time::Instant::now();
     let target_url = resolved_url;
 
-    let response = make_http_request(&client, &target_url, &method, body, headers).await?;
+    let response = make_http_request(&target_url, &method, body.clone(), Some(headers.clone()))?;
     let duration_ms = started.elapsed().as_millis() as i32;
 
     {
-        let mut state_ref = state.borrow_mut();
-        let map = state_ref.borrow_mut::<RuntimeStateMap>();
+        let map = state.borrow_mut::<RuntimeStateMap>();
         if let Some(execution) = map.get_mut(&execution_id) {
             execution.checkpoints.push(FetchCheckpoint {
                 call_index,
@@ -335,7 +344,7 @@ async fn op_fetch(
 /// In Replay mode returns the timestamp recorded during the original Live execution,
 /// making `Date.now()` deterministic across replays.
 #[op2(fast)]
-fn op_now(state: &mut OpState, #[string] execution_id: String) -> f64 {
+fn op_flux_now(state: &mut OpState, #[string] execution_id: String) -> f64 {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -356,6 +365,38 @@ fn op_now(state: &mut OpState, #[string] execution_id: String) -> f64 {
             now_ms as f64
         }
     }
+}
+
+#[op2]
+#[serde]
+fn op_flux_parse_url(
+    #[string] input: String,
+    #[string] base: String,
+) -> std::result::Result<serde_json::Value, JsErrorBox> {
+    let parsed = if base.is_empty() {
+        url::Url::parse(&input)
+    } else {
+        let base_url = url::Url::parse(&base)
+            .map_err(|err| JsErrorBox::type_error(format!("invalid base URL: {err}")))?;
+        base_url.join(&input)
+    }
+    .map_err(|err| JsErrorBox::type_error(format!("invalid URL: {err}")))?;
+
+    Ok(serde_json::json!({
+        "href": parsed.as_str(),
+        "origin": parsed.origin().ascii_serialization(),
+        "protocol": format!("{}:", parsed.scheme()),
+        "username": parsed.username(),
+        "password": parsed.password(),
+        "host": parsed.host_str().map(|host| {
+            parsed.port().map(|port| format!("{host}:{port}")).unwrap_or_else(|| host.to_string())
+        }).unwrap_or_default(),
+        "hostname": parsed.host_str().unwrap_or_default(),
+        "port": parsed.port().map(|port| port.to_string()).unwrap_or_default(),
+        "pathname": parsed.path(),
+        "search": parsed.query().map(|query| format!("?{query}")).unwrap_or_default(),
+        "hash": parsed.fragment().map(|fragment| format!("#{fragment}")).unwrap_or_default(),
+    }))
 }
 
 /// Captures `console.log/warn/error` output and links it to the current execution.
@@ -482,59 +523,51 @@ fn op_net_respond(
     }
 }
 
-async fn make_http_request(
-    client: &Client,
+fn make_http_request(
     url: &str,
     method: &str,
-    body: Option<serde_json::Value>,
-    headers: Option<serde_json::Value>,
+    body: Option<String>,
+    headers: Option<HashMap<String, String>>,
 ) -> Result<serde_json::Value, JsErrorBox> {
-    let method = method
-        .parse::<reqwest::Method>()
-        .map_err(|err| JsErrorBox::type_error(err.to_string()))?;
-
-    let mut request = client.request(method, url);
+    let mut request = ureq::request(method, url);
 
     if let Some(raw_headers) = headers {
-        let map: HashMap<String, String> = serde_json::from_value(raw_headers)
-            .map_err(|err| JsErrorBox::type_error(err.to_string()))?;
-        for (key, value) in map {
-            request = request.header(key, value);
+        for (key, value) in raw_headers {
+            request = request.set(&key, &value);
         }
     }
 
-    if let Some(body) = body {
-        request = request.json(&body);
+    let response = match body {
+        Some(body) => request.send_string(&body),
+        None => request.call(),
     }
-
-    let response = request
-        .send()
-        .await
-        .map_err(|err| JsErrorBox::type_error(format!("fetch failed: {err}")))?;
+    .map_err(|err| JsErrorBox::type_error(format!("fetch failed: {err}")))?;
 
     // Reject responses that advertise a body larger than our limit.
-    if let Some(len) = response.content_length() {
-        if len as usize > MAX_RESPONSE_BYTES {
+    if let Some(len) = response
+        .header("content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        if len > MAX_RESPONSE_BYTES {
             return Err(JsErrorBox::type_error(
                 format!("response too large: {len} bytes exceeds {MAX_RESPONSE_BYTES} byte limit"),
             ));
         }
     }
 
-    let status = response.status().as_u16();
+    let status = response.status();
     let response_headers = response
-        .headers()
-        .iter()
-        .map(|(k, v): (&reqwest::header::HeaderName, &reqwest::header::HeaderValue)| {
-            let value = v.to_str().unwrap_or_default().to_string();
-            (k.to_string(), value)
-        })
+        .headers_names()
+        .into_iter()
+        .filter_map(|name| response.header(&name).map(|value| (name, value.to_string())))
         .collect::<HashMap<_, _>>();
 
     // Stream the body with a size cap to protect against missing/lying Content-Length.
-    let bytes = response
-        .bytes()
-        .await
+    let reader = response.into_reader();
+    let mut bytes = Vec::new();
+    reader
+        .take((MAX_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
         .map_err(|err| JsErrorBox::type_error(err.to_string()))?;
 
     if bytes.len() > MAX_RESPONSE_BYTES {
@@ -566,7 +599,6 @@ const EXECUTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30
 
 pub struct JsIsolate {
     runtime: JsRuntime,
-    http_client: Client,
     /// True when the user module called `Deno.serve()` during module init,
     /// meaning the isolate acts as a long-running HTTP app, not a one-shot handler.
     pub is_server_mode: bool,
@@ -585,27 +617,8 @@ impl JsIsolate {
     }
 
     fn new_internal(_user_code: &str, prepared: String) -> Result<Self> {
-        let http_client = Client::new();
-        let blob_store = Arc::new(deno_web::BlobStore::default());
-        let broadcast_channel = deno_web::InMemoryBroadcastChannel::default();
-
         let mut runtime = JsRuntime::new(RuntimeOptions {
-            extensions: vec![
-                deno_webidl::deno_webidl::init(),
-                deno_web::deno_web::init(
-                    blob_store,
-                    None::<Url>,
-                    broadcast_channel,
-                ),
-                deno_fetch::deno_fetch::init(
-                    deno_fetch::Options {
-                        user_agent: "flowbase".to_string(),
-                        ..Default::default()
-                    },
-                ),
-                deno_crypto::deno_crypto::init(None),
-                flux_runtime_ext::init(),
-            ],
+            extensions: vec![flux_runtime_ext::init()],
             create_params: Some(
                 deno_core::v8::CreateParams::default()
                     .heap_limits(0, V8_HEAP_LIMIT),
@@ -618,7 +631,6 @@ impl JsIsolate {
             let state = runtime.op_state();
             let mut state = state.borrow_mut();
             state.put::<RuntimeStateMap>(HashMap::new());
-            state.put(http_client.clone());
         }
 
         runtime
@@ -648,11 +660,7 @@ impl JsIsolate {
             local.is_true()
         };
 
-        Ok(Self {
-            runtime,
-            http_client,
-            is_server_mode,
-        })
+        Ok(Self { runtime, is_server_mode })
     }
 
     /// Dispatch a single HTTP request into a server-mode isolate.  The JS
@@ -685,7 +693,6 @@ impl JsIsolate {
                 is_server_mode: true,
                 pending_responses: HashMap::new(),
             });
-            state.put(self.http_client.clone());
         }
 
         // Inject execution_id so the JS shim can thread it through all ops.
@@ -766,7 +773,6 @@ impl JsIsolate {
                 is_server_mode: false,
                 pending_responses: HashMap::new(),
             });
-            state.put(self.http_client.clone());
         }
 
         let eid_json = serde_json::to_string(&execution_id).context("failed to encode execution_id")?;
@@ -939,9 +945,9 @@ impl JsIsolate {
 
 fn bootstrap_fetch_js() -> &'static str {
     r#"
-// Deno's web extensions install the DOM and Fetch surface. Flux keeps control
-// of transport, time, randomness, logging, and server dispatch by overriding
-// those entry points after the extensions load.
+// Flux provides a small buffered web-platform shim here. Transport, time,
+// randomness, logging, and server dispatch remain owned by Flux so recording
+// and replay stay deterministic.
 
 // ── Execution ID accessor ────────────────────────────────────────────────────
 // All op wrappers below use this helper so each concurrent execution threads
@@ -949,6 +955,366 @@ fn bootstrap_fetch_js() -> &'static str {
 function __flux_eid() {
   return globalThis.__FLUX_EXECUTION_ID__ || "__unknown__";
 }
+
+function __fluxEncodeUtf8(input) {
+    const encoded = unescape(encodeURIComponent(String(input)));
+    const bytes = new Uint8Array(encoded.length);
+    for (let i = 0; i < encoded.length; i++) {
+        bytes[i] = encoded.charCodeAt(i);
+    }
+    return bytes;
+}
+
+function __fluxDecodeUtf8(input) {
+    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input ?? []);
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode(...chunk);
+    }
+    return decodeURIComponent(escape(binary));
+}
+
+class TextEncoder {
+    encode(input = "") {
+        return __fluxEncodeUtf8(input);
+    }
+}
+
+class TextDecoder {
+    decode(input = undefined) {
+        if (input == null) return "";
+        return __fluxDecodeUtf8(input);
+    }
+}
+
+globalThis.TextEncoder = globalThis.TextEncoder || TextEncoder;
+globalThis.TextDecoder = globalThis.TextDecoder || TextDecoder;
+
+const __fluxEncoder = new globalThis.TextEncoder();
+const __fluxDecoder = new globalThis.TextDecoder();
+
+function __fluxNormalizeHeaderName(name) {
+    return String(name).toLowerCase();
+}
+
+function __fluxBodyToText(body) {
+    if (body == null) return null;
+    if (typeof body === "string") return body;
+    if (body instanceof Uint8Array) return __fluxDecoder.decode(body);
+    return String(body);
+}
+
+function __fluxCreateBodyState(bodyText) {
+    return {
+        bodyText,
+        used: false,
+        locked: false,
+        emitted: false,
+    };
+}
+
+function __fluxConsumeBodyText(state) {
+    if (state.used) {
+        throw new TypeError("Body already consumed");
+    }
+    state.used = true;
+    state.emitted = true;
+    return state.bodyText ?? "";
+}
+
+function __fluxCreateBodyStream(state) {
+    return {
+        getReader() {
+            if (state.locked) {
+                throw new TypeError("ReadableStream is locked");
+            }
+            state.locked = true;
+            return {
+                async read() {
+                    if (state.emitted || state.bodyText === null) {
+                        state.used = true;
+                        state.emitted = true;
+                        return { value: undefined, done: true };
+                    }
+                    state.used = true;
+                    state.emitted = true;
+                    return {
+                        value: __fluxEncoder.encode(state.bodyText),
+                        done: false,
+                    };
+                },
+                releaseLock() {
+                    state.locked = false;
+                },
+                async cancel() {
+                    state.used = true;
+                    state.emitted = true;
+                    state.locked = false;
+                },
+            };
+        },
+    };
+}
+
+function __fluxDecodeFormComponent(value) {
+    return decodeURIComponent(String(value).replace(/\+/g, " "));
+}
+
+class URLSearchParams {
+    constructor(init = "") {
+        this._pairs = [];
+
+        if (init instanceof URLSearchParams) {
+            this._pairs = [...init._pairs];
+            return;
+        }
+
+        if (Array.isArray(init)) {
+            for (const [key, value] of init) {
+                this.append(key, value);
+            }
+            return;
+        }
+
+        if (typeof init === "string") {
+            const query = init.startsWith("?") ? init.slice(1) : init;
+            if (!query) return;
+            for (const pair of query.split("&")) {
+                if (!pair) continue;
+                const [rawKey, rawValue = ""] = pair.split("=");
+                this.append(__fluxDecodeFormComponent(rawKey), __fluxDecodeFormComponent(rawValue));
+            }
+            return;
+        }
+
+        if (init && typeof init === "object") {
+            for (const [key, value] of Object.entries(init)) {
+                this.append(key, value);
+            }
+        }
+    }
+
+    append(name, value) {
+        this._pairs.push([String(name), String(value)]);
+    }
+
+    get(name) {
+        const key = String(name);
+        const match = this._pairs.find(([candidate]) => candidate === key);
+        return match ? match[1] : null;
+    }
+
+    has(name) {
+        const key = String(name);
+        return this._pairs.some(([candidate]) => candidate === key);
+    }
+
+    entries() {
+        return this._pairs[Symbol.iterator]();
+    }
+
+    [Symbol.iterator]() {
+        return this.entries();
+    }
+
+    toString() {
+        return this._pairs
+            .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+            .join("&");
+    }
+}
+
+class URL {
+    constructor(input, base = undefined) {
+        const parsed = Deno.core.ops.op_flux_parse_url(String(input), base == null ? "" : String(base));
+        this.href = parsed.href;
+        this.origin = parsed.origin;
+        this.protocol = parsed.protocol;
+        this.username = parsed.username;
+        this.password = parsed.password ?? "";
+        this.host = parsed.host;
+        this.hostname = parsed.hostname;
+        this.port = parsed.port;
+        this.pathname = parsed.pathname;
+        this.search = parsed.search;
+        this.hash = parsed.hash;
+        this.searchParams = new URLSearchParams(this.search);
+    }
+
+    toString() {
+        return this.href;
+    }
+
+    toJSON() {
+        return this.href;
+    }
+}
+
+class Headers {
+    constructor(init = undefined) {
+        this._map = new Map();
+        if (init instanceof Headers) {
+            for (const [key, value] of init.entries()) this.append(key, value);
+            return;
+        }
+        if (Array.isArray(init)) {
+            for (const [key, value] of init) this.append(key, value);
+            return;
+        }
+        if (init && typeof init === "object") {
+            for (const [key, value] of Object.entries(init)) this.append(key, value);
+        }
+    }
+
+    append(name, value) {
+        const key = __fluxNormalizeHeaderName(name);
+        const existing = this._map.get(key);
+        const next = String(value);
+        this._map.set(key, existing ? `${existing}, ${next}` : next);
+    }
+
+    delete(name) {
+        this._map.delete(__fluxNormalizeHeaderName(name));
+    }
+
+    get(name) {
+        const value = this._map.get(__fluxNormalizeHeaderName(name));
+        return value === undefined ? null : value;
+    }
+
+    has(name) {
+        return this._map.has(__fluxNormalizeHeaderName(name));
+    }
+
+    set(name, value) {
+        this._map.set(__fluxNormalizeHeaderName(name), String(value));
+    }
+
+    entries() {
+        return this._map.entries();
+    }
+
+    keys() {
+        return this._map.keys();
+    }
+
+    values() {
+        return this._map.values();
+    }
+
+    forEach(callback, thisArg = undefined) {
+        for (const [key, value] of this._map.entries()) {
+            callback.call(thisArg, value, key, this);
+        }
+    }
+
+    [Symbol.iterator]() {
+        return this.entries();
+    }
+}
+
+class Request {
+    constructor(input, init = undefined) {
+        const source = input instanceof Request ? input : null;
+        const options = init || {};
+
+        this.url = source ? source.url : String(input);
+        this.method = String(options.method || (source ? source.method : "GET")).toUpperCase();
+        this.headers = new Headers(options.headers || (source ? source.headers : undefined));
+        this._bodyState = __fluxCreateBodyState(options.body !== undefined
+            ? __fluxBodyToText(options.body)
+            : source
+                ? source._bodyState.bodyText
+                : null);
+        this._bodyStream = null;
+    }
+
+    get bodyUsed() {
+        return this._bodyState.used;
+    }
+
+    get body() {
+        if (this._bodyState.bodyText === null) return null;
+        if (!this._bodyStream) {
+            this._bodyStream = __fluxCreateBodyStream(this._bodyState);
+        }
+        return this._bodyStream;
+    }
+
+    async text() {
+        return __fluxConsumeBodyText(this._bodyState);
+    }
+
+    async json() {
+        return JSON.parse(await this.text());
+    }
+}
+
+class Response {
+    constructor(body = null, init = undefined) {
+        const options = init || {};
+        this._bodyState = __fluxCreateBodyState(__fluxBodyToText(body));
+        this._bodyStream = null;
+        this.status = options.status ?? 200;
+        this.statusText = options.statusText ?? "";
+        this.headers = new Headers(options.headers);
+    }
+
+    static json(value, init = undefined) {
+        const options = init || {};
+        const headers = new Headers(options.headers);
+        if (!headers.has("content-type")) {
+            headers.set("content-type", "application/json");
+        }
+        return new Response(JSON.stringify(value), {
+            ...options,
+            headers,
+        });
+    }
+
+    get ok() {
+        return this.status >= 200 && this.status < 300;
+    }
+
+    get bodyUsed() {
+        return this._bodyState.used;
+    }
+
+    get body() {
+        if (this._bodyState.bodyText === null) return null;
+        if (!this._bodyStream) {
+            this._bodyStream = __fluxCreateBodyStream(this._bodyState);
+        }
+        return this._bodyStream;
+    }
+
+    async text() {
+        return __fluxConsumeBodyText(this._bodyState);
+    }
+
+    async json() {
+        return JSON.parse(await this.text());
+    }
+
+    clone() {
+        if (this.bodyUsed) {
+            throw new TypeError("Body already consumed");
+        }
+        return new Response(this._bodyState.bodyText, {
+            status: this.status,
+            statusText: this.statusText,
+            headers: this.headers,
+        });
+    }
+}
+
+globalThis.URLSearchParams = globalThis.URLSearchParams || URLSearchParams;
+globalThis.URL = globalThis.URL || URL;
+globalThis.Headers = Headers;
+globalThis.Request = Request;
+globalThis.Response = Response;
 
 // ── crypto ──────────────────────────────────────────────────────────────────
 if (!globalThis.crypto) globalThis.crypto = {};
@@ -969,13 +1335,13 @@ globalThis.fetch = async function(input, init = undefined) {
     const method = request.method || "GET";
     const headers = Object.fromEntries(request.headers.entries());
     const body = (method === "GET" || method === "HEAD") ? null : await request.text();
-    const response = await Deno.core.ops.op_fetch(
-        __flux_eid(),
-        String(request.url),
-        String(method),
+    const response = await Deno.core.ops.op_flux_fetch({
+        execution_id: __flux_eid(),
+        url: String(request.url),
+        method: String(method),
         body,
         headers,
-    );
+    });
 
     const responseBody = response.body == null
         ? null
@@ -995,19 +1361,19 @@ globalThis.fetch = async function(input, init = undefined) {
   class PatchedDate extends _OrigDate {
     constructor(...args) {
       if (args.length === 0) {
-        super(Deno.core.ops.op_now(__flux_eid()));
+        super(Deno.core.ops.op_flux_now(__flux_eid()));
       } else {
         super(...args);
       }
     }
   }
-  PatchedDate.now = function() { return Deno.core.ops.op_now(__flux_eid()); };
+    PatchedDate.now = function() { return Deno.core.ops.op_flux_now(__flux_eid()); };
   globalThis.Date = PatchedDate;
 }
 
 // ── performance.now() ──────────────────────────────────────────────────────
 if (globalThis.performance) {
-  globalThis.performance.now = function() { return Deno.core.ops.op_now(__flux_eid()); };
+    globalThis.performance.now = function() { return Deno.core.ops.op_flux_now(__flux_eid()); };
 }
 
 // ── console ────────────────────────────────────────────────────────────────
@@ -1065,9 +1431,21 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
     headersInit = [];
   }
 
-  const request = new Request(url, {
+    const requestHeaders = new Headers(headersInit);
+    let requestUrl = String(url);
+    const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(requestUrl);
+    if (!hasScheme) {
+        const host = requestHeaders.get("host") || "127.0.0.1";
+        if (requestUrl.startsWith("/")) {
+            requestUrl = `http://${host}${requestUrl}`;
+        } else {
+            requestUrl = `http://${requestUrl}`;
+        }
+    }
+
+    const request = new Request(requestUrl, {
     method,
-    headers: new Headers(headersInit),
+        headers: requestHeaders,
     body: (method === "GET" || method === "HEAD") ? undefined : (body || undefined),
   });
 
