@@ -1,11 +1,13 @@
+use std::sync::Arc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::rc::Rc;
 
 use anyhow::{Context, Result};
-use deno_core::error::AnyError;
+use deno_core::url::Url;
 use deno_core::{JsRuntime, OpState, RuntimeOptions, op2};
+use deno_error::JsErrorBox;
 use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -28,17 +30,17 @@ const BLOCKED_HOSTS: &[&str] = &[
 ];
 
 /// Validate that a URL is safe to fetch — blocks SSRF to cloud metadata and private IPs.
-fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), AnyError> {
+fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), JsErrorBox> {
     let parsed = url::Url::parse(raw_url)
-        .map_err(|e| deno_core::error::custom_error("TypeError", format!("invalid URL: {e}")))?;
+        .map_err(|e| JsErrorBox::type_error(format!("invalid URL: {e}")))?;
 
     let host = parsed
         .host_str()
-        .ok_or_else(|| deno_core::error::custom_error("TypeError", "invalid URL: no host"))?;
+        .ok_or_else(|| JsErrorBox::type_error("invalid URL: no host"))?;
 
     for blocked in BLOCKED_HOSTS {
         if host == *blocked {
-            return Err(deno_core::error::custom_error(
+            return Err(JsErrorBox::new(
                 "PermissionDenied",
                 format!("fetch blocked: {host} is a restricted endpoint"),
             ));
@@ -47,7 +49,7 @@ fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), AnyError> {
 
     if let Ok(ip) = host.parse::<IpAddr>() {
         if ip.is_loopback() || is_private_ip(&ip) {
-            return Err(deno_core::error::custom_error(
+            return Err(JsErrorBox::new(
                 "PermissionDenied",
                 "fetch blocked: private/loopback IP addresses are not allowed",
             ));
@@ -230,7 +232,7 @@ fn op_end_execution(state: &mut OpState, #[string] execution_id: String) -> Stri
     }
 }
 
-#[op2(async)]
+#[op2(async(lazy))]
 #[serde]
 async fn op_fetch(
     state: Rc<RefCell<OpState>>,
@@ -239,7 +241,7 @@ async fn op_fetch(
     #[string] method: String,
     #[serde] body: Option<serde_json::Value>,
     #[serde] headers: Option<serde_json::Value>,
-) -> Result<serde_json::Value, AnyError> {
+) -> Result<serde_json::Value, JsErrorBox> {
     let original_url = url;
 
     let (request_id, call_index, mode, recorded_checkpoint, client) = {
@@ -247,7 +249,7 @@ async fn op_fetch(
         let (request_id, index, mode, recorded) = {
             let map = state_ref.borrow_mut::<RuntimeStateMap>();
             let execution = map.get_mut(&execution_id).ok_or_else(|| {
-                deno_core::error::custom_error(
+                JsErrorBox::new(
                     "InternalError",
                     format!("op_fetch: execution_id '{execution_id}' not found"),
                 )
@@ -486,16 +488,16 @@ async fn make_http_request(
     method: &str,
     body: Option<serde_json::Value>,
     headers: Option<serde_json::Value>,
-) -> Result<serde_json::Value, AnyError> {
+) -> Result<serde_json::Value, JsErrorBox> {
     let method = method
         .parse::<reqwest::Method>()
-        .map_err(|err| deno_core::error::custom_error("TypeError", err.to_string()))?;
+        .map_err(|err| JsErrorBox::type_error(err.to_string()))?;
 
     let mut request = client.request(method, url);
 
     if let Some(raw_headers) = headers {
         let map: HashMap<String, String> = serde_json::from_value(raw_headers)
-            .map_err(|err| deno_core::error::custom_error("TypeError", err.to_string()))?;
+            .map_err(|err| JsErrorBox::type_error(err.to_string()))?;
         for (key, value) in map {
             request = request.header(key, value);
         }
@@ -505,15 +507,15 @@ async fn make_http_request(
         request = request.json(&body);
     }
 
-    let response = request.send().await.map_err(|err| {
-        deno_core::error::custom_error("TypeError", format!("fetch failed: {err}"))
-    })?;
+    let response = request
+        .send()
+        .await
+        .map_err(|err| JsErrorBox::type_error(format!("fetch failed: {err}")))?;
 
     // Reject responses that advertise a body larger than our limit.
     if let Some(len) = response.content_length() {
         if len as usize > MAX_RESPONSE_BYTES {
-            return Err(deno_core::error::custom_error(
-                "TypeError",
+            return Err(JsErrorBox::type_error(
                 format!("response too large: {len} bytes exceeds {MAX_RESPONSE_BYTES} byte limit"),
             ));
         }
@@ -523,7 +525,7 @@ async fn make_http_request(
     let response_headers = response
         .headers()
         .iter()
-        .map(|(k, v)| {
+        .map(|(k, v): (&reqwest::header::HeaderName, &reqwest::header::HeaderValue)| {
             let value = v.to_str().unwrap_or_default().to_string();
             (k.to_string(), value)
         })
@@ -533,11 +535,10 @@ async fn make_http_request(
     let bytes = response
         .bytes()
         .await
-        .map_err(|err| deno_core::error::custom_error("TypeError", err.to_string()))?;
+        .map_err(|err| JsErrorBox::type_error(err.to_string()))?;
 
     if bytes.len() > MAX_RESPONSE_BYTES {
-        return Err(deno_core::error::custom_error(
-            "TypeError",
+        return Err(JsErrorBox::type_error(
             format!(
                 "response body too large: {} bytes exceeds {MAX_RESPONSE_BYTES} byte limit",
                 bytes.len()
@@ -585,9 +586,26 @@ impl JsIsolate {
 
     fn new_internal(_user_code: &str, prepared: String) -> Result<Self> {
         let http_client = Client::new();
+        let blob_store = Arc::new(deno_web::BlobStore::default());
+        let broadcast_channel = deno_web::InMemoryBroadcastChannel::default();
 
         let mut runtime = JsRuntime::new(RuntimeOptions {
-            extensions: vec![flux_runtime_ext::init_ops_and_esm()],
+            extensions: vec![
+                deno_webidl::deno_webidl::init(),
+                deno_web::deno_web::init(
+                    blob_store,
+                    None::<Url>,
+                    broadcast_channel,
+                ),
+                deno_fetch::deno_fetch::init(
+                    deno_fetch::Options {
+                        user_agent: "flowbase".to_string(),
+                        ..Default::default()
+                    },
+                ),
+                deno_crypto::deno_crypto::init(None),
+                flux_runtime_ext::init(),
+            ],
             create_params: Some(
                 deno_core::v8::CreateParams::default()
                     .heap_limits(0, V8_HEAP_LIMIT),
@@ -625,7 +643,7 @@ impl JsIsolate {
                     "typeof globalThis.__flux_net_handler === 'function'",
                 )
                 .context("failed to probe server mode")?;
-            let scope = &mut runtime.handle_scope();
+            deno_core::scope!(scope, &mut runtime);
             let local = deno_core::v8::Local::new(scope, probe);
             local.is_true()
         };
@@ -796,7 +814,7 @@ impl JsIsolate {
             .context("failed to read handler result")?;
 
         let raw: String = {
-            let scope = &mut self.runtime.handle_scope();
+            deno_core::scope!(scope, &mut self.runtime);
             let local = deno_core::v8::Local::new(scope, result_value);
             deno_core::serde_v8::from_v8(scope, local)
                 .context("failed to deserialize handler result")?
@@ -857,7 +875,7 @@ impl JsIsolate {
                     "typeof globalThis.__flux_user_handler === 'function'",
                 )
                 .context("failed to check for exported handler")?;
-            let scope = &mut self.runtime.handle_scope();
+            deno_core::scope!(scope, &mut self.runtime);
             let local = deno_core::v8::Local::new(scope, check);
             local.is_true()
         };
@@ -921,143 +939,9 @@ impl JsIsolate {
 
 fn bootstrap_fetch_js() -> &'static str {
     r#"
-// ── Web platform polyfills ───────────────────────────────────────────────────
-// deno_core ships only V8 builtins — no fetch, Headers, Request, Response, or
-// crypto. We provide minimal implementations sufficient for Deno.serve handlers
-// and the standard Fetch API.
-
-class Headers {
-  #m;
-  constructor(init) {
-    this.#m = new Map();
-    if (Array.isArray(init)) {
-      for (const p of init) this.#m.set(String(p[0]).toLowerCase(), String(p[1]));
-    } else if (init instanceof Headers) {
-      for (const [k, v] of init.entries()) this.#m.set(k, v);
-    } else if (init && typeof init === "object") {
-      for (const [k, v] of Object.entries(init)) this.#m.set(k.toLowerCase(), String(v));
-    }
-  }
-  get(n)       { return this.#m.get(String(n).toLowerCase()) ?? null; }
-  set(n, v)    { this.#m.set(String(n).toLowerCase(), String(v)); }
-  has(n)       { return this.#m.has(String(n).toLowerCase()); }
-  delete(n)    { this.#m.delete(String(n).toLowerCase()); }
-  append(n, v) {
-    const k = String(n).toLowerCase();
-    const cur = this.#m.get(k);
-    this.#m.set(k, cur == null ? String(v) : cur + ", " + String(v));
-  }
-  entries()    { return this.#m.entries(); }
-  keys()       { return this.#m.keys(); }
-  values()     { return this.#m.values(); }
-  forEach(cb)  { this.#m.forEach((v, k) => cb(v, k, this)); }
-  [Symbol.iterator]() { return this.#m.entries(); }
-}
-
-class Request {
-  #body;
-  constructor(input, init = {}) {
-    this.url    = typeof input === "string" ? input : input.url;
-    this.method = ((init.method ?? (typeof input === "object" ? input.method : undefined)) ?? "GET").toUpperCase();
-    this.headers = init.headers instanceof Headers
-      ? init.headers
-      : new Headers(init.headers);
-    this.#body = init.body ?? null;
-  }
-  async text()        { return this.#body ?? ""; }
-  async json()        { return JSON.parse(this.#body ?? "null"); }
-  async arrayBuffer() {
-    const s = this.#body ?? "";
-    const a = new Uint8Array(s.length);
-    for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
-    return a.buffer;
-  }
-}
-
-class Response {
-  #body;
-  constructor(body, init = {}) {
-    this.#body      = body == null ? "" : String(body);
-    this.status     = init.status ?? 200;
-    this.statusText = init.statusText ?? "";
-    this.ok         = this.status >= 200 && this.status < 300;
-    this.headers    = init.headers instanceof Headers
-      ? init.headers
-      : new Headers(init.headers);
-  }
-  async text() { return this.#body; }
-  async json() { return JSON.parse(this.#body); }
-  clone()      { return new Response(this.#body, { status: this.status, statusText: this.statusText, headers: this.headers }); }
-  static json(data, init = {}) {
-    const body = JSON.stringify(data);
-    const h = new Headers(init.headers);
-    if (!h.has("content-type")) h.set("content-type", "application/json");
-    return new Response(body, { ...init, headers: h });
-  }
-  static error()             { return new Response("", { status: 0 }); }
-  static redirect(url, s=302){ return new Response("", { status: s, headers: new Headers([["location", url]]) }); }
-}
-
-globalThis.Headers  = Headers;
-globalThis.Request  = Request;
-globalThis.Response = Response;
-
-// ── URL ─────────────────────────────────────────────────────────────────────
-if (!globalThis.URL) {
-  globalThis.URL = class URL {
-    #href; #u;
-    constructor(input, base) {
-      const str = base ? String(base).replace(/\/+$/, "") + "/" + String(input).replace(/^\/+/, "") : String(input);
-      this.#href = str;
-      const m = str.match(/^([a-z][a-z0-9+\-.]*):\/\/([^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/i) || [];
-      this.protocol = (m[1] ?? "").toLowerCase() + ":";
-      const host = m[2] ?? "";
-      const atIdx = host.lastIndexOf("@");
-      const hostPart = atIdx >= 0 ? host.slice(atIdx + 1) : host;
-      const portIdx = hostPart.lastIndexOf(":");
-      this.hostname = portIdx >= 0 ? hostPart.slice(0, portIdx) : hostPart;
-      this.port     = portIdx >= 0 ? hostPart.slice(portIdx + 1) : "";
-      this.host     = hostPart;
-      this.pathname = m[3] || "/";
-      this.search   = m[4] ?? "";
-      this.hash     = m[5] ?? "";
-      this.origin   = this.protocol + "//" + this.host;
-      this.href     = this.#href;
-      this.searchParams = new URLSearchParams(this.search.slice(1));
-    }
-    toString() { return this.#href; }
-  };
-}
-
-if (!globalThis.URLSearchParams) {
-  globalThis.URLSearchParams = class URLSearchParams {
-    #p;
-    constructor(init) {
-      this.#p = [];
-      if (typeof init === "string") {
-        for (const part of init.split("&").filter(Boolean)) {
-          const [k, v = ""] = part.split("=");
-          this.#p.push([decodeURIComponent(k), decodeURIComponent(v)]);
-        }
-      } else if (Array.isArray(init)) {
-        this.#p = init.map(([k, v]) => [String(k), String(v)]);
-      } else if (init && typeof init === "object") {
-        for (const [k, v] of Object.entries(init)) this.#p.push([String(k), String(v)]);
-      }
-    }
-    get(k)     { return this.#p.find(([n]) => n === k)?.[1] ?? null; }
-    getAll(k)  { return this.#p.filter(([n]) => n === k).map(([,v]) => v); }
-    has(k)     { return this.#p.some(([n]) => n === k); }
-    set(k, v)  { this.#p = this.#p.filter(([n]) => n !== k); this.#p.push([k, String(v)]); }
-    append(k, v){ this.#p.push([String(k), String(v)]); }
-    delete(k)  { this.#p = this.#p.filter(([n]) => n !== k); }
-    entries()  { return this.#p[Symbol.iterator](); }
-    keys()     { return this.#p.map(([k]) => k)[Symbol.iterator](); }
-    values()   { return this.#p.map(([,v]) => v)[Symbol.iterator](); }
-    toString() { return this.#p.map(([k,v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v)).join("&"); }
-    forEach(cb){ this.#p.forEach(([k, v]) => cb(v, k, this)); }
-  };
-}
+// Deno's web extensions install the DOM and Fetch surface. Flux keeps control
+// of transport, time, randomness, logging, and server dispatch by overriding
+// those entry points after the extensions load.
 
 // ── Execution ID accessor ────────────────────────────────────────────────────
 // All op wrappers below use this helper so each concurrent execution threads
@@ -1068,25 +952,41 @@ function __flux_eid() {
 
 // ── crypto ──────────────────────────────────────────────────────────────────
 if (!globalThis.crypto) globalThis.crypto = {};
+globalThis.crypto.getRandomValues = (typedArray) => {
+    if (!typedArray || typeof typedArray.length !== "number") {
+        throw new TypeError("crypto.getRandomValues expected a typed array");
+    }
+    for (let i = 0; i < typedArray.length; i++) {
+        typedArray[i] = Math.floor(Deno.core.ops.op_random(__flux_eid()) * 256);
+    }
+    return typedArray;
+};
 globalThis.crypto.randomUUID = () => Deno.core.ops.op_random_uuid(__flux_eid());
 
 // ── fetch ──────────────────────────────────────────────────────────────────
-globalThis.fetch = async function(url, init = {}) {
-  const method = typeof init?.method === "string" ? init.method : "GET";
-  const body = init?.body ?? null;
-  const headers = init?.headers ?? null;
-  const response = await Deno.core.ops.op_fetch(__flux_eid(), String(url), String(method), body, headers);
+globalThis.fetch = async function(input, init = undefined) {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const method = request.method || "GET";
+    const headers = Object.fromEntries(request.headers.entries());
+    const body = (method === "GET" || method === "HEAD") ? null : await request.text();
+    const response = await Deno.core.ops.op_fetch(
+        __flux_eid(),
+        String(request.url),
+        String(method),
+        body,
+        headers,
+    );
 
-  return {
-    status: response.status,
-    ok: response.status >= 200 && response.status < 400,
-    headers: response.headers ?? {},
-    async json() { return response.body; },
-    async text() {
-      if (typeof response.body === "string") return response.body;
-      return JSON.stringify(response.body ?? null);
-    },
-  };
+    const responseBody = response.body == null
+        ? null
+        : typeof response.body === "string"
+            ? response.body
+            : JSON.stringify(response.body);
+
+    return new Response(responseBody, {
+        status: response.status,
+        headers: new Headers(response.headers ?? {}),
+    });
 };
 
 // ── Date.now() + new Date() ────────────────────────────────────────────────
