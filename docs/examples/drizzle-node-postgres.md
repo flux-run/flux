@@ -15,6 +15,18 @@ const pool = new pg.Pool({
 });
 
 const db = drizzle(pool);
+
+const client = await pool.connect();
+try {
+  await client.query("begin");
+  await client.query({ text: "select 1", rowMode: "array" });
+  await client.query("commit");
+} catch (err) {
+  await client.query("rollback");
+  throw err;
+} finally {
+  await client.release();
+}
 ```
 
 What this shim supports today:
@@ -22,12 +34,11 @@ What this shim supports today:
 - `new Pool({ connectionString, tls, caCertPem })`
 - `pool.query(sql, params)`
 - `pool.query({ text, values, rowMode: "array" }, params)`
+- `pool.connect()` returning a session-bound client
+- `client.query(...)` on that connected client
+- `client.release()`
 - `pool.end()`
 - `types.builtins` and `types.getTypeParser(...)` for the basic surface Drizzle references
-
-Current limitation:
-
-- `pool.connect()` intentionally throws. Flux does not yet expose stateful Postgres sessions across multiple queries, so transaction-oriented APIs must fail explicitly instead of pretending to work.
 
 Important compatibility note:
 

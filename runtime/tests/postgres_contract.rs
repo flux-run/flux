@@ -329,35 +329,32 @@ export default function handler({ input }) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_node_pg_pool_supports_drizzle_query_shape() -> Result<()> {
-        let _lock = postgres_test_lock().lock().await;
-        let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
-        let (port, shutdown_tx, server_task) = spawn_mock_postgres_param_server().await?;
+    let _lock = postgres_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let (port, shutdown_tx, server_task) = spawn_mock_postgres_transaction_server().await?;
 
-        let code = r#"
+    let code = r#"
 export default async function handler({ input }) {
     const pool = Flux.postgres.createNodePgPool({
         connectionString: input.connectionString,
     });
+    const client = await pool.connect();
 
-    const result = await pool.query(
+    await client.query("begin");
+    const result = await client.query(
         {
             text: input.sql,
             rowMode: "array",
             values: input.params,
         },
     );
-
-    let connectError = null;
-    try {
-        await pool.connect();
-    } catch (err) {
-        connectError = err?.message ?? String(err);
-    }
-
+    await client.query("commit");
+    await client.release();
     await pool.end();
 
     return {
         isPool: pool instanceof Flux.postgres.NodePgPool,
+        isClient: client instanceof Flux.postgres.NodePgClient,
         rows: result.rows,
         rowCount: result.rowCount,
         command: result.command,
@@ -366,47 +363,59 @@ export default async function handler({ input }) {
             date: Flux.postgres.nodePgTypes.builtins.DATE,
             timestampTz: Flux.postgres.nodePgTypes.builtins.TIMESTAMPTZ,
         },
-        connectError,
     };
 }
 "#;
 
-        let payload = serde_json::json!({
-                "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
-                "sql": "select $1::text as value",
-                "params": ["hello"],
-        });
+    let payload = serde_json::json!({
+        "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
+        "sql": "select $1::text as value",
+        "params": ["hello"],
+    });
 
-        let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg shim isolate")?;
-        let output = isolate
-                .execute(payload, ExecutionContext::new("postgres-node-pg-shim"))
-                .await
-                .context("node-pg shim execution failed")?;
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg shim isolate")?;
+    let live_output = isolate
+        .execute(payload.clone(), ExecutionContext::new("postgres-node-pg-shim-live"))
+        .await
+        .context("node-pg shim execution failed")?;
 
-        shutdown_tx.send(()).ok();
-        server_task.await.context("mock postgres server task failed")??;
+    shutdown_tx.send(()).ok();
+    server_task.await.context("mock postgres transaction server task failed")??;
 
-        assert_eq!(output.error, None);
-        assert_eq!(
-                output.output,
-                serde_json::json!({
-                        "isPool": true,
-                        "rows": [["hello"]],
-                        "rowCount": 1,
-                        "command": "QUERY",
-                        "fieldNames": ["value"],
-                        "builtins": {
-                                "date": 1082,
-                                "timestampTz": 1184,
-                        },
-                        "connectError": "Flux.postgres NodePgPool.connect is not implemented yet because stateful Postgres sessions are not available",
-                })
-        );
-        assert_eq!(output.checkpoints.len(), 1);
-        assert_eq!(output.checkpoints[0].boundary, "postgres");
-        assert_eq!(output.checkpoints[0].method, "query");
+    assert_eq!(live_output.error, None);
+    assert_eq!(
+        live_output.output,
+        serde_json::json!({
+            "isPool": true,
+            "isClient": true,
+            "rows": [["hello"]],
+            "rowCount": 1,
+            "command": "QUERY",
+            "fieldNames": ["value"],
+            "builtins": {
+                "date": 1082,
+                "timestampTz": 1184,
+            },
+        })
+    );
+    assert_eq!(live_output.checkpoints.len(), 3);
+    assert!(live_output.checkpoints.iter().all(|cp| cp.boundary == "postgres"));
+    assert!(live_output.checkpoints.iter().all(|cp| cp.method == "query"));
 
-        Ok(())
+    let recorded = live_output.checkpoints.clone();
+    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create node-pg shim replay isolate")?;
+    let mut replay_context = ExecutionContext::new("postgres-node-pg-shim-replay");
+    replay_context.mode = ExecutionMode::Replay;
+    let replay_output = replay_isolate
+        .execute_with_recorded(payload, replay_context, recorded)
+        .await
+        .context("node-pg shim replay execution failed")?;
+
+    assert_eq!(replay_output.error, None);
+    assert_eq!(replay_output.output, live_output.output);
+    assert_eq!(replay_output.checkpoints.len(), 3);
+
+    Ok(())
 }
 
 async fn spawn_mock_postgres_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
@@ -540,6 +549,93 @@ async fn spawn_mock_postgres_param_server() -> Result<(u16, oneshot::Sender<()>,
                     anyhow::bail!("expected Close or Terminate message, got {:?}", next.tag as char);
                 }
                 Ok(())
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx, task))
+}
+
+async fn spawn_mock_postgres_transaction_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind mock postgres transaction listener")?;
+    let port = listener
+        .local_addr()
+        .context("failed to get mock postgres transaction addr")?
+        .port();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = &mut shutdown_rx => Ok(()),
+            accepted = listener.accept() => {
+                let (mut socket, _) = accepted.context("failed to accept postgres transaction client")?;
+
+                let _startup = read_startup_message(&mut socket).await?;
+                write_authentication_ok(&mut socket).await?;
+                write_parameter_status(&mut socket, b"client_encoding", b"UTF8").await?;
+                write_parameter_status(&mut socket, b"server_version", b"16.0").await?;
+                write_backend_key_data(&mut socket).await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let mut expected_idx = 0usize;
+                loop {
+                    let next = read_typed_message(&mut socket).await?;
+                    match next.tag {
+                        b'P' => {
+                            match expected_idx {
+                                0 => {
+                                    handle_extended_query(
+                                        &mut socket,
+                                        next,
+                                        "begin",
+                                        None,
+                                        None,
+                                        b"BEGIN",
+                                    ).await?;
+                                }
+                                1 => {
+                                    handle_extended_query(
+                                        &mut socket,
+                                        next,
+                                        "select $1::text as value",
+                                        Some("hello"),
+                                        Some((b"value".as_slice(), vec![b"hello".as_slice()])),
+                                        b"SELECT 1",
+                                    ).await?;
+                                }
+                                2 => {
+                                    handle_extended_query(
+                                        &mut socket,
+                                        next,
+                                        "commit",
+                                        None,
+                                        None,
+                                        b"COMMIT",
+                                    ).await?;
+                                }
+                                _ => anyhow::bail!("unexpected extra Parse message in transaction flow"),
+                            }
+                            expected_idx += 1;
+                        }
+                        b'C' => {
+                            let sync = read_typed_message(&mut socket).await?;
+                            if sync.tag != b'S' {
+                                anyhow::bail!("expected Sync after Close, got {:?}", sync.tag as char);
+                            }
+                            write_message(&mut socket, b'3', |_| {}).await?;
+                            write_ready_for_query(&mut socket).await?;
+                        }
+                        b'X' => {
+                            if expected_idx != 3 {
+                                anyhow::bail!("transaction server terminated before all expected queries were received");
+                            }
+                            break Ok(());
+                        }
+                        other => anyhow::bail!("unexpected postgres transaction message: {:?}", other as char),
+                    }
+                }
             }
         }
     });
@@ -750,6 +846,106 @@ fn parse_bind_first_text_param(payload: &[u8]) -> Result<String> {
     }
     let value = String::from_utf8(payload[idx..end].to_vec()).context("invalid bind parameter utf8")?;
     Ok(value)
+}
+
+fn parse_bind_first_text_param_opt(payload: &[u8]) -> Result<Option<String>> {
+    let mut idx = 0usize;
+    idx = skip_c_string(payload, idx)?;
+    idx = skip_c_string(payload, idx)?;
+
+    let format_count = read_u16(payload, &mut idx)? as usize;
+    idx = idx.saturating_add(format_count * 2);
+
+    let param_count = read_u16(payload, &mut idx)? as usize;
+    if param_count == 0 {
+        return Ok(None);
+    }
+
+    let param_len = read_i32(payload, &mut idx)?;
+    if param_len < 0 {
+        return Ok(None);
+    }
+    let len = param_len as usize;
+    let end = idx.saturating_add(len);
+    if end > payload.len() {
+        anyhow::bail!("bind payload parameter truncated");
+    }
+    let value = String::from_utf8(payload[idx..end].to_vec()).context("invalid bind parameter utf8")?;
+    Ok(Some(value))
+}
+
+fn parse_parse_sql(payload: &[u8]) -> Result<String> {
+    let mut idx = 0usize;
+    idx = skip_c_string(payload, idx)?;
+    let sql_start = idx;
+    idx = skip_c_string(payload, idx)?;
+    if idx == 0 || sql_start >= idx {
+        anyhow::bail!("parse payload missing SQL");
+    }
+    String::from_utf8(payload[sql_start..idx - 1].to_vec()).context("invalid parse SQL utf8")
+}
+
+async fn handle_extended_query<S>(
+    socket: &mut S,
+    parse: TypedMessage,
+    expected_sql: &str,
+    expected_param: Option<&str>,
+    result_row: Option<(&[u8], Vec<&[u8]>)>,
+    command_complete: &[u8],
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let sql = parse_parse_sql(&parse.payload)?;
+    if sql != expected_sql {
+        anyhow::bail!("unexpected extended-query SQL: {sql}");
+    }
+
+    let describe = read_typed_message(socket).await?;
+    if describe.tag != b'D' {
+        anyhow::bail!("expected Describe message, got {:?}", describe.tag as char);
+    }
+    let sync = read_typed_message(socket).await?;
+    if sync.tag != b'S' {
+        anyhow::bail!("expected Sync after Parse/Describe, got {:?}", sync.tag as char);
+    }
+
+    write_message(socket, b'1', |_| {}).await?;
+    write_parameter_description(socket, if expected_param.is_some() { &[25] } else { &[] }).await?;
+    if let Some((column_name, _)) = &result_row {
+        write_row_description(socket, column_name).await?;
+    } else {
+        write_message(socket, b'n', |_| {}).await?;
+    }
+    write_ready_for_query(socket).await?;
+
+    let bind = read_typed_message(socket).await?;
+    if bind.tag != b'B' {
+        anyhow::bail!("expected Bind message, got {:?}", bind.tag as char);
+    }
+    let actual_param = parse_bind_first_text_param_opt(&bind.payload)?;
+    match (expected_param, actual_param.as_deref()) {
+        (Some(expected), Some(actual)) if expected == actual => {}
+        (None, None) => {}
+        (expected, actual) => anyhow::bail!("unexpected bound parameter: expected {:?}, got {:?}", expected, actual),
+    }
+
+    let execute = read_typed_message(socket).await?;
+    if execute.tag != b'E' {
+        anyhow::bail!("expected Execute message, got {:?}", execute.tag as char);
+    }
+    let sync = read_typed_message(socket).await?;
+    if sync.tag != b'S' {
+        anyhow::bail!("expected Sync after Execute, got {:?}", sync.tag as char);
+    }
+
+    write_message(socket, b'2', |_| {}).await?;
+    if let Some((_, values)) = result_row {
+        write_data_row(socket, &values).await?;
+    }
+    write_command_complete(socket, command_complete).await?;
+    write_ready_for_query(socket).await?;
+    Ok(())
 }
 
 fn skip_c_string(payload: &[u8], mut idx: usize) -> Result<usize> {
