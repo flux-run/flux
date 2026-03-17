@@ -327,6 +327,88 @@ export default function handler({ input }) {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_node_pg_pool_supports_drizzle_query_shape() -> Result<()> {
+        let _lock = postgres_test_lock().lock().await;
+        let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+        let (port, shutdown_tx, server_task) = spawn_mock_postgres_param_server().await?;
+
+        let code = r#"
+export default async function handler({ input }) {
+    const pool = Flux.postgres.createNodePgPool({
+        connectionString: input.connectionString,
+    });
+
+    const result = await pool.query(
+        {
+            text: input.sql,
+            rowMode: "array",
+            values: input.params,
+        },
+    );
+
+    let connectError = null;
+    try {
+        await pool.connect();
+    } catch (err) {
+        connectError = err?.message ?? String(err);
+    }
+
+    await pool.end();
+
+    return {
+        isPool: pool instanceof Flux.postgres.NodePgPool,
+        rows: result.rows,
+        rowCount: result.rowCount,
+        command: result.command,
+        fieldNames: result.fields.map((field) => field.name),
+        builtins: {
+            date: Flux.postgres.nodePgTypes.builtins.DATE,
+            timestampTz: Flux.postgres.nodePgTypes.builtins.TIMESTAMPTZ,
+        },
+        connectError,
+    };
+}
+"#;
+
+        let payload = serde_json::json!({
+                "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
+                "sql": "select $1::text as value",
+                "params": ["hello"],
+        });
+
+        let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg shim isolate")?;
+        let output = isolate
+                .execute(payload, ExecutionContext::new("postgres-node-pg-shim"))
+                .await
+                .context("node-pg shim execution failed")?;
+
+        shutdown_tx.send(()).ok();
+        server_task.await.context("mock postgres server task failed")??;
+
+        assert_eq!(output.error, None);
+        assert_eq!(
+                output.output,
+                serde_json::json!({
+                        "isPool": true,
+                        "rows": [["hello"]],
+                        "rowCount": 1,
+                        "command": "QUERY",
+                        "fieldNames": ["value"],
+                        "builtins": {
+                                "date": 1082,
+                                "timestampTz": 1184,
+                        },
+                        "connectError": "Flux.postgres NodePgPool.connect is not implemented yet because stateful Postgres sessions are not available",
+                })
+        );
+        assert_eq!(output.checkpoints.len(), 1);
+        assert_eq!(output.checkpoints[0].boundary, "postgres");
+        assert_eq!(output.checkpoints[0].method, "query");
+
+        Ok(())
+}
+
 async fn spawn_mock_postgres_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

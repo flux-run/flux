@@ -3581,6 +3581,96 @@ Math.random = () => Deno.core.ops.op_random(__flux_eid());
 globalThis.Flux = globalThis.Flux || {};
 globalThis.Flux.postgres = globalThis.Flux.postgres || {};
 globalThis.Flux.net = globalThis.Flux.net || {};
+const __flux_pg_builtin_types = Object.freeze({
+    DATE: 1082,
+    TIMESTAMP: 1114,
+    TIMESTAMPTZ: 1184,
+    INTERVAL: 1186,
+});
+globalThis.Flux.postgres.nodePgTypes = Object.freeze({
+    builtins: __flux_pg_builtin_types,
+    getTypeParser(_typeId, _format) {
+        return (value) => value;
+    },
+});
+function __flux_normalize_node_pg_query(queryOrConfig, params) {
+    if (typeof queryOrConfig === "string") {
+        return {
+            text: queryOrConfig,
+            params: Array.isArray(params) ? params : [],
+            rowMode: null,
+        };
+    }
+
+    if (!queryOrConfig || typeof queryOrConfig.text !== "string") {
+        throw new TypeError("Flux.postgres NodePgPool.query expects a SQL string or a query config with text");
+    }
+
+    return {
+        text: queryOrConfig.text,
+        params: Array.isArray(params)
+            ? params
+            : Array.isArray(queryOrConfig.values)
+                ? queryOrConfig.values
+                : [],
+        rowMode: queryOrConfig.rowMode === "array" ? "array" : null,
+    };
+}
+function __flux_node_pg_field_list(rows) {
+    const first = Array.isArray(rows) ? rows[0] : null;
+    if (!first || typeof first !== "object" || Array.isArray(first)) return [];
+    return Object.keys(first).map((name) => ({
+        name,
+        dataTypeID: 0,
+        format: "text",
+    }));
+}
+function __flux_node_pg_rows(rows, rowMode) {
+    if (!Array.isArray(rows)) return [];
+    if (rowMode !== "array") return rows;
+    return rows.map((row) => {
+        if (!row || typeof row !== "object" || Array.isArray(row)) return [];
+        return Object.values(row);
+    });
+}
+class FluxNodePgPool {
+    constructor(options = {}) {
+        this.connectionString = String(options.connectionString ?? "");
+        this.tls = !!options.tls;
+        this.caCertPem = options.caCertPem == null ? null : String(options.caCertPem);
+    }
+
+    async query(queryOrConfig, params = undefined) {
+        const normalized = __flux_normalize_node_pg_query(queryOrConfig, params);
+        const response = globalThis.Flux.postgres.query({
+            connectionString: this.connectionString,
+            sql: normalized.text,
+            params: normalized.params,
+            tls: this.tls,
+            caCertPem: this.caCertPem,
+        });
+        const fields = __flux_node_pg_field_list(response.rows);
+        const rows = __flux_node_pg_rows(response.rows, normalized.rowMode);
+        return {
+            command: response.command ?? null,
+            rowCount: rows.length,
+            rows,
+            fields,
+        };
+    }
+
+    async connect() {
+        throw new Error("Flux.postgres NodePgPool.connect is not implemented yet because stateful Postgres sessions are not available");
+    }
+
+    async end() {
+        return undefined;
+    }
+}
+globalThis.Flux.postgres.NodePgPool = FluxNodePgPool;
+globalThis.Flux.postgres.createNodePgPool = function(options = {}) {
+    return new FluxNodePgPool(options);
+};
 globalThis.Flux.postgres.query = function(options = {}) {
     const response = Deno.core.ops.op_flux_postgres_query({
         execution_id: __flux_eid(),
