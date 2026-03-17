@@ -238,6 +238,52 @@ export default function handler({ input }) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_query_supports_int4_params() -> Result<()> {
+    let _lock = postgres_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let (port, shutdown_tx, server_task) = spawn_mock_postgres_int4_param_server().await?;
+
+    let code = r#"
+export default function handler({ input }) {
+  return Flux.postgres.query({
+    connectionString: input.connectionString,
+    sql: input.sql,
+    params: input.params,
+  });
+}
+"#;
+
+    let payload = serde_json::json!({
+        "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
+        "sql": "select ($1::int4 is not null) as has_value",
+        "params": [42],
+    });
+
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create postgres int4 param isolate")?;
+    let live_output = isolate
+        .execute(payload, ExecutionContext::new("postgres-int4-param-live"))
+        .await
+        .context("live postgres int4 param execution failed")?;
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("mock postgres int4 param server task failed")??;
+
+    assert_eq!(live_output.error, None);
+    assert_eq!(
+        live_output.output,
+        serde_json::json!({
+            "rows": [{ "has_value": true }],
+            "fields": [{ "name": "has_value", "dataTypeID": 16, "format": "text" }],
+            "command": "QUERY",
+            "rowCount": 1,
+            "replay": false,
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_query_preserves_native_scalar_params_and_bool_null_results() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
@@ -1127,6 +1173,97 @@ async fn spawn_mock_postgres_param_server() -> Result<(u16, oneshot::Sender<()>,
     Ok((port, shutdown_tx, task))
 }
 
+async fn spawn_mock_postgres_int4_param_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind mock postgres int4 param listener")?;
+    let port = listener
+        .local_addr()
+        .context("failed to get mock postgres int4 param addr")?
+        .port();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = &mut shutdown_rx => Ok(()),
+            accepted = listener.accept() => {
+                let (mut socket, _) = accepted.context("failed to accept postgres int4 param client")?;
+
+                let _startup = read_startup_message(&mut socket).await?;
+                write_authentication_ok(&mut socket).await?;
+                write_parameter_status(&mut socket, b"client_encoding", b"UTF8").await?;
+                write_parameter_status(&mut socket, b"server_version", b"16.0").await?;
+                write_backend_key_data(&mut socket).await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let parse = read_typed_message(&mut socket).await?;
+                if parse.tag != b'P' {
+                    anyhow::bail!("expected Parse message, got {:?}", parse.tag as char);
+                }
+                let sql = parse_parse_sql(&parse.payload)?;
+                if sql != "select ($1::int4 is not null) as has_value" {
+                    anyhow::bail!("unexpected int4 param SQL: {sql}");
+                }
+
+                let describe = read_typed_message(&mut socket).await?;
+                if describe.tag != b'D' {
+                    anyhow::bail!("expected Describe message, got {:?}", describe.tag as char);
+                }
+                let sync = read_typed_message(&mut socket).await?;
+                if sync.tag != b'S' {
+                    anyhow::bail!("expected Sync after Parse/Describe, got {:?}", sync.tag as char);
+                }
+
+                write_message(&mut socket, b'1', |_| {}).await?;
+                write_parameter_description(&mut socket, &[23]).await?;
+                write_row_description_columns(&mut socket, &[(b"has_value", 16)]).await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let bind = read_typed_message(&mut socket).await?;
+                if bind.tag != b'B' {
+                    anyhow::bail!("expected Bind message, got {:?}", bind.tag as char);
+                }
+                let params = parse_bind_params_for_types(&bind.payload, &["int4"])?;
+                assert_eq!(params, vec![Some("42".to_string())]);
+
+                let execute = read_typed_message(&mut socket).await?;
+                if execute.tag != b'E' {
+                    anyhow::bail!("expected Execute message, got {:?}", execute.tag as char);
+                }
+                let sync = read_typed_message(&mut socket).await?;
+                if sync.tag != b'S' {
+                    anyhow::bail!("expected Sync after Execute, got {:?}", sync.tag as char);
+                }
+
+                write_message(&mut socket, b'2', |_| {}).await?;
+                write_data_row(&mut socket, &[b"t"]).await?;
+                write_command_complete(&mut socket, b"SELECT 1").await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let next = read_typed_message(&mut socket).await?;
+                if next.tag == b'C' {
+                    let sync = read_typed_message(&mut socket).await?;
+                    if sync.tag != b'S' {
+                        anyhow::bail!("expected Sync after Close, got {:?}", sync.tag as char);
+                    }
+                    write_message(&mut socket, b'3', |_| {}).await?;
+                    write_ready_for_query(&mut socket).await?;
+
+                    let terminate = read_typed_message(&mut socket).await?;
+                    if terminate.tag != b'X' {
+                        anyhow::bail!("expected Terminate message, got {:?}", terminate.tag as char);
+                    }
+                } else if next.tag != b'X' {
+                    anyhow::bail!("expected Close or Terminate message, got {:?}", next.tag as char);
+                }
+                Ok(())
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx, task))
+}
+
 async fn spawn_mock_postgres_transaction_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -1982,6 +2119,12 @@ fn decode_bind_param_to_string(bytes: &[u8], format_code: u16, expected_type: Op
                 anyhow::bail!("invalid binary int8 bind length: {}", bytes.len());
             }
             i64::from_be_bytes(bytes.try_into().expect("checked int8 width")).to_string()
+        }
+        Some("int4") => {
+            if bytes.len() != 4 {
+                anyhow::bail!("invalid binary int4 bind length: {}", bytes.len());
+            }
+            i32::from_be_bytes(bytes.try_into().expect("checked int4 width")).to_string()
         }
         Some("float8") => {
             if bytes.len() != 8 {

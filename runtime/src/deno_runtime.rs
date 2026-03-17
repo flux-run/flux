@@ -13,13 +13,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use base64::Engine;
+use bytes::BytesMut;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, Utc};
 use deno_ast::{EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileModuleOptions, TranspileOptions};
 use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind, RuntimeOptions, op2, resolve_import, resolve_path};
 use deno_error::JsErrorBox;
 use postgres::config::SslMode as PostgresSslMode;
 use postgres::{Client as PostgresClient, Config as PostgresConfig, NoTls, SimpleQueryMessage};
-use postgres::types::{FromSql, ToSql, Type as PostgresType};
+use postgres::types::{FromSql, IsNull, ToSql, Type as PostgresType};
 use postgres_rustls::MakeTlsConnector as PostgresMakeTlsConnector;
 use rand::Rng;
 use rustls::pki_types::ServerName;
@@ -1393,6 +1394,54 @@ struct PostgresSimpleQueryResponse {
     row_count: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PostgresJsonNumberParam {
+    Integer(i64),
+    Unsigned(u64),
+    Float(f64),
+}
+
+impl ToSql for PostgresJsonNumberParam {
+    fn to_sql(
+        &self,
+        ty: &PostgresType,
+        out: &mut BytesMut,
+    ) -> std::result::Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        match self {
+            Self::Integer(value) => match *ty {
+                PostgresType::INT2 => i16::try_from(*value)?.to_sql(ty, out),
+                PostgresType::INT4 => i32::try_from(*value)?.to_sql(ty, out),
+                PostgresType::INT8 => value.to_sql(ty, out),
+                PostgresType::FLOAT4 => (*value as f32).to_sql(ty, out),
+                PostgresType::FLOAT8 => (*value as f64).to_sql(ty, out),
+                _ => Err(format!("unsupported postgres integer parameter type: {}", ty.name()).into()),
+            },
+            Self::Unsigned(value) => match *ty {
+                PostgresType::INT2 => i16::try_from(*value)?.to_sql(ty, out),
+                PostgresType::INT4 => i32::try_from(*value)?.to_sql(ty, out),
+                PostgresType::INT8 => i64::try_from(*value)?.to_sql(ty, out),
+                PostgresType::FLOAT4 => (*value as f32).to_sql(ty, out),
+                PostgresType::FLOAT8 => (*value as f64).to_sql(ty, out),
+                _ => Err(format!("unsupported postgres integer parameter type: {}", ty.name()).into()),
+            },
+            Self::Float(value) => match *ty {
+                PostgresType::FLOAT4 => (*value as f32).to_sql(ty, out),
+                PostgresType::FLOAT8 => value.to_sql(ty, out),
+                _ => Err(format!("unsupported postgres float parameter type: {}", ty.name()).into()),
+            },
+        }
+    }
+
+    fn accepts(ty: &PostgresType) -> bool {
+        matches!(
+            *ty,
+            PostgresType::INT2 | PostgresType::INT4 | PostgresType::INT8 | PostgresType::FLOAT4 | PostgresType::FLOAT8
+        )
+    }
+
+    postgres::types::to_sql_checked!();
+}
+
 fn perform_postgres_simple_query(
     connection_string: &str,
     sql: &str,
@@ -1659,15 +1708,11 @@ fn box_postgres_param(param: serde_json::Value) -> Result<Box<dyn ToSql + Sync>,
         serde_json::Value::Bool(value) => Ok(Box::new(value)),
         serde_json::Value::Number(value) => {
             if let Some(signed) = value.as_i64() {
-                Ok(Box::new(signed))
+                Ok(Box::new(PostgresJsonNumberParam::Integer(signed)))
             } else if let Some(unsigned) = value.as_u64() {
-                if let Ok(signed) = i64::try_from(unsigned) {
-                    Ok(Box::new(signed))
-                } else {
-                    Ok(Box::new(unsigned.to_string()))
-                }
+                Ok(Box::new(PostgresJsonNumberParam::Unsigned(unsigned)))
             } else if let Some(float) = value.as_f64() {
-                Ok(Box::new(float))
+                Ok(Box::new(PostgresJsonNumberParam::Float(float)))
             } else {
                 Err(JsErrorBox::type_error(format!(
                     "unsupported postgres numeric parameter: {}",
