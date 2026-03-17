@@ -10,7 +10,7 @@ Proto source: `shared/proto/internal_auth.proto`
 
 | RPC | Used by | Purpose |
 |-----|---------|--------|
-| `ValidateToken` | `flux init`, `flux auth`, `flux serve` | Validate service token and return auth mode |
+| `ValidateToken` | `flux init`, `flux auth`, `flux run --listen` | Validate service token and return auth mode |
 | `ListLogs` | `flux logs` | List execution rows with optional filter |
 | `RecordExecution` | `flux-runtime` | Write execution record, checkpoints, and console logs after each request |
 | `GetTrace` | `flux trace` | Fetch full trace including request/response, console logs, and checkpoint spans |

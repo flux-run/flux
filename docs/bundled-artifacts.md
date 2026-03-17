@@ -6,10 +6,10 @@ The supported developer path is:
 
 ```bash
 flux build app.ts
-flux serve app.ts
+flux run app.ts --listen
 ```
 
-`flux build` walks the module graph, fetches supported remote dependencies, and writes a deterministic artifact to `.flux/artifact.json` by default. `flux serve` and `flux run` then execute that built graph inside `flux-runtime`.
+`flux build` walks the module graph, fetches supported remote dependencies, and writes a deterministic artifact to `.flux/artifact.json` by default. `flux run --listen` then executes that built graph inside `flux-runtime`.
 
 ## Why This Is The Official Path
 

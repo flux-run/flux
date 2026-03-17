@@ -32,7 +32,7 @@ This is the Flux entrypoint used by Docker:
 
 ```sh
 flux build main_flux.ts
-flux serve --skip-verify main_flux.ts
+flux run --listen --skip-verify main_flux.ts
 ```
 
 The Flux-specific entry uses:
@@ -87,7 +87,7 @@ Serve the app with recording enabled:
 export FLUX_SERVICE_TOKEN=dev-service-token
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/crud_app
 export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
-target/debug/flux serve --host 127.0.0.1 --port 8000 main_flux.ts
+target/debug/flux run --listen --host 127.0.0.1 --port 8000 main_flux.ts
 ```
 
 Create a todo and capture the execution ID from the response headers:

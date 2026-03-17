@@ -15,7 +15,7 @@ The shipping surface is three binaries:
 ## Required Operator Capabilities
 
 - initialize once and run zero-flag (`flux init`)
-- start and monitor processes (`flux server start`, `flux serve`, `flux ps`, `flux status`)
+- start and monitor processes (`flux server start`, `flux run --listen`, `flux ps`, `flux status`)
 - list and filter executions (`flux logs --status --path --since --search`)
 - stream live events (`flux tail`)
 - inspect complete trace including top-level request/response and checkpoints (`flux trace --verbose`)

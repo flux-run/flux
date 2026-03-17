@@ -17,8 +17,8 @@ flux server start --database-url postgres://postgres:postgres@localhost:5432/flu
 # 2. One-time auth setup
 flux init
 
-# 3. Serve the handler
-flux serve webhook.js
+# 3. Run the handler as a listener
+flux run webhook.js --listen
 
 # 4. Send a request
 curl -sS -X POST http://127.0.0.1:3000/webhook \

@@ -22,7 +22,7 @@ For `flux run`, responsibility flows in one direction:
 2. `runtime/src/main.rs` resolves the entry, validates runtime mode, and starts the runtime process.
 3. `runtime/src/deno_runtime.rs` hosts the embedded JS engine, module loading, deterministic ops, and compatibility shim.
 
-For `flux serve`, the split is the same after the CLI handoff: process bootstrapping stays in `runtime/src/main.rs`, while execution semantics stay in `runtime/src/deno_runtime.rs` and the runtime library.
+For `flux run --listen`, the split is the same after the CLI handoff: process bootstrapping stays in `runtime/src/main.rs`, while execution semantics stay in `runtime/src/deno_runtime.rs` and the runtime library.
 
 Within the runtime library, responsibility splits again:
 

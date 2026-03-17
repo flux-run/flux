@@ -15,7 +15,7 @@ Flux currently ships as three cooperating binaries:
 ## Process Model
 
 - `flux server start` launches `flux-server` (default port 50051)
-- `flux serve` launches `flux-runtime` (default port 3000, connects to `flux-server`)
+- `flux run --listen` launches `flux-runtime` (default port 3000, connects to `flux-server`)
 - metadata files in `~/.flux/` track pid/port/entry for `flux ps` and `flux status`
 
 ## Shared Contract

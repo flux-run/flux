@@ -19,7 +19,7 @@ Build and run it:
 
 ```bash
 flux build examples/hono-hello.ts
-flux serve examples/hono-hello.ts
+flux run examples/hono-hello.ts --listen
 ```
 
 Then hit it:

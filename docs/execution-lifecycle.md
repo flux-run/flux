@@ -19,9 +19,9 @@ That is what makes recording, tracing, replay, and resume possible.
 
 Flux has four execution-related flows today:
 
-1. `flux run`: local script execution through `flux-runtime` in script mode
+1. `flux run`: local execution through `flux-runtime` in script mode
 2. `flux exec`: one-off HTTP-style execution against a temporary runtime
-3. `flux serve`: long-running runtime serving requests and recording executions
+3. `flux run --listen`: long-running runtime serving requests and recording executions
 4. `flux replay` / `flux resume`: server-driven re-evaluation of previously recorded executions
 
 ## Flow 1: `flux run`
@@ -72,11 +72,11 @@ This is the one-off recorded execution path.
 - recording transport or auth metadata issue: [runtime/src/server_client.rs](runtime/src/server_client.rs)
 - persistence or trace retrieval issue: [server/src/grpc.rs](server/src/grpc.rs)
 
-## Flow 3: `flux serve`
+## Flow 3: `flux run --listen`
 
 This is the long-running production-style runtime path.
 
-1. The CLI starts `flux-runtime` in serve mode.
+1. The CLI starts `flux-runtime` in HTTP/listener mode.
 2. [runtime/src/main.rs](runtime/src/main.rs) validates the entry, prepares the artifact, and calls `run_http_runtime`.
 3. [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs) builds an `IsolatePool` and checks whether the entry is:
    - one-shot handler mode, or

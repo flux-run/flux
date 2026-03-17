@@ -50,7 +50,7 @@ On each file change `flux dev` kills the running runtime and respawns it from so
 }
 ```
 
-`flux build` writes the deterministic module graph to `.flux/artifact.json`. `flux serve` only executes that built artifact.
+`flux build` writes the deterministic module graph to `.flux/artifact.json`. `flux run --listen` is the primary way to execute that built artifact.
 
 ## Setup
 
@@ -78,9 +78,9 @@ flux config set token <token>
 flux server start --database-url postgres://...
 flux server restart --database-url postgres://...
 
-# production: serve a pre-built entry (requires flux build first)
-flux serve index.ts
-flux serve index.ts --host 0.0.0.0 --port 8080 --isolate-pool-size 8
+# production: run a pre-built entry as a listener (requires flux build first)
+flux run index.ts --listen
+flux run index.ts --listen --host 0.0.0.0 --port 8080 --isolate-pool-size 8
 
 flux ps
 flux status

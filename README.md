@@ -49,7 +49,7 @@ irm https://fluxbase.co/install.ps1 | iex
 
 ## Telemetry
 
-The CLI collects anonymous usage events (`flux init`, `flux serve`, `flux exec`) to help us understand how Flux is used. **No personal data, code, or credentials are ever sent** — only CLI version, OS, and arch.
+The CLI collects anonymous usage events (`flux init`, `flux run`, `flux exec`) to help us understand how Flux is used. **No personal data, code, or credentials are ever sent** — only CLI version, OS, and arch.
 
 Opt out at any time:
 
@@ -76,7 +76,7 @@ flux dev
 
 # build first; Flux v1 runs bundled artifacts
 flux build index.ts
-flux serve index.ts
+flux run index.ts --listen
 
 # send a request
 curl -X POST http://localhost:3000/index -d '{"email":"user@example.com"}'
@@ -106,7 +106,7 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:5432/crud_app
 export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
 
 flux build examples/crud_app/main_flux.ts
-flux serve --url http://127.0.0.1:50051 --host 127.0.0.1 --port 8000 examples/crud_app/main_flux.ts
+flux run --listen --url http://127.0.0.1:50051 --host 127.0.0.1 --port 8000 examples/crud_app/main_flux.ts
 
 curl -i -X POST http://127.0.0.1:8000/todos \
 	-H 'content-type: application/json' \

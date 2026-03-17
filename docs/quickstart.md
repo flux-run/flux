@@ -31,7 +31,7 @@ After this, commands work without repeating `--url` and `--token`.
 ## 4) Start Runtime
 
 ```bash
-target/debug/flux serve index.ts
+target/debug/flux run index.ts --listen
 ```
 
 Runtime endpoint:
