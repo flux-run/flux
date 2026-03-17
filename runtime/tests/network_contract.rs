@@ -1,12 +1,17 @@
 use std::sync::OnceLock;
+use std::sync::Once;
 
 use anyhow::{Context, Result};
+use rcgen::generate_simple_self_signed;
 use runtime::JsIsolate;
 use runtime::deno_runtime::{ExecutionMode, FetchCheckpoint};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::ServerConfig;
 use runtime::isolate_pool::ExecutionContext;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, oneshot};
+use tokio_rustls::TlsAcceptor;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tcp_exchange_replays_buffered_response() -> Result<()> {
@@ -127,6 +132,79 @@ export default function handler({ input }) {
     );
     assert_eq!(output.checkpoints.len(), 1);
     assert_eq!(output.checkpoints[0].boundary, "tcp");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tcp_exchange_supports_tls_with_custom_ca() -> Result<()> {
+    let _lock = network_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_TCP", "1");
+    ensure_rustls_provider();
+    let cert = generate_simple_self_signed(vec!["localhost".to_string()])
+        .context("failed to generate test certificate")?;
+    let cert_pem = cert.cert.pem();
+    let cert_der: CertificateDer<'static> = cert.cert.der().clone();
+    let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+        cert.key_pair.serialize_der(),
+    ));
+
+    let server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der)
+        .context("failed to build TLS server config")?;
+
+    let acceptor = TlsAcceptor::from(std::sync::Arc::new(server_config));
+    let (port, shutdown_tx, server_task) = spawn_tls_server(acceptor, b"PONGTLS", 4).await?;
+
+    let code = r#"
+export default function handler({ input }) {
+  const result = Flux.net.tcpExchange({
+    host: input.host,
+    port: input.port,
+    text: "ping",
+    readMode: "fixed",
+    readBytes: 7,
+    tls: true,
+    serverName: "localhost",
+    caCertPem: input.caCertPem,
+  });
+
+  return {
+    text: result.text,
+    replay: result.replay,
+    bytes: Array.from(result.bytes),
+  };
+}
+"#;
+
+    let payload = serde_json::json!({
+        "host": "127.0.0.1",
+        "port": port,
+        "caCertPem": cert_pem,
+    });
+
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create tls isolate")?;
+    let output = isolate
+        .execute(payload, ExecutionContext::new("tcp-tls-live"))
+        .await
+        .context("tls tcp execution failed")?;
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("tls server task failed")??;
+
+    assert_eq!(output.error, None);
+    assert_eq!(
+        output.output,
+        serde_json::json!({
+            "text": "PONGTLS",
+            "replay": false,
+            "bytes": [80, 79, 78, 71, 84, 76, 83],
+        })
+    );
+    assert_eq!(output.checkpoints.len(), 1);
+    assert_eq!(output.checkpoints[0].boundary, "tcp");
+    assert_eq!(output.checkpoints[0].request.get("tls"), Some(&serde_json::json!(true)));
 
     Ok(())
 }
@@ -255,9 +333,48 @@ async fn spawn_tcp_server(
     Ok((port, shutdown_tx, task))
 }
 
+async fn spawn_tls_server(
+    acceptor: TlsAcceptor,
+    response: &'static [u8],
+    fixed_request_bytes: usize,
+) -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind tls test listener")?;
+    let port = listener
+        .local_addr()
+        .context("failed to get tls listener addr")?
+        .port();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = &mut shutdown_rx => Ok(()),
+            accepted = listener.accept() => {
+                let (socket, _) = accepted.context("failed to accept tls client")?;
+                let mut socket = acceptor.accept(socket).await.context("failed to complete tls handshake")?;
+                let mut request_bytes = vec![0; fixed_request_bytes];
+                socket.read_exact(&mut request_bytes).await.context("failed to read tls request")?;
+                socket.write_all(response).await.context("failed to write tls response")?;
+                socket.shutdown().await.context("failed to shutdown tls server socket")?;
+                Ok(())
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx, task))
+}
+
 fn network_test_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn ensure_rustls_provider() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
 }
 
 struct EnvVarGuard {

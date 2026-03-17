@@ -48,7 +48,12 @@ tonic = "0.12"
 ureq = "2.12"
 
 rand = "0.8"
+rustls = "0.23.28"
+rustls-pemfile = "2.2.0"
+webpki-roots = "0.26.11"
 
 [dev-dependencies]
 futures = "0.3"
+rcgen = "0.13.2"
+tokio-rustls = "0.26.2"
 wat = "1"

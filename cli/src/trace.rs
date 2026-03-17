@@ -98,6 +98,46 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
             continue;
         }
 
+        if cp.boundary == "tcp" {
+            let host = req
+                .get("host")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            let port = req
+                .get("port")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let tls = req
+                .get("tls")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let bytes_read = res
+                .get("bytes_read")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+
+            println!(
+                "  [{}] TCP{}  {}:{}  {}ms  → {} bytes",
+                cp.call_index,
+                if tls { "+TLS" } else { "" },
+                host,
+                port,
+                cp.duration_ms,
+                bytes_read,
+            );
+
+            if args.verbose {
+                let request_json = serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
+                let response_json = serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
+
+                println!("      request");
+                print_json_block(&request_json, true);
+                println!("      response");
+                print_json_block(&response_json, true);
+            }
+            continue;
+        }
+
         println!(
             "  [{}] {}  {}  {}ms  → {}",
             cp.call_index,

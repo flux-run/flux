@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::sync::Arc;
+use std::sync::Once;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
@@ -13,6 +15,8 @@ use deno_ast::{EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileMo
 use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind, RuntimeOptions, op2, resolve_import, resolve_path};
 use deno_error::JsErrorBox;
 use rand::Rng;
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
 use shared::project::{ArtifactMediaType, ArtifactModule, FluxBuildArtifact};
 use ureq::OrAnyStatus;
@@ -204,6 +208,10 @@ struct TcpExchangeRequestPayload {
     read_bytes: Option<usize>,
     connect_timeout_ms: Option<u64>,
     read_timeout_ms: Option<u64>,
+    #[serde(default)]
+    tls: bool,
+    server_name: Option<String>,
+    ca_cert_pem: Option<String>,
 }
 
 fn default_tcp_read_mode() -> String {
@@ -468,6 +476,9 @@ fn op_flux_tcp_exchange(
         read_bytes,
         connect_timeout_ms,
         read_timeout_ms,
+        tls,
+        server_name,
+        ca_cert_pem,
     } = serde_json::from_value(request)
         .map_err(|err| JsErrorBox::type_error(format!("invalid tcp exchange request: {err}")))?;
 
@@ -525,6 +536,8 @@ fn op_flux_tcp_exchange(
         "write_base64": base64::engine::general_purpose::STANDARD.encode(&write_bytes),
         "read_mode": read_mode,
         "read_bytes": read_bytes,
+        "tls": tls,
+        "server_name": server_name.clone(),
     });
 
     let started = std::time::Instant::now();
@@ -536,6 +549,9 @@ fn op_flux_tcp_exchange(
         read_bytes,
         connect_timeout_ms,
         read_timeout_ms,
+        tls,
+        server_name.as_deref(),
+        ca_cert_pem.as_deref(),
     )?;
     let duration_ms = started.elapsed().as_millis() as i32;
 
@@ -545,6 +561,7 @@ fn op_flux_tcp_exchange(
         "response_base64": base64::engine::general_purpose::STANDARD.encode(&response_bytes),
         "bytes_read": response_bytes.len(),
         "replay": false,
+        "tls": tls,
     });
 
     {
@@ -591,6 +608,9 @@ fn make_tcp_exchange(
     read_bytes: Option<usize>,
     connect_timeout_ms: Option<u64>,
     read_timeout_ms: Option<u64>,
+    tls: bool,
+    server_name: Option<&str>,
+    ca_cert_pem: Option<&str>,
 ) -> Result<Vec<u8>, JsErrorBox> {
     let connect_timeout = Duration::from_millis(connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS));
     let read_timeout = Duration::from_millis(read_timeout_ms.unwrap_or(DEFAULT_READ_TIMEOUT_MS));
@@ -611,12 +631,125 @@ fn make_tcp_exchange(
         .set_write_timeout(Some(connect_timeout))
         .map_err(|err| JsErrorBox::type_error(format!("tcp write timeout setup failed: {err}")))?;
 
+    if tls {
+        let tls_server_name = server_name.unwrap_or(host);
+        let client_config = build_tls_client_config(ca_cert_pem)?;
+        let server_name = ServerName::try_from(tls_server_name.to_string())
+            .map_err(|err| JsErrorBox::type_error(format!("invalid TLS server name: {err}")))?;
+        let connection = ClientConnection::new(client_config, server_name)
+            .map_err(|err| JsErrorBox::type_error(format!("tls connect failed: {err}")))?;
+        let mut tls_stream = StreamOwned::new(connection, stream);
+        perform_buffered_exchange(&mut tls_stream, write_bytes, read_mode, read_bytes)
+    } else {
+        perform_plain_buffered_exchange(&mut stream, write_bytes, read_mode, read_bytes)
+    }
+}
+
+fn build_tls_client_config(ca_cert_pem: Option<&str>) -> Result<Arc<ClientConfig>, JsErrorBox> {
+    ensure_rustls_provider();
+
+    let mut roots = RootCertStore::empty();
+
+    if let Some(pem) = ca_cert_pem {
+        let mut reader = std::io::BufReader::new(pem.as_bytes());
+        let certs = rustls_pemfile::certs(&mut reader)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|err| JsErrorBox::type_error(format!("invalid CA certificate PEM: {err}")))?;
+
+        if certs.is_empty() {
+            return Err(JsErrorBox::type_error("invalid CA certificate PEM: no certificates found"));
+        }
+
+        for cert in certs {
+            roots
+                .add(cert)
+                .map_err(|err| JsErrorBox::type_error(format!("invalid CA certificate PEM: {err}")))?;
+        }
+    } else {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+
+    let config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+
+    Ok(Arc::new(config))
+}
+
+fn ensure_rustls_provider() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
+
+fn perform_buffered_exchange<T: Read + Write>(
+    stream: &mut T,
+    write_bytes: &[u8],
+    read_mode: &str,
+    read_bytes: Option<usize>,
+) -> Result<Vec<u8>, JsErrorBox> {
     if !write_bytes.is_empty() {
         stream
             .write_all(write_bytes)
             .map_err(|err| JsErrorBox::type_error(format!("tcp write failed: {err}")))?;
     }
+    stream
+        .flush()
+        .map_err(|err| JsErrorBox::type_error(format!("tcp flush failed: {err}")))?;
 
+    match read_mode {
+        "until_close" => {
+            let mut bytes = Vec::new();
+            stream
+                .take((MAX_RESPONSE_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|err| JsErrorBox::type_error(format!("tcp read failed: {err}")))?;
+
+            if bytes.len() > MAX_RESPONSE_BYTES {
+                return Err(JsErrorBox::type_error(format!(
+                    "tcp response too large: {} bytes exceeds {MAX_RESPONSE_BYTES} byte limit",
+                    bytes.len()
+                )));
+            }
+
+            Ok(bytes)
+        }
+        "fixed" => {
+            let expected = read_bytes.ok_or_else(|| {
+                JsErrorBox::type_error("tcp fixed read mode requires readBytes")
+            })?;
+            if expected > MAX_RESPONSE_BYTES {
+                return Err(JsErrorBox::type_error(format!(
+                    "tcp response too large: {expected} bytes exceeds {MAX_RESPONSE_BYTES} byte limit"
+                )));
+            }
+            let mut bytes = vec![0; expected];
+            stream
+                .read_exact(&mut bytes)
+                .map_err(|err| JsErrorBox::type_error(format!("tcp read failed: {err}")))?;
+            Ok(bytes)
+        }
+        other => Err(JsErrorBox::type_error(format!(
+            "unsupported tcp read mode: {other}"
+        ))),
+    }
+}
+
+fn perform_plain_buffered_exchange(
+    stream: &mut TcpStream,
+    write_bytes: &[u8],
+    read_mode: &str,
+    read_bytes: Option<usize>,
+) -> Result<Vec<u8>, JsErrorBox> {
+    if !write_bytes.is_empty() {
+        stream
+            .write_all(write_bytes)
+            .map_err(|err| JsErrorBox::type_error(format!("tcp write failed: {err}")))?;
+    }
+    stream
+        .flush()
+        .map_err(|err| JsErrorBox::type_error(format!("tcp flush failed: {err}")))?;
     stream
         .shutdown(Shutdown::Write)
         .map_err(|err| JsErrorBox::type_error(format!("tcp shutdown failed: {err}")))?;
@@ -3042,6 +3175,9 @@ globalThis.Flux.net.tcpExchange = function(options = {}) {
         read_bytes: options.readBytes ?? null,
         connect_timeout_ms: options.connectTimeoutMs ?? null,
         read_timeout_ms: options.readTimeoutMs ?? null,
+        tls: !!options.tls,
+        server_name: options.serverName ?? null,
+        ca_cert_pem: options.caCertPem ?? null,
     });
 
     const bytes = Uint8Array.from(response.bytes ?? []);
