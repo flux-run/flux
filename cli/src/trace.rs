@@ -138,6 +138,46 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
             continue;
         }
 
+        if cp.boundary == "postgres" {
+            let host = req
+                .get("host")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            let port = req
+                .get("port")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(5432);
+            let sql = req
+                .get("sql")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let row_count = res
+                .get("row_count")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+
+            println!(
+                "  [{}] POSTGRES  {}:{}  {}ms  → {} rows  {}",
+                cp.call_index,
+                host,
+                port,
+                cp.duration_ms,
+                row_count,
+                sql,
+            );
+
+            if args.verbose {
+                let request_json = serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
+                let response_json = serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
+
+                println!("      request");
+                print_json_block(&request_json, true);
+                println!("      response");
+                print_json_block(&response_json, true);
+            }
+            continue;
+        }
+
         println!(
             "  [{}] {}  {}  {}ms  → {}",
             cp.call_index,
