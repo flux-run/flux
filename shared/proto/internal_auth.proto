@@ -146,6 +146,7 @@ message ReplayFieldDiff {
   string path = 1;
   string expected_json = 2;
   string actual_json = 3;
+  string kind = 4;
 }
 
 message ReplayResponse {

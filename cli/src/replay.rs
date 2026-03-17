@@ -122,7 +122,7 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         if !visible_diffs.is_empty() {
             println!("    diff");
             for diff in visible_diffs {
-                println!("      {}", diff.path);
+                println!("      {} ({})", diff.path, diff.kind);
                 println!("        expected  {}", diff.expected_json);
                 println!("        actual    {}", diff.actual_json);
             }
@@ -322,6 +322,7 @@ struct DiffTreeNode {
     children: BTreeMap<String, DiffTreeNode>,
     expected: Option<String>,
     actual: Option<String>,
+    kind: Option<String>,
 }
 
 fn colorize(text: impl AsRef<str>, color: &str) -> String {
@@ -396,22 +397,29 @@ fn parse_diff_path(path: &str) -> Vec<String> {
     segments
 }
 
-fn insert_diff(node: &mut DiffTreeNode, segments: &[String], expected: &str, actual: &str) {
+fn insert_diff(node: &mut DiffTreeNode, segments: &[String], expected: &str, actual: &str, kind: &str) {
     if segments.is_empty() {
         node.expected = Some(expected.to_string());
         node.actual = Some(actual.to_string());
+        node.kind = Some(kind.to_string());
         return;
     }
 
     let child = node.children.entry(segments[0].clone()).or_default();
-    insert_diff(child, &segments[1..], expected, actual);
+    insert_diff(child, &segments[1..], expected, actual, kind);
 }
 
 fn build_diff_tree(diffs: &[crate::grpc::ReplayFieldDiffView]) -> DiffTreeNode {
     let mut root = DiffTreeNode::default();
     for diff in diffs {
         let segments = parse_diff_path(&diff.path);
-        insert_diff(&mut root, &segments, &diff.expected_json, &diff.actual_json);
+        insert_diff(
+            &mut root,
+            &segments,
+            &diff.expected_json,
+            &diff.actual_json,
+            &diff.kind,
+        );
     }
     root
 }
@@ -421,7 +429,11 @@ fn render_diff_tree(name: Option<&str>, node: &DiffTreeNode, indent: usize) {
 
     if let Some(name) = name {
         if node.expected.is_some() || !node.children.is_empty() {
-            println!("{}{}:", prefix, name);
+            if let Some(kind) = &node.kind {
+                println!("{}{} ({}):", prefix, name, kind);
+            } else {
+                println!("{}{}:", prefix, name);
+            }
         }
     }
 

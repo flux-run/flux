@@ -91,6 +91,7 @@ pub struct ReplayFieldDiffView {
     pub path: String,
     pub expected_json: String,
     pub actual_json: String,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone)]
@@ -340,6 +341,7 @@ pub async fn replay(
                     path: diff.path,
                     expected_json: diff.expected_json,
                     actual_json: diff.actual_json,
+                    kind: diff.kind,
                 })
                 .collect(),
         }),

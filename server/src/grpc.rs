@@ -334,10 +334,17 @@ fn compact_json(value: &serde_json::Value) -> String {
     }
 }
 
+fn compact_json_or_missing(value: Option<&serde_json::Value>) -> String {
+    match value {
+        Some(value) => compact_json(value),
+        None => "null".to_string(),
+    }
+}
+
 fn push_json_diffs(
     path: &str,
-    expected: &serde_json::Value,
-    actual: &serde_json::Value,
+    expected: Option<&serde_json::Value>,
+    actual: Option<&serde_json::Value>,
     out: &mut Vec<pb::ReplayFieldDiff>,
 ) {
     if expected == actual {
@@ -345,7 +352,7 @@ fn push_json_diffs(
     }
 
     match (expected, actual) {
-        (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+        (Some(serde_json::Value::Object(left)), Some(serde_json::Value::Object(right))) => {
             let mut keys = std::collections::BTreeSet::new();
             keys.extend(left.keys().cloned());
             keys.extend(right.keys().cloned());
@@ -356,25 +363,42 @@ fn push_json_diffs(
                 } else {
                     format!("{}.{}", path, key)
                 };
-                let left_value = left.get(&key).unwrap_or(&serde_json::Value::Null);
-                let right_value = right.get(&key).unwrap_or(&serde_json::Value::Null);
+                let left_value = left.get(&key);
+                let right_value = right.get(&key);
                 push_json_diffs(&child_path, left_value, right_value, out);
             }
         }
-        (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+        (Some(serde_json::Value::Array(left)), Some(serde_json::Value::Array(right))) => {
             let max_len = left.len().max(right.len());
             for index in 0..max_len {
                 let child_path = format!("{}[{}]", path, index);
-                let left_value = left.get(index).unwrap_or(&serde_json::Value::Null);
-                let right_value = right.get(index).unwrap_or(&serde_json::Value::Null);
+                let left_value = left.get(index);
+                let right_value = right.get(index);
                 push_json_diffs(&child_path, left_value, right_value, out);
             }
+        }
+        (None, Some(_)) => {
+            out.push(pb::ReplayFieldDiff {
+                path: path.to_string(),
+                expected_json: compact_json_or_missing(expected),
+                actual_json: compact_json_or_missing(actual),
+                kind: "added".to_string(),
+            });
+        }
+        (Some(_), None) => {
+            out.push(pb::ReplayFieldDiff {
+                path: path.to_string(),
+                expected_json: compact_json_or_missing(expected),
+                actual_json: compact_json_or_missing(actual),
+                kind: "removed".to_string(),
+            });
         }
         _ => {
             out.push(pb::ReplayFieldDiff {
                 path: path.to_string(),
-                expected_json: compact_json(expected),
-                actual_json: compact_json(actual),
+                expected_json: compact_json_or_missing(expected),
+                actual_json: compact_json_or_missing(actual),
+                kind: "changed".to_string(),
             });
         }
     }
@@ -382,7 +406,7 @@ fn push_json_diffs(
 
 fn diff_json_values(expected: &serde_json::Value, actual: &serde_json::Value) -> Vec<pb::ReplayFieldDiff> {
     let mut diffs = Vec::new();
-    push_json_diffs("$", expected, actual, &mut diffs);
+    push_json_diffs("$", Some(expected), Some(actual), &mut diffs);
     diffs
 }
 
