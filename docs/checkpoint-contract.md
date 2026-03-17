@@ -171,6 +171,8 @@ The first divergence should be surfaced as structured data, not only as a format
 - expected recorded payload
 - actual live payload
 
+When practical, Flux should also surface a deterministic field-level diff for that first divergence so tooling can point directly at changed paths rather than only dumping whole payloads.
+
 Replay steps should also carry provenance so Flux can explain which parts of a replay are trusted history versus recomputed execution. At minimum that means:
 
 - `source = recorded | live`

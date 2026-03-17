@@ -334,6 +334,58 @@ fn compact_json(value: &serde_json::Value) -> String {
     }
 }
 
+fn push_json_diffs(
+    path: &str,
+    expected: &serde_json::Value,
+    actual: &serde_json::Value,
+    out: &mut Vec<pb::ReplayFieldDiff>,
+) {
+    if expected == actual {
+        return;
+    }
+
+    match (expected, actual) {
+        (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+            let mut keys = std::collections::BTreeSet::new();
+            keys.extend(left.keys().cloned());
+            keys.extend(right.keys().cloned());
+
+            for key in keys {
+                let child_path = if path == "$" {
+                    format!("$.{}", key)
+                } else {
+                    format!("{}.{}", path, key)
+                };
+                let left_value = left.get(&key).unwrap_or(&serde_json::Value::Null);
+                let right_value = right.get(&key).unwrap_or(&serde_json::Value::Null);
+                push_json_diffs(&child_path, left_value, right_value, out);
+            }
+        }
+        (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+            let max_len = left.len().max(right.len());
+            for index in 0..max_len {
+                let child_path = format!("{}[{}]", path, index);
+                let left_value = left.get(index).unwrap_or(&serde_json::Value::Null);
+                let right_value = right.get(index).unwrap_or(&serde_json::Value::Null);
+                push_json_diffs(&child_path, left_value, right_value, out);
+            }
+        }
+        _ => {
+            out.push(pb::ReplayFieldDiff {
+                path: path.to_string(),
+                expected_json: compact_json(expected),
+                actual_json: compact_json(actual),
+            });
+        }
+    }
+}
+
+fn diff_json_values(expected: &serde_json::Value, actual: &serde_json::Value) -> Vec<pb::ReplayFieldDiff> {
+    let mut diffs = Vec::new();
+    push_json_diffs("$", expected, actual, &mut diffs);
+    diffs
+}
+
 #[tonic::async_trait]
 impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc {
     type TailStream = ReceiverStream<Result<pb::TailEvent, Status>>;
@@ -867,6 +919,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                     url: step_url.clone(),
                     expected_json: compact_json(cp_response),
                     actual_json: compact_json(&response_to_store),
+                    diffs: diff_json_values(cp_response, &response_to_store),
                 });
                 replay_error = format!(
                     "replay validation failed at checkpoint {}: live HTTP response diverged from recorded checkpoint\nrecorded  {}\nlive      {}",

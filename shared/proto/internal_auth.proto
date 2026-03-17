@@ -139,6 +139,13 @@ message ReplayDivergence {
   string url = 3;
   string expected_json = 4;
   string actual_json = 5;
+  repeated ReplayFieldDiff diffs = 6;
+}
+
+message ReplayFieldDiff {
+  string path = 1;
+  string expected_json = 2;
+  string actual_json = 3;
 }
 
 message ReplayResponse {

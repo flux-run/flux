@@ -83,6 +83,14 @@ pub struct ReplayDivergenceView {
     pub url: String,
     pub expected_json: String,
     pub actual_json: String,
+    pub diffs: Vec<ReplayFieldDiffView>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplayFieldDiffView {
+    pub path: String,
+    pub expected_json: String,
+    pub actual_json: String,
 }
 
 #[derive(Debug, Clone)]
@@ -325,6 +333,15 @@ pub async fn replay(
             url: divergence.url,
             expected_json: divergence.expected_json,
             actual_json: divergence.actual_json,
+            diffs: divergence
+                .diffs
+                .into_iter()
+                .map(|diff| ReplayFieldDiffView {
+                    path: diff.path,
+                    expected_json: diff.expected_json,
+                    actual_json: diff.actual_json,
+                })
+                .collect(),
         }),
     })
 }

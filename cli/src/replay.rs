@@ -100,6 +100,14 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         );
         println!("    expected    {}", divergence.expected_json);
         println!("    actual      {}", divergence.actual_json);
+        if !divergence.diffs.is_empty() {
+            println!("    diff");
+            for diff in &divergence.diffs {
+                println!("      {}", diff.path);
+                println!("        expected  {}", diff.expected_json);
+                println!("        actual    {}", diff.actual_json);
+            }
+        }
     }
 
     if !response.output.is_empty() && response.output != "null" {
