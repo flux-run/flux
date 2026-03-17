@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use base64::Engine;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, Utc};
 use deno_ast::{EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileModuleOptions, TranspileOptions};
 use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind, RuntimeOptions, op2, resolve_import, resolve_path};
 use deno_error::JsErrorBox;
@@ -1669,17 +1670,77 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .map(|value| serde_json::Value::String(value.0))
             .or_else(|| string_value().map(serde_json::Value::String))
             .unwrap_or(serde_json::Value::Null),
-        postgres::types::Type::DATE
-        | postgres::types::Type::TIME
-        | postgres::types::Type::TIMETZ
-        | postgres::types::Type::TIMESTAMP
-        | postgres::types::Type::TIMESTAMPTZ
-        | postgres::types::Type::INTERVAL
-        | postgres::types::Type::UUID => row
+        postgres::types::Type::DATE => row
+            .try_get::<_, Option<NaiveDate>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::Value::String(value.format("%Y-%m-%d").to_string()))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresTextValue>>(name)
+                    .ok()
+                    .flatten()
+                    .map(|value| serde_json::Value::String(value.0))
+            })
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::TIME => row
+            .try_get::<_, Option<NaiveTime>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::Value::String(value.format("%H:%M:%S%.f").to_string().trim_end_matches('0').trim_end_matches('.').to_string()))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresTextValue>>(name)
+                    .ok()
+                    .flatten()
+                    .map(|value| serde_json::Value::String(value.0))
+            })
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::TIMETZ => row
             .try_get::<_, Option<PostgresTextValue>>(name)
             .ok()
             .flatten()
             .map(|value| serde_json::Value::String(value.0))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::TIMESTAMP => row
+            .try_get::<_, Option<NaiveDateTime>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::Value::String(value.format("%Y-%m-%dT%H:%M:%S%.f").to_string().trim_end_matches('0').trim_end_matches('.').to_string()))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresTextValue>>(name)
+                    .ok()
+                    .flatten()
+                    .map(|value| serde_json::Value::String(value.0))
+            })
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::TIMESTAMPTZ => row
+            .try_get::<_, Option<DateTime<Utc>>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::Value::String(value.to_rfc3339_opts(SecondsFormat::Millis, true)))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresTextValue>>(name)
+                    .ok()
+                    .flatten()
+                    .map(|value| serde_json::Value::String(value.0))
+            })
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::INTERVAL => row
+            .try_get::<_, Option<PostgresTextValue>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::Value::String(value.0))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::UUID => row
+            .try_get::<_, Option<Uuid>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::Value::String(value.to_string()))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresTextValue>>(name)
+                    .ok()
+                    .flatten()
+                    .map(|value| serde_json::Value::String(value.0))
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::JSON | postgres::types::Type::JSONB => row
             .try_get::<_, Option<serde_json::Value>>(name)
