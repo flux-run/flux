@@ -22,6 +22,8 @@ pub struct ReplayArgs {
     pub validate: bool,
     #[arg(long)]
     pub explain: bool,
+    #[arg(long, value_name = "PATHS", value_delimiter = ',')]
+    pub ignore: Vec<String>,
     #[arg(long, value_name = "INDEX")]
     pub from_index: Option<i32>,
     #[arg(long, value_name = "URL")]
@@ -72,7 +74,7 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     };
 
     if args.explain {
-        print_explain_view(short_id, &response, args.validate);
+        print_explain_view(short_id, &response, args.validate, &args.ignore);
         if args.validate && response.divergence.is_some() {
             std::process::exit(REPLAY_DIVERGENCE_EXIT_CODE);
         }
@@ -107,6 +109,7 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     }
 
     if let Some(divergence) = &response.divergence {
+        let visible_diffs = filtered_diffs(&divergence.diffs, &args.ignore);
         println!("  divergence");
         println!(
             "    checkpoint  [{}] {}  {}",
@@ -116,13 +119,15 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         );
         println!("    expected    {}", divergence.expected_json);
         println!("    actual      {}", divergence.actual_json);
-        if !divergence.diffs.is_empty() {
+        if !visible_diffs.is_empty() {
             println!("    diff");
-            for diff in &divergence.diffs {
+            for diff in visible_diffs {
                 println!("      {}", diff.path);
                 println!("        expected  {}", diff.expected_json);
                 println!("        actual    {}", diff.actual_json);
             }
+        } else if !divergence.diffs.is_empty() && !args.ignore.is_empty() {
+            println!("    diff        all matching changes hidden by --ignore");
         }
     }
 
@@ -323,6 +328,36 @@ fn colorize(text: impl AsRef<str>, color: &str) -> String {
     format!("{}{}{}", color, text.as_ref(), ANSI_RESET)
 }
 
+fn path_matches_ignore(path: &str, ignore_patterns: &[String]) -> bool {
+    if ignore_patterns.is_empty() {
+        return false;
+    }
+
+    let segments = parse_diff_path(path);
+    ignore_patterns.iter().any(|pattern| {
+        let trimmed = pattern.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        if path == trimmed {
+            return true;
+        }
+
+        segments.iter().any(|segment| segment == trimmed)
+    })
+}
+
+fn filtered_diffs<'a>(
+    diffs: &'a [crate::grpc::ReplayFieldDiffView],
+    ignore_patterns: &[String],
+) -> Vec<&'a crate::grpc::ReplayFieldDiffView> {
+    diffs
+        .iter()
+        .filter(|diff| !path_matches_ignore(&diff.path, ignore_patterns))
+        .collect()
+}
+
 fn parse_diff_path(path: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let chars: Vec<char> = path.chars().collect();
@@ -415,6 +450,7 @@ fn print_explain_view(
     short_id: &str,
     response: &crate::grpc::ReplayView,
     validate: bool,
+    ignore_patterns: &[String],
 ) {
     println!("  Execution Replay ({})", short_id);
     println!();
@@ -429,6 +465,9 @@ fn print_explain_view(
     println!("  duration    {}ms", response.duration_ms);
     if validate {
         println!("  validation  {}", colorize("enabled", ANSI_YELLOW));
+    }
+    if !ignore_patterns.is_empty() {
+        println!("  ignore      {}", ignore_patterns.join(", "));
     }
 
     println!();
@@ -469,6 +508,7 @@ fn print_explain_view(
     }
 
     if let Some(divergence) = &response.divergence {
+        let visible_diffs = filtered_diffs(&divergence.diffs, ignore_patterns);
         println!();
         println!("  {}", colorize("First Divergence", ANSI_RED));
         println!(
@@ -482,8 +522,16 @@ fn print_explain_view(
             println!("    expected  {}", colorize(&divergence.expected_json, ANSI_DIM));
             println!("    actual    {}", colorize(&divergence.actual_json, ANSI_RED));
         } else {
-            let tree = build_diff_tree(&divergence.diffs);
-            render_diff_tree(None, &tree, 4);
+            if visible_diffs.is_empty() {
+                println!("    {}", colorize("all matching field diffs hidden by --ignore", ANSI_DIM));
+            } else {
+                let owned_diffs: Vec<crate::grpc::ReplayFieldDiffView> = visible_diffs
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                let tree = build_diff_tree(&owned_diffs);
+                render_diff_tree(None, &tree, 4);
+            }
         }
     }
 

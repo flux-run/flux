@@ -109,6 +109,7 @@ flux replay <execution_id>
 flux replay <execution_id> --from-index 1 --diff
 flux replay <execution_id> --commit --validate
 flux replay <execution_id> --commit --validate --explain
+flux replay <execution_id> --commit --validate --explain --ignore timestamp,requestId
 flux resume <execution_id>
 flux resume <execution_id> --from 2
 ```
@@ -118,6 +119,8 @@ flux resume <execution_id> --from 2
 When validated replay detects divergence, `flux` exits with code `2`. This makes replay validation usable in CI and automation.
 
 `flux replay --explain` renders replay as an execution narrative: each checkpoint shows whether it came from recorded history or live execution, whether live execution validated successfully, and where the first divergence occurred.
+
+`--ignore` is display-only: it hides matching diff paths or field names from replay output, but it does not change validation behavior or exit codes.
 
 ## One-Off Local Run
 
