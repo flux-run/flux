@@ -127,7 +127,7 @@ export interface RuntimeHandle {
 }
 
 /**
- * Start a handler via `flux serve --skip-verify <entry>`.
+ * Start a handler via `flux run --listen --skip-verify <entry>`.
  *
  * This is exactly the same command a developer runs locally, which means
  * the integration tests exercise the CLI's argument handling, binary lookup,
@@ -157,7 +157,8 @@ export async function startRuntime(
   const skipVerify      = opts.skipVerify      ?? true;
 
   const args = [
-    "serve",
+    "run",
+    "--listen",
     "--host",  host,
     "--port",  String(port),
     "--isolate-pool-size", String(isolatePoolSize),
@@ -172,13 +173,13 @@ export async function startRuntime(
 
   const proc = spawn(FLUX_CLI_BIN, args, {
     cwd: WORKSPACE_ROOT,
-    // FLUX_SERVICE_TOKEN is read by `flux serve` via clap's env() attribute
+    // FLUX_SERVICE_TOKEN is read by `flux run` via clap's env() attribute
     env: { ...process.env, ...opts.env, FLUX_SERVICE_TOKEN: token },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   proc.on("error", (err) => {
-    throw new Error(`flux serve failed to start: ${err.message}`);
+    throw new Error(`flux run --listen failed to start: ${err.message}`);
   });
 
   // Wait until the port is open (or timeout)

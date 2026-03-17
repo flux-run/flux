@@ -16,6 +16,7 @@ mod replay;
 mod resume;
 mod run;
 mod runtime_process;
+mod runtime_server;
 mod serve;
 mod server;
 mod status;

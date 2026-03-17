@@ -141,7 +141,7 @@ Exercises the ESM module system — patterns that break new runtimes.
 
 ## Integration Tests (real binary)
 
-These tests compile the real Flux binaries and verify them end-to-end through the same user-facing commands developers run locally. Some suites start HTTP handlers with `flux serve`; others execute scripts directly with `flux run`. Together they exercise the full stack: Cargo build → CLI start → runtime load → request handling or script execution.
+These tests compile the real Flux binaries and verify them end-to-end through the same user-facing commands developers run locally. Some suites start HTTP handlers with `flux run --listen`; others execute scripts directly with `flux run`. Together they exercise the full stack: Cargo build → CLI start → runtime load → request handling or script execution.
 
 > **Why this matters:** the internal suites (trust / compat / replay / modules) run JavaScript assertions inside a Node.js process. They prove the JS logic is correct but never touch the Rust binaries. Integration tests close that gap.
 
@@ -163,7 +163,7 @@ npm run test:integration -- --suite echo   # one suite only
 
 ### What it tests
 
-HTTP suites start a `flux serve` process on a unique port (3100–3199), send real requests, assert responses, then stop the process. Command suites execute `flux run` directly and assert the emitted JSON output.
+HTTP suites start a `flux run --listen` process on a unique port (3100–3199), send real requests, assert responses, then stop the process. Command suites execute `flux run` directly and assert the emitted JSON output.
 
 | Suite | Handler | Checks |
 |-------|---------|--------|
@@ -177,7 +177,7 @@ HTTP suites start a `flux serve` process on a unique port (3100–3199), send re
 | `drizzle-transaction` | `examples/drizzle/transaction.ts` | direct `flux run`, Drizzle transaction semantics against disposable Postgres |
 | `drizzle-replay` | `examples/drizzle/crud.ts` | recorded `flux run` plus `flux replay --diff` verification for Drizzle + Postgres |
 
-HTTP handler files live in `runtime/external-tests/flux-handlers/`. They use `Deno.serve(...)` so they are valid `flux serve` entry targets. The Drizzle suites run the checked-in examples from `examples/drizzle/` after installing their local `node_modules` with `npm ci` when needed.
+HTTP handler files live in `runtime/external-tests/flux-handlers/`. They use `Deno.serve(...)` so they are valid `flux run --listen` entry targets. The Drizzle suites run the checked-in examples from `examples/drizzle/` after installing their local `node_modules` with `npm ci` when needed.
 
 When a command suite is executed with a Flux server URL and token, `flux run` prints an `execution_id:` line before the final JSON payload. Integration replay suites capture that ID and assert the stored execution can be replayed deterministically.
 
@@ -186,7 +186,7 @@ When a command suite is executed with a Flux server URL and token, `flux run` pr
 `runtime/runners/lib/flux-binary.ts` is the helper that:
 - Locates the CLI, runtime, and server binaries under `target/debug/` (or `target/release/` when `FLUX_RELEASE=1`)
 - Builds via `SQLX_OFFLINE=true cargo build -p cli -p runtime -p server` when the binaries are missing
-- Spawns `flux serve` with `--host`, `--port`, and `--isolate-pool-size` for HTTP suites
+- Spawns `flux run --listen` with `--host`, `--port`, and `--isolate-pool-size` for HTTP suites
 - Polls the port every 100 ms until the isolate is ready (15 s timeout)
 - Kills spawned processes after each suite (`SIGTERM → SIGKILL`)
 

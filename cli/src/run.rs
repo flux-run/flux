@@ -4,12 +4,17 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use crate::runtime_process::{exec_runtime, find_runtime_binary, find_workspace_root};
+use crate::runtime_server::{execute_server_runtime, RuntimeServerOptions};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
     /// Entry file to execute as a plain script.
     #[arg(value_name = "ENTRY", default_value = "index.js")]
     pub entry: String,
+
+    /// Keep the runtime alive as an HTTP listener instead of executing once.
+    #[arg(long)]
+    pub listen: bool,
 
     /// JSON input passed to the exported default handler, if present.
     /// Equivalent to the payload in `flux exec`. Ignored for top-level scripts.
@@ -27,9 +32,39 @@ pub struct RunArgs {
     /// Use a release-mode flux-runtime binary if found.
     #[arg(long)]
     pub release: bool,
+
+    #[arg(long)]
+    pub skip_verify: bool,
+
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+
+    #[arg(long, default_value_t = 3000)]
+    pub port: u16,
+
+    #[arg(long, default_value_t = 16)]
+    pub isolate_pool_size: usize,
+
+    #[arg(long)]
+    pub check_only: bool,
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
+    if args.listen {
+        return execute_server_runtime(RuntimeServerOptions {
+            entry: Some(args.entry.clone()),
+            url: args.url.clone(),
+            token: args.token.clone(),
+            skip_verify: args.skip_verify,
+            host: args.host.clone(),
+            port: args.port,
+            isolate_pool_size: args.isolate_pool_size,
+            check_only: args.check_only,
+            release: args.release,
+        })
+        .await;
+    }
+
     let entry = PathBuf::from(&args.entry);
     if !entry.exists() {
         bail!("entry file not found: {}", entry.display());

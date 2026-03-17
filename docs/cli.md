@@ -121,12 +121,13 @@ When validated replay detects divergence, `flux` exits with code `2`. This makes
 
 ```bash
 flux run index.ts                         # run as a plain script
+flux run index.ts --listen               # run as a long-lived HTTP runtime
 flux run index.ts --url http://127.0.0.1:50051   # record the script execution
 flux exec index.ts --input '{"amount":100}'
 flux exec index.ts --input '{"amount":100}' --timeout-secs 30
 ```
 
-When `flux run` is given a Flux server URL and token, the runtime records the script execution and prints an `execution_id:` line before the final JSON payload. That ID can be used with `flux trace`, `flux why`, and `flux replay`.
+When `flux run` is given a Flux server URL and token, the runtime records the execution and prints an `execution_id:` line before the final JSON payload. That ID can be used with `flux trace`, `flux why`, and `flux replay`.
 
 ## UX Conventions
 
