@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
-use std::net::IpAddr;
+use std::net::{IpAddr, ToSocketAddrs};
 
 use anyhow::{Context, Result};
 use deno_core::{JsRuntime, OpState, RuntimeOptions, op2};
 use deno_error::JsErrorBox;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use ureq::OrAnyStatus;
 use uuid::Uuid;
 
 use crate::isolate_pool::ExecutionContext;
@@ -17,6 +18,9 @@ type RuntimeStateMap = HashMap<String, RuntimeExecutionState>;
 
 /// Maximum response body size: 10 MB.
 const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Maximum redirect hops for a single buffered fetch.
+const MAX_REDIRECTS: usize = 5;
 
 /// Blocked metadata hostnames (cloud provider instance metadata endpoints).
 const BLOCKED_HOSTS: &[&str] = &[
@@ -36,24 +40,45 @@ fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), JsErrorBox> {
 
     for blocked in BLOCKED_HOSTS {
         if host == *blocked {
-            return Err(JsErrorBox::new(
-                "PermissionDenied",
-                format!("fetch blocked: {host} is a restricted endpoint"),
-            ));
+            return Err(JsErrorBox::generic(format!(
+                "fetch blocked: {host} is a restricted endpoint"
+            )));
         }
     }
 
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        let allow_loopback = std::env::var("FLOWBASE_ALLOW_LOOPBACK_FETCH")
-            .map(|value| value == "1")
-            .unwrap_or(false);
+    let allow_loopback = std::env::var("FLOWBASE_ALLOW_LOOPBACK_FETCH")
+        .map(|value| value == "1")
+        .unwrap_or(false);
 
-        if (ip.is_loopback() && !allow_loopback) || is_private_ip(&ip) {
-            return Err(JsErrorBox::new(
-                "PermissionDenied",
-                "fetch blocked: private/loopback IP addresses are not allowed",
-            ));
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        validate_ip_addr(&ip, allow_loopback)?;
+    } else if let Some(port) = parsed.port_or_known_default() {
+        if let Ok(resolved) = (host, port).to_socket_addrs() {
+            for addr in resolved {
+                validate_ip_addr(&addr.ip(), allow_loopback)?;
+            }
         }
+    }
+
+    Ok(())
+}
+
+fn validate_ip_addr(ip: &IpAddr, allow_loopback: bool) -> std::result::Result<(), JsErrorBox> {
+    if ip.is_loopback() {
+        if allow_loopback {
+            return Ok(());
+        }
+        return Err(JsErrorBox::new(
+            "Error",
+            "fetch blocked: private/loopback IP addresses are not allowed",
+        ));
+    }
+
+    if is_private_ip(ip) {
+        return Err(JsErrorBox::new(
+            "Error",
+            "fetch blocked: private/loopback IP addresses are not allowed",
+        ));
     }
 
     Ok(())
@@ -67,11 +92,18 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             || v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64 // 100.64.0.0/10 (CGNAT)
         }
         IpAddr::V6(v6) => {
-            v6.is_loopback()     // ::1
-            || (v6.segments()[0] & 0xfe00) == 0xfc00  // fc00::/7 unique-local
+            (v6.segments()[0] & 0xfe00) == 0xfc00  // fc00::/7 unique-local
             || (v6.segments()[0] & 0xffc0) == 0xfe80  // fe80::/10 link-local
         }
     }
+}
+
+fn normalized_headers_value(headers: &HashMap<String, String>) -> serde_json::Value {
+    let normalized: BTreeMap<String, String> = headers
+        .iter()
+        .map(|(key, value)| (key.to_ascii_lowercase(), value.clone()))
+        .collect();
+    serde_json::to_value(normalized).unwrap_or_else(|_| serde_json::json!({}))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,6 +311,10 @@ fn op_flux_fetch(
         (request_id, index, mode, recorded)
     };
 
+    // SSRF protection applies to live and replay paths. Recorded checkpoints must
+    // never bypass the runtime's URL safety gate.
+    validate_fetch_url(&original_url)?;
+
     // In Replay mode, return the recorded response instead of making a live call.
     if matches!(mode, ExecutionMode::Replay) {
         if let Some(checkpoint) = recorded_checkpoint {
@@ -303,16 +339,13 @@ fn op_flux_fetch(
         tracing::warn!(%request_id, %call_index, "replay: no recorded checkpoint, making live call");
     }
 
-    // SSRF protection: block private/metadata IPs before making the request.
-    validate_fetch_url(&original_url)?;
-
     let resolved_url = original_url.clone();
     let request_json = serde_json::json!({
         "url": original_url.clone(),
         "resolved_url": resolved_url.clone(),
         "method": method.clone(),
         "body": body.clone(),
-        "headers": headers,
+        "headers": normalized_headers_value(&headers),
     });
 
     let started = std::time::Instant::now();
@@ -529,24 +562,75 @@ fn make_http_request(
     body: Option<String>,
     headers: Option<HashMap<String, String>>,
 ) -> Result<serde_json::Value, JsErrorBox> {
-    let mut request = ureq::request(method, url);
+    let agent = ureq::builder().redirects(0).build();
+    let request_headers = headers.unwrap_or_default();
+    let mut current_url = url.to_string();
+    let mut current_method = method.to_string();
+    let mut current_body = body;
+    let response = {
+        let mut final_response = None;
+        for redirect_count in 0..=MAX_REDIRECTS {
+        validate_fetch_url(&current_url)?;
 
-    if let Some(raw_headers) = headers {
-        for (key, value) in raw_headers {
-            request = request.set(&key, &value);
+        let mut request = agent.request(&current_method, &current_url);
+        for (key, value) in &request_headers {
+            request = request.set(key, value);
         }
-    }
 
-    let response = match body {
-        Some(body) => request.send_string(&body),
-        None => request.call(),
-    }
-    .map_err(|err| JsErrorBox::type_error(format!("fetch failed: {err}")))?;
+        let response = match current_body.as_deref() {
+            Some(body) => request.send_string(body),
+            None => request.call(),
+        }
+        .or_any_status()
+        .map_err(|err| JsErrorBox::type_error(format!("fetch failed: {err}")))?;
+
+        match response.status() {
+            301 | 302 | 303 | 307 | 308 => {
+                if redirect_count == MAX_REDIRECTS {
+                    return Err(JsErrorBox::type_error("too many redirects"));
+                }
+
+                let location = response.header("location").ok_or_else(|| {
+                    JsErrorBox::type_error("redirect response missing Location header")
+                })?;
+
+                let next_url = url::Url::parse(&current_url)
+                    .and_then(|base| base.join(location))
+                    .map_err(|err| JsErrorBox::type_error(format!("invalid redirect URL: {err}")))?
+                    .to_string();
+
+                if current_url == next_url {
+                    return Err(JsErrorBox::type_error("redirect loop detected"));
+                }
+
+                match response.status() {
+                    301 | 302 if current_method.eq_ignore_ascii_case("POST") => {
+                        current_method = "GET".to_string();
+                        current_body = None;
+                    }
+                    303 if !current_method.eq_ignore_ascii_case("HEAD") => {
+                        current_method = "GET".to_string();
+                        current_body = None;
+                    }
+                    _ => {}
+                }
+
+                current_url = next_url;
+                continue;
+            }
+            _ => {
+                final_response = Some(response);
+                break;
+            }
+        }
+        }
+        final_response.ok_or_else(|| JsErrorBox::type_error("redirect resolution failed"))?
+    };
 
     // Reject responses that advertise a body larger than our limit.
     if let Some(len) = response
         .header("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|value: &str| value.parse::<usize>().ok())
     {
         if len > MAX_RESPONSE_BYTES {
             return Err(JsErrorBox::type_error(
@@ -556,11 +640,15 @@ fn make_http_request(
     }
 
     let status = response.status();
-    let response_headers = response
+    let response_headers: BTreeMap<String, String> = response
         .headers_names()
         .into_iter()
-        .filter_map(|name| response.header(&name).map(|value| (name, value.to_string())))
-        .collect::<HashMap<_, _>>();
+        .filter_map(|name: String| {
+            response
+                .header(&name)
+                .map(|value: &str| (name.to_ascii_lowercase(), value.to_string()))
+        })
+        .collect();
 
     // Stream the body with a size cap to protect against missing/lying Content-Length.
     let reader = response.into_reader();
@@ -568,7 +656,7 @@ fn make_http_request(
     reader
         .take((MAX_RESPONSE_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|err| JsErrorBox::type_error(err.to_string()))?;
+        .map_err(|err: std::io::Error| JsErrorBox::type_error(err.to_string()))?;
 
     if bytes.len() > MAX_RESPONSE_BYTES {
         return Err(JsErrorBox::type_error(
