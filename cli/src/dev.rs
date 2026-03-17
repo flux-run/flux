@@ -1,66 +1,46 @@
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Args;
 
-use crate::build::{FluxManifest, content_hash, detect_features};
-
-// ─── CLI args ────────────────────────────────────────────────────────────────
+use crate::project::{resolve_entry_path, watch_fingerprint};
 
 #[derive(Debug, Args)]
 pub struct DevArgs {
-    /// Entry file (JS or TS).
-    #[arg(value_name = "ENTRY", default_value = "index.ts")]
-    pub entry: String,
+    #[arg(value_name = "ENTRY")]
+    pub entry: Option<String>,
 
-    /// Flux server URL for recording executions (optional).
     #[arg(long, value_name = "URL")]
     pub url: Option<String>,
 
-    /// Service token for the Flux server (optional).
     #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
     pub token: Option<String>,
 
-    /// Bind host for the HTTP server.
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
 
-    /// HTTP port.
     #[arg(long, default_value_t = 3000)]
     pub port: u16,
 
-    /// Number of isolates in the pool.
     #[arg(long, default_value_t = 1)]
     pub isolate_pool_size: usize,
 
-    /// Use a release-mode flux-runtime binary if found.
     #[arg(long)]
     pub release: bool,
 
-    /// File-change poll interval in milliseconds.
     #[arg(long, default_value_t = 500)]
     pub poll_ms: u64,
 
-    /// Directory to watch (defaults to the directory containing ENTRY).
     #[arg(long)]
     pub watch_dir: Option<String>,
 }
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
-
 pub async fn execute(args: DevArgs) -> Result<()> {
-    let entry = PathBuf::from(&args.entry);
-    if !entry.exists() {
-        bail!("entry file not found: {}", entry.display());
-    }
-
+    let entry = resolve_entry_path(args.entry.as_deref())?;
     let workspace_root = find_workspace_root()
         .ok_or_else(|| anyhow::anyhow!("could not locate workspace root containing Cargo.toml"))?;
+    let binary = ensure_runtime_binary(&workspace_root, args.release).await?;
 
-    let binary = find_runtime_binary(&workspace_root, args.release);
-
-    // Server URL and token are optional in dev mode.
     let server_url = args
         .url
         .clone()
@@ -72,42 +52,37 @@ pub async fn execute(args: DevArgs) -> Result<()> {
         .watch_dir
         .as_deref()
         .map(PathBuf::from)
-        .or_else(|| entry.parent().map(|p| p.to_path_buf()))
+        .or_else(|| entry.parent().map(|path| path.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
-    eprintln!(
-        "flux dev  {} (watching {}, poll {}ms)",
-        args.entry,
-        watch_dir.display(),
-        args.poll_ms,
-    );
-    eprintln!("          Ctrl+C to stop\n");
+    eprintln!("flux dev  {}", entry.display());
+    eprintln!("watching  {}", watch_dir.display());
 
     loop {
-        refresh_manifest(&entry)?;
+        let mut child = tokio::process::Command::new(&binary)
+            .args(build_runtime_args(&entry, &server_url, &token, &args))
+            .spawn()
+            .context("failed to spawn flux-runtime")?;
+        eprintln!("[flux dev] started pid {:?}", child.id());
 
-        let mut child = spawn_runtime(&workspace_root, &binary, &server_url, &token, &args)?;
-        eprintln!("[flux dev] started  pid {:?}", child.id());
-
-        let mtime_before = dir_mtime(&watch_dir);
-
+        let fingerprint_before = watch_fingerprint(&watch_dir)?;
         let should_restart = loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(args.poll_ms)).await;
 
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    eprintln!("[flux dev] runtime exited ({status}), restarting…");
+                    eprintln!("[flux dev] runtime exited ({status}), restarting");
                     break true;
                 }
-                Ok(None) => {} // still running
-                Err(e) => {
-                    eprintln!("[flux dev] wait error: {e}, restarting…");
+                Ok(None) => {}
+                Err(err) => {
+                    eprintln!("[flux dev] wait error: {err}, restarting");
                     break true;
                 }
             }
 
-            if dir_mtime(&watch_dir) != mtime_before {
-                eprintln!("[flux dev] change detected, restarting…");
+            if watch_fingerprint(&watch_dir)? != fingerprint_before {
+                eprintln!("[flux dev] change detected, restarting");
                 break true;
             }
         };
@@ -117,68 +92,14 @@ pub async fn execute(args: DevArgs) -> Result<()> {
             let _ = child.wait().await;
         }
 
-        // Brief pause so the OS can release the port before the next spawn.
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
     }
 }
 
-// ─── Manifest refresh ────────────────────────────────────────────────────────
-
-/// Write (or overwrite) `flux.json` beside the entry file with the current
-/// feature set. Called before each runtime spawn so the manifest stays fresh.
-fn refresh_manifest(entry: &PathBuf) -> Result<()> {
-    let source = std::fs::read_to_string(entry)
-        .with_context(|| format!("failed to read {}", entry.display()))?;
-
-    let manifest = FluxManifest {
-        flux_version: "0.2".to_string(),
-        entry: entry.to_string_lossy().into_owned(),
-        code_hash: content_hash(&source),
-        built_at: chrono::Utc::now().to_rfc3339(),
-        runtime_features: detect_features(&source).into_iter().collect(),
-        bundled: None,
-        minified: false,
-    };
-
-    let json =
-        serde_json::to_string_pretty(&manifest).context("failed to serialise flux.json")?;
-    let out = entry.parent().unwrap_or(Path::new(".")).join("flux.json");
-    std::fs::write(&out, json).with_context(|| format!("failed to write {}", out.display()))
-}
-
-// ─── Runtime spawning ────────────────────────────────────────────────────────
-
-fn spawn_runtime(
-    workspace_root: &Path,
-    binary: &Option<PathBuf>,
-    server_url: &str,
-    token: &str,
-    args: &DevArgs,
-) -> Result<tokio::process::Child> {
-    let prog_args = build_runtime_args(server_url, token, args);
-
-    if let Some(bin) = binary {
-        tokio::process::Command::new(bin)
-            .args(&prog_args)
-            .spawn()
-            .context("failed to spawn flux-runtime")
-    } else {
-        let mut cmd = tokio::process::Command::new("cargo");
-        cmd.current_dir(workspace_root)
-            .args(["run", "-p", "runtime", "--bin", "flux-runtime"]);
-        if args.release {
-            cmd.arg("--release");
-        }
-        cmd.arg("--").args(&prog_args);
-        cmd.spawn()
-            .context("failed to spawn flux-runtime via `cargo run`")
-    }
-}
-
-fn build_runtime_args(server_url: &str, token: &str, args: &DevArgs) -> Vec<String> {
+fn build_runtime_args(entry: &Path, server_url: &str, token: &str, args: &DevArgs) -> Vec<String> {
     vec![
         "--entry".to_string(),
-        args.entry.clone(),
+        entry.to_string_lossy().into_owned(),
         "--server-url".to_string(),
         server_url.to_string(),
         "--token".to_string(),
@@ -192,33 +113,27 @@ fn build_runtime_args(server_url: &str, token: &str, args: &DevArgs) -> Vec<Stri
     ]
 }
 
-// ─── File watching ───────────────────────────────────────────────────────────
+async fn ensure_runtime_binary(workspace_root: &Path, release: bool) -> Result<PathBuf> {
+    if let Some(binary) = find_runtime_binary(workspace_root, release) {
+        return Ok(binary);
+    }
 
-/// Return the most-recent mtime of any JS/TS/JSON file directly inside `dir`
-/// (one level — skips `node_modules` and hidden directories).
-fn dir_mtime(dir: &Path) -> Option<SystemTime> {
-    std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|res| {
-            let entry = res.ok()?;
-            let path = entry.path();
+    let mut command = tokio::process::Command::new("cargo");
+    command
+        .current_dir(workspace_root)
+        .args(["build", "-p", "runtime", "--bin", "flux-runtime"]);
+    if release {
+        command.arg("--release");
+    }
 
-            let name = path.file_name()?.to_string_lossy().into_owned();
-            if path.is_dir() && (name == "node_modules" || name.starts_with('.')) {
-                return None;
-            }
+    let status = command.status().await.context("failed to build flux-runtime")?;
+    if !status.success() {
+        anyhow::bail!("failed to build flux-runtime")
+    }
 
-            let ext = path.extension()?.to_string_lossy().into_owned();
-            if matches!(ext.as_str(), "js" | "ts" | "jsx" | "tsx" | "json") {
-                entry.metadata().ok()?.modified().ok()
-            } else {
-                None
-            }
-        })
-        .max()
+    find_runtime_binary(workspace_root, release)
+        .ok_or_else(|| anyhow::anyhow!("flux-runtime binary not found after build"))
 }
-
-// ─── Local helpers (mirrors run.rs / serve.rs) ───────────────────────────────
 
 fn find_workspace_root() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
@@ -244,7 +159,7 @@ fn find_runtime_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> 
     [primary, secondary]
         .into_iter()
         .map(|profile| workspace_root.join("target").join(profile).join(name))
-        .find(|p| p.exists())
+        .find(|path| path.exists())
 }
 
 fn flux_config_path() -> PathBuf {
@@ -257,15 +172,15 @@ fn flux_config_path() -> PathBuf {
 fn read_config_url() -> Option<String> {
     let raw = std::fs::read_to_string(flux_config_path()).ok()?;
     raw.lines()
-        .find(|l| l.starts_with("url"))
-        .and_then(|l| l.splitn(2, '=').nth(1))
-        .map(|v| v.trim().trim_matches('"').to_string())
+        .find(|line| line.starts_with("url"))
+        .and_then(|line| line.splitn(2, '=').nth(1))
+        .map(|value| value.trim().trim_matches('"').to_string())
 }
 
 fn read_config_token() -> Option<String> {
     let raw = std::fs::read_to_string(flux_config_path()).ok()?;
     raw.lines()
-        .find(|l| l.starts_with("token"))
-        .and_then(|l| l.splitn(2, '=').nth(1))
-        .map(|v| v.trim().trim_matches('"').to_string())
+        .find(|line| line.starts_with("token"))
+        .and_then(|line| line.splitn(2, '=').nth(1))
+        .map(|value| value.trim().trim_matches('"').to_string())
 }

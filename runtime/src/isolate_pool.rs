@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
+use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry, NetRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,11 +67,11 @@ struct WorkItem {
 }
 
 impl IsolatePool {
-    pub fn new(size: usize, user_code: &str) -> Result<Self> {
+    pub fn new(size: usize, artifact: RuntimeArtifact) -> Result<Self> {
         let mut workers = Vec::with_capacity(size);
         let mut is_server_mode = false;
         for id in 0..size {
-            let (sender, server_mode) = spawn_isolate_worker(id, user_code.to_string())?;
+            let (sender, server_mode) = spawn_isolate_worker(id, artifact.clone())?;
             if id == 0 {
                 is_server_mode = server_mode;
             }
@@ -165,7 +166,7 @@ impl IsolatePool {
 
 fn spawn_isolate_worker(
     isolate_id: usize,
-    user_code: String,
+    artifact: RuntimeArtifact,
 ) -> Result<(mpsc::Sender<WorkItem>, bool)> {
     let (tx, mut rx) = mpsc::channel::<WorkItem>(64);
     let (init_tx, init_rx) = std::sync::mpsc::channel::<std::result::Result<bool, String>>();
@@ -190,7 +191,12 @@ fn spawn_isolate_worker(
             let local_set = tokio::task::LocalSet::new();
 
             local_set.block_on(&runtime, async move {
-                let mut isolate = match JsIsolate::new(&user_code, isolate_id) {
+                let isolate_result = match &artifact {
+                    RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, isolate_id),
+                    RuntimeArtifact::Built(artifact) => JsIsolate::new_from_artifact(artifact).await,
+                };
+
+                let mut isolate = match isolate_result {
                     Ok(iso) => {
                         let _ = init_tx.send(Ok(iso.is_server_mode));
                         iso

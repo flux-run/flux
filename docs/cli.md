@@ -4,18 +4,27 @@ Flux CLI (`flux`) manages the build pipeline, server process, runtime execution,
 
 ## Build Pipeline
 
-### `flux build` — analyse and bundle for production
+### `flux build` — resolve and freeze an artifact for production
 
 ```bash
-flux build                        # analyses index.ts, writes flux.json
-flux build server.ts              # explicit entry
-flux build server.ts --no-bundle  # skip esbuild, just write flux.json
-flux build server.ts --no-minify  # bundle without minification
+flux build              # resolves the configured entry and writes .flux/artifact.json
+flux build server.ts    # explicit entry
 ```
 
-`flux build` reads the entry file, detects which runtime features it needs
-(fetch, WebSocket, node:*, fs, net, os, subprocess), and writes **`flux.json`**
-to the same directory. If `esbuild` is on `PATH` it also produces `.flux/bundle.js`.
+`flux build` resolves the full ESM import graph from the entry, rejects unsupported imports (`node:*`, `require()`, bare package imports), freezes remote and `npm:` dependencies into a deterministic artifact, and writes **`.flux/artifact.json`** beside **`flux.json`**.
+
+### `flux check` — compatibility analysis
+
+```bash
+flux check              # check the configured entry
+flux check server.ts    # check an explicit entry
+```
+
+`flux check` performs static analysis first and reports:
+
+- errors for `node:*` imports and `require()` usage
+- warnings for unsupported globals and unsupported web APIs
+- compatibility status for `npm:` dependencies
 
 ### `flux dev` — development server with hot reload
 
@@ -27,44 +36,30 @@ flux dev server.ts --poll-ms 200  # faster poll interval
 flux dev server.ts --watch-dir ./src
 ```
 
-On each file change `flux dev` re-analyses imports, writes a fresh `flux.json`,
-kills the running runtime, and respawns it. No external file-watcher dependency
-— uses mtime polling every 500 ms by default.
+On each file change `flux dev` kills the running runtime and respawns it from source. It fingerprints the watched tree recursively, prioritizes correctness over isolate reuse, and reuses the existing `flux-runtime` binary instead of rebuilding it on every restart.
 
-### `flux.json` manifest
+### `flux.json` project config
 
-`flux build` (and `flux dev` on each restart) write a `flux.json` file that
-tells the runtime which capability modules to load:
+`flux init` scaffolds a stable project config:
 
 ```json
 {
   "flux_version": "0.2",
-  "entry": "server.ts",
-  "code_hash": "a1b2c3d4e5f6",
-  "built_at": "2026-01-01T00:00:00Z",
-  "runtime_features": ["web", "fetch", "crypto", "node", "fs"],
-  "bundled": ".flux/bundle.js",
-  "minified": true
+  "entry": "./index.ts",
+  "artifact": "./.flux/artifact.json"
 }
 ```
 
-| Feature | Activated by |
-|---|---|
-| `web` | always (TextEncoder, streams, AbortController) |
-| `fetch` | always (fetch, Headers, Request, Response) |
-| `crypto` | always (SubtleCrypto, randomUUID) |
-| `websocket` | `WebSocket` in source |
-| `node` | `require(`, `from 'node:…'`, bare npm imports |
-| `fs` | `node:fs`, `Deno.readFile`, `Deno.writeFile` |
-| `net` | `node:net`, `Deno.connect`, `Deno.listen` |
-| `os` | `process.env`, `Deno.env`, `node:os` |
-| `process` | `Deno.Command`, `node:child_process` |
+`flux build` writes the deterministic module graph to `.flux/artifact.json`. `flux serve` only executes that built artifact.
 
 ## Setup
 
 ```bash
-# interactive: prompts for server URL and service token
+# scaffold a new runnable Flux project in the current directory
 flux init
+
+# migrate the old interactive auth flow explicitly
+flux init --auth
 
 # non-interactive auth
 flux auth --url localhost:50051 --token <token>
@@ -83,7 +78,7 @@ flux config set token <token>
 flux server start --database-url postgres://...
 flux server restart --database-url postgres://...
 
-# production: serve a pre-built entry (requires flux.json + running server)
+# production: serve a pre-built entry (requires flux build first)
 flux serve index.ts
 flux serve index.ts --host 0.0.0.0 --port 8080 --isolate-pool-size 8
 
@@ -135,4 +130,4 @@ flux exec index.ts --input '{"amount":100}' --timeout-secs 30
 - list views show short IDs (8 chars)
 - detail views use full execution IDs
 - status colors: `✓ ok` (green), `✗ error` (red), `⚠ slow` (yellow)
-- after `flux init`, no repeated auth flags are required
+- after `flux init --auth` or `flux auth`, no repeated auth flags are required

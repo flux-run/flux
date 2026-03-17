@@ -689,16 +689,20 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "deno_ast",
  "dirs",
  "prost",
  "reqwest",
  "rpassword",
  "serde",
  "serde_json",
+ "sha2",
  "shared",
+ "tempfile",
  "tokio",
  "toml",
  "tonic",
+ "url",
 ]
 
 [[package]]
@@ -3665,6 +3669,7 @@ version = "0.1.0"
 dependencies = [
  "prost",
  "protoc-bin-vendored",
+ "serde",
  "tonic",
  "tonic-build",
 ]

@@ -64,10 +64,17 @@ The developer loop looks like this:
 # start the server
 flux server start --database-url postgres://localhost:5432/postgres
 
-# one-time auth setup
+# scaffold a project
 flux init
 
-# serve a function file
+# one-time auth setup
+flux init --auth
+
+# development entrypoint with reload
+flux dev
+
+# build and serve the deterministic artifact
+flux build
 flux serve index.ts
 
 # send a request

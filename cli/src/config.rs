@@ -52,11 +52,11 @@ pub fn resolve_auth(url: Option<String>, token: Option<String>) -> Result<Resolv
     let url = url
         .or(config.url)
         .or_else(load_server_url_from_port_file)
-        .ok_or_else(|| anyhow::anyhow!("missing server URL\n\nrun:\n  flux init"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing server URL\n\nrun:\n  flux init --auth"))?;
 
     let token = token
         .or(config.token)
-        .ok_or_else(|| anyhow::anyhow!("missing service token\n\nrun:\n  flux init"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing service token\n\nrun:\n  flux init --auth"))?;
 
     Ok(ResolvedAuth {
         url: normalize_grpc_url(&url),

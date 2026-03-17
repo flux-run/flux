@@ -59,11 +59,11 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         bail!("isolate_pool_size must be greater than 0");
     }
 
-    let pool = Arc::new(IsolatePool::new(config.isolate_pool_size, &artifact.code)?);
+    let pool = Arc::new(IsolatePool::new(config.isolate_pool_size, artifact.clone())?);
     let is_server_mode = pool.is_server_mode;
     let state = RuntimeState {
         route_name: config.route_name.clone(),
-        code_version: artifact.sha256.clone(),
+        code_version: artifact.code_version().to_string(),
         pool,
         server_url: config.server_url,
         service_token: config.service_token,

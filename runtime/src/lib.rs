@@ -16,6 +16,7 @@ pub use artifact::{
 	RuntimeSubmitRequest,
 	build_artifact,
 	build_artifact_from_file,
+	load_built_artifact_from_file,
 	sha256_hex,
 };
 pub use http_runtime::{

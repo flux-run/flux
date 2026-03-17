@@ -12,7 +12,9 @@ use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResp
 use deno_error::JsErrorBox;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use shared::project::{ArtifactMediaType, ArtifactModule, FluxBuildArtifact};
 use ureq::OrAnyStatus;
+use url::Url;
 use uuid::Uuid;
 
 use crate::isolate_pool::ExecutionContext;
@@ -696,6 +698,11 @@ struct TypescriptModuleLoader {
     source_maps: SourceMapStore,
 }
 
+struct ArtifactModuleLoader {
+    source_maps: SourceMapStore,
+    modules: HashMap<String, ArtifactModule>,
+}
+
 fn should_transpile_media_type(media_type: MediaType) -> bool {
     matches!(
         media_type,
@@ -748,6 +755,17 @@ fn transpile_module_source(
     }
 
     Ok(result.text)
+}
+
+fn artifact_media_type(media_type: ArtifactMediaType) -> MediaType {
+    match media_type {
+        ArtifactMediaType::JavaScript => MediaType::JavaScript,
+        ArtifactMediaType::Mjs => MediaType::Mjs,
+        ArtifactMediaType::Jsx => MediaType::Jsx,
+        ArtifactMediaType::TypeScript => MediaType::TypeScript,
+        ArtifactMediaType::Tsx => MediaType::Tsx,
+        ArtifactMediaType::Json => MediaType::Json,
+    }
 }
 
 impl ModuleLoader for TypescriptModuleLoader {
@@ -836,6 +854,102 @@ impl ModuleLoader for TypescriptModuleLoader {
     }
 }
 
+impl ModuleLoader for ArtifactModuleLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+        _kind: ResolutionKind,
+    ) -> std::result::Result<ModuleSpecifier, deno_core::error::ModuleLoaderError> {
+        if specifier.starts_with("npm:") {
+            let resolved = Url::parse(specifier).map_err(JsErrorBox::from_err)?;
+            if self.modules.contains_key(resolved.as_str()) {
+                return Ok(resolved);
+            }
+        }
+
+        let resolution_base = self
+            .modules
+            .get(referrer)
+            .map(|module| module.base_specifier.as_str())
+            .unwrap_or(referrer);
+        let resolved = resolve_import(specifier, resolution_base).map_err(JsErrorBox::from_err)?;
+
+        if self.modules.contains_key(resolved.as_str()) {
+            Ok(resolved)
+        } else {
+            Err(JsErrorBox::generic(format!(
+                "dynamic resolution is disabled for built artifacts: {}",
+                resolved
+            ))
+            .into())
+        }
+    }
+
+    fn load(
+        &self,
+        module_specifier: &ModuleSpecifier,
+        _maybe_referrer: Option<&ModuleLoadReferrer>,
+        options: ModuleLoadOptions,
+    ) -> ModuleLoadResponse {
+        let source_maps = self.source_maps.clone();
+        let module_specifier = module_specifier.clone();
+        let modules = self.modules.clone();
+
+        fn load_module(
+            source_maps: SourceMapStore,
+            modules: HashMap<String, ArtifactModule>,
+            module_specifier: &ModuleSpecifier,
+            options: &ModuleLoadOptions,
+        ) -> std::result::Result<ModuleSource, deno_core::error::ModuleLoaderError> {
+            let module = modules.get(module_specifier.as_str()).ok_or_else(|| {
+                JsErrorBox::generic(format!(
+                    "module not found in built artifact: {}",
+                    module_specifier
+                ))
+            })?;
+
+            let media_type = artifact_media_type(module.media_type.clone());
+            let module_type = match media_type {
+                MediaType::Json => ModuleType::Json,
+                _ => ModuleType::JavaScript,
+            };
+
+            if module_type == ModuleType::Json
+                && options.requested_module_type != deno_core::RequestedModuleType::Json
+            {
+                return Err(JsErrorBox::generic(
+                    "attempted to load JSON module without `with { type: \"json\" }`",
+                )
+                .into());
+            }
+
+            let source = transpile_module_source(
+                module_specifier,
+                media_type,
+                module.source.clone(),
+                Some(&source_maps),
+            )?;
+
+            Ok(ModuleSource::new(
+                module_type,
+                ModuleSourceCode::String(source.into()),
+                module_specifier,
+                None,
+            ))
+        }
+
+        ModuleLoadResponse::Sync(load_module(source_maps, modules, &module_specifier, &options))
+    }
+
+    fn get_source_map(&self, specifier: &str) -> Option<Cow<'_, [u8]>> {
+        self.source_maps
+            .borrow()
+            .get(specifier)
+            .map(|value| value.clone().into())
+    }
+}
+
 pub struct JsIsolate {
     runtime: JsRuntime,
     /// True when the user module called `Deno.serve()` during module init,
@@ -913,6 +1027,84 @@ impl JsIsolate {
         evaluation
             .await
             .context("failed to evaluate user module")?;
+
+        let is_server_mode = {
+            let probe = runtime
+                .execute_script(
+                    "flux:probe_server_mode",
+                    "typeof globalThis.__flux_net_handler === 'function'",
+                )
+                .context("failed to probe server mode")?;
+            deno_core::scope!(scope, &mut runtime);
+            let local = deno_core::v8::Local::new(scope, probe);
+            local.is_true()
+        };
+
+        Ok(Self { runtime, is_server_mode })
+    }
+
+    pub async fn new_from_artifact(artifact: &FluxBuildArtifact) -> Result<Self> {
+        let source_maps = Rc::new(RefCell::new(HashMap::new()));
+        let modules = artifact
+            .modules
+            .iter()
+            .cloned()
+            .map(|module| (module.specifier.clone(), module))
+            .collect::<HashMap<_, _>>();
+        let mut runtime = JsRuntime::new(RuntimeOptions {
+            module_loader: Some(Rc::new(ArtifactModuleLoader {
+                source_maps,
+                modules,
+            })),
+            extensions: vec![flux_runtime_ext::init()],
+            create_params: Some(
+                deno_core::v8::CreateParams::default()
+                    .heap_limits(0, V8_HEAP_LIMIT),
+            ),
+            ..Default::default()
+        });
+
+        {
+            let state = runtime.op_state();
+            let mut state = state.borrow_mut();
+            state.put::<RuntimeStateMap>(HashMap::new());
+        }
+
+        runtime
+            .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
+            .context("failed to install fetch interceptor")?;
+
+        let entry_module = artifact
+            .modules
+            .iter()
+            .find(|module| module.specifier == artifact.entry_specifier)
+            .ok_or_else(|| anyhow::anyhow!("entry module missing from built artifact"))?;
+        let main_module = Url::parse(&artifact.entry_specifier)
+            .with_context(|| format!("invalid entry module specifier: {}", artifact.entry_specifier))?;
+        let transformed_entry = prepare_user_code(&entry_module.source);
+        let transformed_entry = transpile_module_source(
+            &main_module,
+            artifact_media_type(entry_module.media_type.clone()),
+            transformed_entry,
+            None,
+        )
+        .context("failed to transpile built artifact entry module")?;
+
+        let module_id = runtime
+            .load_main_es_module_from_code(&main_module, transformed_entry)
+            .await
+            .context("failed to load built artifact entry module")?;
+        let evaluation = runtime.mod_evaluate(module_id);
+        tokio::time::timeout(
+            EXECUTION_TIMEOUT,
+            runtime.run_event_loop(Default::default()),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("module initialization timed out after {EXECUTION_TIMEOUT:?}"))?
+        .context("event loop error during artifact module initialization")?;
+        evaluation
+            .await
+            .context("failed to evaluate built artifact entry module")?;
 
         let is_server_mode = {
             let probe = runtime
