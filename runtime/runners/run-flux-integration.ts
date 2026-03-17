@@ -21,7 +21,7 @@
 
 import { performance }   from "node:perf_hooks";
 import { spawnSync }     from "node:child_process";
-import { readFileSync }  from "node:fs";
+import { existsSync, readFileSync }  from "node:fs";
 import { resolve }       from "node:path";
 import { dirname }       from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +44,7 @@ const HANDLERS_DIR = resolve(__dirname, "../external-tests/flux-handlers");
 const EXAMPLES_DIR = resolve(WORKSPACE_ROOT, "examples");
 const CRUD_APP_DIR = resolve(EXAMPLES_DIR, "crud_app");
 const CRUD_INIT_SQL = resolve(CRUD_APP_DIR, "init.sql");
+const DRIZZLE_DIR = resolve(EXAMPLES_DIR, "drizzle");
 
 // Each suite gets its own port in the 3100-3199 range so suites can run
 // sequentially without port conflicts when multiple are enabled.
@@ -68,6 +69,13 @@ interface PostgresHandle {
   containerName: string;
   databaseUrl: string;
   stop(): void;
+}
+
+interface PostgresConfig {
+  databaseName: string;
+  username: string;
+  password: string;
+  initSql?: string;
 }
 
 const crudReplayState = {
@@ -144,9 +152,9 @@ async function waitForPostgres(containerName: string, timeoutMs = 15_000): Promi
   throw new Error(`postgres container ${containerName} did not become ready within ${timeoutMs}ms`);
 }
 
-async function startCrudPostgres(hostPort: number): Promise<PostgresHandle> {
-  const containerName = `flux-int-crud-replay-${hostPort}`;
-  const databaseUrl = `postgres://postgres:postgres@127.0.0.1:${hostPort}/crud_app`;
+async function startPostgres(hostPort: number, config: PostgresConfig): Promise<PostgresHandle> {
+  const containerName = `flux-int-${config.databaseName}-${hostPort}`;
+  const databaseUrl = `postgres://${config.username}:${config.password}@127.0.0.1:${hostPort}/${config.databaseName}`;
 
   runCheckedCommand("docker", [
     "run",
@@ -155,9 +163,11 @@ async function startCrudPostgres(hostPort: number): Promise<PostgresHandle> {
     "--name",
     containerName,
     "-e",
-    "POSTGRES_PASSWORD=postgres",
+    `POSTGRES_USER=${config.username}`,
     "-e",
-    "POSTGRES_DB=crud_app",
+    `POSTGRES_PASSWORD=${config.password}`,
+    "-e",
+    `POSTGRES_DB=${config.databaseName}`,
     "-p",
     `${hostPort}:5432`,
     "postgres:17-alpine",
@@ -165,11 +175,13 @@ async function startCrudPostgres(hostPort: number): Promise<PostgresHandle> {
 
   try {
     await waitForPostgres(containerName);
-    runCheckedCommand(
-      "docker",
-      ["exec", "-i", containerName, "psql", "-U", "postgres", "-d", "crud_app", "-v", "ON_ERROR_STOP=1"],
-      { input: readFileSync(CRUD_INIT_SQL, "utf8") },
-    );
+    if (config.initSql) {
+      runCheckedCommand(
+        "docker",
+        ["exec", "-i", containerName, "psql", "-U", config.username, "-d", config.databaseName, "-v", "ON_ERROR_STOP=1"],
+        { input: config.initSql },
+      );
+    }
   } catch (error) {
     runCheckedCommand("docker", ["rm", "-f", containerName]);
     throw error;
@@ -184,6 +196,23 @@ async function startCrudPostgres(hostPort: number): Promise<PostgresHandle> {
   };
 }
 
+async function startCrudPostgres(hostPort: number): Promise<PostgresHandle> {
+  return startPostgres(hostPort, {
+    databaseName: "crud_app",
+    username: "postgres",
+    password: "postgres",
+    initSql: readFileSync(CRUD_INIT_SQL, "utf8"),
+  });
+}
+
+async function startDrizzlePostgres(hostPort: number): Promise<PostgresHandle> {
+  return startPostgres(hostPort, {
+    databaseName: "madmonkey",
+    username: "admin",
+    password: "password123",
+  });
+}
+
 function extractReplayOutput(stdout: string): string {
   const match = stdout.match(/^\s*output\s+(.+)$/m);
   if (!match) {
@@ -196,29 +225,61 @@ function stripAnsi(value: string): string {
   return value.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+function extractCommandOutput(stdout: string): string {
+  const cleaned = stripAnsi(stdout).trimEnd();
+  const objectStart = cleaned.lastIndexOf("\n{");
+  const arrayStart = cleaned.lastIndexOf("\n[");
+  const start = Math.max(objectStart, arrayStart);
+
+  if (start === -1) {
+    throw new Error(`could not find command output in CLI output\n${stdout}`);
+  }
+
+  return cleaned.slice(start + 1).trim();
+}
+
+function ensureDrizzleExampleDependencies(): void {
+  const drizzleOrmPackage = resolve(DRIZZLE_DIR, "node_modules", "drizzle-orm", "package.json");
+  if (existsSync(drizzleOrmPackage)) {
+    return;
+  }
+
+  runCheckedCommand("npm", ["ci"], { cwd: DRIZZLE_DIR });
+}
+
 // ---------------------------------------------------------------------------
 // Suite runner wrapper
 // ---------------------------------------------------------------------------
 
 interface Suite {
   name:    string;
-  handler: string;   // filename inside HANDLERS_DIR
+  handler?: string;   // filename inside HANDLERS_DIR
   handlerBaseDir?: "handlers" | "examples";
   start?: (entry: string, port: number) => Promise<RuntimeHandle>;
-  run: (baseUrl: string, ctx: AssertionContext) => Promise<void>;
+  run?: (baseUrl: string, ctx: AssertionContext) => Promise<void>;
+  execute?: (ctx: AssertionContext) => Promise<void>;
 }
 
 async function runSuite(suite: Suite): Promise<{ passed: number; failed: number; results: TestResult[] }> {
-  const port    = allocatePort();
-  const entryBaseDir = suite.handlerBaseDir === "examples" ? EXAMPLES_DIR : HANDLERS_DIR;
-  const entry   = resolve(entryBaseDir, suite.handler);
   const ctx: AssertionContext = { results: [] };
 
   let runtime: RuntimeHandle | null = null;
   try {
-    buildArtifact(entry, { quiet: true });
-    runtime = suite.start ? await suite.start(entry, port) : await startRuntime(entry, port);
-    await suite.run(runtime.baseUrl, ctx);
+    if (suite.execute) {
+      await suite.execute(ctx);
+    } else {
+      if (!suite.handler || !suite.run) {
+        throw new Error(`suite ${suite.name} is missing a handler or run function`);
+      }
+
+      const port = allocatePort();
+      const entryBaseDir = suite.handlerBaseDir === "examples" ? EXAMPLES_DIR : HANDLERS_DIR;
+      const entry = resolve(entryBaseDir, suite.handler);
+
+      buildArtifact(entry, { quiet: true });
+      runtime = suite.start ? await suite.start(entry, port) : await startRuntime(entry, port);
+      await suite.run(runtime.baseUrl, ctx);
+    }
   } catch (err) {
     ctx.results.push({
       name:    `[suite startup] ${suite.name}`,
@@ -567,6 +628,86 @@ const SUITES: Suite[] = [
       const listAfterReplay = await get(baseUrl, "/todos");
       const todosAfterReplay = listAfterReplay.body as any[];
       assert(ctx, "GET /todos after replay → count unchanged", () => Array.isArray(todosAfterReplay) && todosAfterReplay.length === 1);
+    },
+  },
+
+  // ── 8. Drizzle examples ────────────────────────────────────────────────
+  {
+    name: "drizzle-crud",
+    async execute(ctx) {
+      ensureDrizzleExampleDependencies();
+
+      const databasePort = allocateDatabasePort();
+      const postgres = await startDrizzlePostgres(databasePort);
+
+      try {
+        const stdout = runCheckedCommand(
+          FLUX_CLI_BIN,
+          [
+            "run",
+            "--input",
+            JSON.stringify({ input: { connectionString: postgres.databaseUrl } }),
+            resolve(DRIZZLE_DIR, "crud.ts"),
+          ],
+          {
+            cwd: WORKSPACE_ROOT,
+            env: { FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1" },
+          },
+        );
+
+        const payload = JSON.parse(extractCommandOutput(stdout)) as {
+          inserted?: { id?: number; title?: string; state?: string };
+          selected?: { id?: number; title?: string; state?: string };
+          updated?: { id?: number; title?: string; state?: string };
+        };
+
+        assert(ctx, "flux run examples/drizzle/crud.ts → inserted row", () => payload.inserted?.title === "ship flux" && payload.inserted?.state === "new");
+        assert(ctx, "flux run examples/drizzle/crud.ts → selected row", () => payload.selected?.id === payload.inserted?.id && payload.selected?.state === "new");
+        assert(ctx, "flux run examples/drizzle/crud.ts → updated row", () => payload.updated?.id === payload.inserted?.id && payload.updated?.state === "done");
+      } finally {
+        postgres.stop();
+      }
+    },
+  },
+  {
+    name: "drizzle-transaction",
+    async execute(ctx) {
+      ensureDrizzleExampleDependencies();
+
+      const databasePort = allocateDatabasePort();
+      const postgres = await startDrizzlePostgres(databasePort);
+
+      try {
+        const stdout = runCheckedCommand(
+          FLUX_CLI_BIN,
+          [
+            "run",
+            "--input",
+            JSON.stringify({ input: { connectionString: postgres.databaseUrl } }),
+            resolve(DRIZZLE_DIR, "transaction.ts"),
+          ],
+          {
+            cwd: WORKSPACE_ROOT,
+            env: { FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1" },
+          },
+        );
+
+        const payload = JSON.parse(extractCommandOutput(stdout)) as {
+          txResult?: {
+            inserted?: { id?: number; name?: string; status?: string };
+            selected?: { id?: number; name?: string; status?: string };
+            updated?: { id?: number; name?: string; status?: string };
+          };
+          finalRows?: Array<{ id?: number; name?: string; status?: string }>;
+        };
+
+        assert(ctx, "flux run examples/drizzle/transaction.ts → inserted row", () => payload.txResult?.inserted?.name === "replay-check" && payload.txResult?.inserted?.status === "queued");
+        assert(ctx, "flux run examples/drizzle/transaction.ts → selected row", () => payload.txResult?.selected?.id === payload.txResult?.inserted?.id && payload.txResult?.selected?.status === "queued");
+        assert(ctx, "flux run examples/drizzle/transaction.ts → updated row", () => payload.txResult?.updated?.id === payload.txResult?.inserted?.id && payload.txResult?.updated?.status === "running");
+        assert(ctx, "flux run examples/drizzle/transaction.ts → final persisted row", () => Array.isArray(payload.finalRows) && payload.finalRows.length === 1 && payload.finalRows[0]?.status === "running");
+      } finally {
+        postgres.stop();
+      }
     },
   },
 

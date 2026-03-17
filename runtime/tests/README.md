@@ -141,9 +141,9 @@ Exercises the ESM module system — patterns that break new runtimes.
 
 ## Integration Tests (real binary)
 
-These tests compile the **actual `flux-runtime` Rust binary** and verify it end-to-end by sending real HTTP requests to running isolates. They are the only tests that exercise the full stack: Cargo build → binary start → Deno V8 isolate load → HTTP request/response.
+These tests compile the real Flux binaries and verify them end-to-end through the same user-facing commands developers run locally. Some suites start HTTP handlers with `flux serve`; others execute scripts directly with `flux run`. Together they exercise the full stack: Cargo build → CLI start → runtime load → request handling or script execution.
 
-> **Why this matters:** the internal suites (trust / compat / replay / modules) run JavaScript assertions inside a Node.js process. They prove the JS logic is correct but never touch the Rust binary. Integration tests close that gap.
+> **Why this matters:** the internal suites (trust / compat / replay / modules) run JavaScript assertions inside a Node.js process. They prove the JS logic is correct but never touch the Rust binaries. Integration tests close that gap.
 
 ### Quick start
 
@@ -163,7 +163,7 @@ npm run test:integration -- --suite echo   # one suite only
 
 ### What it tests
 
-Each suite starts a `flux-runtime` process on a unique port (3100–3199), sends HTTP requests, asserts responses, then stops the process.
+HTTP suites start a `flux serve` process on a unique port (3100–3199), send real requests, assert responses, then stop the process. Command suites execute `flux run` directly and assert the emitted JSON output.
 
 | Suite | Handler | Checks |
 |-------|---------|--------|
@@ -172,17 +172,20 @@ Each suite starts a `flux-runtime` process on a unique port (3100–3199), sends
 | `web-apis` | `web-apis.js` | `crypto.randomUUID`, `Date`, `URL`, `TextEncoder`, `btoa/atob`, `structuredClone` |
 | `async-ops` | `async-ops.js` | `await`, `Promise.all`, `Promise.race`, `setTimeout`, sequential pipeline |
 | `error-handling` | `error-handling.js` | 404/400/422 explicit responses, sync throw → 5xx, async reject → 5xx |
+| `crud-replay` | `examples/crud_app/main_flux.ts` | HTTP CRUD flow plus `flux replay --diff` verification |
+| `drizzle-crud` | `examples/drizzle/crud.ts` | direct `flux run`, Drizzle insert/select/update against disposable Postgres |
+| `drizzle-transaction` | `examples/drizzle/transaction.ts` | direct `flux run`, Drizzle transaction semantics against disposable Postgres |
 
-Handler files live in `runtime/external-tests/flux-handlers/`. They use `Deno.serve(...)` so they are valid `flux-runtime --entry` targets.
+HTTP handler files live in `runtime/external-tests/flux-handlers/`. They use `Deno.serve(...)` so they are valid `flux serve` entry targets. The Drizzle suites run the checked-in examples from `examples/drizzle/` after installing their local `node_modules` with `npm ci` when needed.
 
 ### Binary management
 
 `runtime/runners/lib/flux-binary.ts` is the helper that:
-- Locates the binary at `target/debug/flux-runtime` (or `target/release/` when `FLUX_RELEASE=1`)
-- Builds via `SQLX_OFFLINE=true cargo build -p runtime` when the binary is missing
-- Spawns the process with `--entry`, `--host`, `--port`, `--isolate-pool-size`
+- Locates the CLI, runtime, and server binaries under `target/debug/` (or `target/release/` when `FLUX_RELEASE=1`)
+- Builds via `SQLX_OFFLINE=true cargo build -p cli -p runtime -p server` when the binaries are missing
+- Spawns `flux serve` with `--host`, `--port`, and `--isolate-pool-size` for HTTP suites
 - Polls the port every 100 ms until the isolate is ready (15 s timeout)
-- Kills the process after each suite (`SIGTERM → SIGKILL`)
+- Kills spawned processes after each suite (`SIGTERM → SIGKILL`)
 
 ### Skipping the build
 
