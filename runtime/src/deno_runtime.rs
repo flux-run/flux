@@ -1275,6 +1275,8 @@ struct PostgresArrayText(String);
 
 struct PostgresTextValue(String);
 
+struct PostgresByteaText(String);
+
 impl<'a> FromSql<'a> for PostgresNumericText {
     fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(Self(std::str::from_utf8(raw)?.to_string()))
@@ -1330,8 +1332,19 @@ impl<'a> FromSql<'a> for PostgresTextValue {
                 | postgres::types::Type::TIMESTAMP
                 | postgres::types::Type::TIMESTAMPTZ
                 | postgres::types::Type::INTERVAL
+                | postgres::types::Type::OID
                 | postgres::types::Type::UUID
         )
+    }
+}
+
+impl<'a> FromSql<'a> for PostgresByteaText {
+    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &PostgresType) -> bool {
+        *ty == postgres::types::Type::BYTEA
     }
 }
 
@@ -1613,6 +1626,30 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .flatten()
             .map(|value| serde_json::json!(value))
             .or_else(|| string_value().and_then(|value| value.parse::<f64>().ok().map(|parsed| serde_json::json!(parsed))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::OID => row
+            .try_get::<_, Option<u32>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::json!(value))
+            .or_else(|| {
+                row.try_get::<_, Option<PostgresTextValue>>(name)
+                    .ok()
+                    .flatten()
+                    .and_then(|value| value.0.parse::<u32>().ok().map(|parsed| serde_json::json!(parsed)))
+            })
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::BYTEA => row
+            .try_get::<_, Option<PostgresByteaText>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::Value::String(value.0))
+            .or_else(|| {
+                row.try_get::<_, Option<Vec<u8>>>(name)
+                    .ok()
+                    .flatten()
+                    .map(|value| serde_json::Value::String(format!("\\x{}", hex::encode(value))))
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::NUMERIC => row
             .try_get::<_, Option<PostgresNumericText>>(name)
@@ -4443,6 +4480,7 @@ globalThis.Flux.postgres = globalThis.Flux.postgres || {};
 globalThis.Flux.net = globalThis.Flux.net || {};
 const __flux_pg_builtin_types = Object.freeze({
     BOOL: 16,
+    BYTEA: 17,
     INT8: 20,
     INT2: 21,
     INT4: 23,

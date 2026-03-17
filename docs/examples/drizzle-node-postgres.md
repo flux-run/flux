@@ -53,6 +53,7 @@ types.setTypeParser(types.builtins.NUMERIC, (value) => value);
 
 - The same OID-based parser path now applies to JSONB and one-dimensional array fields on extended queries, so custom `pg` parsers can reshape those values too.
 - Date, time, timetz, timestamp, timestamptz, interval, and UUID fields now use that same parser path as exact text values, which matches the common `pg` pattern of registering app-specific parsers in JavaScript.
+- BYTEA fields now surface as exact `\x...` hex strings by default, so custom `pg` parsers can convert them into byte arrays or other application-specific binary shapes.
 
 Important compatibility note:
 
