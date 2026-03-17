@@ -1,8 +1,13 @@
-export function add(a: number, b: number): number {
-  return a + b;
+import { createApp } from "./src/app.ts";
+import { createPostgresTodoRepository, ensureSchema } from "./src/db.ts";
+
+export async function createServerApp() {
+  const repository = createPostgresTodoRepository();
+  await ensureSchema(repository.sql);
+  return createApp(repository);
 }
 
-// Learn more at https://docs.deno.com/runtime/manual/examples/module_metadata#concepts
 if (import.meta.main) {
-  console.log("Add 2 + 3 =", add(2, 3));
+  const app = await createServerApp();
+  Deno.serve({ port: Number(Deno.env.get("PORT") ?? "8000") }, app.fetch);
 }

@@ -1,0 +1,71 @@
+{
+  "version": "5",
+  "specifiers": {
+    "jsr:@hono/hono@*": "4.12.8",
+    "jsr:@hono/hono@4": "4.12.8",
+    "jsr:@hono/hono@^4.12.8": "4.12.8",
+    "jsr:@std/assert@^1.0.19": "1.0.19",
+    "jsr:@std/internal@^1.0.12": "1.0.12",
+    "npm:drizzle-orm@*": "0.45.1_postgres@3.4.8",
+    "npm:drizzle-orm@~0.45.1": "0.45.1_postgres@3.4.8",
+    "npm:drizzle-zod@*": "0.8.3_drizzle-orm@0.45.1__postgres@3.4.8_zod@4.3.6_postgres@3.4.8",
+    "npm:drizzle-zod@~0.8.3": "0.8.3_drizzle-orm@0.45.1__postgres@3.4.8_zod@4.3.6_postgres@3.4.8",
+    "npm:hono@*": "4.12.8",
+    "npm:postgres@*": "3.4.8",
+    "npm:postgres@^3.4.8": "3.4.8",
+    "npm:zod@*": "4.3.6",
+    "npm:zod@^4.3.6": "4.3.6"
+  },
+  "jsr": {
+    "@hono/hono@4.12.8": {
+      "integrity": "1997fde8abf28e84d821c9c867229be020e268d4749397aec071305bf54db297"
+    },
+    "@std/assert@1.0.19": {
+      "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
+    },
+    "@std/internal@1.0.12": {
+      "integrity": "972a634fd5bc34b242024402972cd5143eac68d8dffaca5eaa4dba30ce17b027"
+    }
+  },
+  "npm": {
+    "drizzle-orm@0.45.1_postgres@3.4.8": {
+      "integrity": "sha512-Te0FOdKIistGNPMq2jscdqngBRfBpC8uMFVwqjf6gtTVJHIQ/dosgV/CLBU2N4ZJBsXL5savCba9b0YJskKdcA==",
+      "dependencies": [
+        "postgres"
+      ],
+      "optionalPeers": [
+        "postgres"
+      ]
+    },
+    "drizzle-zod@0.8.3_drizzle-orm@0.45.1__postgres@3.4.8_zod@4.3.6_postgres@3.4.8": {
+      "integrity": "sha512-66yVOuvGhKJnTdiqj1/Xaaz9/qzOdRJADpDa68enqS6g3t0kpNkwNYjUuaeXgZfO/UWuIM9HIhSlJ6C5ZraMww==",
+      "dependencies": [
+        "drizzle-orm",
+        "zod"
+      ]
+    },
+    "hono@4.12.8": {
+      "integrity": "sha512-VJCEvtrezO1IAR+kqEYnxUOoStaQPGrCmX3j4wDTNOcD1uRPFpGlwQUIW8niPuvHXaTUxeOUl5MMDGrl+tmO9A=="
+    },
+    "postgres@3.4.8": {
+      "integrity": "sha512-d+JFcLM17njZaOLkv6SCev7uoLaBtfK86vMUXhW1Z4glPWh4jozno9APvW/XKFJ3CCxVoC7OL38BqRydtu5nGg=="
+    },
+    "zod@4.3.6": {
+      "integrity": "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "jsr:@hono/hono@4",
+      "jsr:@hono/hono@^4.12.8",
+      "jsr:@std/assert@^1.0.19",
+      "npm:drizzle-orm@~0.45.1",
+      "npm:drizzle-zod@~0.8.3",
+      "npm:postgres@^3.4.8",
+      "npm:zod@^4.3.6"
+    ]
+  }
+}
