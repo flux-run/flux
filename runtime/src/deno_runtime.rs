@@ -1,9 +1,14 @@
+use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::net::{IpAddr, ToSocketAddrs};
+use std::path::Path;
+use std::rc::Rc;
 
 use anyhow::{Context, Result};
-use deno_core::{JsRuntime, OpState, RuntimeOptions, op2};
+use deno_ast::{EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileModuleOptions, TranspileOptions};
+use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind, RuntimeOptions, op2, resolve_import, resolve_path};
 use deno_error::JsErrorBox;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -685,6 +690,152 @@ const V8_HEAP_LIMIT: usize = 128 * 1024 * 1024;
 /// Maximum execution time for a single function invocation.
 const EXECUTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+type SourceMapStore = Rc<RefCell<HashMap<String, Vec<u8>>>>;
+
+struct TypescriptModuleLoader {
+    source_maps: SourceMapStore,
+}
+
+fn should_transpile_media_type(media_type: MediaType) -> bool {
+    matches!(
+        media_type,
+        MediaType::Jsx
+            | MediaType::TypeScript
+            | MediaType::Mts
+            | MediaType::Cts
+            | MediaType::Dts
+            | MediaType::Dmts
+            | MediaType::Dcts
+            | MediaType::Tsx
+    )
+}
+
+fn transpile_module_source(
+    module_specifier: &ModuleSpecifier,
+    media_type: MediaType,
+    source: String,
+    source_maps: Option<&SourceMapStore>,
+) -> std::result::Result<String, JsErrorBox> {
+    if !should_transpile_media_type(media_type) {
+        return Ok(source);
+    }
+
+    let result = deno_ast::parse_module(ParseParams {
+        specifier: module_specifier.clone(),
+        text: source.into(),
+        media_type,
+        capture_tokens: false,
+        scope_analysis: false,
+        maybe_syntax: None,
+    })
+    .map_err(JsErrorBox::from_err)?
+    .transpile(
+        &TranspileOptions::default(),
+        &TranspileModuleOptions::default(),
+        &EmitOptions {
+            source_map: SourceMapOption::Separate,
+            inline_sources: true,
+            ..Default::default()
+        },
+    )
+    .map_err(JsErrorBox::from_err)?
+    .into_source();
+
+    if let (Some(source_maps), Some(source_map)) = (source_maps, result.source_map) {
+        source_maps
+            .borrow_mut()
+            .insert(module_specifier.to_string(), source_map.into_bytes());
+    }
+
+    Ok(result.text)
+}
+
+impl ModuleLoader for TypescriptModuleLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+        _kind: ResolutionKind,
+    ) -> std::result::Result<ModuleSpecifier, deno_core::error::ModuleLoaderError> {
+        resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)
+    }
+
+    fn load(
+        &self,
+        module_specifier: &ModuleSpecifier,
+        _maybe_referrer: Option<&ModuleLoadReferrer>,
+        options: ModuleLoadOptions,
+    ) -> ModuleLoadResponse {
+        let source_maps = self.source_maps.clone();
+        let module_specifier = module_specifier.clone();
+
+        fn load_module(
+            source_maps: SourceMapStore,
+            module_specifier: &ModuleSpecifier,
+            options: &ModuleLoadOptions,
+        ) -> std::result::Result<ModuleSource, deno_core::error::ModuleLoaderError> {
+            let path = module_specifier
+                .to_file_path()
+                .map_err(|_| JsErrorBox::generic("Only file:// URLs are supported."))?;
+
+            let media_type = MediaType::from_path(&path);
+            let module_type = match media_type {
+                MediaType::JavaScript | MediaType::Mjs | MediaType::Cjs => {
+                    ModuleType::JavaScript
+                }
+                MediaType::TypeScript
+                | MediaType::Mts
+                | MediaType::Cts
+                | MediaType::Dts
+                | MediaType::Dmts
+                | MediaType::Dcts
+                | MediaType::Tsx
+                | MediaType::Jsx => ModuleType::JavaScript,
+                MediaType::Json => ModuleType::Json,
+                _ => {
+                    return Err(JsErrorBox::generic(format!(
+                        "unsupported module extension: {}",
+                        path.display()
+                    )));
+                }
+            };
+
+            if module_type == ModuleType::Json
+                && options.requested_module_type != deno_core::RequestedModuleType::Json
+            {
+                return Err(JsErrorBox::generic(
+                    "attempted to load JSON module without `with { type: \"json\" }`",
+                ));
+            }
+
+            let source = std::fs::read_to_string(&path)
+                .map_err(JsErrorBox::from_err)?;
+            let source = transpile_module_source(
+                module_specifier,
+                media_type,
+                source,
+                Some(&source_maps),
+            )?;
+
+            Ok(ModuleSource::new(
+                module_type,
+                ModuleSourceCode::String(source.into()),
+                module_specifier,
+                None,
+            ))
+        }
+
+        ModuleLoadResponse::Sync(load_module(source_maps, &module_specifier, &options))
+    }
+
+    fn get_source_map(&self, specifier: &str) -> Option<Cow<'_, [u8]>> {
+        self.source_maps
+            .borrow()
+            .get(specifier)
+            .map(|value| value.clone().into())
+    }
+}
+
 pub struct JsIsolate {
     runtime: JsRuntime,
     /// True when the user module called `Deno.serve()` during module init,
@@ -702,6 +853,80 @@ impl JsIsolate {
     /// global when `export default` IS present.
     pub fn new_for_run(user_code: &str) -> Result<Self> {
         Self::new_internal(user_code, prepare_run_code(user_code))
+    }
+
+    /// Variant used by `flux run` when loading a real JS/TS module entry.
+    /// Supports relative ESM imports and TypeScript transpilation on demand.
+    pub async fn new_for_run_entry(entry: &Path) -> Result<Self> {
+        let source_maps = Rc::new(RefCell::new(HashMap::new()));
+        let mut runtime = JsRuntime::new(RuntimeOptions {
+            module_loader: Some(Rc::new(TypescriptModuleLoader {
+                source_maps,
+            })),
+            extensions: vec![flux_runtime_ext::init()],
+            create_params: Some(
+                deno_core::v8::CreateParams::default()
+                    .heap_limits(0, V8_HEAP_LIMIT),
+            ),
+            ..Default::default()
+        });
+
+        {
+            let state = runtime.op_state();
+            let mut state = state.borrow_mut();
+            state.put::<RuntimeStateMap>(HashMap::new());
+        }
+
+        runtime
+            .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
+            .context("failed to install fetch interceptor")?;
+
+        let main_module = resolve_path(
+            entry.to_str().ok_or_else(|| anyhow::anyhow!("invalid entry path: {}", entry.display()))?,
+            &std::env::current_dir().context("failed to get current working directory")?,
+        )
+        .with_context(|| format!("failed to resolve module specifier for {}", entry.display()))?;
+
+        let entry_source = std::fs::read_to_string(entry)
+            .with_context(|| format!("failed to read {}", entry.display()))?;
+        let transformed_entry = prepare_run_code(&entry_source);
+        let transformed_entry = transpile_module_source(
+            &main_module,
+            MediaType::from_path(entry),
+            transformed_entry,
+            None,
+        )
+        .context("failed to transpile entry module")?;
+
+        let module_id = runtime
+            .load_main_es_module_from_code(&main_module, transformed_entry)
+            .await
+            .context("failed to load user module")?;
+        let evaluation = runtime.mod_evaluate(module_id);
+        tokio::time::timeout(
+            EXECUTION_TIMEOUT,
+            runtime.run_event_loop(Default::default()),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("module initialization timed out after {EXECUTION_TIMEOUT:?}"))?
+        .context("event loop error during module initialization")?;
+        evaluation
+            .await
+            .context("failed to evaluate user module")?;
+
+        let is_server_mode = {
+            let probe = runtime
+                .execute_script(
+                    "flux:probe_server_mode",
+                    "typeof globalThis.__flux_net_handler === 'function'",
+                )
+                .context("failed to probe server mode")?;
+            deno_core::scope!(scope, &mut runtime);
+            let local = deno_core::v8::Local::new(scope, probe);
+            local.is_true()
+        };
+
+        Ok(Self { runtime, is_server_mode })
     }
 
     fn new_internal(_user_code: &str, prepared: String) -> Result<Self> {
@@ -836,6 +1061,18 @@ impl JsIsolate {
         context: ExecutionContext,
         recorded_checkpoints: Vec<FetchCheckpoint>,
     ) -> Result<JsExecutionOutput> {
+        self
+            .execute_handler_with_recorded(payload, context, recorded_checkpoints, true)
+            .await
+    }
+
+    async fn execute_handler_with_recorded(
+        &mut self,
+        payload: serde_json::Value,
+        context: ExecutionContext,
+        recorded_checkpoints: Vec<FetchCheckpoint>,
+        wrap_payload_in_input: bool,
+    ) -> Result<JsExecutionOutput> {
         let execution_id = context.execution_id.clone();
         let recorded: HashMap<u32, FetchCheckpoint> = recorded_checkpoints
             .into_iter()
@@ -865,6 +1102,11 @@ impl JsIsolate {
 
         let eid_json = serde_json::to_string(&execution_id).context("failed to encode execution_id")?;
         let payload_json = serde_json::to_string(&payload).context("failed to encode payload")?;
+        let handler_arg = if wrap_payload_in_input {
+            format!("{{ input: {payload_json}, ctx }}")
+        } else {
+            payload_json.clone()
+        };
         let invoke = format!(
             "(async () => {{\n\
                const __eid = {eid};\n\
@@ -875,14 +1117,14 @@ impl JsIsolate {
                globalThis.__flux_last_error[__eid] = null;\n\
                try {{\n\
                  const ctx = {{}};\n\
-                 const result = await globalThis.__flux_user_handler({{ input: {payload}, ctx }});\n\
+                                 const result = await globalThis.__flux_user_handler({handler_arg});\n\
                  globalThis.__flux_last_result[__eid] = result ?? null;\n\
                }} catch (err) {{\n\
                  globalThis.__flux_last_error[__eid] = String(err && err.stack ? err.stack : err);\n\
                }}\n\
              }})();",
             eid = eid_json,
-            payload = payload_json,
+                        handler_arg = handler_arg,
         );
 
         self.runtime
@@ -976,7 +1218,9 @@ impl JsIsolate {
 
         if has_handler {
             let context = ExecutionContext::new("__run__");
-            let output = self.execute(input, context).await?;
+            let output = self
+                .execute_handler_with_recorded(input, context, Vec::new(), false)
+                .await?;
             if let Some(ref err) = output.error {
                 eprintln!("error: {err}");
             }
@@ -1194,9 +1438,45 @@ class URLSearchParams {
         return match ? match[1] : null;
     }
 
+    getAll(name) {
+        const key = String(name);
+        return this._pairs
+            .filter(([candidate]) => candidate === key)
+            .map(([, value]) => value);
+    }
+
     has(name) {
         const key = String(name);
         return this._pairs.some(([candidate]) => candidate === key);
+    }
+
+    set(name, value) {
+        const key = String(name);
+        const nextValue = String(value);
+        const nextPairs = [];
+        let replaced = false;
+
+        for (const [candidate, currentValue] of this._pairs) {
+            if (candidate === key) {
+                if (!replaced) {
+                    nextPairs.push([key, nextValue]);
+                    replaced = true;
+                }
+                continue;
+            }
+            nextPairs.push([candidate, currentValue]);
+        }
+
+        if (!replaced) {
+            nextPairs.push([key, nextValue]);
+        }
+
+        this._pairs = nextPairs;
+    }
+
+    delete(name) {
+        const key = String(name);
+        this._pairs = this._pairs.filter(([candidate]) => candidate !== key);
     }
 
     entries() {

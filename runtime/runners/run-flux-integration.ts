@@ -235,6 +235,70 @@ const SUITES: Suite[] = [
         assert(ctx, "GET /web/url-build → pathname", () => b?.path === "/v1/users");
       }
       {
+        const r = await get(baseUrl, "/web/url-search-params");
+        const b = r.body as any;
+        assert(ctx, "GET /web/url-search-params → repeated params", () => Array.isArray(b?.tags) && b.tags.length === 2 && b.tags[0] === "alpha" && b.tags[1] === "beta");
+        assert(ctx, "GET /web/url-search-params → plus decodes to space", () => b?.space === "hello world");
+        assert(ctx, "GET /web/url-search-params → append/set semantics", () => b?.extra === "42" && b?.single === "value" && b?.hasExtra === true);
+        assert(ctx, "GET /web/url-search-params → serialized output", () => typeof b?.text === "string" && b.text.includes("tag=alpha") && b.text.includes("extra=42"));
+      }
+      {
+        const res = await fetch(`${baseUrl}/web/headers`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-custom": "MiXeD",
+          },
+          body: JSON.stringify({ ok: true }),
+        });
+        const b = await res.json() as any;
+        assert(ctx, "POST /web/headers → 202", () => res.status === 202);
+        assert(ctx, "POST /web/headers → inbound header visible", () => b?.inbound === "MiXeD");
+        assert(ctx, "POST /web/headers → case-insensitive lookup", () => b?.caseInsensitive === "MiXeD");
+        assert(ctx, "POST /web/headers → request content-type visible", () => b?.hasJson === true);
+        assert(ctx, "POST /web/headers → appended response header preserved", () => res.headers.get("x-one") === "alpha, beta");
+        assert(ctx, "POST /web/headers → response header set", () => res.headers.get("x-two") === "gamma");
+      }
+      {
+        const res = await fetch(`${baseUrl}/web/request-info?foo=bar`, {
+          method: "POST",
+          headers: {
+            "content-type": "text/plain",
+            "x-custom": "request-header",
+          },
+          body: "payload-body",
+        });
+        const b = await res.json() as any;
+        assert(ctx, "POST /web/request-info → Request instance", () => b?.isRequest === true);
+        assert(ctx, "POST /web/request-info → method preserved", () => b?.method === "POST");
+        assert(ctx, "POST /web/request-info → query visible", () => b?.query === "bar");
+        assert(ctx, "POST /web/request-info → header visible", () => b?.header === "request-header");
+        assert(ctx, "POST /web/request-info → body readable", () => b?.body === "payload-body");
+      }
+      {
+        const r = await get(baseUrl, "/web/request-construct");
+        const b = r.body as any;
+        assert(ctx, "GET /web/request-construct → Request constructor available", () => b?.isRequest === true);
+        assert(ctx, "GET /web/request-construct → method set", () => b?.method === "POST");
+        assert(ctx, "GET /web/request-construct → URL host/query set", () => b?.host === "api.example.com" && b?.query === "bar");
+        assert(ctx, "GET /web/request-construct → headers readable", () => b?.contentType === "text/plain" && b?.extra === "demo");
+        assert(ctx, "GET /web/request-construct → body readable", () => b?.body === "payload");
+      }
+      {
+        const res = await fetch(`${baseUrl}/web/response`);
+        const text = await res.text();
+        assert(ctx, "GET /web/response → status preserved", () => res.status === 201);
+        assert(ctx, "GET /web/response → header preserved", () => res.headers.get("x-response") === "ok");
+        assert(ctx, "GET /web/response → body preserved", () => text === "created");
+      }
+      {
+        const r = await get(baseUrl, "/web/text-encoding");
+        const b = r.body as any;
+        assert(ctx, "GET /web/text-encoding → decode round-trip", () => b?.decoded === "Flux 日本語");
+        assert(ctx, "GET /web/text-encoding → UTF-8 bytes produced", () => typeof b?.byteLength === "number" && b.byteLength > "Flux 日本語".length);
+        assert(ctx, "GET /web/text-encoding → byte prefix returned", () => Array.isArray(b?.prefix) && b.prefix.length === 4);
+      }
+      {
         const r = await get(baseUrl, "/web/math");
         const b = r.body as any;
         assert(ctx, "GET /web/math → random in [0,1)", () => b?.random_in_range === true);

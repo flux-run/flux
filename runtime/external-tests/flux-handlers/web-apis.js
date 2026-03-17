@@ -1,22 +1,23 @@
 /**
  * web-apis.js — Flux integration test handler
  *
- * Tests built-in Web APIs available inside the Deno V8 isolate.
+ * Tests Web APIs available inside the Flux runtime.
  *
  * Supported by flux-runtime:
- *   crypto.randomUUID, Date, URL / URLSearchParams
- *
- * NOT available in the flux-runtime isolate (excluded from tests):
- *   TextEncoder / TextDecoder  — not polyfilled
- *   btoa / atob                — not polyfilled
- *   structuredClone            — not polyfilled
- *   setTimeout with real delay — patched by replay system
+ *   crypto.randomUUID, Date, URL / URLSearchParams, Headers,
+ *   Request / Response, TextEncoder / TextDecoder
  *
  * Routes:
  *   GET /web/uuid        – crypto.randomUUID()
  *   GET /web/date        – Date.now() and new Date().toISOString()
  *   GET /web/url         – URL parsing + search params
  *   GET /web/url-build   – constructing a URL from parts
+ *   GET /web/url-search-params – URLSearchParams round-trip semantics
+ *   POST /web/headers    – request/response header semantics
+ *   POST /web/request-info – incoming Request inspection
+ *   GET /web/request-construct – Request constructor semantics
+ *   GET /web/response    – Response constructor semantics
+ *   GET /web/text-encoding – TextEncoder / TextDecoder round-trip
  *   GET /web/math        – Math built-ins (random, floor, ceil, abs, min, max)
  *   GET /web/json        – JSON.stringify / JSON.parse round-trip
  */
@@ -53,6 +54,88 @@ Deno.serve((req) => {
       // available in the flux-runtime isolate's URL implementation.
       const u = new URL("https://api.example.com/v1/users?page=2&limit=10");
       return Response.json({ href: u.href, page: u.searchParams.get("page"), path: u.pathname });
+    }
+
+    case "/web/url-search-params": {
+      const params = new URLSearchParams("tag=alpha&tag=beta&space=hello+world");
+      params.append("extra", "42");
+      params.set("single", "value");
+      return Response.json({
+        tags: params.getAll("tag"),
+        space: params.get("space"),
+        extra: params.get("extra"),
+        hasExtra: params.has("extra"),
+        single: params.get("single"),
+        text: params.toString(),
+      });
+    }
+
+    case "/web/headers": {
+      const headers = new Headers();
+      headers.set("content-type", "application/json");
+      headers.set("x-one", "alpha");
+      headers.append("x-one", "beta");
+      headers.set("x-two", "gamma");
+      return new Response(JSON.stringify({
+        inbound: req.headers.get("x-custom"),
+        caseInsensitive: req.headers.get("X-CUSTOM"),
+        hasJson: req.headers.get("content-type") === "application/json",
+      }), {
+        status: 202,
+        headers,
+      });
+    }
+
+    case "/web/request-info": {
+      return req.text().then((body) => Response.json({
+        isRequest: req instanceof Request,
+        method: req.method,
+        pathname: url.pathname,
+        query: url.searchParams.get("foo"),
+        header: req.headers.get("x-custom"),
+        body,
+      }));
+    }
+
+    case "/web/request-construct": {
+      const built = new Request("https://api.example.com/items?foo=bar", {
+        method: "POST",
+        headers: new Headers([
+          ["content-type", "text/plain"],
+          ["x-extra", "demo"],
+        ]),
+        body: "payload",
+      });
+      return built.text().then((body) => Response.json({
+        isRequest: built instanceof Request,
+        method: built.method,
+        host: new URL(built.url).host,
+        query: new URL(built.url).searchParams.get("foo"),
+        contentType: built.headers.get("content-type"),
+        extra: built.headers.get("x-extra"),
+        body,
+      }));
+    }
+
+    case "/web/response": {
+      return new Response("created", {
+        status: 201,
+        headers: {
+          "content-type": "text/plain",
+          "x-response": "ok",
+        },
+      });
+    }
+
+    case "/web/text-encoding": {
+      const source = "Flux 日本語";
+      const encoded = new TextEncoder().encode(source);
+      const decoded = new TextDecoder().decode(encoded);
+      return Response.json({
+        decoded,
+        byteLength: encoded.length,
+        prefix: Array.from(encoded.slice(0, 4)),
+      });
     }
 
     case "/web/math": {

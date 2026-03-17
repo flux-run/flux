@@ -107,7 +107,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    let code = load_entry_code(&entry)?;
     let name = entry
         .file_name()
         .and_then(|v| v.to_str())
@@ -115,7 +114,7 @@ async fn main() -> Result<()> {
 
     // If flux.json names a bundled output file, prefer it over the raw entry so
     // the runtime executes the single-file bundle (tree-shaken, minified).
-    let (code, name) = if let Some(manifest) = load_flux_manifest(&entry) {
+    let (effective_entry, code, name) = if let Some(manifest) = load_flux_manifest(&entry) {
         if let Some(bundle_rel) = manifest.bundled {
             let bundle_path = entry
                 .parent()
@@ -123,23 +122,22 @@ async fn main() -> Result<()> {
                 .join(&bundle_rel);
             if bundle_path.exists() {
                 tracing::debug!(bundle = %bundle_path.display(), "using bundled entry from flux.json");
-                let bundle_code = std::fs::read_to_string(&bundle_path)
-                    .with_context(|| format!("failed to read bundle {}", bundle_path.display()))?;
+                let bundle_code = load_entry_code(&bundle_path)?;
                 let bundle_name = bundle_path
                     .file_name()
                     .and_then(|v| v.to_str())
                     .unwrap_or(name)
                     .to_string();
-                (bundle_code, bundle_name)
+                (bundle_path, bundle_code, bundle_name)
             } else {
                 tracing::warn!(bundle = %bundle_path.display(), "flux.json bundle path not found, falling back to entry");
-                (code, name.to_string())
+                (entry.clone(), load_entry_code(&entry)?, name.to_string())
             }
         } else {
-            (code, name.to_string())
+            (entry.clone(), load_entry_code(&entry)?, name.to_string())
         }
     } else {
-        (code, name.to_string())
+        (entry.clone(), load_entry_code(&entry)?, name.to_string())
     };
 
     let artifact = runtime::build_artifact(&name, code);
@@ -151,10 +149,11 @@ async fn main() -> Result<()> {
         .to_string();
 
     if args.script_mode {
-        tracing::debug!(entry = %entry.display(), "script mode");
+        tracing::debug!(entry = %effective_entry.display(), "script mode");
         let input: serde_json::Value = serde_json::from_str(&args.script_input)
             .with_context(|| format!("invalid --script-input JSON: {}", args.script_input))?;
-        let mut isolate = runtime::JsIsolate::new_for_run(&artifact.code)
+        let mut isolate = runtime::JsIsolate::new_for_run_entry(&effective_entry)
+            .await
             .context("failed to create JS isolate")?;
         let (output, _logs) = isolate.run_script(input).await
             .context("script execution failed")?;
