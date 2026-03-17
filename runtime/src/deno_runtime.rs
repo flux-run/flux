@@ -1360,19 +1360,7 @@ fn perform_postgres_query_with_client(
         let mut object = serde_json::Map::new();
         for column in row.columns() {
             let key = column.name().to_string();
-            let value = if let Ok(value) = row.try_get::<_, String>(column.name()) {
-                serde_json::Value::String(value)
-            } else if let Ok(value) = row.try_get::<_, i64>(column.name()) {
-                serde_json::json!(value)
-            } else if let Ok(value) = row.try_get::<_, i32>(column.name()) {
-                serde_json::json!(value)
-            } else if let Ok(value) = row.try_get::<_, bool>(column.name()) {
-                serde_json::json!(value)
-            } else if let Ok(value) = row.try_get::<_, f64>(column.name()) {
-                serde_json::json!(value)
-            } else {
-                serde_json::Value::Null
-            };
+            let value = decode_postgres_row_value(&row, column);
             object.insert(key, value);
         }
         rows.push(serde_json::Value::Object(object));
@@ -1431,12 +1419,93 @@ fn box_postgres_param(param: serde_json::Value) -> Result<Box<dyn ToSql + Sync>,
     match param {
         serde_json::Value::Null => Ok(Box::new(Option::<String>::None)),
         serde_json::Value::String(value) => Ok(Box::new(value)),
-        serde_json::Value::Bool(value) => Ok(Box::new(value.to_string())),
-        serde_json::Value::Number(value) => Ok(Box::new(value.to_string())),
+        serde_json::Value::Bool(value) => Ok(Box::new(value)),
+        serde_json::Value::Number(value) => {
+            if let Some(signed) = value.as_i64() {
+                Ok(Box::new(signed))
+            } else if let Some(unsigned) = value.as_u64() {
+                if let Ok(signed) = i64::try_from(unsigned) {
+                    Ok(Box::new(signed))
+                } else {
+                    Ok(Box::new(unsigned.to_string()))
+                }
+            } else if let Some(float) = value.as_f64() {
+                Ok(Box::new(float))
+            } else {
+                Err(JsErrorBox::type_error(format!(
+                    "unsupported postgres numeric parameter: {}",
+                    value
+                )))
+            }
+        }
         other => Err(JsErrorBox::type_error(format!(
             "unsupported postgres parameter type: {}",
             other
         ))),
+    }
+}
+
+fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> serde_json::Value {
+    let name = column.name();
+    let ty = column.type_();
+    let string_value = || {
+        row.try_get::<_, Option<String>>(name)
+            .ok()
+            .flatten()
+    };
+
+    match *ty {
+        postgres::types::Type::BOOL => row
+            .try_get::<_, Option<bool>>(name)
+            .ok()
+            .flatten()
+            .map(serde_json::Value::Bool)
+            .or_else(|| {
+                string_value().and_then(|value| match value.as_str() {
+                    "t" | "true" => Some(serde_json::Value::Bool(true)),
+                    "f" | "false" => Some(serde_json::Value::Bool(false)),
+                    _ => None,
+                })
+            })
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::INT2 => row
+            .try_get::<_, Option<i16>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::json!(value))
+            .or_else(|| string_value().and_then(|value| value.parse::<i16>().ok().map(|parsed| serde_json::json!(parsed))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::INT4 => row
+            .try_get::<_, Option<i32>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::json!(value))
+            .or_else(|| string_value().and_then(|value| value.parse::<i32>().ok().map(|parsed| serde_json::json!(parsed))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::INT8 => row
+            .try_get::<_, Option<i64>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::json!(value))
+            .or_else(|| string_value().and_then(|value| value.parse::<i64>().ok().map(|parsed| serde_json::json!(parsed))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::FLOAT4 => row
+            .try_get::<_, Option<f32>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::json!(value))
+            .or_else(|| string_value().and_then(|value| value.parse::<f32>().ok().map(|parsed| serde_json::json!(parsed))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::FLOAT8 => row
+            .try_get::<_, Option<f64>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::json!(value))
+            .or_else(|| string_value().and_then(|value| value.parse::<f64>().ok().map(|parsed| serde_json::json!(parsed))))
+            .unwrap_or(serde_json::Value::Null),
+        _ => string_value()
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
     }
 }
 

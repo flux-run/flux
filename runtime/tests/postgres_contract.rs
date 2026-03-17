@@ -238,6 +238,69 @@ export default function handler({ input }) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_query_preserves_native_scalar_params_and_bool_null_results() -> Result<()> {
+    let _lock = postgres_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let (port, shutdown_tx, server_task) = spawn_mock_postgres_mixed_types_server().await?;
+
+    let code = r#"
+export default function handler({ input }) {
+  const result = Flux.postgres.query({
+    connectionString: input.connectionString,
+    sql: input.sql,
+    params: input.params,
+  });
+
+  return {
+    rows: result.rows,
+    command: result.command,
+    replay: result.replay,
+  };
+}
+"#;
+
+    let payload = serde_json::json!({
+        "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
+        "sql": "select ($1::int8 is not null) as has_n, $2::boolean as flag, ($3::float8 is not null) as has_ratio, $4::text as note, null::int8 as empty",
+        "params": [42, true, 3.5, "hello"],
+    });
+
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create postgres mixed-type isolate")?;
+    let live_output = isolate
+        .execute(payload.clone(), ExecutionContext::new("postgres-mixed-types-live"))
+        .await
+        .context("live postgres mixed-type execution failed")?;
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("mock postgres mixed-type server task failed")??;
+
+    assert_eq!(live_output.error, None);
+    assert_eq!(
+        live_output.output,
+        serde_json::json!({
+            "rows": [{ "has_n": true, "flag": true, "has_ratio": true, "note": "hello", "empty": null }],
+            "command": "QUERY",
+            "replay": false,
+        })
+    );
+
+    let recorded = live_output.checkpoints.clone();
+    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create postgres mixed-type replay isolate")?;
+    let mut replay_context = ExecutionContext::new("postgres-mixed-types-replay");
+    replay_context.mode = ExecutionMode::Replay;
+    let replay_output = replay_isolate
+        .execute_with_recorded(payload, replay_context, recorded)
+        .await
+        .context("replay postgres mixed-type execution failed")?;
+
+    assert_eq!(replay_output.error, None);
+    assert_eq!(replay_output.output.get("rows"), live_output.output.get("rows"));
+    assert_eq!(replay_output.output.get("replay"), Some(&serde_json::json!(true)));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_simple_query_supports_tls_with_custom_ca_and_replay() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
@@ -643,6 +706,100 @@ async fn spawn_mock_postgres_transaction_server() -> Result<(u16, oneshot::Sende
     Ok((port, shutdown_tx, task))
 }
 
+async fn spawn_mock_postgres_mixed_types_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind mock postgres mixed-types listener")?;
+    let port = listener
+        .local_addr()
+        .context("failed to get mock postgres mixed-types addr")?
+        .port();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = &mut shutdown_rx => Ok(()),
+            accepted = listener.accept() => {
+                let (mut socket, _) = accepted.context("failed to accept postgres mixed-types client")?;
+
+                let _startup = read_startup_message(&mut socket).await?;
+                write_authentication_ok(&mut socket).await?;
+                write_parameter_status(&mut socket, b"client_encoding", b"UTF8").await?;
+                write_parameter_status(&mut socket, b"server_version", b"16.0").await?;
+                write_backend_key_data(&mut socket).await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let parse = read_typed_message(&mut socket).await?;
+                if parse.tag != b'P' {
+                    anyhow::bail!("expected Parse message, got {:?}", parse.tag as char);
+                }
+                let sql = parse_parse_sql(&parse.payload)?;
+                if sql != "select ($1::int8 is not null) as has_n, $2::boolean as flag, ($3::float8 is not null) as has_ratio, $4::text as note, null::int8 as empty" {
+                    anyhow::bail!("unexpected mixed-types SQL: {sql}");
+                }
+
+                let describe = read_typed_message(&mut socket).await?;
+                if describe.tag != b'D' {
+                    anyhow::bail!("expected Describe message, got {:?}", describe.tag as char);
+                }
+                let sync = read_typed_message(&mut socket).await?;
+                if sync.tag != b'S' {
+                    anyhow::bail!("expected Sync after Parse/Describe, got {:?}", sync.tag as char);
+                }
+
+                write_message(&mut socket, b'1', |_| {}).await?;
+                write_parameter_description(&mut socket, &[20, 16, 701, 25]).await?;
+                write_row_description_columns(
+                    &mut socket,
+                    &[(b"has_n", 16), (b"flag", 16), (b"has_ratio", 16), (b"note", 25), (b"empty", 20)],
+                ).await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let bind = read_typed_message(&mut socket).await?;
+                if bind.tag != b'B' {
+                    anyhow::bail!("expected Bind message, got {:?}", bind.tag as char);
+                }
+                let params = parse_bind_params_for_types(&bind.payload, &["int8", "bool", "float8", "text"])?;
+                assert_eq!(params, vec![Some("42".to_string()), Some("t".to_string()), Some("3.5".to_string()), Some("hello".to_string())]);
+
+                let execute = read_typed_message(&mut socket).await?;
+                if execute.tag != b'E' {
+                    anyhow::bail!("expected Execute message, got {:?}", execute.tag as char);
+                }
+                let sync = read_typed_message(&mut socket).await?;
+                if sync.tag != b'S' {
+                    anyhow::bail!("expected Sync after Execute, got {:?}", sync.tag as char);
+                }
+
+                write_message(&mut socket, b'2', |_| {}).await?;
+                write_data_row_opt(&mut socket, &[Some(b"t"), Some(b"t"), Some(b"t"), Some(b"hello"), None]).await?;
+                write_command_complete(&mut socket, b"SELECT 1").await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let next = read_typed_message(&mut socket).await?;
+                if next.tag == b'C' {
+                    let sync = read_typed_message(&mut socket).await?;
+                    if sync.tag != b'S' {
+                        anyhow::bail!("expected Sync after Close, got {:?}", sync.tag as char);
+                    }
+                    write_message(&mut socket, b'3', |_| {}).await?;
+                    write_ready_for_query(&mut socket).await?;
+
+                    let terminate = read_typed_message(&mut socket).await?;
+                    if terminate.tag != b'X' {
+                        anyhow::bail!("expected Terminate message, got {:?}", terminate.tag as char);
+                    }
+                } else if next.tag != b'X' {
+                    anyhow::bail!("expected Close or Terminate message, got {:?}", next.tag as char);
+                }
+                Ok(())
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx, task))
+}
+
 async fn spawn_mock_postgres_tls_server(
     acceptor: TlsAcceptor,
 ) -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
@@ -783,29 +940,63 @@ async fn write_row_description<S>(socket: &mut S, column_name: &[u8]) -> Result<
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    write_row_description_columns(socket, &[(column_name, 25)]).await
+}
+
+async fn write_row_description_columns<S>(socket: &mut S, columns: &[(&[u8], u32)]) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b'T', |buf| {
-        buf.extend_from_slice(&1u16.to_be_bytes());
-        buf.extend_from_slice(column_name);
-        buf.push(0);
-        buf.extend_from_slice(&0u32.to_be_bytes());
-        buf.extend_from_slice(&0u16.to_be_bytes());
-        buf.extend_from_slice(&25u32.to_be_bytes());
-        buf.extend_from_slice(&(-1i16).to_be_bytes());
-        buf.extend_from_slice(&(-1i32).to_be_bytes());
-        buf.extend_from_slice(&0u16.to_be_bytes());
+        buf.extend_from_slice(&(columns.len() as u16).to_be_bytes());
+        for (column_name, oid) in columns {
+            let type_size = postgres_type_size(*oid);
+            buf.extend_from_slice(column_name);
+            buf.push(0);
+            buf.extend_from_slice(&0u32.to_be_bytes());
+            buf.extend_from_slice(&0u16.to_be_bytes());
+            buf.extend_from_slice(&oid.to_be_bytes());
+            buf.extend_from_slice(&type_size.to_be_bytes());
+            buf.extend_from_slice(&(-1i32).to_be_bytes());
+            buf.extend_from_slice(&0u16.to_be_bytes());
+        }
     })
     .await
+}
+
+fn postgres_type_size(oid: u32) -> i16 {
+    match oid {
+        16 => 1,
+        20 => 8,
+        21 => 2,
+        23 => 4,
+        700 => 4,
+        701 => 8,
+        _ => -1,
+    }
 }
 
 async fn write_data_row<S>(socket: &mut S, values: &[&[u8]]) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    write_data_row_opt(socket, &values.iter().map(|value| Some(*value)).collect::<Vec<_>>()).await
+}
+
+async fn write_data_row_opt<S>(socket: &mut S, values: &[Option<&[u8]>]) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b'D', |buf| {
         buf.extend_from_slice(&(values.len() as u16).to_be_bytes());
         for value in values {
-            buf.extend_from_slice(&(value.len() as i32).to_be_bytes());
-            buf.extend_from_slice(value);
+            match value {
+                Some(value) => {
+                    buf.extend_from_slice(&(value.len() as i32).to_be_bytes());
+                    buf.extend_from_slice(value);
+                }
+                None => buf.extend_from_slice(&(-1i32).to_be_bytes()),
+            }
         }
     })
     .await
@@ -849,28 +1040,82 @@ fn parse_bind_first_text_param(payload: &[u8]) -> Result<String> {
 }
 
 fn parse_bind_first_text_param_opt(payload: &[u8]) -> Result<Option<String>> {
+    let params = parse_bind_text_params(payload)?;
+    Ok(params.into_iter().next().unwrap_or(None))
+}
+
+fn parse_bind_text_params(payload: &[u8]) -> Result<Vec<Option<String>>> {
+    parse_bind_params_for_types(payload, &[])
+}
+
+fn parse_bind_params_for_types(payload: &[u8], expected_types: &[&str]) -> Result<Vec<Option<String>>> {
     let mut idx = 0usize;
     idx = skip_c_string(payload, idx)?;
     idx = skip_c_string(payload, idx)?;
 
     let format_count = read_u16(payload, &mut idx)? as usize;
-    idx = idx.saturating_add(format_count * 2);
+    let mut format_codes = Vec::with_capacity(format_count);
+    for _ in 0..format_count {
+        format_codes.push(read_u16(payload, &mut idx)?);
+    }
 
     let param_count = read_u16(payload, &mut idx)? as usize;
-    if param_count == 0 {
-        return Ok(None);
+    let mut params = Vec::with_capacity(param_count);
+    for _ in 0..param_count {
+        let param_len = read_i32(payload, &mut idx)?;
+        if param_len < 0 {
+            params.push(None);
+            continue;
+        }
+        let len = param_len as usize;
+        let end = idx.saturating_add(len);
+        if end > payload.len() {
+            anyhow::bail!("bind payload parameter truncated");
+        }
+        let param_index = params.len();
+        let format_code = if format_codes.is_empty() {
+            0
+        } else if format_codes.len() == 1 {
+            format_codes[0]
+        } else {
+            *format_codes.get(param_index).ok_or_else(|| anyhow::anyhow!("missing bind format code for parameter"))?
+        };
+        let bytes = &payload[idx..end];
+        let value = decode_bind_param_to_string(bytes, format_code, expected_types.get(param_index).copied())?;
+        idx = end;
+        params.push(value);
+    }
+    Ok(params)
+}
+
+fn decode_bind_param_to_string(bytes: &[u8], format_code: u16, expected_type: Option<&str>) -> Result<Option<String>> {
+    if format_code == 0 {
+        return Ok(Some(String::from_utf8(bytes.to_vec()).context("invalid bind parameter utf8")?));
     }
 
-    let param_len = read_i32(payload, &mut idx)?;
-    if param_len < 0 {
-        return Ok(None);
-    }
-    let len = param_len as usize;
-    let end = idx.saturating_add(len);
-    if end > payload.len() {
-        anyhow::bail!("bind payload parameter truncated");
-    }
-    let value = String::from_utf8(payload[idx..end].to_vec()).context("invalid bind parameter utf8")?;
+    let value = match expected_type {
+        Some("bool") => {
+            if bytes.len() != 1 {
+                anyhow::bail!("invalid binary bool bind length: {}", bytes.len());
+            }
+            if bytes[0] == 0 { "f".to_string() } else { "t".to_string() }
+        }
+        Some("int8") => {
+            if bytes.len() != 8 {
+                anyhow::bail!("invalid binary int8 bind length: {}", bytes.len());
+            }
+            i64::from_be_bytes(bytes.try_into().expect("checked int8 width")).to_string()
+        }
+        Some("float8") => {
+            if bytes.len() != 8 {
+                anyhow::bail!("invalid binary float8 bind length: {}", bytes.len());
+            }
+            f64::from_bits(u64::from_be_bytes(bytes.try_into().expect("checked float8 width"))).to_string()
+        }
+        Some("text") | None => String::from_utf8(bytes.to_vec()).context("invalid binary text bind utf8")?,
+        Some(other) => anyhow::bail!("unsupported expected bind type: {other}"),
+    };
+
     Ok(Some(value))
 }
 
