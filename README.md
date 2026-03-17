@@ -74,8 +74,8 @@ flux init --auth
 # development entrypoint with reload
 flux dev
 
-# build and serve the deterministic artifact
-flux build
+# build first; Flux v1 runs bundled artifacts
+flux build index.ts
 flux serve index.ts
 
 # send a request
@@ -92,6 +92,8 @@ The experience is:
 - one project
 - one runtime
 - one place to inspect what happened
+
+For framework apps and npm dependencies, the intended v1 path is bundled artifacts. See [docs/bundled-artifacts.md](docs/bundled-artifacts.md).
 
 ## Product Positioning
 

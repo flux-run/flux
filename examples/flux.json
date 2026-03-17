@@ -1,0 +1,5 @@
+{
+  "flux_version": "0.2",
+  "entry": "./drizzle-basic.ts",
+  "artifact": "./.flux/artifact.json"
+}

@@ -2,6 +2,13 @@
 
 Flux now exposes a small `pg`-shaped shim on top of `Flux.postgres.query(...)` for Drizzle's normal query path.
 
+Use this through the bundled-artifact workflow:
+
+```bash
+flux build app.ts
+flux serve app.ts
+```
+
 Use the included example module at [examples/flux-pg.js](../../examples/flux-pg.js):
 
 ```js
