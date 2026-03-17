@@ -15,6 +15,8 @@ pub struct ReplayArgs {
     pub commit: bool,
     #[arg(long)]
     pub validate: bool,
+    #[arg(long)]
+    pub explain: bool,
     #[arg(long, value_name = "INDEX")]
     pub from_index: Option<i32>,
     #[arg(long, value_name = "URL")]
@@ -63,6 +65,15 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     } else {
         "\x1b[31m✗\x1b[0m"
     };
+
+    if args.explain {
+        print_explain_view(short_id, &response, args.validate);
+        if args.validate && response.divergence.is_some() {
+            std::process::exit(REPLAY_DIVERGENCE_EXIT_CODE);
+        }
+        return Ok(());
+    }
+
     println!(
         "  {}  {}  {}ms",
         status_symbol, response.status, response.duration_ms
@@ -294,4 +305,95 @@ fn sanitize_replay_error(raw: &str) -> String {
     } else {
         lines.join("\n         ")
     }
+}
+
+fn print_explain_view(
+    short_id: &str,
+    response: &crate::grpc::ReplayView,
+    validate: bool,
+) {
+    println!("  Execution Replay ({})", short_id);
+    println!();
+
+    let status_label = if response.status == "ok" {
+        "ok"
+    } else {
+        "error"
+    };
+
+    println!("  status      {}", status_label);
+    println!("  duration    {}ms", response.duration_ms);
+    if validate {
+        println!("  validation  enabled");
+    }
+
+    println!();
+    for step in &response.steps {
+        let summary = match (step.source.as_str(), step.validated) {
+            ("recorded", _) => "recorded".to_string(),
+            ("live", true) => "live (validated)".to_string(),
+            ("live", false) => "live".to_string(),
+            _ => step.source.clone(),
+        };
+
+        let diverged = response
+            .divergence
+            .as_ref()
+            .map(|divergence| divergence.checkpoint_index == step.call_index)
+            .unwrap_or(false);
+
+        if diverged {
+            println!(
+                "  [{}] {} {}  {}ms  {}  DIVERGED",
+                step.call_index,
+                step.boundary.to_lowercase(),
+                step.url,
+                step.duration_ms,
+                summary,
+            );
+        } else {
+            println!(
+                "  [{}] {} {}  {}ms  {}",
+                step.call_index,
+                step.boundary.to_lowercase(),
+                step.url,
+                step.duration_ms,
+                summary,
+            );
+        }
+    }
+
+    if let Some(divergence) = &response.divergence {
+        println!();
+        println!("  First Divergence");
+        println!(
+            "  [{}] {} {}",
+            divergence.checkpoint_index,
+            divergence.boundary.to_lowercase(),
+            divergence.url,
+        );
+
+        if divergence.diffs.is_empty() {
+            println!("    expected  {}", divergence.expected_json);
+            println!("    actual    {}", divergence.actual_json);
+        } else {
+            for diff in &divergence.diffs {
+                println!("    {}", diff.path);
+                println!("      expected  {}", diff.expected_json);
+                println!("      actual    {}", diff.actual_json);
+            }
+        }
+    }
+
+    if !response.error.is_empty() {
+        println!();
+        println!("  error  {}", sanitize_replay_error(&response.error));
+    }
+
+    if !response.output.is_empty() && response.output != "null" {
+        println!();
+        println!("  output  {}", response.output);
+    }
+
+    println!();
 }

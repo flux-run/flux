@@ -108,6 +108,7 @@ flux why <execution_id>
 flux replay <execution_id>
 flux replay <execution_id> --from-index 1 --diff
 flux replay <execution_id> --commit --validate
+flux replay <execution_id> --commit --validate --explain
 flux resume <execution_id>
 flux resume <execution_id> --from 2
 ```
@@ -115,6 +116,8 @@ flux resume <execution_id> --from 2
 `flux replay --commit --validate` turns live replay divergence into a loud failure: if a live HTTP checkpoint result differs from the recorded checkpoint result, replay is marked as an error instead of silently drifting.
 
 When validated replay detects divergence, `flux` exits with code `2`. This makes replay validation usable in CI and automation.
+
+`flux replay --explain` renders replay as an execution narrative: each checkpoint shows whether it came from recorded history or live execution, whether live execution validated successfully, and where the first divergence occurred.
 
 ## One-Off Local Run
 
