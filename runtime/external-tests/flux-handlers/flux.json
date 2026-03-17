@@ -1,5 +1,5 @@
 {
   "flux_version": "0.2",
-  "entry": "./hono-hello.ts",
+  "entry": "./error-handling.js",
   "artifact": "./.flux/artifact.json"
 }

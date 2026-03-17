@@ -90,6 +90,27 @@ export function ensureBinary(opts: { force?: boolean; quiet?: boolean } = {}): v
 }
 
 // ---------------------------------------------------------------------------
+// Artifact build
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a Flux artifact for the given entry using the real `flux build` CLI.
+ * Throws if the build fails.
+ */
+export function buildArtifact(entryAbsPath: string, opts: { quiet?: boolean } = {}): void {
+  const result = spawnSync(FLUX_CLI_BIN, ["build", entryAbsPath], {
+    cwd: WORKSPACE_ROOT,
+    stdio: opts.quiet ? "pipe" : "inherit",
+    env: { ...process.env, SQLX_OFFLINE: "true" },
+  });
+
+  if (result.status !== 0) {
+    const stderr = result.stderr?.toString() ?? "";
+    throw new Error(`flux build failed for ${entryAbsPath} (exit ${result.status})\n${stderr}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 

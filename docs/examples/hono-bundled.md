@@ -10,7 +10,7 @@ import { Hono } from "npm:hono";
 const app = new Hono();
 
 app.get("/", (c) => c.text("hello from hono on flux"));
-app.get("/health", (c) => c.json({ ok: true }));
+app.get("/app-health", (c) => c.json({ ok: true }));
 
 Deno.serve(app.fetch);
 ```
@@ -26,7 +26,7 @@ Then hit it:
 
 ```bash
 curl http://localhost:3000/hono-hello/
-curl http://localhost:3000/hono-hello/health
+curl http://localhost:3000/hono-hello/app-health
 ```
 
 Why this shape works well in Flux:

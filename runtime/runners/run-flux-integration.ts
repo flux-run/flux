@@ -25,15 +25,18 @@ import { dirname }       from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ensureBinary,
+  buildArtifact,
   startRuntime,
   postJson,
   get,
+  WORKSPACE_ROOT,
   type RuntimeHandle,
 } from "./lib/flux-binary.js";
 import { TestResult, buildReport, writeReport, printSummary } from "./lib/utils.js";
 
 const __dirname   = dirname(fileURLToPath(import.meta.url));
 const HANDLERS_DIR = resolve(__dirname, "../external-tests/flux-handlers");
+const EXAMPLES_DIR = resolve(WORKSPACE_ROOT, "examples");
 
 // Each suite gets its own port in the 3100-3199 range so suites can run
 // sequentially without port conflicts when multiple are enabled.
@@ -85,16 +88,19 @@ function assert(
 interface Suite {
   name:    string;
   handler: string;   // filename inside HANDLERS_DIR
+  handlerBaseDir?: "handlers" | "examples";
   run: (baseUrl: string, ctx: AssertionContext) => Promise<void>;
 }
 
 async function runSuite(suite: Suite): Promise<{ passed: number; failed: number; results: TestResult[] }> {
   const port    = allocatePort();
-  const entry   = resolve(HANDLERS_DIR, suite.handler);
+  const entryBaseDir = suite.handlerBaseDir === "examples" ? EXAMPLES_DIR : HANDLERS_DIR;
+  const entry   = resolve(entryBaseDir, suite.handler);
   const ctx: AssertionContext = { results: [] };
 
   let runtime: RuntimeHandle | null = null;
   try {
+    buildArtifact(entry, { quiet: true });
     runtime = await startRuntime(entry, port);
     await suite.run(runtime.baseUrl, ctx);
   } catch (err) {
@@ -314,6 +320,31 @@ const SUITES: Suite[] = [
         const b = r.body as any;
         assert(ctx, "GET /web/json → JSON round-trip match", () => b?.match === true);
         assert(ctx, "GET /web/json → json field is string", () => typeof b?.json === "string");
+      }
+    },
+  },
+
+  // ── 6. Bundled framework app ───────────────────────────────────────────
+  {
+    name: "bundled-hono",
+    handler: "hono-hello.ts",
+    handlerBaseDir: "examples",
+    async run(baseUrl, ctx) {
+      {
+        const res = await fetch(`${baseUrl}/`, {
+          headers: { host: "localhost" },
+        });
+        const text = await res.text();
+        assert(ctx, "GET / → 200", () => res.status === 200);
+        assert(ctx, "GET / → hono text body", () => text === "hello from hono on flux");
+      }
+      {
+        const res = await fetch(`${baseUrl}/app-health`, {
+          headers: { host: "localhost" },
+        });
+        const body = await res.json() as any;
+        assert(ctx, "GET /app-health → 200", () => res.status === 200);
+        assert(ctx, "GET /app-health → json ok:true", () => body?.ok === true);
       }
     },
   },
