@@ -1,12 +1,14 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::io::Read;
-use std::net::{IpAddr, ToSocketAddrs};
+use std::io::{Read, Write};
+use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use base64::Engine;
 use deno_ast::{EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileModuleOptions, TranspileOptions};
 use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind, RuntimeOptions, op2, resolve_import, resolve_path};
 use deno_error::JsErrorBox;
@@ -36,6 +38,9 @@ const BLOCKED_HOSTS: &[&str] = &[
     "169.254.170.2",
 ];
 
+const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_READ_TIMEOUT_MS: u64 = 5_000;
+
 /// Validate that a URL is safe to fetch — blocks SSRF to cloud metadata and private IPs.
 fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), JsErrorBox> {
     let parsed = url::Url::parse(raw_url)
@@ -64,6 +69,48 @@ fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), JsErrorBox> {
             for addr in resolved {
                 validate_ip_addr(&addr.ip(), allow_loopback)?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_outbound_host(
+    host: &str,
+    port: u16,
+    blocked_label: &str,
+    allow_env_var: &str,
+) -> std::result::Result<(), JsErrorBox> {
+    for blocked in BLOCKED_HOSTS {
+        if host == *blocked {
+            return Err(JsErrorBox::generic(format!(
+                "{blocked_label} blocked: {host} is a restricted endpoint"
+            )));
+        }
+    }
+
+    let allow_loopback = std::env::var(allow_env_var)
+        .map(|value| value == "1")
+        .unwrap_or(false);
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        validate_ip_addr(&ip, allow_loopback).map_err(|_| {
+            JsErrorBox::new(
+                "Error",
+                format!("{blocked_label} blocked: private/loopback IP addresses are not allowed"),
+            )
+        })?;
+        return Ok(());
+    }
+
+    if let Ok(resolved) = (host, port).to_socket_addrs() {
+        for addr in resolved {
+            validate_ip_addr(&addr.ip(), allow_loopback).map_err(|_| {
+                JsErrorBox::new(
+                    "Error",
+                    format!("{blocked_label} blocked: private/loopback IP addresses are not allowed"),
+                )
+            })?;
         }
     }
 
@@ -145,6 +192,24 @@ struct FetchRequestPayload {
     headers: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct TcpExchangeRequestPayload {
+    execution_id: String,
+    host: String,
+    port: u16,
+    #[serde(default)]
+    write_bytes: Vec<u8>,
+    #[serde(default = "default_tcp_read_mode")]
+    read_mode: String,
+    read_bytes: Option<usize>,
+    connect_timeout_ms: Option<u64>,
+    read_timeout_ms: Option<u64>,
+}
+
+fn default_tcp_read_mode() -> String {
+    "until_close".to_string()
+}
+
 /// A virtual HTTP request fed into a server-mode isolate by the Rust host.
 #[derive(Debug, Clone)]
 pub struct NetRequest {
@@ -209,6 +274,7 @@ deno_core::extension!(flux_runtime_ext, ops = [
     op_begin_execution,
     op_end_execution,
     op_flux_fetch,
+    op_flux_tcp_exchange,
     op_flux_now,
     op_flux_parse_url,
     op_console,
@@ -385,6 +451,212 @@ fn op_flux_fetch(
 
     tracing::debug!(%request_id, %call_index, original_url = %original_url, resolved_url = %target_url, "intercepted fetch");
     Ok(response)
+}
+
+#[op2]
+#[serde]
+fn op_flux_tcp_exchange(
+    state: &mut OpState,
+    #[serde] request: serde_json::Value,
+) -> Result<serde_json::Value, JsErrorBox> {
+    let TcpExchangeRequestPayload {
+        execution_id,
+        host,
+        port,
+        write_bytes,
+        read_mode,
+        read_bytes,
+        connect_timeout_ms,
+        read_timeout_ms,
+    } = serde_json::from_value(request)
+        .map_err(|err| JsErrorBox::type_error(format!("invalid tcp exchange request: {err}")))?;
+
+    let (request_id, call_index, mode, recorded_checkpoint) = {
+        let map = state.borrow_mut::<RuntimeStateMap>();
+        let execution = map.get_mut(&execution_id).ok_or_else(|| {
+            JsErrorBox::new(
+                "InternalError",
+                format!("op_flux_tcp_exchange: execution_id '{execution_id}' not found"),
+            )
+        })?;
+        let idx = execution.call_index;
+        execution.call_index = execution.call_index.saturating_add(1);
+        let recorded = execution.recorded.remove(&idx);
+        (
+            execution.context.request_id.clone(),
+            idx,
+            execution.context.mode.clone(),
+            recorded,
+        )
+    };
+
+    validate_outbound_host(&host, port, "tcp connect", "FLOWBASE_ALLOW_LOOPBACK_TCP")?;
+
+    if matches!(mode, ExecutionMode::Replay) {
+        if let Some(checkpoint) = recorded_checkpoint {
+            let response = checkpoint.response.clone();
+            let bytes = decode_checkpoint_bytes(&response, "response_base64")?;
+            {
+                let map = state.borrow_mut::<RuntimeStateMap>();
+                if let Some(execution) = map.get_mut(&execution_id) {
+                    execution.checkpoints.push(FetchCheckpoint {
+                        call_index,
+                        boundary: checkpoint.boundary,
+                        url: checkpoint.url,
+                        method: checkpoint.method,
+                        request: checkpoint.request,
+                        response: response.clone(),
+                        duration_ms: checkpoint.duration_ms,
+                    });
+                }
+            }
+            tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: returned recorded tcp exchange");
+            return Ok(serde_json::json!({
+                "bytes": bytes,
+                "replay": true,
+            }));
+        }
+        tracing::warn!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded tcp checkpoint, making live exchange");
+    }
+
+    let request_json = serde_json::json!({
+        "host": host,
+        "port": port,
+        "write_base64": base64::engine::general_purpose::STANDARD.encode(&write_bytes),
+        "read_mode": read_mode,
+        "read_bytes": read_bytes,
+    });
+
+    let started = std::time::Instant::now();
+    let response_bytes = make_tcp_exchange(
+        &host,
+        port,
+        &write_bytes,
+        &read_mode,
+        read_bytes,
+        connect_timeout_ms,
+        read_timeout_ms,
+    )?;
+    let duration_ms = started.elapsed().as_millis() as i32;
+
+    let response_json = serde_json::json!({
+        "host": host,
+        "port": port,
+        "response_base64": base64::engine::general_purpose::STANDARD.encode(&response_bytes),
+        "bytes_read": response_bytes.len(),
+        "replay": false,
+    });
+
+    {
+        let map = state.borrow_mut::<RuntimeStateMap>();
+        if let Some(execution) = map.get_mut(&execution_id) {
+            execution.checkpoints.push(FetchCheckpoint {
+                call_index,
+                boundary: "tcp".to_string(),
+                url: format!("tcp://{}:{}", host, port),
+                method: "exchange".to_string(),
+                request: request_json,
+                response: response_json,
+                duration_ms,
+            });
+        }
+    }
+
+    tracing::debug!(%request_id, %call_index, host = %host, port = %port, "intercepted tcp exchange");
+
+    Ok(serde_json::json!({
+        "bytes": response_bytes,
+        "replay": false,
+    }))
+}
+
+fn decode_checkpoint_bytes(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<Vec<u8>, JsErrorBox> {
+    let encoded = value
+        .get(field)
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| JsErrorBox::type_error(format!("recorded tcp checkpoint missing {field}")))?;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|err| JsErrorBox::type_error(format!("invalid recorded tcp payload: {err}")))
+}
+
+fn make_tcp_exchange(
+    host: &str,
+    port: u16,
+    write_bytes: &[u8],
+    read_mode: &str,
+    read_bytes: Option<usize>,
+    connect_timeout_ms: Option<u64>,
+    read_timeout_ms: Option<u64>,
+) -> Result<Vec<u8>, JsErrorBox> {
+    let connect_timeout = Duration::from_millis(connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS));
+    let read_timeout = Duration::from_millis(read_timeout_ms.unwrap_or(DEFAULT_READ_TIMEOUT_MS));
+
+    let mut addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(|err| JsErrorBox::type_error(format!("tcp connect failed: {err}")))?;
+    let addr = addrs
+        .next()
+        .ok_or_else(|| JsErrorBox::type_error("tcp connect failed: no resolved address"))?;
+
+    let mut stream = TcpStream::connect_timeout(&addr, connect_timeout)
+        .map_err(|err| JsErrorBox::type_error(format!("tcp connect failed: {err}")))?;
+    stream
+        .set_read_timeout(Some(read_timeout))
+        .map_err(|err| JsErrorBox::type_error(format!("tcp read timeout setup failed: {err}")))?;
+    stream
+        .set_write_timeout(Some(connect_timeout))
+        .map_err(|err| JsErrorBox::type_error(format!("tcp write timeout setup failed: {err}")))?;
+
+    if !write_bytes.is_empty() {
+        stream
+            .write_all(write_bytes)
+            .map_err(|err| JsErrorBox::type_error(format!("tcp write failed: {err}")))?;
+    }
+
+    stream
+        .shutdown(Shutdown::Write)
+        .map_err(|err| JsErrorBox::type_error(format!("tcp shutdown failed: {err}")))?;
+
+    match read_mode {
+        "until_close" => {
+            let mut bytes = Vec::new();
+            stream
+                .take((MAX_RESPONSE_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|err| JsErrorBox::type_error(format!("tcp read failed: {err}")))?;
+
+            if bytes.len() > MAX_RESPONSE_BYTES {
+                return Err(JsErrorBox::type_error(format!(
+                    "tcp response too large: {} bytes exceeds {MAX_RESPONSE_BYTES} byte limit",
+                    bytes.len()
+                )));
+            }
+
+            Ok(bytes)
+        }
+        "fixed" => {
+            let expected = read_bytes.ok_or_else(|| {
+                JsErrorBox::type_error("tcp fixed read mode requires readBytes")
+            })?;
+            if expected > MAX_RESPONSE_BYTES {
+                return Err(JsErrorBox::type_error(format!(
+                    "tcp response too large: {expected} bytes exceeds {MAX_RESPONSE_BYTES} byte limit"
+                )));
+            }
+            let mut bytes = vec![0; expected];
+            stream
+                .read_exact(&mut bytes)
+                .map_err(|err| JsErrorBox::type_error(format!("tcp read failed: {err}")))?;
+            Ok(bytes)
+        }
+        other => Err(JsErrorBox::type_error(format!(
+            "unsupported tcp read mode: {other}"
+        ))),
+    }
 }
 
 /// Returns current time as milliseconds since Unix epoch.
@@ -2749,6 +3021,36 @@ globalThis.clearInterval = (timerId) => {
 
 // ── Math.random ─────────────────────────────────────────────────────────────
 Math.random = () => Deno.core.ops.op_random(__flux_eid());
+
+// ── Flux.net (deterministic outbound TCP) ───────────────────────────────────
+globalThis.Flux = globalThis.Flux || {};
+globalThis.Flux.net = globalThis.Flux.net || {};
+globalThis.Flux.net.tcpExchange = function(options = {}) {
+    const encodedText = Array.from(new TextEncoder().encode(options.text ?? ""));
+    const inputBytes = ArrayBuffer.isView(options.data)
+        ? Array.from(new Uint8Array(options.data.buffer, options.data.byteOffset, options.data.byteLength))
+        : Array.isArray(options.data)
+            ? options.data
+            : encodedText;
+
+    const response = Deno.core.ops.op_flux_tcp_exchange({
+        execution_id: __flux_eid(),
+        host: String(options.host ?? ""),
+        port: Number(options.port ?? 0),
+        write_bytes: inputBytes,
+        read_mode: options.readMode ?? "until_close",
+        read_bytes: options.readBytes ?? null,
+        connect_timeout_ms: options.connectTimeoutMs ?? null,
+        read_timeout_ms: options.readTimeoutMs ?? null,
+    });
+
+    const bytes = Uint8Array.from(response.bytes ?? []);
+    return {
+        bytes,
+        replay: !!response.replay,
+        text: new TextDecoder().decode(bytes),
+    };
+};
 
 // ── Deno.serve (server mode) ─────────────────────────────────────────────────
 globalThis.__flux_net_handler = null;

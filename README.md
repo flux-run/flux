@@ -19,6 +19,7 @@ Flux records every execution as a single unit:
 
 - the input, output, and error
 - every outbound IO call with its request, response, and duration
+	- currently includes buffered HTTP fetches and deterministic TCP exchanges
 - the total duration and HTTP status
 
 Debugging starts from one execution ID:
