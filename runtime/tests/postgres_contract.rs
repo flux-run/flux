@@ -634,6 +634,96 @@ export default async function handler({ input }) {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_node_pg_pool_applies_temporal_and_uuid_type_parsers() -> Result<()> {
+    let _lock = postgres_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let (port, shutdown_tx, server_task) = spawn_mock_postgres_temporal_result_server().await?;
+
+    let code = r#"
+export default async function handler({ input }) {
+    const types = Flux.postgres.nodePgTypes;
+    types.setTypeParser(types.builtins.DATE, (value) => `date:${value}`);
+    types.setTypeParser(types.builtins.TIMESTAMP, (value) => value.replace(" ", "T"));
+    types.setTypeParser(types.builtins.TIMESTAMPTZ, (value) => ({ utc: value.endsWith("+00") }));
+    types.setTypeParser(types.builtins.INTERVAL, (value) => value.split(" ")[0]);
+    types.setTypeParser(types.builtins.UUID, (value) => value.toUpperCase());
+
+    const pool = Flux.postgres.createNodePgPool({
+        connectionString: input.connectionString,
+    });
+    const result = await pool.query(input.sql);
+    await pool.end();
+
+    return {
+        rows: result.rows,
+        fields: result.fields,
+        builtins: {
+            date: types.builtins.DATE,
+            time: types.builtins.TIME,
+            timetz: types.builtins.TIMETZ,
+            uuid: types.builtins.UUID,
+        },
+    };
+}
+"#;
+
+    let payload = serde_json::json!({
+        "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
+        "sql": "select '2026-03-17'::date as created_on, '2026-03-17 12:34:56'::timestamp as created_at, '2026-03-17 12:34:56+00'::timestamptz as created_at_utc, '2 days 03:04:05'::interval as elapsed, '123e4567-e89b-12d3-a456-426614174000'::uuid as id",
+    });
+
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg temporal parser isolate")?;
+    let live_output = isolate
+        .execute(payload.clone(), ExecutionContext::new("postgres-node-pg-temporal-live"))
+        .await
+        .context("node-pg temporal parser execution failed")?;
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("mock postgres temporal server task failed")??;
+
+    assert_eq!(live_output.error, None);
+    assert_eq!(
+        live_output.output,
+        serde_json::json!({
+            "rows": [{
+                "created_on": "date:2026-03-17",
+                "created_at": "2026-03-17T12:34:56",
+                "created_at_utc": { "utc": true },
+                "elapsed": "2",
+                "id": "123E4567-E89B-12D3-A456-426614174000",
+            }],
+            "fields": [
+                { "name": "created_on", "dataTypeID": 1082, "format": "text" },
+                { "name": "created_at", "dataTypeID": 1114, "format": "text" },
+                { "name": "created_at_utc", "dataTypeID": 1184, "format": "text" },
+                { "name": "elapsed", "dataTypeID": 1186, "format": "text" },
+                { "name": "id", "dataTypeID": 2950, "format": "text" },
+            ],
+            "builtins": {
+                "date": 1082,
+                "time": 1083,
+                "timetz": 1266,
+                "uuid": 2950,
+            },
+        })
+    );
+
+    let recorded = live_output.checkpoints.clone();
+    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create node-pg temporal replay isolate")?;
+    let mut replay_context = ExecutionContext::new("postgres-node-pg-temporal-replay");
+    replay_context.mode = ExecutionMode::Replay;
+    let replay_output = replay_isolate
+        .execute_with_recorded(payload, replay_context, recorded)
+        .await
+        .context("node-pg temporal parser replay failed")?;
+
+    assert_eq!(replay_output.error, None);
+    assert_eq!(replay_output.output, live_output.output);
+
+    Ok(())
+}
+
 async fn spawn_mock_postgres_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -955,6 +1045,80 @@ async fn spawn_mock_postgres_json_array_result_server() -> Result<(u16, oneshot:
                     "select '{\"ok\":true,\"label\":\"json\"}'::jsonb as payload, '{1,2,3}'::int8[] as ids, '{\"alpha\",\"beta\"}'::text[] as tags",
                     &[],
                     Some((&[(b"payload".as_slice(), 3802), (b"ids".as_slice(), 1016), (b"tags".as_slice(), 1009)], vec![Some(b"{\"ok\":true,\"label\":\"json\"}".as_slice()), Some(b"{1,2,3}".as_slice()), Some(b"{\"alpha\",\"beta\"}".as_slice())])),
+                    b"SELECT 1",
+                ).await?;
+
+                let next = read_typed_message(&mut socket).await?;
+                if next.tag == b'C' {
+                    let sync = read_typed_message(&mut socket).await?;
+                    if sync.tag != b'S' {
+                        anyhow::bail!("expected Sync after Close, got {:?}", sync.tag as char);
+                    }
+                    write_message(&mut socket, b'3', |_| {}).await?;
+                    write_ready_for_query(&mut socket).await?;
+
+                    let terminate = read_typed_message(&mut socket).await?;
+                    if terminate.tag != b'X' {
+                        anyhow::bail!("expected Terminate message, got {:?}", terminate.tag as char);
+                    }
+                } else if next.tag != b'X' {
+                    anyhow::bail!("expected Close or Terminate message, got {:?}", next.tag as char);
+                }
+
+                Ok(())
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx, task))
+}
+
+async fn spawn_mock_postgres_temporal_result_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind mock postgres temporal listener")?;
+    let port = listener
+        .local_addr()
+        .context("failed to get mock postgres temporal addr")?
+        .port();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = &mut shutdown_rx => Ok(()),
+            accepted = listener.accept() => {
+                let (mut socket, _) = accepted.context("failed to accept postgres temporal client")?;
+
+                let _startup = read_startup_message(&mut socket).await?;
+                write_authentication_ok(&mut socket).await?;
+                write_parameter_status(&mut socket, b"client_encoding", b"UTF8").await?;
+                write_parameter_status(&mut socket, b"server_version", b"16.0").await?;
+                write_backend_key_data(&mut socket).await?;
+                write_ready_for_query(&mut socket).await?;
+
+                let parse = read_typed_message(&mut socket).await?;
+                if parse.tag != b'P' {
+                    anyhow::bail!("expected Parse message, got {:?}", parse.tag as char);
+                }
+
+                handle_extended_query_columns(
+                    &mut socket,
+                    parse,
+                    "select '2026-03-17'::date as created_on, '2026-03-17 12:34:56'::timestamp as created_at, '2026-03-17 12:34:56+00'::timestamptz as created_at_utc, '2 days 03:04:05'::interval as elapsed, '123e4567-e89b-12d3-a456-426614174000'::uuid as id",
+                    &[],
+                    Some((&[
+                        (b"created_on".as_slice(), 1082),
+                        (b"created_at".as_slice(), 1114),
+                        (b"created_at_utc".as_slice(), 1184),
+                        (b"elapsed".as_slice(), 1186),
+                        (b"id".as_slice(), 2950),
+                    ], vec![
+                        Some(b"2026-03-17".as_slice()),
+                        Some(b"2026-03-17 12:34:56".as_slice()),
+                        Some(b"2026-03-17 12:34:56+00".as_slice()),
+                        Some(b"2 days 03:04:05".as_slice()),
+                        Some(b"123e4567-e89b-12d3-a456-426614174000".as_slice()),
+                    ])),
                     b"SELECT 1",
                 ).await?;
 

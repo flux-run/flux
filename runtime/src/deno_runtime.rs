@@ -1273,6 +1273,8 @@ struct PostgresJsonText(String);
 
 struct PostgresArrayText(String);
 
+struct PostgresTextValue(String);
+
 impl<'a> FromSql<'a> for PostgresNumericText {
     fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(Self(std::str::from_utf8(raw)?.to_string()))
@@ -1310,6 +1312,25 @@ impl<'a> FromSql<'a> for PostgresArrayText {
                 | postgres::types::Type::TEXT_ARRAY
                 | postgres::types::Type::VARCHAR_ARRAY
                 | postgres::types::Type::NUMERIC_ARRAY
+        )
+    }
+}
+
+impl<'a> FromSql<'a> for PostgresTextValue {
+    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self(std::str::from_utf8(raw)?.to_string()))
+    }
+
+    fn accepts(ty: &PostgresType) -> bool {
+        matches!(
+            *ty,
+            postgres::types::Type::DATE
+                | postgres::types::Type::TIME
+                | postgres::types::Type::TIMETZ
+                | postgres::types::Type::TIMESTAMP
+                | postgres::types::Type::TIMESTAMPTZ
+                | postgres::types::Type::INTERVAL
+                | postgres::types::Type::UUID
         )
     }
 }
@@ -1599,6 +1620,18 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .flatten()
             .map(|value| serde_json::Value::String(value.0))
             .or_else(|| string_value().map(serde_json::Value::String))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::DATE
+        | postgres::types::Type::TIME
+        | postgres::types::Type::TIMETZ
+        | postgres::types::Type::TIMESTAMP
+        | postgres::types::Type::TIMESTAMPTZ
+        | postgres::types::Type::INTERVAL
+        | postgres::types::Type::UUID => row
+            .try_get::<_, Option<PostgresTextValue>>(name)
+            .ok()
+            .flatten()
+            .map(|value| serde_json::Value::String(value.0))
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::JSON | postgres::types::Type::JSONB => row
             .try_get::<_, Option<serde_json::Value>>(name)
@@ -4427,12 +4460,15 @@ const __flux_pg_builtin_types = Object.freeze({
     FLOAT4_ARRAY: 1021,
     FLOAT8_ARRAY: 1022,
     DATE: 1082,
+    TIME: 1083,
     TIMESTAMP: 1114,
     TIMESTAMPTZ: 1184,
     INTERVAL: 1186,
+    TIMETZ: 1266,
     VARCHAR_ARRAY: 1015,
     NUMERIC: 1700,
     NUMERIC_ARRAY: 1231,
+    UUID: 2950,
     JSONB: 3802,
 });
 const __flux_pg_type_parsers = new Map();
