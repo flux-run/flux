@@ -1503,9 +1503,177 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .map(|value| serde_json::json!(value))
             .or_else(|| string_value().and_then(|value| value.parse::<f64>().ok().map(|parsed| serde_json::json!(parsed))))
             .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::NUMERIC => string_value()
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::JSON | postgres::types::Type::JSONB => row
+            .try_get::<_, Option<serde_json::Value>>(name)
+            .ok()
+            .flatten()
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::BOOL_ARRAY => row
+            .try_get::<_, Option<Vec<bool>>>(name)
+            .ok()
+            .flatten()
+            .map(|values| serde_json::Value::Array(values.into_iter().map(serde_json::Value::Bool).collect()))
+            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, parse_postgres_bool_array_element)))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::INT2_ARRAY => row
+            .try_get::<_, Option<Vec<i16>>>(name)
+            .ok()
+            .flatten()
+            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<i16>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::INT4_ARRAY => row
+            .try_get::<_, Option<Vec<i32>>>(name)
+            .ok()
+            .flatten()
+            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<i32>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::INT8_ARRAY => row
+            .try_get::<_, Option<Vec<i64>>>(name)
+            .ok()
+            .flatten()
+            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<i64>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::FLOAT4_ARRAY => row
+            .try_get::<_, Option<Vec<f32>>>(name)
+            .ok()
+            .flatten()
+            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<f32>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::FLOAT8_ARRAY => row
+            .try_get::<_, Option<Vec<f64>>>(name)
+            .ok()
+            .flatten()
+            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| item.parse::<f64>().ok().map(|parsed| serde_json::json!(parsed)))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::TEXT_ARRAY | postgres::types::Type::VARCHAR_ARRAY => row
+            .try_get::<_, Option<Vec<String>>>(name)
+            .ok()
+            .flatten()
+            .map(|values| serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect()))
+            .or_else(|| string_value().and_then(|value| parse_postgres_text_array(&value, |item| Some(serde_json::Value::String(item.to_string())))))
+            .unwrap_or(serde_json::Value::Null),
+        postgres::types::Type::NUMERIC_ARRAY => string_value()
+            .and_then(|value| parse_postgres_text_array(&value, |item| Some(serde_json::Value::String(item.to_string()))))
+            .unwrap_or(serde_json::Value::Null),
         _ => string_value()
             .map(serde_json::Value::String)
             .unwrap_or(serde_json::Value::Null),
+    }
+}
+
+fn parse_postgres_bool_array_element(item: &str) -> Option<serde_json::Value> {
+    match item {
+        "t" | "true" => Some(serde_json::Value::Bool(true)),
+        "f" | "false" => Some(serde_json::Value::Bool(false)),
+        _ => None,
+    }
+}
+
+fn parse_postgres_text_array<F>(
+    raw: &str,
+    parse_item: F,
+) -> Option<serde_json::Value>
+where
+    F: Fn(&str) -> Option<serde_json::Value>,
+{
+    if !raw.starts_with('{') || !raw.ends_with('}') {
+        return None;
+    }
+
+    let inner = &raw[1..raw.len().saturating_sub(1)];
+    if inner.is_empty() {
+        return Some(serde_json::Value::Array(Vec::new()));
+    }
+
+    let mut values = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut escaped = false;
+    let mut quoted_current = false;
+
+    let push_current = |values: &mut Vec<serde_json::Value>, current: &mut String, quoted_current: &mut bool| {
+        let value = if !*quoted_current && current == "NULL" {
+            serde_json::Value::Null
+        } else {
+            parse_item(current).unwrap_or(serde_json::Value::Null)
+        };
+        values.push(value);
+        current.clear();
+        *quoted_current = false;
+    };
+
+    for ch in inner.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if in_quotes => escaped = true,
+            '"' => {
+                in_quotes = !in_quotes;
+                if in_quotes && current.is_empty() {
+                    quoted_current = true;
+                }
+            }
+            ',' if !in_quotes => push_current(&mut values, &mut current, &mut quoted_current),
+            other => current.push(other),
+        }
+    }
+
+    if in_quotes || escaped {
+        return None;
+    }
+
+    push_current(&mut values, &mut current, &mut quoted_current);
+    Some(serde_json::Value::Array(values))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_postgres_bool_array_element, parse_postgres_text_array};
+
+    #[test]
+    fn parses_text_arrays() {
+        let parsed = parse_postgres_text_array("{alpha,beta}", |item| {
+            Some(serde_json::Value::String(item.to_string()))
+        });
+
+        assert_eq!(
+            parsed,
+            Some(serde_json::json!(["alpha", "beta"]))
+        );
+    }
+
+    #[test]
+    fn parses_quoted_text_and_null_arrays() {
+        let parsed = parse_postgres_text_array("{\"hello,world\",NULL,plain}", |item| {
+            Some(serde_json::Value::String(item.to_string()))
+        });
+
+        assert_eq!(
+            parsed,
+            Some(serde_json::json!(["hello,world", null, "plain"]))
+        );
+    }
+
+    #[test]
+    fn parses_bool_arrays() {
+        let parsed = parse_postgres_text_array("{t,f,true,false}", parse_postgres_bool_array_element);
+
+        assert_eq!(
+            parsed,
+            Some(serde_json::json!([true, false, true, false]))
+        );
     }
 }
 
