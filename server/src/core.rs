@@ -151,6 +151,19 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
 
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS flux.execution_console_logs (
+            execution_id UUID NOT NULL,
+            seq INTEGER NOT NULL,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (execution_id, seq)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
         "CREATE OR REPLACE FUNCTION flux.notify_execution()
          RETURNS trigger AS $$
          BEGIN
@@ -184,6 +197,8 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_executions_path_started ON flux.executions (path, started_at DESC)")
         .execute(pool).await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_checkpoints_execution_call ON flux.checkpoints (execution_id, call_index)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_console_logs_execution_seq ON flux.execution_console_logs (execution_id, seq)")
         .execute(pool).await?;
 
     Ok(())

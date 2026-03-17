@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use tonic::Request;
 use tonic::metadata::MetadataValue;
 
-use crate::deno_runtime::FetchCheckpoint;
+use crate::deno_runtime::{FetchCheckpoint, LogEntry};
 use crate::isolate_pool::ExecutionResult;
 
 pub use shared::pb;
@@ -39,6 +39,12 @@ pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelop
             .into_iter()
             .map(checkpoint_to_proto)
             .collect(),
+        logs: envelope
+            .result
+            .logs
+            .into_iter()
+            .map(log_entry_to_proto)
+            .collect(),
     });
 
     request.metadata_mut().insert(
@@ -64,6 +70,13 @@ fn checkpoint_to_proto(checkpoint: FetchCheckpoint) -> pb::CheckpointEntry {
         request_json: serde_json::to_string(&checkpoint.request).unwrap_or_else(|_| "null".to_string()),
         response_json: serde_json::to_string(&checkpoint.response).unwrap_or_else(|_| "null".to_string()),
         duration_ms: checkpoint.duration_ms,
+    }
+}
+
+fn log_entry_to_proto(entry: LogEntry) -> pb::ConsoleLogEntry {
+    pb::ConsoleLogEntry {
+        level: entry.level,
+        message: entry.message,
     }
 }
 

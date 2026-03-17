@@ -207,6 +207,44 @@ export default async function handler() {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn timer_boundaries_are_recorded_and_replayed() -> Result<()> {
+    let _lock = polyfill_test_lock().lock().await;
+    let code = r#"
+export default async function handler() {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  return { ok: true };
+}
+"#;
+
+    let mut live_isolate = JsIsolate::new_for_run(code).context("failed to create live isolate")?;
+    let live_output = live_isolate
+        .execute(serde_json::json!({}), ExecutionContext::new("timer-live"))
+        .await
+        .context("live timer execution failed")?;
+
+    assert_eq!(live_output.error, None);
+    assert_eq!(live_output.output, serde_json::json!({ "ok": true }));
+    assert_eq!(live_output.checkpoints.len(), 1);
+    assert_eq!(live_output.checkpoints[0].boundary, "timer");
+    assert_eq!(live_output.checkpoints[0].method, "delay");
+
+    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
+    let mut replay_context = ExecutionContext::new("timer-replay");
+    replay_context.mode = runtime::deno_runtime::ExecutionMode::Replay;
+    let replay_output = replay_isolate
+        .execute_with_recorded(serde_json::json!({}), replay_context, live_output.checkpoints.clone())
+        .await
+        .context("replay timer execution failed")?;
+
+    assert_eq!(replay_output.error, None);
+    assert_eq!(replay_output.output, serde_json::json!({ "ok": true }));
+    assert_eq!(replay_output.checkpoints.len(), 1);
+    assert_eq!(replay_output.checkpoints[0].boundary, "timer");
+
+    Ok(())
+}
+
 fn polyfill_test_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))

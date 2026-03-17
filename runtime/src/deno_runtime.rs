@@ -469,15 +469,65 @@ fn op_console(
 }
 
 /// Returns the effective timer delay to use.
-/// In Replay mode always returns 0 so timers fire immediately.
+/// Records timer boundaries so traces capture scheduling decisions.
 #[op2(fast)]
 fn op_timer_delay(state: &mut OpState, #[string] execution_id: String, delay_ms: f64) -> f64 {
     let map = state.borrow_mut::<RuntimeStateMap>();
-    match map.get(&execution_id) {
-        Some(exec) => match exec.context.mode {
-            ExecutionMode::Replay => 0.0,
-            ExecutionMode::Live => delay_ms,
-        },
+    match map.get_mut(&execution_id) {
+        Some(exec) => {
+            let call_index = exec.call_index;
+            exec.call_index = exec.call_index.saturating_add(1);
+
+            match exec.context.mode {
+                ExecutionMode::Replay => {
+                    let recorded = exec.recorded.remove(&call_index);
+                    let effective_delay_ms = recorded
+                        .as_ref()
+                        .and_then(|checkpoint| checkpoint.response.get("effective_delay_ms"))
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or_else(|| if delay_ms.is_sign_negative() { 0.0 } else { delay_ms });
+
+                    if let Some(checkpoint) = recorded {
+                        exec.checkpoints.push(checkpoint);
+                    } else {
+                        exec.checkpoints.push(FetchCheckpoint {
+                            call_index,
+                            boundary: "timer".to_string(),
+                            url: String::new(),
+                            method: "delay".to_string(),
+                            request: serde_json::json!({
+                                "requested_delay_ms": delay_ms,
+                            }),
+                            response: serde_json::json!({
+                                "effective_delay_ms": effective_delay_ms,
+                                "replay": true,
+                            }),
+                            duration_ms: 0,
+                        });
+                    }
+
+                    effective_delay_ms
+                }
+                ExecutionMode::Live => {
+                    let effective_delay_ms = if delay_ms.is_sign_negative() { 0.0 } else { delay_ms };
+                    exec.checkpoints.push(FetchCheckpoint {
+                        call_index,
+                        boundary: "timer".to_string(),
+                        url: String::new(),
+                        method: "delay".to_string(),
+                        request: serde_json::json!({
+                            "requested_delay_ms": delay_ms,
+                        }),
+                        response: serde_json::json!({
+                            "effective_delay_ms": effective_delay_ms,
+                            "replay": false,
+                        }),
+                        duration_ms: 0,
+                    });
+                    effective_delay_ms
+                }
+            }
+        }
         None => delay_ms,
     }
 }
@@ -2639,12 +2689,63 @@ console.trace = (...a) => {
 };
 
 // ── setTimeout / setInterval ────────────────────────────────────────────────
-const _origSetTimeout  = globalThis.setTimeout;
-const _origSetInterval = globalThis.setInterval;
-globalThis.setTimeout  = (fn, delay, ...args) =>
-  _origSetTimeout(fn,  Deno.core.ops.op_timer_delay(__flux_eid(), delay ?? 0), ...args);
-globalThis.setInterval = (fn, delay, ...args) =>
-  _origSetInterval(fn, Deno.core.ops.op_timer_delay(__flux_eid(), delay ?? 0), ...args);
+let __flux_timer_id = 1;
+const __flux_active_timers = new Map();
+
+function __flux_invoke_timer_callback(fn, args) {
+    if (typeof fn === "function") {
+        fn(...args);
+        return;
+    }
+    throw new TypeError("Timer callback must be a function");
+}
+
+globalThis.setTimeout = (fn, delay, ...args) => {
+    const timerId = __flux_timer_id++;
+    __flux_active_timers.set(timerId, { interval: false, cancelled: false });
+    const effectiveDelay = Deno.core.ops.op_timer_delay(__flux_eid(), delay ?? 0);
+    queueMicrotask(() => {
+        const timer = __flux_active_timers.get(timerId);
+        if (!timer || timer.cancelled) return;
+        __flux_active_timers.delete(timerId);
+        __flux_invoke_timer_callback(fn, args);
+    });
+    return timerId;
+};
+
+globalThis.clearTimeout = (timerId) => {
+    const timer = __flux_active_timers.get(timerId);
+    if (!timer) return;
+    timer.cancelled = true;
+    __flux_active_timers.delete(timerId);
+};
+
+globalThis.setInterval = (fn, delay, ...args) => {
+    const timerId = __flux_timer_id++;
+    __flux_active_timers.set(timerId, { interval: true, cancelled: false });
+
+    function tick() {
+        const timer = __flux_active_timers.get(timerId);
+        if (!timer || timer.cancelled) return;
+        Deno.core.ops.op_timer_delay(__flux_eid(), delay ?? 0);
+        queueMicrotask(() => {
+            const nextTimer = __flux_active_timers.get(timerId);
+            if (!nextTimer || nextTimer.cancelled) return;
+            __flux_invoke_timer_callback(fn, args);
+            tick();
+        });
+    }
+
+    tick();
+    return timerId;
+};
+
+globalThis.clearInterval = (timerId) => {
+    const timer = __flux_active_timers.get(timerId);
+    if (!timer) return;
+    timer.cancelled = true;
+    __flux_active_timers.delete(timerId);
+};
 
 // ── Math.random ─────────────────────────────────────────────────────────────
 Math.random = () => Deno.core.ops.op_random(__flux_eid());

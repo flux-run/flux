@@ -41,6 +41,14 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
     println!("  response");
     print_json_block(&trace.response_json, args.verbose);
 
+    if !trace.logs.is_empty() {
+        println!();
+        println!("  console logs");
+        for log in &trace.logs {
+            println!("  [{}] {}", log.level, log.message);
+        }
+    }
+
     if trace.checkpoints.is_empty() {
         println!("\n  no checkpoints recorded\n");
         return Ok(());
@@ -60,6 +68,35 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
             .get("status")
             .and_then(|value| value.as_u64())
             .unwrap_or(0);
+
+        if cp.boundary == "timer" {
+            let requested_delay_ms = req
+                .get("requested_delay_ms")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0);
+            let effective_delay_ms = res
+                .get("effective_delay_ms")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(requested_delay_ms);
+
+            println!(
+                "  [{}] TIMER  requested={}ms  effective={}ms",
+                cp.call_index,
+                requested_delay_ms,
+                effective_delay_ms,
+            );
+
+            if args.verbose {
+                let request_json = serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
+                let response_json = serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
+
+                println!("      request");
+                print_json_block(&request_json, true);
+                println!("      response");
+                print_json_block(&response_json, true);
+            }
+            continue;
+        }
 
         println!(
             "  [{}] {}  {}  {}ms  → {}",

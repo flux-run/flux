@@ -562,6 +562,24 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .map_err(|e| Status::internal(format!("failed to upsert checkpoint: {e}")))?;
         }
 
+        for (seq, log) in req.logs.into_iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO flux.execution_console_logs
+                 (execution_id, seq, level, message)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (execution_id, seq) DO UPDATE SET
+                   level = EXCLUDED.level,
+                   message = EXCLUDED.message",
+            )
+            .bind(execution_id)
+            .bind(seq as i32)
+            .bind(log.level)
+            .bind(log.message)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(format!("failed to upsert execution console log: {e}")))?;
+        }
+
         tx.commit()
             .await
             .map_err(|e| Status::internal(format!("failed to commit execution: {e}")))?;
@@ -614,6 +632,22 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             })
             .collect();
 
+        let console_log_rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT level, message
+             FROM flux.execution_console_logs
+             WHERE execution_id = $1
+             ORDER BY seq ASC",
+        )
+        .bind(execution_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch execution console logs: {e}")))?;
+
+        let logs = console_log_rows
+            .into_iter()
+            .map(|(level, message)| pb::ConsoleLogEntry { level, message })
+            .collect();
+
         Ok(Response::new(pb::GetTraceResponse {
             execution_id: execution_id_raw,
             method,
@@ -624,6 +658,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             checkpoints,
             request_json: serde_json::to_string(&request_json).unwrap_or_else(|_| "null".to_string()),
             response_json: serde_json::to_string(&response_json).unwrap_or_else(|_| "null".to_string()),
+            logs,
         }))
     }
 

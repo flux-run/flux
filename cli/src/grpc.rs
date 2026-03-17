@@ -28,6 +28,12 @@ pub struct TraceCheckpoint {
 }
 
 #[derive(Debug, Clone)]
+pub struct TraceConsoleLog {
+    pub level: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct TraceView {
     pub execution_id: String,
     pub method: String,
@@ -38,6 +44,7 @@ pub struct TraceView {
     pub request_json: String,
     pub response_json: String,
     pub checkpoints: Vec<TraceCheckpoint>,
+    pub logs: Vec<TraceConsoleLog>,
 }
 
 fn friendly_connect_error(endpoint: &str, err: tonic::transport::Error) -> anyhow::Error {
@@ -217,6 +224,14 @@ pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<Tra
                 request: cp.request,
                 response: cp.response,
                 duration_ms: cp.duration_ms,
+            })
+            .collect(),
+        logs: response
+            .logs
+            .into_iter()
+            .map(|log| TraceConsoleLog {
+                level: log.level,
+                message: log.message,
             })
             .collect(),
     })
