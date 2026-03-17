@@ -13,6 +13,10 @@ use uuid::Uuid;
 
 use crate::isolate_pool::ExecutionContext;
 
+/// Per-isolate map of in-flight execution states, keyed by execution_id.
+/// Stored once in `OpState`; each concurrent execution owns its own slot.
+type RuntimeStateMap = HashMap<String, RuntimeExecutionState>;
+
 /// Maximum response body size: 10 MB.
 const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
@@ -144,12 +148,93 @@ struct RuntimeExecutionState {
     pending_responses: HashMap<String, NetResponse>,
 }
 
-deno_core::extension!(flux_runtime_ext, ops = [op_fetch, op_now, op_console, op_timer_delay, op_random, op_random_uuid, op_net_listen, op_net_respond]);
+deno_core::extension!(flux_runtime_ext, ops = [
+    op_begin_execution,
+    op_end_execution,
+    op_fetch,
+    op_now,
+    op_console,
+    op_timer_delay,
+    op_random,
+    op_random_uuid,
+    op_net_listen,
+    op_net_respond,
+]);
+
+/// Called by JS at the start of every execution to register a state slot.
+/// `recorded_random_json` and `recorded_uuids_json` are JSON-encoded arrays for
+/// replay mode; pass `"[]"` for live executions.
+#[op2(fast)]
+fn op_begin_execution(
+    state: &mut OpState,
+    #[string] execution_id: String,
+    #[string] request_id: String,
+    #[string] code_version: String,
+    is_replay: bool,
+    #[string] recorded_random_json: String,
+    #[string] recorded_uuids_json: String,
+    #[string] recorded_now_ms_json: String,
+) {
+    let recorded_random: Vec<f64> =
+        serde_json::from_str(&recorded_random_json).unwrap_or_default();
+    let recorded_uuids: Vec<String> =
+        serde_json::from_str(&recorded_uuids_json).unwrap_or_default();
+    let recorded_now_ms: Option<u64> =
+        serde_json::from_str(&recorded_now_ms_json).unwrap_or(None);
+
+    let exec_state = RuntimeExecutionState {
+        context: ExecutionContext {
+            execution_id: execution_id.clone(),
+            request_id,
+            code_version,
+            mode: if is_replay { ExecutionMode::Replay } else { ExecutionMode::Live },
+        },
+        call_index: 0,
+        checkpoints: Vec::new(),
+        recorded: HashMap::new(),
+        recorded_now_ms,
+        logs: Vec::new(),
+        recorded_random,
+        random_index: 0,
+        recorded_uuids,
+        uuid_index: 0,
+        is_server_mode: false,
+        pending_responses: HashMap::new(),
+    };
+
+    state
+        .borrow_mut::<RuntimeStateMap>()
+        .insert(execution_id, exec_state);
+}
+
+/// Called by JS at the end of every execution.  Returns a JSON string with the
+/// collected checkpoints, logs, random values, and uuids so Rust can harvest
+/// them without an extra op round-trip.
+#[op2]
+#[string]
+fn op_end_execution(state: &mut OpState, #[string] execution_id: String) -> String {
+    let slot = state
+        .borrow_mut::<RuntimeStateMap>()
+        .remove(&execution_id);
+
+    match slot {
+        Some(s) => serde_json::to_string(&serde_json::json!({
+            "checkpoints": s.checkpoints,
+            "logs":        s.logs,
+            "random":      s.recorded_random,
+            "uuids":       s.recorded_uuids,
+            "now_ms":      s.recorded_now_ms,
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        None => "{}".to_string(),
+    }
+}
 
 #[op2(async)]
 #[serde]
 async fn op_fetch(
     state: Rc<RefCell<OpState>>,
+    #[string] execution_id: String,
     #[string] url: String,
     #[string] method: String,
     #[serde] body: Option<serde_json::Value>,
@@ -160,7 +245,13 @@ async fn op_fetch(
     let (request_id, call_index, mode, recorded_checkpoint, client) = {
         let mut state_ref = state.borrow_mut();
         let (request_id, index, mode, recorded) = {
-            let execution = state_ref.borrow_mut::<RuntimeExecutionState>();
+            let map = state_ref.borrow_mut::<RuntimeStateMap>();
+            let execution = map.get_mut(&execution_id).ok_or_else(|| {
+                deno_core::error::custom_error(
+                    "InternalError",
+                    format!("op_fetch: execution_id '{execution_id}' not found"),
+                )
+            })?;
             let idx = execution.call_index;
             execution.call_index = execution.call_index.saturating_add(1);
             let rec = execution.recorded.remove(&idx);
@@ -181,21 +272,22 @@ async fn op_fetch(
             let response = checkpoint.response.clone();
             {
                 let mut state_ref = state.borrow_mut();
-                let execution = state_ref.borrow_mut::<RuntimeExecutionState>();
-                execution.checkpoints.push(FetchCheckpoint {
-                    call_index,
-                    boundary: checkpoint.boundary,
-                    url: checkpoint.url,
-                    method: checkpoint.method,
-                    request: checkpoint.request,
-                    response: response.clone(),
-                    duration_ms: checkpoint.duration_ms,
-                });
+                let map = state_ref.borrow_mut::<RuntimeStateMap>();
+                if let Some(execution) = map.get_mut(&execution_id) {
+                    execution.checkpoints.push(FetchCheckpoint {
+                        call_index,
+                        boundary: checkpoint.boundary,
+                        url: checkpoint.url,
+                        method: checkpoint.method,
+                        request: checkpoint.request,
+                        response: response.clone(),
+                        duration_ms: checkpoint.duration_ms,
+                    });
+                }
             }
             tracing::debug!(%request_id, %call_index, "replay: returned recorded response");
             return Ok(response);
         }
-        // No recorded checkpoint for this index — fall through to live call.
         tracing::warn!(%request_id, %call_index, "replay: no recorded checkpoint, making live call");
     }
 
@@ -219,16 +311,18 @@ async fn op_fetch(
 
     {
         let mut state_ref = state.borrow_mut();
-        let execution = state_ref.borrow_mut::<RuntimeExecutionState>();
-        execution.checkpoints.push(FetchCheckpoint {
-            call_index,
-            boundary: "http".to_string(),
-            url: original_url.clone(),
-            method: method.clone(),
-            request: request_json,
-            response: response.clone(),
-            duration_ms,
-        });
+        let map = state_ref.borrow_mut::<RuntimeStateMap>();
+        if let Some(execution) = map.get_mut(&execution_id) {
+            execution.checkpoints.push(FetchCheckpoint {
+                call_index,
+                boundary: "http".to_string(),
+                url: original_url.clone(),
+                method: method.clone(),
+                request: request_json,
+                response: response.clone(),
+                duration_ms,
+            });
+        }
     }
 
     tracing::debug!(%request_id, %call_index, original_url = %original_url, resolved_url = %target_url, "intercepted fetch");
@@ -239,13 +333,18 @@ async fn op_fetch(
 /// In Replay mode returns the timestamp recorded during the original Live execution,
 /// making `Date.now()` deterministic across replays.
 #[op2(fast)]
-fn op_now(state: &mut OpState) -> f64 {
+fn op_now(state: &mut OpState, #[string] execution_id: String) -> f64 {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
 
-    let exec = state.borrow_mut::<RuntimeExecutionState>();
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    let exec = match map.get_mut(&execution_id) {
+        Some(e) => e,
+        None => return now_ms as f64,
+    };
+
     match exec.context.mode {
         ExecutionMode::Replay => exec.recorded_now_ms.unwrap_or(now_ms) as f64,
         ExecutionMode::Live => {
@@ -258,14 +357,20 @@ fn op_now(state: &mut OpState) -> f64 {
 }
 
 /// Captures `console.log/warn/error` output and links it to the current execution.
-/// Always prints to stdout/stderr so output is still visible during development.
 #[op2(fast)]
-fn op_console(state: &mut OpState, #[string] msg: String, is_err: bool) {
-    let exec = state.borrow_mut::<RuntimeExecutionState>();
-    exec.logs.push(LogEntry {
-        level: if is_err { "error".to_string() } else { "log".to_string() },
-        message: msg.clone(),
-    });
+fn op_console(
+    state: &mut OpState,
+    #[string] execution_id: String,
+    #[string] msg: String,
+    is_err: bool,
+) {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    if let Some(exec) = map.get_mut(&execution_id) {
+        exec.logs.push(LogEntry {
+            level: if is_err { "error".to_string() } else { "log".to_string() },
+            message: msg.clone(),
+        });
+    }
     if is_err {
         eprintln!("{msg}");
     } else {
@@ -274,22 +379,28 @@ fn op_console(state: &mut OpState, #[string] msg: String, is_err: bool) {
 }
 
 /// Returns the effective timer delay to use.
-/// In Replay mode always returns 0 so `setTimeout`/`setInterval` fire immediately,
-/// keeping replay fast and avoiding real-time waits on recorded data.
+/// In Replay mode always returns 0 so timers fire immediately.
 #[op2(fast)]
-fn op_timer_delay(state: &mut OpState, delay_ms: f64) -> f64 {
-    let exec = state.borrow::<RuntimeExecutionState>();
-    match exec.context.mode {
-        ExecutionMode::Replay => 0.0,
-        ExecutionMode::Live => delay_ms,
+fn op_timer_delay(state: &mut OpState, #[string] execution_id: String, delay_ms: f64) -> f64 {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    match map.get(&execution_id) {
+        Some(exec) => match exec.context.mode {
+            ExecutionMode::Replay => 0.0,
+            ExecutionMode::Live => delay_ms,
+        },
+        None => delay_ms,
     }
 }
 
 /// In Live mode: generate a value via `rand`, record it for later storage.
 /// In Replay mode: return the next recorded value in sequence (fallback: 0.5).
 #[op2(fast)]
-fn op_random(state: &mut OpState) -> f64 {
-    let exec = state.borrow_mut::<RuntimeExecutionState>();
+fn op_random(state: &mut OpState, #[string] execution_id: String) -> f64 {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    let exec = match map.get_mut(&execution_id) {
+        Some(e) => e,
+        None => return rand::thread_rng().r#gen(),
+    };
     match exec.context.mode {
         ExecutionMode::Live => {
             let v: f64 = rand::thread_rng().r#gen();
@@ -305,13 +416,15 @@ fn op_random(state: &mut OpState) -> f64 {
 }
 
 /// In Live mode: generate a UUID v4 and record it.
-/// In Replay mode: return the recorded UUID in sequence so `crypto.randomUUID()`
-/// returns the *exact same* value as during the original execution — required
-/// because user code may write the UUID to a DB and return it in the response.
+/// In Replay mode: return the recorded UUID in sequence.
 #[op2]
 #[string]
-fn op_random_uuid(state: &mut OpState) -> String {
-    let exec = state.borrow_mut::<RuntimeExecutionState>();
+fn op_random_uuid(state: &mut OpState, #[string] execution_id: String) -> String {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    let exec = match map.get_mut(&execution_id) {
+        Some(e) => e,
+        None => return Uuid::new_v4().to_string(),
+    };
     match exec.context.mode {
         ExecutionMode::Live => {
             let id = Uuid::new_v4().to_string();
@@ -329,20 +442,21 @@ fn op_random_uuid(state: &mut OpState) -> String {
     }
 }
 
-/// Intercepts `Deno.serve()` in bootstrap JS — marks the isolate as a
-/// long-running HTTP server.  The port hint is advisory and ignored; the Rust
-/// Axum listener owns the actual TCP socket.
+/// Intercepts `Deno.serve()` — marks the isolate as a long-running HTTP server.
 #[op2(fast)]
-fn op_net_listen(state: &mut OpState, #[smi] _port: u32) {
-    state.borrow_mut::<RuntimeExecutionState>().is_server_mode = true;
+fn op_net_listen(state: &mut OpState, #[string] execution_id: String, #[smi] _port: u32) {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    if let Some(exec) = map.get_mut(&execution_id) {
+        exec.is_server_mode = true;
+    }
 }
 
-/// Called by the `__flux_dispatch_request` JS shim after the user handler
-/// (Express/Hono/etc.) produces an HTTP response.  Stores the finalized
-/// response so Rust can collect it after the event loop drains.
+/// Called by the `__flux_dispatch_request` JS shim after the handler produces
+/// an HTTP response.  Stores the finalized response keyed by req_id.
 #[op2(fast)]
 fn op_net_respond(
     state: &mut OpState,
+    #[string] execution_id: String,
     #[string] req_id: String,
     #[smi] status: u32,
     #[string] headers_json: String,
@@ -358,10 +472,12 @@ fn op_net_respond(
             Some((k, v))
         })
         .collect();
-    state
-        .borrow_mut::<RuntimeExecutionState>()
-        .pending_responses
-        .insert(req_id, NetResponse { status: status as u16, headers, body });
+
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    if let Some(exec) = map.get_mut(&execution_id) {
+        exec.pending_responses
+            .insert(req_id, NetResponse { status: status as u16, headers, body });
+    }
 }
 
 async fn make_http_request(
@@ -479,25 +595,11 @@ impl JsIsolate {
             ..Default::default()
         });
 
-        // Seed OpState so that module-level ops (e.g. op_net_listen via
-        // `Deno.serve()`) can run safely during `execute_script`.
+        // Seed OpState with an empty execution-state map and the HTTP client.
         {
             let state = runtime.op_state();
             let mut state = state.borrow_mut();
-            state.put(RuntimeExecutionState {
-                context: ExecutionContext::new("__bootstrap__"),
-                call_index: 0,
-                checkpoints: Vec::new(),
-                recorded: HashMap::new(),
-                recorded_now_ms: None,
-                logs: Vec::new(),
-                recorded_random: Vec::new(),
-                random_index: 0,
-                recorded_uuids: Vec::new(),
-                uuid_index: 0,
-                is_server_mode: false,
-                pending_responses: HashMap::new(),
-            });
+            state.put::<RuntimeStateMap>(HashMap::new());
             state.put(http_client.clone());
         }
 
@@ -509,10 +611,23 @@ impl JsIsolate {
             .execute_script("flux:user_code", prepared)
             .context("failed to load user code")?;
 
+        // Check if the module called Deno.serve() during init.
+        // In the new model, server-mode detection uses a bootstrap execution slot.
         let is_server_mode = {
             let state = runtime.op_state();
             let state = state.borrow();
-            state.borrow::<RuntimeExecutionState>().is_server_mode
+            // Deno.serve wires up __flux_net_handler; check for it instead of OpState.
+            // (no state slot exists yet — we check the JS side via a script)
+            drop(state);
+            let probe = runtime
+                .execute_script(
+                    "flux:probe_server_mode",
+                    "typeof globalThis.__flux_net_handler === 'function'",
+                )
+                .context("failed to probe server mode")?;
+            let scope = &mut runtime.handle_scope();
+            let local = deno_core::v8::Local::new(scope, probe);
+            local.is_true()
         };
 
         Ok(Self {
@@ -530,10 +645,15 @@ impl JsIsolate {
         context: ExecutionContext,
         req: NetRequest,
     ) -> Result<NetResponse> {
+        let execution_id = context.execution_id.clone();
+        let request_id = context.request_id.clone();
+
+        // Register a state slot for this request.
         {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
-            state.put(RuntimeExecutionState {
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            map.insert(execution_id.clone(), RuntimeExecutionState {
                 context,
                 call_index: 0,
                 checkpoints: Vec::new(),
@@ -550,9 +670,11 @@ impl JsIsolate {
             state.put(self.http_client.clone());
         }
 
-        // Escape all fields into a JS expression.
+        // Inject execution_id so the JS shim can thread it through all ops.
         let script = format!(
-            "globalThis.__flux_dispatch_request({}, {}, {}, {}, {});",
+            "globalThis.__FLUX_EXECUTION_ID__ = {};\n\
+             globalThis.__flux_dispatch_request({}, {}, {}, {}, {});",
+            serde_json::to_string(&execution_id).unwrap(),
             serde_json::to_string(&req.req_id).unwrap(),
             serde_json::to_string(&req.method).unwrap(),
             serde_json::to_string(&req.url).unwrap(),
@@ -574,10 +696,14 @@ impl JsIsolate {
 
         let state = self.runtime.op_state();
         let mut state = state.borrow_mut();
-        let exec = state.borrow_mut::<RuntimeExecutionState>();
+        let map = state.borrow_mut::<RuntimeStateMap>();
+        let exec = map
+            .remove(&execution_id)
+            .ok_or_else(|| anyhow::anyhow!("state slot missing for execution {execution_id}"))?;
         exec.pending_responses
-            .remove(&req.req_id)
-            .ok_or_else(|| anyhow::anyhow!("handler did not call op_net_respond for req {}", req.req_id))
+            .into_values()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("handler did not call op_net_respond for req {} (request_id={})", req.req_id, request_id))
     }
 
     pub async fn execute(
@@ -597,14 +723,18 @@ impl JsIsolate {
         context: ExecutionContext,
         recorded_checkpoints: Vec<FetchCheckpoint>,
     ) -> Result<JsExecutionOutput> {
+        let execution_id = context.execution_id.clone();
         let recorded: HashMap<u32, FetchCheckpoint> = recorded_checkpoints
             .into_iter()
             .map(|cp| (cp.call_index, cp))
             .collect();
+
+        // Register the state slot before injecting JS.
         {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
-            state.put(RuntimeExecutionState {
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            map.insert(execution_id.clone(), RuntimeExecutionState {
                 context,
                 call_index: 0,
                 checkpoints: Vec::new(),
@@ -621,19 +751,25 @@ impl JsIsolate {
             state.put(self.http_client.clone());
         }
 
+        let eid_json = serde_json::to_string(&execution_id).context("failed to encode execution_id")?;
         let payload_json = serde_json::to_string(&payload).context("failed to encode payload")?;
         let invoke = format!(
-            "globalThis.__flux_last_result = null;\n\
-             globalThis.__flux_last_error = null;\n\
-             (async () => {{\n\
+            "(async () => {{\n\
+               const __eid = {eid};\n\
+               globalThis.__FLUX_EXECUTION_ID__ = __eid;\n\
+               globalThis.__flux_last_result = globalThis.__flux_last_result || {{}};\n\
+               globalThis.__flux_last_result[__eid] = null;\n\
+               globalThis.__flux_last_error = globalThis.__flux_last_error || {{}};\n\
+               globalThis.__flux_last_error[__eid] = null;\n\
                try {{\n\
                  const ctx = {{}};\n\
                  const result = await globalThis.__flux_user_handler({{ input: {payload}, ctx }});\n\
-                 globalThis.__flux_last_result = result ?? null;\n\
+                 globalThis.__flux_last_result[__eid] = result ?? null;\n\
                }} catch (err) {{\n\
-                 globalThis.__flux_last_error = String(err && err.stack ? err.stack : err);\n\
+                 globalThis.__flux_last_error[__eid] = String(err && err.stack ? err.stack : err);\n\
                }}\n\
              }})();",
+            eid = eid_json,
             payload = payload_json,
         );
 
@@ -649,12 +785,14 @@ impl JsIsolate {
         .map_err(|_| anyhow::anyhow!("function execution timed out after {EXECUTION_TIMEOUT:?}"))?
         .context("failed while running JS event loop")?;
 
+        let result_script = format!(
+            "JSON.stringify({{ result: (globalThis.__flux_last_result || {{}})[{eid}] ?? null, error: (globalThis.__flux_last_error || {{}})[{eid}] ?? null }})",
+            eid = eid_json,
+        );
+
         let result_value = self
             .runtime
-            .execute_script(
-                "flux:result",
-                "JSON.stringify({ result: globalThis.__flux_last_result ?? null, error: globalThis.__flux_last_error ?? null })",
-            )
+            .execute_script("flux:result", result_script)
             .context("failed to read handler result")?;
 
         let raw: String = {
@@ -670,11 +808,11 @@ impl JsIsolate {
         let (checkpoints, logs) = {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
-            let execution = state.borrow_mut::<RuntimeExecutionState>();
-            (
-                std::mem::take(&mut execution.checkpoints),
-                std::mem::take(&mut execution.logs),
-            )
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            match map.remove(&execution_id) {
+                Some(execution) => (execution.checkpoints, execution.logs),
+                None => (Vec::new(), Vec::new()),
+            }
         };
 
         let error = envelope
@@ -725,7 +863,6 @@ impl JsIsolate {
         };
 
         if has_handler {
-            // Handler mode: call with the provided input.
             let context = ExecutionContext::new("__run__");
             let output = self.execute(input, context).await?;
             if let Some(ref err) = output.error {
@@ -734,7 +871,35 @@ impl JsIsolate {
             return Ok((Some(output.output), output.logs));
         }
 
-        // Top-level mode: drain the event loop.
+        // Top-level mode: register a transient state slot so ops don't panic,
+        // then drain the event loop.
+        let execution_id = "__script__".to_string();
+        {
+            let state = self.runtime.op_state();
+            let mut state = state.borrow_mut();
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            map.insert(execution_id.clone(), RuntimeExecutionState {
+                context: ExecutionContext::new("__script__"),
+                call_index: 0,
+                checkpoints: Vec::new(),
+                recorded: HashMap::new(),
+                recorded_now_ms: None,
+                logs: Vec::new(),
+                recorded_random: Vec::new(),
+                random_index: 0,
+                recorded_uuids: Vec::new(),
+                uuid_index: 0,
+                is_server_mode: false,
+                pending_responses: HashMap::new(),
+            });
+        }
+
+        // Tell bootstrap JS which execution_id to use for top-level ops.
+        let eid_json = serde_json::to_string(&execution_id).unwrap();
+        self.runtime
+            .execute_script("flux:set_script_eid", format!("globalThis.__FLUX_EXECUTION_ID__ = {eid_json};"))
+            .context("failed to set execution_id")?;
+
         tokio::time::timeout(
             EXECUTION_TIMEOUT,
             self.runtime.run_event_loop(Default::default()),
@@ -744,9 +909,13 @@ impl JsIsolate {
         .context("event loop error during script execution")?;
 
         let state = self.runtime.op_state();
-        let state = state.borrow();
-        let exec = state.borrow::<RuntimeExecutionState>();
-        Ok((None, exec.logs.clone()))
+        let mut state = state.borrow_mut();
+        let map = state.borrow_mut::<RuntimeStateMap>();
+        let logs = map
+            .remove(&execution_id)
+            .map(|e| e.logs)
+            .unwrap_or_default();
+        Ok((None, logs))
     }
 }
 
@@ -834,16 +1003,12 @@ globalThis.Request  = Request;
 globalThis.Response = Response;
 
 // ── URL ─────────────────────────────────────────────────────────────────────
-// V8 in bare deno_core does not provide the WHATWG URL interface.
-// Minimal implementation covering the properties user code typically reads.
 if (!globalThis.URL) {
   globalThis.URL = class URL {
     #href; #u;
     constructor(input, base) {
-      // Resolve relative URLs against base
       const str = base ? String(base).replace(/\/+$/, "") + "/" + String(input).replace(/^\/+/, "") : String(input);
       this.#href = str;
-      // Parse the key components with a simple regex
       const m = str.match(/^([a-z][a-z0-9+\-.]*):\/\/([^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/i) || [];
       this.protocol = (m[1] ?? "").toLowerCase() + ":";
       const host = m[2] ?? "";
@@ -894,16 +1059,23 @@ if (!globalThis.URLSearchParams) {
   };
 }
 
-// crypto — always install our op so randomUUID() works in all contexts
+// ── Execution ID accessor ────────────────────────────────────────────────────
+// All op wrappers below use this helper so each concurrent execution threads
+// its own ID through the Rust ops, which index into the per-execution HashMap.
+function __flux_eid() {
+  return globalThis.__FLUX_EXECUTION_ID__ || "__unknown__";
+}
+
+// ── crypto ──────────────────────────────────────────────────────────────────
 if (!globalThis.crypto) globalThis.crypto = {};
-globalThis.crypto.randomUUID = () => Deno.core.ops.op_random_uuid();
+globalThis.crypto.randomUUID = () => Deno.core.ops.op_random_uuid(__flux_eid());
 
 // ── fetch ──────────────────────────────────────────────────────────────────
 globalThis.fetch = async function(url, init = {}) {
   const method = typeof init?.method === "string" ? init.method : "GET";
   const body = init?.body ?? null;
   const headers = init?.headers ?? null;
-  const response = await Deno.core.ops.op_fetch(String(url), String(method), body, headers);
+  const response = await Deno.core.ops.op_fetch(__flux_eid(), String(url), String(method), body, headers);
 
   return {
     status: response.status,
@@ -918,73 +1090,48 @@ globalThis.fetch = async function(url, init = {}) {
 };
 
 // ── Date.now() + new Date() ────────────────────────────────────────────────
-// In Replay mode op_now returns the timestamp recorded during the original
-// execution, making time deterministic without touching the system clock.
-//
-// IMPORTANT: `Date.now` alone is not enough. `new Date()` (no-args) calls
-// V8's internal clock directly, bypassing any JS-level Date.now override.
-// After weeks in production this causes silent replay corruption: the
-// constructor keeps returning live wall-clock time while .now() is frozen.
-// Fix: subclass Date so the no-arg constructor routes through op_now too.
-// `class extends` preserves instanceof checks and the full prototype chain.
 {
   const _OrigDate = globalThis.Date;
   class PatchedDate extends _OrigDate {
     constructor(...args) {
       if (args.length === 0) {
-        super(Deno.core.ops.op_now());
+        super(Deno.core.ops.op_now(__flux_eid()));
       } else {
         super(...args);
       }
     }
   }
-  PatchedDate.now = function() { return Deno.core.ops.op_now(); };
-  // parse() and UTC() are deterministic — inherited automatically via class extends
+  PatchedDate.now = function() { return Deno.core.ops.op_now(__flux_eid()); };
   globalThis.Date = PatchedDate;
 }
 
 // ── performance.now() ──────────────────────────────────────────────────────
-// performance.now() is a separate high-resolution monotonic clock that also
-// reads the system clock. If left unpatched, replay sees live wall time even
-// when Date.now is frozen. Route it through the same op_now so it shares the
-// same frozen timestamp in replay mode.
 if (globalThis.performance) {
-  const _origPerfNow = globalThis.performance.now.bind(globalThis.performance);
-  globalThis.performance.now = function() { return Deno.core.ops.op_now(); };
+  globalThis.performance.now = function() { return Deno.core.ops.op_now(__flux_eid()); };
 }
 
 // ── console ────────────────────────────────────────────────────────────────
-// Capture all console output and link it to the current execution_id so
-// `flux trace` can show logs alongside spans and DB mutations.
 function _flux_fmt(...args) {
   return args.map(v => (typeof v === "string" ? v : JSON.stringify(v))).join(" ");
 }
-console.log   = (...a) => Deno.core.ops.op_console(_flux_fmt(...a), false);
-console.info  = (...a) => Deno.core.ops.op_console(_flux_fmt(...a), false);
-console.warn  = (...a) => Deno.core.ops.op_console(_flux_fmt(...a), false);
-console.error = (...a) => Deno.core.ops.op_console(_flux_fmt(...a), true);
-console.debug = (...a) => Deno.core.ops.op_console(_flux_fmt(...a), false);
+console.log   = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), false);
+console.info  = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), false);
+console.warn  = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), false);
+console.error = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), true);
+console.debug = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), false);
 
 // ── setTimeout / setInterval ────────────────────────────────────────────────
-// In Replay mode op_timer_delay returns 0 so timers fire immediately instead
-// of waiting real wall-clock time — keeps replay fast and deterministic.
 const _origSetTimeout  = globalThis.setTimeout;
 const _origSetInterval = globalThis.setInterval;
 globalThis.setTimeout  = (fn, delay, ...args) =>
-  _origSetTimeout(fn,  Deno.core.ops.op_timer_delay(delay ?? 0), ...args);
+  _origSetTimeout(fn,  Deno.core.ops.op_timer_delay(__flux_eid(), delay ?? 0), ...args);
 globalThis.setInterval = (fn, delay, ...args) =>
-  _origSetInterval(fn, Deno.core.ops.op_timer_delay(delay ?? 0), ...args);
+  _origSetInterval(fn, Deno.core.ops.op_timer_delay(__flux_eid(), delay ?? 0), ...args);
 
 // ── Math.random ─────────────────────────────────────────────────────────────
-// In Live mode op_random generates a real random f64 and records it.
-// In Replay mode it returns the recorded value in sequence → same code path,
-// same branching, deterministic execution.
-Math.random = () => Deno.core.ops.op_random();
+Math.random = () => Deno.core.ops.op_random(__flux_eid());
 
 // ── Deno.serve (server mode) ─────────────────────────────────────────────────
-// Intercepts `Deno.serve(handler)` so frameworks like Hono work inside Flux.
-// The handler is stored globally; Rust feeds requests in via
-// `__flux_dispatch_request` instead of binding a real TCP socket.
 globalThis.__flux_net_handler = null;
 
 Deno.serve = function(handlerOrOptions) {
@@ -992,29 +1139,27 @@ Deno.serve = function(handlerOrOptions) {
   if (typeof handlerOrOptions === "function") {
     handler = handlerOrOptions;
   } else if (handlerOrOptions && typeof handlerOrOptions.fetch === "function") {
-    // Hono passes { fetch } object
     handler = handlerOrOptions.fetch.bind(handlerOrOptions);
   }
   if (!handler) throw new TypeError("Deno.serve: expected a handler function or { fetch } object");
 
   globalThis.__flux_net_handler = handler;
-  Deno.core.ops.op_net_listen(0);
+  Deno.core.ops.op_net_listen(__flux_eid(), 0);
 
-  // Return a stub Deno.Server — frameworks may call .finished, .ref, .unref
   return { ref() {}, unref() {}, shutdown() {}, finished: Promise.resolve() };
 };
 
 // Called by Rust (via execute_script) for each incoming HTTP request.
 globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJson, body) {
+  const __eid = globalThis.__FLUX_EXECUTION_ID__;
   const handler = globalThis.__flux_net_handler;
   if (!handler) {
-    Deno.core.ops.op_net_respond(reqId, 500, "[]", "No Deno.serve handler registered");
+    Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", "No Deno.serve handler registered");
     return;
   }
 
   let headersInit;
   try {
-    // headersJson is [[name,value],...] from Rust
     headersInit = JSON.parse(headersJson);
   } catch {
     headersInit = [];
@@ -1031,7 +1176,7 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
     response = await handler(request);
   } catch (err) {
     const msg = String(err && err.stack ? err.stack : err);
-    Deno.core.ops.op_net_respond(reqId, 500, "[]", msg);
+    Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", msg);
     return;
   }
 
@@ -1039,7 +1184,7 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
   try { responseBody = await response.text(); } catch { responseBody = ""; }
 
   const responseHeaders = JSON.stringify([...response.headers.entries()]);
-  Deno.core.ops.op_net_respond(reqId, response.status, responseHeaders, responseBody);
+  Deno.core.ops.op_net_respond(__eid, reqId, response.status ?? 200, responseHeaders, responseBody);
 };
 "#
 }

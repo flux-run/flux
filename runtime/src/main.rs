@@ -3,6 +3,23 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use deno_ast::{EmitOptions, MediaType, ParseParams, TranspileModuleOptions, TranspileOptions};
 use clap::Parser;
+use serde::Deserialize;
+
+/// Subset of flux.json that the runtime cares about.
+#[derive(Debug, Deserialize)]
+struct FluxManifest {
+    #[serde(default)]
+    bundled: Option<String>,
+}
+
+/// Load flux.json from the same directory as the entry file, if present.
+fn load_flux_manifest(entry: &Path) -> Option<FluxManifest> {
+    let manifest_path = entry.parent()?.join("flux.json");
+    let text = std::fs::read_to_string(&manifest_path).ok()?;
+    serde_json::from_str(&text)
+        .map_err(|e| tracing::warn!("flux.json parse error: {e}"))
+        .ok()
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "flux-runtime")]
@@ -95,7 +112,37 @@ async fn main() -> Result<()> {
         .file_name()
         .and_then(|v| v.to_str())
         .ok_or_else(|| anyhow::anyhow!("invalid entry file name: {}", entry.display()))?;
-    let artifact = runtime::build_artifact(name, code);
+
+    // If flux.json names a bundled output file, prefer it over the raw entry so
+    // the runtime executes the single-file bundle (tree-shaken, minified).
+    let (code, name) = if let Some(manifest) = load_flux_manifest(&entry) {
+        if let Some(bundle_rel) = manifest.bundled {
+            let bundle_path = entry
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(&bundle_rel);
+            if bundle_path.exists() {
+                tracing::debug!(bundle = %bundle_path.display(), "using bundled entry from flux.json");
+                let bundle_code = std::fs::read_to_string(&bundle_path)
+                    .with_context(|| format!("failed to read bundle {}", bundle_path.display()))?;
+                let bundle_name = bundle_path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or(name)
+                    .to_string();
+                (bundle_code, bundle_name)
+            } else {
+                tracing::warn!(bundle = %bundle_path.display(), "flux.json bundle path not found, falling back to entry");
+                (code, name.to_string())
+            }
+        } else {
+            (code, name.to_string())
+        }
+    } else {
+        (code, name.to_string())
+    };
+
+    let artifact = runtime::build_artifact(&name, code);
 
     let route_name = entry
         .file_stem()

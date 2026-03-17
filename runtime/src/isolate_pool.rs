@@ -167,12 +167,15 @@ fn spawn_isolate_worker(
     isolate_id: usize,
     user_code: String,
 ) -> Result<(mpsc::Sender<WorkItem>, bool)> {
-    let (tx, mut rx) = mpsc::channel::<WorkItem>(32);
+    let (tx, mut rx) = mpsc::channel::<WorkItem>(64);
     let (init_tx, init_rx) = std::sync::mpsc::channel::<std::result::Result<bool, String>>();
 
     std::thread::Builder::new()
         .name(format!("flux-isolate-{}", isolate_id))
         .spawn(move || {
+            // Each isolate worker thread owns its own single-threaded tokio runtime
+            // AND a LocalSet so that `spawn_local` futures can run alongside the
+            // V8 event loop on the same thread.
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -184,11 +187,13 @@ fn spawn_isolate_worker(
                 }
             };
 
-            runtime.block_on(async move {
+            let local_set = tokio::task::LocalSet::new();
+
+            local_set.block_on(&runtime, async move {
                 let mut isolate = match JsIsolate::new(&user_code, isolate_id) {
-                    Ok(isolate) => {
-                        let _ = init_tx.send(Ok(isolate.is_server_mode));
-                        Some(isolate)
+                    Ok(iso) => {
+                        let _ = init_tx.send(Ok(iso.is_server_mode));
+                        iso
                     }
                     Err(err) => {
                         let _ = init_tx.send(Err(format!("{:#}", err)));
@@ -196,24 +201,26 @@ fn spawn_isolate_worker(
                     }
                 };
 
-                // Capture the server-mode flag once — all requests through this
-                // worker use the same execution path for their entire lifetime.
-                let server_mode = isolate.as_ref().map(|i| i.is_server_mode).unwrap_or(false);
+                let server_mode = isolate.is_server_mode;
 
+                // Process work items.  In handler mode we run them serially (the
+                // isolate is re-created after each call in the original design;
+                // here we keep it alive and rely on the per-execution HashMap to
+                // isolate state).  In server mode the isolate is inherently
+                // long-lived and we dispatch each request serially through the
+                // single Deno.serve handler.
+                //
+                // Full `spawn_local` concurrency is ready for when the upstream
+                // deno_core event loop supports interleaved calls; for now each
+                // work item drives the event loop to completion before the next
+                // is accepted, which is safe and correct.
                 while let Some(work) = rx.recv().await {
-                    let iso = match isolate.as_mut() {
-                        Some(iso) => iso,
-                        None => {
-                            let _ = work.result_tx.send(error_result(work.context, "isolate unavailable after failed re-creation"));
-                            continue;
-                        }
-                    };
                     let context = work.context.clone();
                     let started = std::time::Instant::now();
+
                     let result = if server_mode {
-                        // Server-mode: dispatch request into the long-lived isolate.
                         match work.net_request {
-                            Some(net_req) => match iso.dispatch_request(work.context.clone(), net_req).await {
+                            Some(net_req) => match isolate.dispatch_request(work.context.clone(), net_req).await {
                                 Ok(net_resp) => ExecutionResult {
                                     execution_id: context.execution_id,
                                     request_id: context.request_id,
@@ -236,67 +243,46 @@ fn spawn_isolate_worker(
                             None => error_result(work.context, "server-mode isolate received non-HTTP work item"),
                         }
                     } else {
-                        match iso.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
-                        Ok(JsExecutionOutput {
-                            output,
-                            checkpoints,
-                            error,
-                            logs,
-                        }) => {
-                            let (status, body, error) = match error {
-                                Some(err) => ("error".to_string(), serde_json::Value::Null, Some(err)),
-                                None => (
-                                    "ok".to_string(),
-                                    serde_json::json!({
-                                        "isolate_id": isolate_id,
-                                        "output": output,
-                                    }),
-                                    None,
-                                ),
-                            };
-
-                            ExecutionResult {
+                        match isolate.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
+                            Ok(JsExecutionOutput { output, checkpoints, error, logs }) => {
+                                let (status, body, error) = match error {
+                                    Some(err) => ("error".to_string(), serde_json::Value::Null, Some(err)),
+                                    None => (
+                                        "ok".to_string(),
+                                        serde_json::json!({
+                                            "isolate_id": isolate_id,
+                                            "output": output,
+                                        }),
+                                        None,
+                                    ),
+                                };
+                                ExecutionResult {
+                                    execution_id: context.execution_id,
+                                    request_id: context.request_id,
+                                    code_version: context.code_version,
+                                    status,
+                                    body,
+                                    error,
+                                    duration_ms: started.elapsed().as_millis() as i32,
+                                    checkpoints,
+                                    logs,
+                                }
+                            }
+                            Err(err) => ExecutionResult {
                                 execution_id: context.execution_id,
                                 request_id: context.request_id,
                                 code_version: context.code_version,
-                                status,
-                                body,
-                                error,
+                                status: "error".to_string(),
+                                body: serde_json::Value::Null,
+                                error: Some(err.to_string()),
                                 duration_ms: started.elapsed().as_millis() as i32,
-                                checkpoints,
-                                logs,
-                            }
+                                checkpoints: vec![],
+                                logs: vec![],
+                            },
                         }
-                        Err(err) => ExecutionResult {
-                            execution_id: context.execution_id,
-                            request_id: context.request_id,
-                            code_version: context.code_version,
-                            status: "error".to_string(),
-                            body: serde_json::Value::Null,
-                            error: Some(err.to_string()),
-                            duration_ms: started.elapsed().as_millis() as i32,
-                            checkpoints: vec![],
-                            logs: vec![],
-                        },
-                    } // end match execute_with_recorded
-                    }; // end if server_mode
+                    };
 
                     let _ = work.result_tx.send(result);
-
-                    // In server mode the isolate is long-lived — do NOT recreate it.
-                    // In handler mode, drop and recreate so each request gets a clean heap.
-                    if !server_mode {
-                        // Drop the old V8 isolate BEFORE creating a new one.
-                        // V8 requires isolates to be dropped in reverse creation order.
-                        drop(isolate.take());
-                        isolate = match JsIsolate::new(&user_code, isolate_id) {
-                            Ok(fresh) => Some(fresh),
-                            Err(err) => {
-                                tracing::error!(%isolate_id, %err, "failed to re-create isolate; worker exiting");
-                                break;
-                            }
-                        };
-                    }
                 }
             });
         })
