@@ -1,8 +1,13 @@
 use anyhow::{Result, bail};
 use clap::Args;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const REPLAY_DIVERGENCE_EXIT_CODE: i32 = 2;
+const ANSI_GREEN: &str = "\x1b[32m";
+const ANSI_YELLOW: &str = "\x1b[33m";
+const ANSI_RED: &str = "\x1b[31m";
+const ANSI_DIM: &str = "\x1b[90m";
+const ANSI_RESET: &str = "\x1b[0m";
 
 use crate::config::resolve_auth;
 use crate::grpc::{get_trace, replay};
@@ -307,6 +312,105 @@ fn sanitize_replay_error(raw: &str) -> String {
     }
 }
 
+#[derive(Default)]
+struct DiffTreeNode {
+    children: BTreeMap<String, DiffTreeNode>,
+    expected: Option<String>,
+    actual: Option<String>,
+}
+
+fn colorize(text: impl AsRef<str>, color: &str) -> String {
+    format!("{}{}{}", color, text.as_ref(), ANSI_RESET)
+}
+
+fn parse_diff_path(path: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let chars: Vec<char> = path.chars().collect();
+    let mut index = 0;
+
+    if chars.first() == Some(&'$') {
+        index += 1;
+    }
+
+    while index < chars.len() {
+        match chars[index] {
+            '.' => {
+                index += 1;
+            }
+            '[' => {
+                let start = index;
+                index += 1;
+                while index < chars.len() && chars[index] != ']' {
+                    index += 1;
+                }
+                if index < chars.len() {
+                    index += 1;
+                }
+                segments.push(chars[start..index].iter().collect());
+            }
+            _ => {
+                let start = index;
+                while index < chars.len() && chars[index] != '.' && chars[index] != '[' {
+                    index += 1;
+                }
+                segments.push(chars[start..index].iter().collect());
+            }
+        }
+    }
+
+    segments
+}
+
+fn insert_diff(node: &mut DiffTreeNode, segments: &[String], expected: &str, actual: &str) {
+    if segments.is_empty() {
+        node.expected = Some(expected.to_string());
+        node.actual = Some(actual.to_string());
+        return;
+    }
+
+    let child = node.children.entry(segments[0].clone()).or_default();
+    insert_diff(child, &segments[1..], expected, actual);
+}
+
+fn build_diff_tree(diffs: &[crate::grpc::ReplayFieldDiffView]) -> DiffTreeNode {
+    let mut root = DiffTreeNode::default();
+    for diff in diffs {
+        let segments = parse_diff_path(&diff.path);
+        insert_diff(&mut root, &segments, &diff.expected_json, &diff.actual_json);
+    }
+    root
+}
+
+fn render_diff_tree(name: Option<&str>, node: &DiffTreeNode, indent: usize) {
+    let prefix = " ".repeat(indent);
+
+    if let Some(name) = name {
+        if node.expected.is_some() || !node.children.is_empty() {
+            println!("{}{}:", prefix, name);
+        }
+    }
+
+    let child_indent = if name.is_some() { indent + 2 } else { indent };
+    let child_prefix = " ".repeat(child_indent);
+
+    if let (Some(expected), Some(actual)) = (&node.expected, &node.actual) {
+        println!(
+            "{}expected  {}",
+            child_prefix,
+            colorize(expected, ANSI_DIM)
+        );
+        println!(
+            "{}actual    {}",
+            child_prefix,
+            colorize(actual, ANSI_RED)
+        );
+    }
+
+    for (child_name, child_node) in &node.children {
+        render_diff_tree(Some(child_name), child_node, child_indent);
+    }
+}
+
 fn print_explain_view(
     short_id: &str,
     response: &crate::grpc::ReplayView,
@@ -316,22 +420,22 @@ fn print_explain_view(
     println!();
 
     let status_label = if response.status == "ok" {
-        "ok"
+        colorize("ok", ANSI_GREEN)
     } else {
-        "error"
+        colorize("error", ANSI_RED)
     };
 
     println!("  status      {}", status_label);
     println!("  duration    {}ms", response.duration_ms);
     if validate {
-        println!("  validation  enabled");
+        println!("  validation  {}", colorize("enabled", ANSI_YELLOW));
     }
 
     println!();
     for step in &response.steps {
         let summary = match (step.source.as_str(), step.validated) {
-            ("recorded", _) => "recorded".to_string(),
-            ("live", true) => "live (validated)".to_string(),
+            ("recorded", _) => colorize("recorded", ANSI_GREEN),
+            ("live", true) => colorize("live (validated)", ANSI_YELLOW),
             ("live", false) => "live".to_string(),
             _ => step.source.clone(),
         };
@@ -344,12 +448,13 @@ fn print_explain_view(
 
         if diverged {
             println!(
-                "  [{}] {} {}  {}ms  {}  DIVERGED",
+                "  [{}] {} {}  {}ms  {}  {}",
                 step.call_index,
                 step.boundary.to_lowercase(),
                 step.url,
                 step.duration_ms,
                 summary,
+                colorize("DIVERGED", ANSI_RED),
             );
         } else {
             println!(
@@ -365,7 +470,7 @@ fn print_explain_view(
 
     if let Some(divergence) = &response.divergence {
         println!();
-        println!("  First Divergence");
+        println!("  {}", colorize("First Divergence", ANSI_RED));
         println!(
             "  [{}] {} {}",
             divergence.checkpoint_index,
@@ -374,20 +479,17 @@ fn print_explain_view(
         );
 
         if divergence.diffs.is_empty() {
-            println!("    expected  {}", divergence.expected_json);
-            println!("    actual    {}", divergence.actual_json);
+            println!("    expected  {}", colorize(&divergence.expected_json, ANSI_DIM));
+            println!("    actual    {}", colorize(&divergence.actual_json, ANSI_RED));
         } else {
-            for diff in &divergence.diffs {
-                println!("    {}", diff.path);
-                println!("      expected  {}", diff.expected_json);
-                println!("      actual    {}", diff.actual_json);
-            }
+            let tree = build_diff_tree(&divergence.diffs);
+            render_diff_tree(None, &tree, 4);
         }
     }
 
     if !response.error.is_empty() {
         println!();
-        println!("  error  {}", sanitize_replay_error(&response.error));
+        println!("  error  {}", colorize(sanitize_replay_error(&response.error), ANSI_RED));
     }
 
     if !response.output.is_empty() && response.output != "null" {
