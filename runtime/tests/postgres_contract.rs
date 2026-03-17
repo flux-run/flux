@@ -644,6 +644,8 @@ async fn postgres_node_pg_pool_applies_temporal_and_uuid_type_parsers() -> Resul
 export default async function handler({ input }) {
     const types = Flux.postgres.nodePgTypes;
     types.setTypeParser(types.builtins.DATE, (value) => `date:${value}`);
+    types.setTypeParser(types.builtins.TIME, (value) => ({ time: value }));
+    types.setTypeParser(types.builtins.TIMETZ, (value) => value.replace("+00", "Z"));
     types.setTypeParser(types.builtins.TIMESTAMP, (value) => value.replace(" ", "T"));
     types.setTypeParser(types.builtins.TIMESTAMPTZ, (value) => ({ utc: value.endsWith("+00") }));
     types.setTypeParser(types.builtins.INTERVAL, (value) => value.split(" ")[0]);
@@ -670,7 +672,7 @@ export default async function handler({ input }) {
 
     let payload = serde_json::json!({
         "connectionString": format!("postgres://127.0.0.1:{port}/flux_test"),
-        "sql": "select '2026-03-17'::date as created_on, '2026-03-17 12:34:56'::timestamp as created_at, '2026-03-17 12:34:56+00'::timestamptz as created_at_utc, '2 days 03:04:05'::interval as elapsed, '123e4567-e89b-12d3-a456-426614174000'::uuid as id",
+        "sql": "select '2026-03-17'::date as created_on, '12:34:56'::time as starts_at, '12:34:56+00'::timetz as starts_at_tz, '2026-03-17 12:34:56'::timestamp as created_at, '2026-03-17 12:34:56+00'::timestamptz as created_at_utc, '2 days 03:04:05'::interval as elapsed, '123e4567-e89b-12d3-a456-426614174000'::uuid as id",
     });
 
     let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg temporal parser isolate")?;
@@ -688,6 +690,8 @@ export default async function handler({ input }) {
         serde_json::json!({
             "rows": [{
                 "created_on": "date:2026-03-17",
+                "starts_at": { "time": "12:34:56" },
+                "starts_at_tz": "12:34:56Z",
                 "created_at": "2026-03-17T12:34:56",
                 "created_at_utc": { "utc": true },
                 "elapsed": "2",
@@ -695,6 +699,8 @@ export default async function handler({ input }) {
             }],
             "fields": [
                 { "name": "created_on", "dataTypeID": 1082, "format": "text" },
+                { "name": "starts_at", "dataTypeID": 1083, "format": "text" },
+                { "name": "starts_at_tz", "dataTypeID": 1266, "format": "text" },
                 { "name": "created_at", "dataTypeID": 1114, "format": "text" },
                 { "name": "created_at_utc", "dataTypeID": 1184, "format": "text" },
                 { "name": "elapsed", "dataTypeID": 1186, "format": "text" },
@@ -1104,16 +1110,20 @@ async fn spawn_mock_postgres_temporal_result_server() -> Result<(u16, oneshot::S
                 handle_extended_query_columns(
                     &mut socket,
                     parse,
-                    "select '2026-03-17'::date as created_on, '2026-03-17 12:34:56'::timestamp as created_at, '2026-03-17 12:34:56+00'::timestamptz as created_at_utc, '2 days 03:04:05'::interval as elapsed, '123e4567-e89b-12d3-a456-426614174000'::uuid as id",
+                    "select '2026-03-17'::date as created_on, '12:34:56'::time as starts_at, '12:34:56+00'::timetz as starts_at_tz, '2026-03-17 12:34:56'::timestamp as created_at, '2026-03-17 12:34:56+00'::timestamptz as created_at_utc, '2 days 03:04:05'::interval as elapsed, '123e4567-e89b-12d3-a456-426614174000'::uuid as id",
                     &[],
                     Some((&[
                         (b"created_on".as_slice(), 1082),
+                        (b"starts_at".as_slice(), 1083),
+                        (b"starts_at_tz".as_slice(), 1266),
                         (b"created_at".as_slice(), 1114),
                         (b"created_at_utc".as_slice(), 1184),
                         (b"elapsed".as_slice(), 1186),
                         (b"id".as_slice(), 2950),
                     ], vec![
                         Some(b"2026-03-17".as_slice()),
+                        Some(b"12:34:56".as_slice()),
+                        Some(b"12:34:56+00".as_slice()),
                         Some(b"2026-03-17 12:34:56".as_slice()),
                         Some(b"2026-03-17 12:34:56+00".as_slice()),
                         Some(b"2 days 03:04:05".as_slice()),
