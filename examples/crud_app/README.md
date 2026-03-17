@@ -1,10 +1,10 @@
 # CRUD App
 
-Minimal Deno CRUD API built with Hono, Drizzle ORM, Zod, and Postgres.
+Minimal CRUD API built to test Flux with Hono, Zod, and Postgres.
 
 ## Docker
 
-This sample now includes a containerized local setup for the app plus Postgres.
+This sample now includes a containerized local setup that runs the app with Flux plus a Postgres service.
 
 Start both services:
 
@@ -26,23 +26,29 @@ Remove the Postgres volume too:
 docker compose down -v
 ```
 
-## Flux status
+## Flux path
 
-This sample already builds as a Flux artifact:
+This is the Flux entrypoint used by Docker:
+
+```sh
+flux build main_flux.ts
+flux serve --skip-verify main_flux.ts
+```
+
+The Flux-specific entry uses:
+
+- `Deno.serve(...)` for server mode
+- `Deno.env.get("DATABASE_URL")` for container config
+- direct SQL over the Flux `pg` shim
+- `FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1` in Docker so the app can reach the local Postgres container
+- schema creation is handled by Postgres init SQL, not by Flux module initialization
+
+You can still build it manually:
 
 ```sh
 cd examples/crud_app
-flux build main.ts
+flux build main_flux.ts
 ```
-
-That validates the bundled module graph for Hono + Drizzle.
-
-Current runtime caveat:
-
-- the sample still reads `DATABASE_URL` via `Deno.env.get(...)`
-- the sample still uses the `drizzle-orm/postgres-js` driver for local Deno development
-
-Those choices are fine for local Deno usage, but Flux's proven database seam today is the bundled artifact path plus the `pg`-compatible Flux shim.
 
 ## Setup
 
@@ -58,6 +64,8 @@ Run the API:
 deno task dev
 ```
 
+That local Deno path uses `main.ts`, Drizzle, and `postgres-js` for convenience.
+
 Or run it in containers:
 
 ```sh
@@ -67,10 +75,16 @@ docker compose up --build
 Build the Flux artifact:
 
 ```sh
-flux build main.ts
+flux build main_flux.ts
 ```
 
-The server starts on `http://localhost:8000` by default. Set `PORT` to override it.
+The Flux-served container listens on `http://localhost:8000`.
+
+If you run the Flux path without Docker, create the table first:
+
+```sh
+psql postgres://postgres:postgres@localhost:5432/crud_app -f init.sql
+```
 
 ## Endpoints
 

@@ -104,6 +104,10 @@ fn validate_outbound_host(
         .map(|value| value == "1")
         .unwrap_or(false);
 
+    if allow_loopback {
+        return Ok(());
+    }
+
     if let Ok(ip) = host.parse::<IpAddr>() {
         validate_ip_addr(&ip, allow_loopback).map_err(|_| {
             JsErrorBox::new(
@@ -461,6 +465,7 @@ deno_core::extension!(flux_runtime_ext, ops = [
     op_flux_postgres_simple_query,
     op_flux_postgres_query,
     op_flux_postgres_session_query,
+    op_flux_env_get,
     op_flux_now,
     op_flux_parse_url,
     op_console,
@@ -470,6 +475,12 @@ deno_core::extension!(flux_runtime_ext, ops = [
     op_net_listen,
     op_net_respond,
 ]);
+
+#[op2]
+#[string]
+fn op_flux_env_get(#[string] key: String) -> Option<String> {
+    std::env::var(key).ok()
+}
 
 /// Called by JS at the start of every execution to register a state slot.
 /// `recorded_random_json` and `recorded_uuids_json` are JSON-encoded arrays for
@@ -1863,7 +1874,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_postgres_bool_array_element, parse_postgres_text_array};
+    use super::{parse_postgres_bool_array_element, parse_postgres_text_array, validate_outbound_host};
 
     #[test]
     fn parses_text_arrays() {
@@ -1897,6 +1908,26 @@ mod tests {
             parsed,
             Some(serde_json::json!([true, false, true, false]))
         );
+    }
+
+    #[test]
+    fn postgres_allow_env_allows_private_hosts() {
+        unsafe {
+            std::env::set_var("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+        }
+
+        let result = validate_outbound_host(
+            "172.18.0.2",
+            5432,
+            "postgres connect",
+            "FLOWBASE_ALLOW_LOOPBACK_POSTGRES",
+        );
+
+        unsafe {
+            std::env::remove_var("FLOWBASE_ALLOW_LOOPBACK_POSTGRES");
+        }
+
+        assert!(result.is_ok());
     }
 }
 
@@ -4873,6 +4904,16 @@ globalThis.Flux.net.tcpExchange = function(options = {}) {
 };
 
 // ── Deno.serve (server mode) ─────────────────────────────────────────────────
+if (!Deno.env) {
+    Deno.env = {};
+}
+
+if (typeof Deno.env.get !== "function") {
+    Deno.env.get = function(key) {
+        return Deno.core.ops.op_flux_env_get(String(key));
+    };
+}
+
 globalThis.__flux_net_handler = null;
 globalThis.__flux_net_server = null;
 

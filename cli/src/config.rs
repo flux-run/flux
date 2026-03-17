@@ -64,6 +64,24 @@ pub fn resolve_auth(url: Option<String>, token: Option<String>) -> Result<Resolv
     })
 }
 
+pub fn resolve_optional_auth(url: Option<String>, token: Option<String>) -> Result<ResolvedAuth> {
+    let config = CliConfig::load()?;
+
+    let url = url
+        .or(config.url)
+        .or_else(load_server_url_from_port_file)
+        .unwrap_or_else(|| "http://127.0.0.1:50051".to_string());
+
+    let token = token
+        .or(config.token)
+        .unwrap_or_default();
+
+    Ok(ResolvedAuth {
+        url: normalize_grpc_url(&url),
+        token,
+    })
+}
+
 fn load_server_url_from_port_file() -> Option<String> {
     let path = dirs::home_dir()?.join(".flux").join("server.port");
     let raw = std::fs::read_to_string(path).ok()?;

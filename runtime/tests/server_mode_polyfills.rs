@@ -288,6 +288,37 @@ export default async function handler() {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deno_env_get_reads_process_environment() -> Result<()> {
+    let _lock = polyfill_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLUX_TEST_DATABASE_URL", "postgres://flux:test@db/flux");
+    let code = r#"
+export default async function handler() {
+  return {
+    value: Deno.env.get("FLUX_TEST_DATABASE_URL") ?? null,
+    missing: Deno.env.get("FLUX_TEST_MISSING") ?? null,
+  };
+}
+"#;
+
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create isolate")?;
+    let output = isolate
+        .execute(serde_json::json!({}), ExecutionContext::new("deno-env-get"))
+        .await
+        .context("deno env get execution failed")?;
+
+    assert_eq!(output.error, None);
+    assert_eq!(
+        output.output,
+        serde_json::json!({
+            "value": "postgres://flux:test@db/flux",
+            "missing": null,
+        })
+    );
+
+    Ok(())
+}
+
 fn polyfill_test_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))

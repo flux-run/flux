@@ -1,5 +1,5 @@
 {
   "flux_version": "0.2",
-  "entry": "./main.ts",
+  "entry": "./main_flux.ts",
   "artifact": "./.flux/artifact.json"
 }

@@ -1,5 +1,5 @@
-import { drizzle } from "npm:drizzle-orm/node-postgres";
-import { sql } from "npm:drizzle-orm";
+import { drizzle } from "npm:drizzle-orm@0.45.1/node-postgres";
+import { sql } from "npm:drizzle-orm@0.45.1";
 import pg from "./flux-pg.js";
 
 type Input = {

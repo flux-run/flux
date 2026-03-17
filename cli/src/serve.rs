@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use crate::config::resolve_auth;
+use crate::config::resolve_optional_auth;
 use crate::grpc::validate_service_token;
 use crate::project::{resolve_built_artifact, resolve_entry_path};
 
@@ -33,7 +33,7 @@ pub struct ServeArgs {
 pub async fn execute(args: ServeArgs) -> Result<()> {
     let entry = resolve_entry_path(args.entry.as_deref())?;
     let (_config, built_artifact) = resolve_built_artifact(&entry)?;
-    let auth = resolve_auth(args.url.clone(), args.token.clone())?;
+    let auth = resolve_optional_auth(args.url.clone(), args.token.clone())?;
     if !args.skip_verify {
         validate_service_token(&auth.url, &auth.token).await?;
     }
