@@ -14,13 +14,16 @@ use base64::Engine;
 use deno_ast::{EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileModuleOptions, TranspileOptions};
 use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind, RuntimeOptions, op2, resolve_import, resolve_path};
 use deno_error::JsErrorBox;
-use postgres::{Client as PostgresClient, NoTls, SimpleQueryMessage};
+use postgres::config::SslMode as PostgresSslMode;
+use postgres::{Client as PostgresClient, Config as PostgresConfig, NoTls, SimpleQueryMessage};
 use postgres::types::ToSql;
+use postgres_rustls::MakeTlsConnector as PostgresMakeTlsConnector;
 use rand::Rng;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
 use shared::project::{ArtifactMediaType, ArtifactModule, FluxBuildArtifact};
+use tokio_rustls::TlsConnector;
 use ureq::OrAnyStatus;
 use url::Url;
 use uuid::Uuid;
@@ -223,6 +226,15 @@ struct PostgresQueryRequestPayload {
     sql: String,
     #[serde(default)]
     params: Vec<serde_json::Value>,
+    #[serde(default)]
+    tls: bool,
+    ca_cert_pem: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct PostgresTlsOptions {
+    enabled: bool,
+    ca_cert_pem: Option<String>,
 }
 
 fn default_tcp_read_mode() -> String {
@@ -611,6 +623,8 @@ fn op_flux_postgres_simple_query(
         connection_string,
         sql,
         params: _,
+        tls,
+        ca_cert_pem,
     } = serde_json::from_value(request)
         .map_err(|err| JsErrorBox::type_error(format!("invalid postgres query request: {err}")))?;
 
@@ -672,7 +686,14 @@ fn op_flux_postgres_simple_query(
     }
 
     let started = std::time::Instant::now();
-    let live_response = perform_postgres_simple_query(&connection_string, &sql)?;
+    let live_response = perform_postgres_simple_query(
+        &connection_string,
+        &sql,
+        &PostgresTlsOptions {
+            enabled: tls,
+            ca_cert_pem,
+        },
+    )?;
     let duration_ms = started.elapsed().as_millis() as i32;
 
     let request_json = serde_json::json!({
@@ -680,6 +701,7 @@ fn op_flux_postgres_simple_query(
         "host": host,
         "port": port,
         "sql": sql,
+        "tls": tls,
     });
     let response_json = serde_json::json!({
         "rows": live_response.rows,
@@ -723,6 +745,8 @@ fn op_flux_postgres_query(
         connection_string,
         sql,
         params,
+        tls,
+        ca_cert_pem,
     } = serde_json::from_value(request)
         .map_err(|err| JsErrorBox::type_error(format!("invalid postgres query request: {err}")))?;
 
@@ -784,7 +808,15 @@ fn op_flux_postgres_query(
     }
 
     let started = std::time::Instant::now();
-    let live_response = perform_postgres_query(&connection_string, &sql, &params)?;
+    let live_response = perform_postgres_query(
+        &connection_string,
+        &sql,
+        &params,
+        &PostgresTlsOptions {
+            enabled: tls,
+            ca_cert_pem,
+        },
+    )?;
     let duration_ms = started.elapsed().as_millis() as i32;
 
     let request_json = serde_json::json!({
@@ -793,6 +825,7 @@ fn op_flux_postgres_query(
         "port": port,
         "sql": sql,
         "params": params,
+        "tls": tls,
     });
     let response_json = serde_json::json!({
         "rows": live_response.rows,
@@ -835,12 +868,13 @@ struct PostgresSimpleQueryResponse {
 fn perform_postgres_simple_query(
     connection_string: &str,
     sql: &str,
+    tls: &PostgresTlsOptions,
 ) -> Result<PostgresSimpleQueryResponse, JsErrorBox> {
     let connection_string = connection_string.to_string();
     let sql = sql.to_string();
+    let tls = tls.clone();
     std::thread::spawn(move || {
-        let mut client = PostgresClient::connect(&connection_string, NoTls)
-            .map_err(|err| JsErrorBox::type_error(format!("postgres connect failed: {err}")))?;
+        let mut client = connect_postgres_client(&connection_string, &tls)?;
         let messages = client
             .simple_query(&sql)
             .map_err(|err| JsErrorBox::type_error(format!("postgres query failed: {err}")))?;
@@ -884,13 +918,14 @@ fn perform_postgres_query(
     connection_string: &str,
     sql: &str,
     params: &[serde_json::Value],
+    tls: &PostgresTlsOptions,
 ) -> Result<PostgresSimpleQueryResponse, JsErrorBox> {
     let connection_string = connection_string.to_string();
     let sql = sql.to_string();
     let params = params.to_vec();
+    let tls = tls.clone();
     std::thread::spawn(move || {
-        let mut client = PostgresClient::connect(&connection_string, NoTls)
-            .map_err(|err| JsErrorBox::type_error(format!("postgres connect failed: {err}")))?;
+        let mut client = connect_postgres_client(&connection_string, &tls)?;
 
         let mut boxed_params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
         for param in params {
@@ -936,6 +971,29 @@ fn perform_postgres_query(
     })
     .join()
     .map_err(|_| JsErrorBox::generic("postgres query thread panicked"))?
+}
+
+fn connect_postgres_client(
+    connection_string: &str,
+    tls: &PostgresTlsOptions,
+) -> Result<PostgresClient, JsErrorBox> {
+    let mut config: PostgresConfig = connection_string
+        .parse()
+        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres connection string: {err}")))?;
+
+    if tls.enabled {
+        config.ssl_mode(PostgresSslMode::Require);
+        let tls_config = build_tls_client_config(tls.ca_cert_pem.as_deref())?;
+        let connector = PostgresMakeTlsConnector::new(TlsConnector::from(tls_config));
+        config
+            .connect(connector)
+            .map_err(|err| JsErrorBox::type_error(format!("postgres connect failed: {err}")))
+    } else {
+        config.ssl_mode(PostgresSslMode::Disable);
+        config
+            .connect(NoTls)
+            .map_err(|err| JsErrorBox::type_error(format!("postgres connect failed: {err}")))
+    }
 }
 
 fn box_postgres_param(param: serde_json::Value) -> Result<Box<dyn ToSql + Sync>, JsErrorBox> {
@@ -3529,6 +3587,8 @@ globalThis.Flux.postgres.query = function(options = {}) {
         connection_string: String(options.connectionString ?? ""),
         sql: String(options.sql ?? ""),
         params: Array.isArray(options.params) ? options.params : [],
+        tls: !!options.tls,
+        ca_cert_pem: options.caCertPem == null ? null : String(options.caCertPem),
     });
 
     return {
@@ -3542,6 +3602,8 @@ globalThis.Flux.postgres.simpleQuery = function(options = {}) {
         execution_id: __flux_eid(),
         connection_string: String(options.connectionString ?? ""),
         sql: String(options.sql ?? ""),
+        tls: !!options.tls,
+        ca_cert_pem: options.caCertPem == null ? null : String(options.caCertPem),
     });
 
     return {

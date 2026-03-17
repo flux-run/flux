@@ -151,14 +151,19 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
                 .get("sql")
                 .and_then(|value| value.as_str())
                 .unwrap_or("");
+            let tls = req
+                .get("tls")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
             let row_count = res
                 .get("row_count")
                 .and_then(|value| value.as_u64())
                 .unwrap_or(0);
 
             println!(
-                "  [{}] POSTGRES  {}:{}  {}ms  → {} rows  {}",
+                "  [{}] POSTGRES{}  {}:{}  {}ms  → {} rows  {}",
                 cp.call_index,
+                if tls { "+TLS" } else { "" },
                 host,
                 port,
                 cp.duration_ms,

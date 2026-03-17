@@ -1,12 +1,16 @@
-use std::sync::OnceLock;
+use std::sync::{Once, OnceLock};
 
 use anyhow::{Context, Result};
+use rcgen::generate_simple_self_signed;
 use runtime::JsIsolate;
 use runtime::deno_runtime::{ExecutionMode, FetchCheckpoint};
+use rustls::ServerConfig;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use runtime::isolate_pool::ExecutionContext;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, oneshot};
+use tokio_rustls::TlsAcceptor;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_simple_query_replays_recorded_rows() -> Result<()> {
@@ -233,6 +237,96 @@ export default function handler({ input }) {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn postgres_simple_query_supports_tls_with_custom_ca_and_replay() -> Result<()> {
+    let _lock = postgres_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    ensure_rustls_provider();
+
+    let cert = generate_simple_self_signed(vec!["localhost".to_string()])
+        .context("failed to generate postgres TLS certificate")?;
+    let cert_pem = cert.cert.pem();
+    let cert_der: CertificateDer<'static> = cert.cert.der().clone();
+    let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der()));
+
+    let server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der)
+        .context("failed to build postgres TLS server config")?;
+
+    let acceptor = TlsAcceptor::from(std::sync::Arc::new(server_config));
+    let (port, shutdown_tx, server_task) = spawn_mock_postgres_tls_server(acceptor).await?;
+
+    let code = r#"
+export default function handler({ input }) {
+  const result = Flux.postgres.simpleQuery({
+    connectionString: input.connectionString,
+    sql: input.sql,
+    tls: true,
+    caCertPem: input.caCertPem,
+  });
+
+  return {
+    rows: result.rows,
+    command: result.command,
+    replay: result.replay,
+  };
+}
+"#;
+
+    let payload = serde_json::json!({
+        "connectionString": format!("postgres://localhost:{port}/flux_test"),
+        "sql": "select 1 as value",
+        "caCertPem": cert_pem,
+    });
+
+    let mut isolate = JsIsolate::new_for_run(code).context("failed to create postgres tls isolate")?;
+    let live_output = isolate
+        .execute(payload.clone(), ExecutionContext::new("postgres-tls-live"))
+        .await
+        .context("live postgres TLS execution failed")?;
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("mock postgres tls server task failed")??;
+
+    assert_eq!(live_output.error, None);
+    assert_eq!(
+        live_output.output,
+        serde_json::json!({
+            "rows": [{ "value": "1" }],
+            "command": "SELECT 1",
+            "replay": false,
+        })
+    );
+    assert_eq!(live_output.checkpoints.len(), 1);
+    assert_eq!(live_output.checkpoints[0].boundary, "postgres");
+    assert_eq!(live_output.checkpoints[0].method, "simple_query");
+    assert_eq!(live_output.checkpoints[0].request.get("tls"), Some(&serde_json::json!(true)));
+
+    let recorded = live_output.checkpoints.clone();
+    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create postgres tls replay isolate")?;
+    let mut replay_context = ExecutionContext::new("postgres-tls-replay");
+    replay_context.mode = ExecutionMode::Replay;
+    let replay_output = replay_isolate
+        .execute_with_recorded(payload, replay_context, recorded)
+        .await
+        .context("replay postgres TLS execution failed")?;
+
+    assert_eq!(replay_output.error, None);
+    assert_eq!(
+        replay_output.output,
+        serde_json::json!({
+            "rows": [{ "value": "1" }],
+            "command": "SELECT 1",
+            "replay": true,
+        })
+    );
+    assert_eq!(replay_output.checkpoints.len(), 1);
+    assert_eq!(replay_output.checkpoints[0].boundary, "postgres");
+
+    Ok(())
+}
+
 async fn spawn_mock_postgres_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -371,19 +465,84 @@ async fn spawn_mock_postgres_param_server() -> Result<(u16, oneshot::Sender<()>,
     Ok((port, shutdown_tx, task))
 }
 
+async fn spawn_mock_postgres_tls_server(
+    acceptor: TlsAcceptor,
+) -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind mock postgres TLS listener")?;
+    let port = listener
+        .local_addr()
+        .context("failed to get mock postgres TLS addr")?
+        .port();
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+
+    let task = tokio::spawn(async move {
+        tokio::select! {
+            _ = &mut shutdown_rx => Ok(()),
+            accepted = listener.accept() => {
+                let (mut socket, _) = accepted.context("failed to accept postgres TLS client")?;
+
+                let ssl_request = read_startup_message(&mut socket).await?;
+                if ssl_request.len() != 4 || i32::from_be_bytes([ssl_request[0], ssl_request[1], ssl_request[2], ssl_request[3]]) != 80_877_103 {
+                    anyhow::bail!("expected SSLRequest before TLS handshake");
+                }
+                socket.write_all(b"S").await.context("failed to accept postgres TLS request")?;
+
+                let mut tls_stream = acceptor.accept(socket).await.context("failed to complete postgres TLS handshake")?;
+                let _startup = read_startup_message(&mut tls_stream).await?;
+                write_authentication_ok(&mut tls_stream).await?;
+                write_parameter_status(&mut tls_stream, b"client_encoding", b"UTF8").await?;
+                write_parameter_status(&mut tls_stream, b"server_version", b"16.0").await?;
+                write_backend_key_data(&mut tls_stream).await?;
+                write_ready_for_query(&mut tls_stream).await?;
+
+                let query = read_typed_message(&mut tls_stream).await?;
+                if query.tag != b'Q' {
+                    anyhow::bail!("expected Query message, got {:?}", query.tag as char);
+                }
+                let sql = String::from_utf8(query.payload[..query.payload.len().saturating_sub(1)].to_vec())
+                    .context("invalid TLS query payload")?;
+                if sql != "select 1 as value" {
+                    anyhow::bail!("unexpected TLS SQL: {sql}");
+                }
+
+                write_row_description(&mut tls_stream, b"value").await?;
+                write_data_row(&mut tls_stream, &[b"1"]).await?;
+                write_command_complete(&mut tls_stream, b"SELECT 1").await?;
+                write_ready_for_query(&mut tls_stream).await?;
+
+                let terminate = read_typed_message(&mut tls_stream).await?;
+                if terminate.tag != b'X' {
+                    anyhow::bail!("expected Terminate message, got {:?}", terminate.tag as char);
+                }
+                Ok(())
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx, task))
+}
+
 struct TypedMessage {
     tag: u8,
     payload: Vec<u8>,
 }
 
-async fn read_startup_message(socket: &mut tokio::net::TcpStream) -> Result<Vec<u8>> {
+async fn read_startup_message<S>(socket: &mut S) -> Result<Vec<u8>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let length = socket.read_i32().await.context("failed to read startup length")? as usize;
     let mut payload = vec![0; length.saturating_sub(4)];
     socket.read_exact(&mut payload).await.context("failed to read startup payload")?;
     Ok(payload)
 }
 
-async fn read_typed_message(socket: &mut tokio::net::TcpStream) -> Result<TypedMessage> {
+async fn read_typed_message<S>(socket: &mut S) -> Result<TypedMessage>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let tag = socket.read_u8().await.context("failed to read message tag")?;
     let length = socket.read_i32().await.context("failed to read message length")? as usize;
     let mut payload = vec![0; length.saturating_sub(4)];
@@ -391,11 +550,17 @@ async fn read_typed_message(socket: &mut tokio::net::TcpStream) -> Result<TypedM
     Ok(TypedMessage { tag, payload })
 }
 
-async fn write_authentication_ok(socket: &mut tokio::net::TcpStream) -> Result<()> {
+async fn write_authentication_ok<S>(socket: &mut S) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b'R', |buf| buf.extend_from_slice(&0u32.to_be_bytes())).await
 }
 
-async fn write_parameter_status(socket: &mut tokio::net::TcpStream, key: &[u8], value: &[u8]) -> Result<()> {
+async fn write_parameter_status<S>(socket: &mut S, key: &[u8], value: &[u8]) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b'S', |buf| {
         buf.extend_from_slice(key);
         buf.push(0);
@@ -405,7 +570,10 @@ async fn write_parameter_status(socket: &mut tokio::net::TcpStream, key: &[u8], 
     .await
 }
 
-async fn write_backend_key_data(socket: &mut tokio::net::TcpStream) -> Result<()> {
+async fn write_backend_key_data<S>(socket: &mut S) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b'K', |buf| {
         buf.extend_from_slice(&1u32.to_be_bytes());
         buf.extend_from_slice(&2u32.to_be_bytes());
@@ -413,7 +581,10 @@ async fn write_backend_key_data(socket: &mut tokio::net::TcpStream) -> Result<()
     .await
 }
 
-async fn write_parameter_description(socket: &mut tokio::net::TcpStream, oids: &[u32]) -> Result<()> {
+async fn write_parameter_description<S>(socket: &mut S, oids: &[u32]) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b't', |buf| {
         buf.extend_from_slice(&(oids.len() as u16).to_be_bytes());
         for oid in oids {
@@ -423,11 +594,17 @@ async fn write_parameter_description(socket: &mut tokio::net::TcpStream, oids: &
     .await
 }
 
-async fn write_ready_for_query(socket: &mut tokio::net::TcpStream) -> Result<()> {
+async fn write_ready_for_query<S>(socket: &mut S) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b'Z', |buf| buf.push(b'I')).await
 }
 
-async fn write_row_description(socket: &mut tokio::net::TcpStream, column_name: &[u8]) -> Result<()> {
+async fn write_row_description<S>(socket: &mut S, column_name: &[u8]) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b'T', |buf| {
         buf.extend_from_slice(&1u16.to_be_bytes());
         buf.extend_from_slice(column_name);
@@ -442,7 +619,10 @@ async fn write_row_description(socket: &mut tokio::net::TcpStream, column_name: 
     .await
 }
 
-async fn write_data_row(socket: &mut tokio::net::TcpStream, values: &[&[u8]]) -> Result<()> {
+async fn write_data_row<S>(socket: &mut S, values: &[&[u8]]) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b'D', |buf| {
         buf.extend_from_slice(&(values.len() as u16).to_be_bytes());
         for value in values {
@@ -453,7 +633,10 @@ async fn write_data_row(socket: &mut tokio::net::TcpStream, values: &[&[u8]]) ->
     .await
 }
 
-async fn write_command_complete(socket: &mut tokio::net::TcpStream, tag: &[u8]) -> Result<()> {
+async fn write_command_complete<S>(socket: &mut S, tag: &[u8]) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     write_message(socket, b'C', |buf| {
         buf.extend_from_slice(tag);
         buf.push(0);
@@ -522,8 +705,9 @@ fn read_i32(payload: &[u8], idx: &mut usize) -> Result<i32> {
     Ok(value)
 }
 
-async fn write_message<F>(socket: &mut tokio::net::TcpStream, tag: u8, build: F) -> Result<()>
+async fn write_message<S, F>(socket: &mut S, tag: u8, build: F) -> Result<()>
 where
+    S: AsyncRead + AsyncWrite + Unpin,
     F: FnOnce(&mut Vec<u8>),
 {
     let mut payload = Vec::new();
@@ -540,6 +724,13 @@ where
 fn postgres_test_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn ensure_rustls_provider() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
 }
 
 struct EnvVarGuard {
