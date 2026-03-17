@@ -1391,12 +1391,44 @@ function __fluxCreateBodyStream(state) {
 }
 
 function __fluxDecodeFormComponent(value) {
-    return decodeURIComponent(String(value).replace(/\+/g, " "));
+    const normalized = String(value).replace(/\+/g, " ");
+    try {
+        return decodeURIComponent(normalized);
+    } catch {
+        const bytes = [];
+        for (let index = 0; index < normalized.length; index++) {
+            const char = normalized[index];
+            if (
+                char === "%" &&
+                index + 2 < normalized.length &&
+                /[0-9a-fA-F]{2}/.test(normalized.slice(index + 1, index + 3))
+            ) {
+                bytes.push(parseInt(normalized.slice(index + 1, index + 3), 16));
+                index += 2;
+            } else {
+                bytes.push(char.charCodeAt(0));
+            }
+        }
+
+        return new TextDecoder().decode(new Uint8Array(bytes));
+    }
+}
+
+function __fluxEncodeFormComponent(value) {
+    return encodeURIComponent(String(value)).replace(/%20/g, "+");
+}
+
+class DOMException extends Error {
+    constructor(message = "", name = "Error") {
+        super(String(message));
+        this.name = String(name);
+    }
 }
 
 class URLSearchParams {
-    constructor(init = "") {
+    constructor(init = "", update = null) {
         this._pairs = [];
+        this._update = typeof update === "function" ? update : null;
 
         if (init instanceof URLSearchParams) {
             this._pairs = [...init._pairs];
@@ -1430,6 +1462,7 @@ class URLSearchParams {
 
     append(name, value) {
         this._pairs.push([String(name), String(value)]);
+        this._commit();
     }
 
     get(name) {
@@ -1445,8 +1478,12 @@ class URLSearchParams {
             .map(([, value]) => value);
     }
 
-    has(name) {
+    has(name, value = undefined) {
         const key = String(name);
+        if (arguments.length > 1) {
+            const expected = String(value);
+            return this._pairs.some(([candidate, currentValue]) => candidate === key && currentValue === expected);
+        }
         return this._pairs.some(([candidate]) => candidate === key);
     }
 
@@ -1472,11 +1509,51 @@ class URLSearchParams {
         }
 
         this._pairs = nextPairs;
+        this._commit();
     }
 
-    delete(name) {
+    delete(name, value = undefined) {
         const key = String(name);
-        this._pairs = this._pairs.filter(([candidate]) => candidate !== key);
+        if (arguments.length > 1) {
+            const expected = String(value);
+            this._pairs = this._pairs.filter(([candidate, currentValue]) => !(candidate === key && currentValue === expected));
+        } else {
+            this._pairs = this._pairs.filter(([candidate]) => candidate !== key);
+        }
+        this._commit();
+    }
+
+    forEach(callback, thisArg = undefined) {
+        for (const [key, value] of this._pairs) {
+            callback.call(thisArg, value, key, this);
+        }
+    }
+
+    keys() {
+        return this._pairs.map(([key]) => key)[Symbol.iterator]();
+    }
+
+    values() {
+        return this._pairs.map(([, value]) => value)[Symbol.iterator]();
+    }
+
+    sort() {
+        this._pairs.sort(([leftKey], [rightKey]) => {
+            if (leftKey < rightKey) return -1;
+            if (leftKey > rightKey) return 1;
+            return 0;
+        });
+        this._commit();
+    }
+
+    get size() {
+        return this._pairs.length;
+    }
+
+    _commit() {
+        if (this._update) {
+            this._update(this.toString());
+        }
     }
 
     entries() {
@@ -1489,7 +1566,7 @@ class URLSearchParams {
 
     toString() {
         return this._pairs
-            .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+            .map(([key, value]) => `${__fluxEncodeFormComponent(key)}=${__fluxEncodeFormComponent(value)}`)
             .join("&");
     }
 }
@@ -1497,26 +1574,178 @@ class URLSearchParams {
 class URL {
     constructor(input, base = undefined) {
         const parsed = Deno.core.ops.op_flux_parse_url(String(input), base == null ? "" : String(base));
-        this.href = parsed.href;
-        this.origin = parsed.origin;
-        this.protocol = parsed.protocol;
-        this.username = parsed.username;
-        this.password = parsed.password ?? "";
-        this.host = parsed.host;
-        this.hostname = parsed.hostname;
-        this.port = parsed.port;
-        this.pathname = parsed.pathname;
-        this.search = parsed.search;
-        this.hash = parsed.hash;
-        this.searchParams = new URLSearchParams(this.search);
+        this._applyParsed(parsed);
+        this.searchParams = new URLSearchParams(this._search, (nextSearchParams) => {
+            this.search = nextSearchParams ? `?${nextSearchParams}` : "";
+        });
+    }
+
+    static canParse(input, base = undefined) {
+        try {
+            new URL(input, base);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    static parse(input, base = undefined) {
+        try {
+            return new URL(input, base);
+        } catch {
+            return null;
+        }
+    }
+
+    _applyParsed(parsed) {
+        this._href = parsed.href;
+        this._origin = parsed.origin;
+        this._protocol = parsed.protocol;
+        this._username = parsed.username;
+        this._password = parsed.password ?? "";
+        this._host = parsed.host;
+        this._hostname = parsed.hostname;
+        this._port = parsed.port;
+        this._pathname = parsed.pathname;
+        this._search = parsed.search;
+        this._hash = parsed.hash;
+    }
+
+    _reparseFrom(parts) {
+        const credentials = parts.username
+            ? `${parts.username}${parts.password ? `:${parts.password}` : ""}@`
+            : "";
+        const authority = parts.host ? `//${credentials}${parts.host}` : "";
+        const nextHref = `${parts.protocol}${authority}${parts.pathname}${parts.search}${parts.hash}`;
+        this._applyParsed(Deno.core.ops.op_flux_parse_url(nextHref, ""));
+        if (this.searchParams) {
+            this.searchParams._pairs = new URLSearchParams(this._search)._pairs;
+        }
+    }
+
+    get href() {
+        return this._href;
+    }
+
+    set href(value) {
+        this._applyParsed(Deno.core.ops.op_flux_parse_url(String(value), ""));
+        if (this.searchParams) {
+            this.searchParams._pairs = new URLSearchParams(this._search)._pairs;
+        }
+    }
+
+    get origin() {
+        return this._origin;
+    }
+
+    get protocol() {
+        return this._protocol;
+    }
+
+    set protocol(value) {
+        this._reparseFrom({
+            protocol: String(value),
+            username: this._username,
+            password: this._password,
+            host: this._host,
+            pathname: this._pathname,
+            search: this._search,
+            hash: this._hash,
+        });
+    }
+
+    get username() {
+        return this._username;
+    }
+
+    set username(value) {
+        this._reparseFrom({
+            protocol: this._protocol,
+            username: String(value),
+            password: this._password,
+            host: this._host,
+            pathname: this._pathname,
+            search: this._search,
+            hash: this._hash,
+        });
+    }
+
+    get password() {
+        return this._password;
+    }
+
+    set password(value) {
+        this._reparseFrom({
+            protocol: this._protocol,
+            username: this._username,
+            password: String(value),
+            host: this._host,
+            pathname: this._pathname,
+            search: this._search,
+            hash: this._hash,
+        });
+    }
+
+    get host() {
+        return this._host;
+    }
+
+    get hostname() {
+        return this._hostname;
+    }
+
+    get port() {
+        return this._port;
+    }
+
+    get pathname() {
+        return this._pathname;
+    }
+
+    get search() {
+        return this._search;
+    }
+
+    set search(value) {
+        const nextSearch = value === "" ? "" : String(value).startsWith("?") ? String(value) : `?${value}`;
+        this._reparseFrom({
+            protocol: this._protocol,
+            username: this._username,
+            password: this._password,
+            host: this._host,
+            pathname: this._pathname,
+            search: nextSearch,
+            hash: this._hash,
+        });
+    }
+
+    get hash() {
+        return this._hash;
+    }
+
+    set hash(value) {
+        const nextHash = value === ""
+            ? ""
+            : String(value).startsWith(String.fromCharCode(35))
+                ? String(value)
+                : `#${value}`;
+        this._reparseFrom({
+            protocol: this._protocol,
+            username: this._username,
+            password: this._password,
+            host: this._host,
+            pathname: this._pathname,
+            search: this._search,
+            hash: nextHash,
+        });
     }
 
     toString() {
-        return this.href;
+        return this._href;
     }
 
     toJSON() {
-        return this.href;
+        return this._href;
     }
 }
 
@@ -1680,6 +1909,7 @@ class Response {
 
 globalThis.URLSearchParams = globalThis.URLSearchParams || URLSearchParams;
 globalThis.URL = globalThis.URL || URL;
+globalThis.DOMException = globalThis.DOMException || DOMException;
 globalThis.Headers = Headers;
 globalThis.Request = Request;
 globalThis.Response = Response;

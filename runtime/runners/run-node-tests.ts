@@ -129,6 +129,10 @@ async function main() {
   const sequentialFiles = collectJsFiles(sequentialDir);
   let allFiles          = [...parallelFiles, ...sequentialFiles];
 
+  if (FILTER) {
+    allFiles = allFiles.filter((file) => basename(file).includes(FILTER));
+  }
+
   if (Number.isFinite(LIMIT)) allFiles = allFiles.slice(0, LIMIT);
 
   console.log("\nNode.js Core Compatibility Tests");

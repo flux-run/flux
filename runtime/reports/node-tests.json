@@ -1,711 +1,431 @@
 {
   "suite": "Node.js Core Tests",
-  "timestamp": "2026-03-17T05:36:35.298Z",
+  "timestamp": "2026-03-17T05:51:39.577Z",
   "engine": "node v22.20.0",
   "passed": 0,
-  "failed": 99,
+  "failed": 59,
   "skipped": 1,
-  "total": 100,
-  "elapsedMs": 1522,
+  "total": 60,
+  "elapsedMs": 963,
   "passRate": "0.0%",
   "results": [
     {
-      "name": "test-abort-controller-any-timeout.js",
+      "name": "test-bootstrap-modules.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
-      "duration": 33
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: process is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-bootstrap-modules.js:5:14\n",
+      "duration": 113
     },
     {
-      "name": "test-abortcontroller-internal.js",
+      "name": "test-buffer-constructor-node-modules-paths.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-buffer-constructor-node-modules-paths.js:3:16\n",
       "duration": 15
     },
     {
-      "name": "test-abortcontroller.js",
+      "name": "test-buffer-constructor-node-modules.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:16\n",
-      "duration": 16
-    },
-    {
-      "name": "test-aborted-util.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:16\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-buffer-constructor-node-modules.js:3:16\n",
       "duration": 14
     },
     {
-      "name": "test-abortsignal-any.mjs",
+      "name": "test-buffer-constructor-outside-node-modules.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: Uncaught SyntaxError: Cannot use import statement outside a module\n           at flux:user_code:1:1\n",
-      "duration": 18
-    },
-    {
-      "name": "test-abortsignal-cloneable.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 16
-    },
-    {
-      "name": "test-abortsignal-drop-settled-signals.mjs",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: Uncaught SyntaxError: Cannot use import statement outside a module\n           at flux:user_code:3:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-buffer-constructor-outside-node-modules.js:4:16",
       "duration": 15
     },
     {
-      "name": "test-accessor-properties.js",
+      "name": "test-diagnostics-channel-module-import-error.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:23\n",
-      "duration": 16
-    },
-    {
-      "name": "test-als-defaultvalue-original.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-diagnostics-channel-module-import-error.js:2:16",
       "duration": 14
     },
     {
-      "name": "test-als-defaultvalue.js",
+      "name": "test-diagnostics-channel-module-import.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-diagnostics-channel-module-import.js:2:16\n",
       "duration": 15
     },
     {
-      "name": "test-arm-math-illegal-instruction.js",
+      "name": "test-diagnostics-channel-module-require-error.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-assert-async.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-assert-checktag.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:40\n",
-      "duration": 15
-    },
-    {
-      "name": "test-assert-class-destructuring.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-diagnostics-channel-module-require-error.js:2:1",
       "duration": 14
     },
     {
-      "name": "test-assert-class.js",
+      "name": "test-diagnostics-channel-module-require.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
-      "duration": 16
-    },
-    {
-      "name": "test-assert-deep-with-error.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:1\n",
-      "duration": 17
-    },
-    {
-      "name": "test-assert-deep.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:33\n",
-      "duration": 18
-    },
-    {
-      "name": "test-assert-esm-cjs-message-verify.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:30\n",
-      "duration": 14
-    },
-    {
-      "name": "test-assert-fail.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-diagnostics-channel-module-require.js:2:16\n",
       "duration": 15
     },
     {
-      "name": "test-assert-first-line.js",
+      "name": "test-eslint-required-modules.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:5:1\n",
-      "duration": 16
-    },
-    {
-      "name": "test-assert-if-error.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
-      "duration": 16
-    },
-    {
-      "name": "test-assert-myers-diff.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:16\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-eslint-required-modules.js:3:16\n",
       "duration": 15
     },
     {
-      "name": "test-assert-partial-deep-equal.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 17
-    },
-    {
-      "name": "test-assert-typedarray-deepequal.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-assert.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:24:44\n",
-      "duration": 17
-    },
-    {
-      "name": "test-async-hooks-async-await.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:5:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-asyncresource-constructor.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:5:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-close-during-destroy.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:5:16\n",
-      "duration": 16
-    },
-    {
-      "name": "test-async-hooks-constructor.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:5:1\n",
-      "duration": 16
-    },
-    {
-      "name": "test-async-hooks-correctly-switch-promise-hook.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-destroy-on-gc.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:7:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-disable-during-promise.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-disable-gc-tracking.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:7:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-enable-before-promise-resolve.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-enable-disable-enable.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-enable-disable.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 16
-    },
-    {
-      "name": "test-async-hooks-enable-during-promise.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-enable-recursive.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-hooks-enabledhooksexits.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-execution-async-resource-await.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-execution-async-resource.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-fatal-error.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 16
-    },
-    {
-      "name": "test-async-hooks-http-agent-destroy.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-http-agent.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-http-parser-destroy.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-prevent-double-destroy.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:7:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-promise-enable-disable.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 16
-    },
-    {
-      "name": "test-async-hooks-promise-triggerid.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-promise.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-hooks-recursive-stack-runInAsyncScope.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 16
-    },
-    {
-      "name": "test-async-hooks-run-in-async-scope-caught-exception.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-run-in-async-scope-this-arg.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:5:16\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-hooks-stack-overflow-nested-async.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:8:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-stack-overflow-try-catch.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:6:1\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-hooks-stack-overflow.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:7:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-top-level-clearimmediate.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:5:16\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-hooks-vm-gc.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:1\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-hooks-worker-asyncfn-terminate-1.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-hooks-worker-asyncfn-terminate-2.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-hooks-worker-asyncfn-terminate-3.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-hooks-worker-asyncfn-terminate-4.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-local-storage-bind.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-local-storage-contexts.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 14
-    },
-    {
-      "name": "test-async-local-storage-deep-stack.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 16
-    },
-    {
-      "name": "test-async-local-storage-enter-with.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-local-storage-exit-does-not-leak.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-local-storage-http-agent.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-local-storage-http-multiclients.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-local-storage-http-parser-leak.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-local-storage-isolation.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 16
-    },
-    {
-      "name": "test-async-local-storage-snapshot.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-local-storage-weak-asyncwrap-leak.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-wrap-constructor.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:5:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-wrap-destroyid.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-wrap-pop-id-during-load.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: Uncaught SyntaxError: Illegal return statement\n           at flux:user_code:10:3\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-wrap-promise-after-enabled.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:5:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-wrap-tlssocket-asyncreset.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-wrap-trigger-id.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-async-wrap-uncaughtexception.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-asyncresource-bind.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-atomics-wake.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-bad-unicode.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:23:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-bash-completion.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:1\n",
-      "duration": 16
-    },
-    {
-      "name": "test-beforeexit-event-exit.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:23:25\n",
-      "duration": 16
-    },
-    {
-      "name": "test-benchmark-cli.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-binding-constants.js",
+      "name": "test-inspector-module.js",
       "passed": false,
       "skipped": true,
       "duration": 0
     },
     {
-      "name": "test-blob-createobjecturl.js",
+      "name": "test-internal-module-require.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: Uncaught SyntaxError: Identifier 'URL' has already been declared\n           at flux:user_code:1:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-internal-module-require.js:10:16\n",
       "duration": 14
     },
     {
-      "name": "test-blob-file-backed.js",
+      "name": "test-internal-module-wrap.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: Uncaught SyntaxError: Identifier 'TextDecoder' has already been declared\n           at flux:user_code:1:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-internal-module-wrap.js:3:16\n",
       "duration": 15
     },
     {
-      "name": "test-blob.js",
+      "name": "test-internal-modules.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:4:16\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-internal-modules.js:2:1\n",
+      "duration": 14
+    },
+    {
+      "name": "test-internal-util-isinsidenodemodules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-internal-util-isinsidenodemodules.js:5:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-builtin.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-builtin.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-cache.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-cache.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-children.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-children.js:3:1\n",
+      "duration": 13
+    },
+    {
+      "name": "test-module-circular-dependency-warning.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-circular-dependency-warning.js:3:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-circular-symlinks.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-circular-symlinks.js:15:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-create-require-multibyte.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-create-require-multibyte.js:3:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-create-require.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-create-require.js:3:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-globalpaths-nodepath.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-globalpaths-nodepath.js:23:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-isBuiltin.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-isBuiltin.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-loading-deprecated.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-loading-deprecated.js:3:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-loading-error.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-loading-error.js:23:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-loading-globalpaths.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-loading-globalpaths.js:2:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-main-extension-lookup.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-main-extension-lookup.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-main-fail.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-main-fail.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-main-preserve-symlinks-fail.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-main-preserve-symlinks-fail.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-multi-extensions.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-multi-extensions.js:5:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-nodemodulepaths.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-nodemodulepaths.js:24:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-parent-deprecation.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-parent-deprecation.js:4:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-parent-setter-deprecation.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-parent-setter-deprecation.js:4:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-print-timing.mjs",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user module\n    1: No such file or directory (os error 2)\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-prototype-mutation.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-prototype-mutation.js:2:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-readonly.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-readonly.js:3:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-relative-lookup.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-relative-lookup.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-run-main-monkey-patch.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-run-main-monkey-patch.js:6:1\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-setsourcemapssupport.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-setsourcemapssupport.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-stat.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-stat.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-strip-types.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-strip-types.js:3:16\n",
       "duration": 16
     },
     {
-      "name": "test-blocklist-clone.js",
+      "name": "test-module-symlinked-peer-modules.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:16\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-symlinked-peer-modules.js:11:16\n",
       "duration": 15
     },
     {
-      "name": "test-blocklist.js",
+      "name": "test-module-version.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-bootstrap-modules.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: process is not defined\n           at flux:user_code:5:14\n",
-      "duration": 15
-    },
-    {
-      "name": "test-broadcastchannel-custom-inspect.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-version.js:2:1\n",
       "duration": 14
     },
     {
-      "name": "test-btoa-atob.js",
+      "name": "test-module-wrap.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-wrap.js:2:1\n",
       "duration": 15
     },
     {
-      "name": "test-buffer-alloc-unsafe-is-initialized-with-zero-fill-flag.js",
+      "name": "test-module-wrapper.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:6:16\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-wrapper.js:2:1\n",
       "duration": 15
     },
     {
-      "name": "test-buffer-alloc-unsafe-is-uninitialized.js",
+      "name": "test-permission-fs-internal-module-stat.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:6:16\n",
-      "duration": 15
-    },
-    {
-      "name": "test-buffer-alloc.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:2:16\n",
-      "duration": 17
-    },
-    {
-      "name": "test-buffer-arraybuffer.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
-      "duration": 15
-    },
-    {
-      "name": "test-buffer-ascii.js",
-      "passed": false,
-      "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:23:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-permission-fs-internal-module-stat.js:4:16\n",
       "duration": 14
     },
     {
-      "name": "test-buffer-backing-arraybuffer.js",
+      "name": "test-runner-module-mocking.js",
       "passed": false,
       "skipped": false,
-      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user code\n    1: ReferenceError: require is not defined\n           at flux:user_code:3:1\n",
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-runner-module-mocking.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-shadow-realm-allowed-builtin-modules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-shadow-realm-allowed-builtin-modules.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-shadow-realm-gc-module.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-shadow-realm-gc-module.js:9:16\n",
+      "duration": 16
+    },
+    {
+      "name": "test-shadow-realm-module.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-shadow-realm-module.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-shadow-realm-preload-module.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-shadow-realm-preload-module.js:2:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-after-evaluate.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-after-evaluate.js:10:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-basic.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-basic.js:5:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-vm-module-cached-data.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-cached-data.js:5:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-dynamic-import-promise.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-dynamic-import-promise.js:4:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-vm-module-dynamic-import.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-dynamic-import.js:5:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-vm-module-dynamic-namespace.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-dynamic-namespace.js:5:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-errors.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-errors.js:5:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-evaluate-source-text-module.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-evaluate-source-text-module.js:5:16\n",
+      "duration": 16
+    },
+    {
+      "name": "test-vm-module-evaluate-synthethic-module-rejection.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-evaluate-synthethic-module-rejection.",
       "duration": 15
     }
   ]
