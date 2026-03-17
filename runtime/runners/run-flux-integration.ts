@@ -20,13 +20,18 @@
  */
 
 import { performance }   from "node:perf_hooks";
+import { spawnSync }     from "node:child_process";
+import { readFileSync }  from "node:fs";
 import { resolve }       from "node:path";
 import { dirname }       from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   ensureBinary,
   buildArtifact,
   startRuntime,
+  startServer,
+  FLUX_CLI_BIN,
   postJson,
   get,
   WORKSPACE_ROOT,
@@ -37,11 +42,19 @@ import { TestResult, buildReport, writeReport, printSummary } from "./lib/utils.
 const __dirname   = dirname(fileURLToPath(import.meta.url));
 const HANDLERS_DIR = resolve(__dirname, "../external-tests/flux-handlers");
 const EXAMPLES_DIR = resolve(WORKSPACE_ROOT, "examples");
+const CRUD_APP_DIR = resolve(EXAMPLES_DIR, "crud_app");
+const CRUD_INIT_SQL = resolve(CRUD_APP_DIR, "init.sql");
 
 // Each suite gets its own port in the 3100-3199 range so suites can run
 // sequentially without port conflicts when multiple are enabled.
 let nextPort = 3100;
 function allocatePort() { return nextPort++; }
+
+let nextDatabasePort = 55432;
+function allocateDatabasePort() { return nextDatabasePort++; }
+
+let nextServerPort = 51051;
+function allocateServerPort() { return nextServerPort++; }
 
 // ---------------------------------------------------------------------------
 // Assertion helper
@@ -50,6 +63,17 @@ function allocatePort() { return nextPort++; }
 interface AssertionContext {
   results: TestResult[];
 }
+
+interface PostgresHandle {
+  containerName: string;
+  databaseUrl: string;
+  stop(): void;
+}
+
+const crudReplayState = {
+  serverUrl: "",
+  serviceToken: "",
+};
 
 function assert(
   ctx: AssertionContext,
@@ -81,6 +105,97 @@ function assert(
   });
 }
 
+function runCheckedCommand(
+  command: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string } = {},
+): string {
+  const result = spawnSync(command, args, {
+    cwd: opts.cwd ?? WORKSPACE_ROOT,
+    env: { ...process.env, ...opts.env },
+    encoding: "utf8",
+    input: opts.input,
+  });
+
+  if (result.status !== 0) {
+    throw new Error(
+      `${command} ${args.join(" ")} failed (exit ${result.status})\n${result.stderr ?? result.stdout ?? ""}`,
+    );
+  }
+
+  return result.stdout ?? "";
+}
+
+async function waitForPostgres(containerName: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = spawnSync("docker", ["exec", containerName, "pg_isready", "-U", "postgres", "-d", "postgres"], {
+      cwd: WORKSPACE_ROOT,
+      encoding: "utf8",
+    });
+
+    if (result.status === 0) {
+      return;
+    }
+
+    await sleep(250);
+  }
+
+  throw new Error(`postgres container ${containerName} did not become ready within ${timeoutMs}ms`);
+}
+
+async function startCrudPostgres(hostPort: number): Promise<PostgresHandle> {
+  const containerName = `flux-int-crud-replay-${hostPort}`;
+  const databaseUrl = `postgres://postgres:postgres@127.0.0.1:${hostPort}/crud_app`;
+
+  runCheckedCommand("docker", [
+    "run",
+    "--rm",
+    "-d",
+    "--name",
+    containerName,
+    "-e",
+    "POSTGRES_PASSWORD=postgres",
+    "-e",
+    "POSTGRES_DB=crud_app",
+    "-p",
+    `${hostPort}:5432`,
+    "postgres:17-alpine",
+  ]);
+
+  try {
+    await waitForPostgres(containerName);
+    runCheckedCommand(
+      "docker",
+      ["exec", "-i", containerName, "psql", "-U", "postgres", "-d", "crud_app", "-v", "ON_ERROR_STOP=1"],
+      { input: readFileSync(CRUD_INIT_SQL, "utf8") },
+    );
+  } catch (error) {
+    runCheckedCommand("docker", ["rm", "-f", containerName]);
+    throw error;
+  }
+
+  return {
+    containerName,
+    databaseUrl,
+    stop() {
+      runCheckedCommand("docker", ["rm", "-f", containerName]);
+    },
+  };
+}
+
+function extractReplayOutput(stdout: string): string {
+  const match = stdout.match(/^\s*output\s+(.+)$/m);
+  if (!match) {
+    throw new Error(`could not find replay output in CLI output\n${stdout}`);
+  }
+  return match[1];
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 // ---------------------------------------------------------------------------
 // Suite runner wrapper
 // ---------------------------------------------------------------------------
@@ -89,6 +204,7 @@ interface Suite {
   name:    string;
   handler: string;   // filename inside HANDLERS_DIR
   handlerBaseDir?: "handlers" | "examples";
+  start?: (entry: string, port: number) => Promise<RuntimeHandle>;
   run: (baseUrl: string, ctx: AssertionContext) => Promise<void>;
 }
 
@@ -101,7 +217,7 @@ async function runSuite(suite: Suite): Promise<{ passed: number; failed: number;
   let runtime: RuntimeHandle | null = null;
   try {
     buildArtifact(entry, { quiet: true });
-    runtime = await startRuntime(entry, port);
+    runtime = suite.start ? await suite.start(entry, port) : await startRuntime(entry, port);
     await suite.run(runtime.baseUrl, ctx);
   } catch (err) {
     ctx.results.push({
@@ -346,6 +462,111 @@ const SUITES: Suite[] = [
         assert(ctx, "GET /app-health → 200", () => res.status === 200);
         assert(ctx, "GET /app-health → json ok:true", () => body?.ok === true);
       }
+    },
+  },
+
+  // ── 7. CRUD replay ──────────────────────────────────────────────────────
+  {
+    name: "crud-replay",
+    handler: "crud_app/main_flux.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const serverPort = allocateServerPort();
+      const serviceToken = "dev-service-token";
+      const postgres = await startCrudPostgres(databasePort);
+      const server = await startServer(serverPort, {
+        databaseUrl: postgres.databaseUrl,
+        serviceToken,
+      });
+
+      try {
+        crudReplayState.serverUrl = server.url;
+        crudReplayState.serviceToken = serviceToken;
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          serverUrl: server.url,
+          token: serviceToken,
+          env: {
+            DATABASE_URL: postgres.databaseUrl,
+            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+          },
+        });
+
+        return {
+          ...runtime,
+          async stop() {
+            try {
+              await runtime.stop();
+            } finally {
+              try {
+                await server.stop();
+              } finally {
+                postgres.stop();
+                crudReplayState.serverUrl = "";
+                crudReplayState.serviceToken = "";
+              }
+            }
+          },
+        };
+      } catch (error) {
+        crudReplayState.serverUrl = "";
+        crudReplayState.serviceToken = "";
+        await server.stop();
+        postgres.stop();
+        throw error;
+      }
+    },
+    async run(baseUrl, ctx) {
+      const initialList = await get(baseUrl, "/todos");
+      const initialTodos = initialList.body as any[];
+      assert(ctx, "GET /todos before create → 200", () => initialList.status === 200);
+      assert(ctx, "GET /todos before create → empty", () => Array.isArray(initialTodos) && initialTodos.length === 0);
+
+      const createRes = await fetch(`${baseUrl}/todos`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          title: "Ship Flux",
+          description: "Replay integration",
+        }),
+      });
+      const createBody = await createRes.json() as Record<string, unknown>;
+      const executionId = createRes.headers.get("x-flux-execution-id");
+
+      assert(ctx, "POST /todos → 201", () => createRes.status === 201);
+      assert(ctx, "POST /todos → execution id header", () => typeof executionId === "string" && executionId.length > 0);
+      assert(ctx, "POST /todos → title persisted", () => createBody.title === "Ship Flux");
+      assert(ctx, "POST /todos → completed false", () => createBody.completed === false);
+
+      const listAfterCreate = await get(baseUrl, "/todos");
+      const todosAfterCreate = listAfterCreate.body as any[];
+      assert(ctx, "GET /todos after create → one row", () => Array.isArray(todosAfterCreate) && todosAfterCreate.length === 1);
+
+      const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
+        "replay",
+        executionId ?? "",
+        "--url",
+        crudReplayState.serverUrl,
+        "--token",
+        crudReplayState.serviceToken,
+        "--diff",
+      ]));
+
+      const replayEnvelope = JSON.parse(extractReplayOutput(replayStdout)) as {
+        net_response?: { body?: string; status?: number };
+      };
+      const replayBody = JSON.parse(replayEnvelope.net_response?.body ?? "null") as Record<string, unknown>;
+
+      assert(ctx, "flux replay → ok", () => replayStdout.includes("ok"));
+      assert(ctx, "flux replay → same JSON response", () => JSON.stringify(replayBody) === JSON.stringify(createBody));
+      assert(ctx, "flux replay → 201 status preserved", () => replayEnvelope.net_response?.status === 201);
+      assert(ctx, "flux replay → Postgres step recorded", () => replayStdout.includes("POSTGRES") && replayStdout.includes("(recorded)"));
+      assert(ctx, "flux replay → writes suppressed", () => replayStdout.includes("db writes suppressed"));
+
+      const listAfterReplay = await get(baseUrl, "/todos");
+      const todosAfterReplay = listAfterReplay.body as any[];
+      assert(ctx, "GET /todos after replay → count unchanged", () => Array.isArray(todosAfterReplay) && todosAfterReplay.length === 1);
     },
   },
 

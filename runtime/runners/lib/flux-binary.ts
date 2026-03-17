@@ -32,26 +32,28 @@ const PROFILE = process.env["FLUX_RELEASE"] === "1" ? "release" : "debug";
 export const FLUX_CLI_BIN     = resolve(WORKSPACE_ROOT, "target", PROFILE, "flux");
 /** Path to the compiled flux-runtime binary (used by flux serve internally). */
 export const FLUX_RUNTIME_BIN = resolve(WORKSPACE_ROOT, "target", PROFILE, "flux-runtime");
+/** Path to the compiled flux-server binary. */
+export const FLUX_SERVER_BIN  = resolve(WORKSPACE_ROOT, "target", PROFILE, "flux-server");
 
 // ---------------------------------------------------------------------------
 // Build
 // ---------------------------------------------------------------------------
 
-/** Returns true if both the CLI and runtime binaries exist on disk. */
+/** Returns true if the CLI, runtime, and server binaries exist on disk. */
 export function binaryExists(): boolean {
-  return existsSync(FLUX_CLI_BIN) && existsSync(FLUX_RUNTIME_BIN);
+  return existsSync(FLUX_CLI_BIN) && existsSync(FLUX_RUNTIME_BIN) && existsSync(FLUX_SERVER_BIN);
 }
 
 /**
- * Compiles the `flux` CLI and `flux-runtime` binaries via `cargo build`.
+ * Compiles the `flux`, `flux-runtime`, and `flux-server` binaries via `cargo build`.
  * Throws if the build fails.
  */
 export function buildFlux(opts: { release?: boolean; quiet?: boolean } = {}): void {
   const profile = opts.release ? ["--release"] : [];
-  // Build both the CLI and the runtime in one pass
-  const cmd = ["build", "-p", "cli", "-p", "runtime", ...profile];
+  // Build the operator CLI, runtime, and recording server in one pass.
+  const cmd = ["build", "-p", "cli", "-p", "runtime", "-p", "server", ...profile];
 
-  console.log(`  Building flux CLI + runtime (${opts.release ? "release" : "debug"})…`);
+  console.log(`  Building flux CLI + runtime + server (${opts.release ? "release" : "debug"})…`);
 
   const result = spawnSync("cargo", cmd, {
     cwd:   WORKSPACE_ROOT,
@@ -66,6 +68,7 @@ export function buildFlux(opts: { release?: boolean; quiet?: boolean } = {}): vo
 
   console.log(`  ✓ flux built → ${FLUX_CLI_BIN}`);
   console.log(`  ✓ flux-runtime built → ${FLUX_RUNTIME_BIN}`);
+  console.log(`  ✓ flux-server built → ${FLUX_SERVER_BIN}`);
 }
 
 /**
@@ -77,8 +80,8 @@ export function ensureBinary(opts: { force?: boolean; quiet?: boolean } = {}): v
     if (!binaryExists()) {
       throw new Error(
         `--skip-build was set but binaries not found.\n` +
-        `Expected:\n  ${FLUX_CLI_BIN}\n  ${FLUX_RUNTIME_BIN}\n` +
-        `Run: cd ${WORKSPACE_ROOT} && SQLX_OFFLINE=true cargo build -p cli -p runtime`,
+        `Expected:\n  ${FLUX_CLI_BIN}\n  ${FLUX_RUNTIME_BIN}\n  ${FLUX_SERVER_BIN}\n` +
+        `Run: cd ${WORKSPACE_ROOT} && SQLX_OFFLINE=true cargo build -p cli -p runtime -p server`,
       );
     }
     return;
@@ -142,28 +145,35 @@ export async function startRuntime(
     isolatePoolSize?: number;
     timeoutMs?:       number;
     token?:           string;
+    serverUrl?:       string;
+    skipVerify?:      boolean;
+    env?:             NodeJS.ProcessEnv;
   } = {},
 ): Promise<RuntimeHandle> {
   const host            = opts.host            ?? "127.0.0.1";
   const isolatePoolSize = opts.isolatePoolSize ?? 1;
   const token           = opts.token           ?? "test-token";
   const timeoutMs       = opts.timeoutMs       ?? 15_000;
+  const skipVerify      = opts.skipVerify      ?? true;
 
-  // `flux serve` requires a server URL when not skipping verify; --skip-verify
-  // lets us run without a live Flux server during tests.
   const args = [
     "serve",
-    "--skip-verify",
     "--host",  host,
     "--port",  String(port),
     "--isolate-pool-size", String(isolatePoolSize),
-    entryAbsPath,
   ];
+  if (skipVerify) {
+    args.push("--skip-verify");
+  }
+  if (opts.serverUrl) {
+    args.push("--url", opts.serverUrl);
+  }
+  args.push(entryAbsPath);
 
   const proc = spawn(FLUX_CLI_BIN, args, {
     cwd: WORKSPACE_ROOT,
     // FLUX_SERVICE_TOKEN is read by `flux serve` via clap's env() attribute
-    env: { ...process.env, FLUX_SERVICE_TOKEN: token },
+    env: { ...process.env, ...opts.env, FLUX_SERVICE_TOKEN: token },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -184,6 +194,61 @@ export async function startRuntime(
     async stop() {
       proc.kill("SIGTERM");
       // Give the process up to 3 seconds to exit cleanly
+      await Promise.race([
+        new Promise<void>((resolve) => proc.once("exit", () => resolve())),
+        sleep(3000),
+      ]);
+      if (!proc.killed) proc.kill("SIGKILL");
+    },
+  };
+}
+
+export interface ServerHandle {
+  process: ChildProcess;
+  host: string;
+  port: number;
+  url: string;
+  stop(): Promise<void>;
+}
+
+export async function startServer(
+  port = 50051,
+  opts: {
+    host?: string;
+    databaseUrl: string;
+    serviceToken: string;
+    timeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<ServerHandle> {
+  const host = opts.host ?? "127.0.0.1";
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+
+  const proc = spawn(FLUX_SERVER_BIN, [], {
+    cwd: WORKSPACE_ROOT,
+    env: {
+      ...process.env,
+      ...opts.env,
+      GRPC_PORT: String(port),
+      DATABASE_URL: opts.databaseUrl,
+      INTERNAL_SERVICE_TOKEN: opts.serviceToken,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  proc.on("error", (err) => {
+    throw new Error(`flux-server failed to start: ${err.message}`);
+  });
+
+  await waitForPort(host, port, timeoutMs);
+
+  return {
+    process: proc,
+    host,
+    port,
+    url: `http://${host}:${port}`,
+    async stop() {
+      proc.kill("SIGTERM");
       await Promise.race([
         new Promise<void>((resolve) => proc.once("exit", () => resolve())),
         sleep(3000),

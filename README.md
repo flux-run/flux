@@ -93,6 +93,31 @@ The experience is:
 - one runtime
 - one place to inspect what happened
 
+## Replay Demo
+
+The shortest proof of the product is the CRUD example in [examples/crud_app](examples/crud_app):
+
+```bash
+docker compose -f examples/crud_app/docker-compose.yml up -d postgres
+flux server start --database-url postgres://postgres:postgres@localhost:5432/crud_app --service-token dev-service-token
+
+export FLUX_SERVICE_TOKEN=dev-service-token
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/crud_app
+export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+
+flux build examples/crud_app/main_flux.ts
+flux serve --url http://127.0.0.1:50051 --host 127.0.0.1 --port 8000 examples/crud_app/main_flux.ts
+
+curl -i -X POST http://127.0.0.1:8000/todos \
+	-H 'content-type: application/json' \
+	-d '{"title":"Ship Flux","description":"Replay demo"}'
+
+# copy x-flux-execution-id from the response headers
+flux replay <execution_id> --url http://127.0.0.1:50051 --token dev-service-token --diff
+```
+
+That flow records a real backend request, replays it with the same response, and suppresses the original Postgres write during replay.
+
 For framework apps and npm dependencies, the intended v1 path is bundled artifacts. See [docs/bundled-artifacts.md](docs/bundled-artifacts.md).
 
 ## Product Positioning
