@@ -50,6 +50,8 @@ const DB_THEN_REMOTE_INIT_SQL = resolve(DB_THEN_REMOTE_DIR, "init.sql");
 const DRIZZLE_DIR = resolve(EXAMPLES_DIR, "drizzle");
 const IDEMPOTENCY_DIR = resolve(EXAMPLES_DIR, "idempotency");
 const IDEMPOTENCY_INIT_SQL = resolve(IDEMPOTENCY_DIR, "init.sql");
+const WEBHOOK_DEDUP_DIR = resolve(EXAMPLES_DIR, "webhook_dedup");
+const WEBHOOK_DEDUP_INIT_SQL = resolve(WEBHOOK_DEDUP_DIR, "init.sql");
 const JWKS_SERVER_ENTRY = resolve(HANDLERS_DIR, "jwks_server.js");
 
 // Each suite gets its own port in the 3100-3199 range so suites can run
@@ -107,6 +109,11 @@ const crudReplayState = {
 };
 
 const idempotencyState = {
+  serverUrl: "",
+  serviceToken: "",
+};
+
+const webhookDedupState = {
   serverUrl: "",
   serviceToken: "",
 };
@@ -231,11 +238,26 @@ async function startPostgres(hostPort: number, config: PostgresConfig): Promise<
   try {
     await waitForPostgres(containerName, config.username, config.databaseName);
     if (config.initSql) {
-      runCheckedCommand(
-        "docker",
-        ["exec", "-i", containerName, "psql", "-U", config.username, "-d", config.databaseName, "-v", "ON_ERROR_STOP=1"],
-        { input: config.initSql },
-      );
+      const deadline = Date.now() + 15_000;
+      let lastError: Error | null = null;
+      while (Date.now() < deadline) {
+        try {
+          runCheckedCommand(
+            "docker",
+            ["exec", "-i", containerName, "psql", "-U", config.username, "-d", config.databaseName, "-v", "ON_ERROR_STOP=1"],
+            { input: config.initSql },
+          );
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error as Error;
+          await sleep(250);
+        }
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
     }
   } catch (error) {
     runCheckedCommand("docker", ["rm", "-f", containerName]);
@@ -1054,6 +1076,143 @@ const SUITES: Suite[] = [
       const afterReplayList = await get(baseUrl, "/orders");
       const afterReplayOrders = (afterReplayList.body as Record<string, unknown>)?.orders as Array<Record<string, unknown>> | undefined;
       assert(ctx, "GET /orders after replay → count unchanged", () => Array.isArray(afterReplayOrders) && afterReplayOrders.length === 1);
+    },
+  },
+
+  {
+    name: "webhook-dedup",
+    handler: "webhook_dedup/main_flux.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const redisPort = allocateRedisPort();
+      const serverPort = allocateServerPort();
+      const serviceToken = "dev-service-token";
+      const postgres = await startPostgres(databasePort, {
+        databaseName: "webhook_dedup",
+        username: "admin",
+        password: "password123",
+        initSql: readFileSync(WEBHOOK_DEDUP_INIT_SQL, "utf8"),
+      });
+      const redis = await startRedis(redisPort);
+      const server = await startServer(serverPort, {
+        databaseUrl: postgres.databaseUrl,
+        serviceToken,
+      });
+
+      try {
+        webhookDedupState.serverUrl = server.url;
+        webhookDedupState.serviceToken = serviceToken;
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          serverUrl: server.url,
+          token: serviceToken,
+          env: {
+            DATABASE_URL: postgres.databaseUrl,
+            REDIS_URL: redis.redisUrl,
+            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+          },
+        });
+
+        return {
+          ...runtime,
+          async stop() {
+            try {
+              await runtime.stop();
+            } finally {
+              try {
+                await server.stop();
+              } finally {
+                try {
+                  redis.stop();
+                } finally {
+                  postgres.stop();
+                  webhookDedupState.serverUrl = "";
+                  webhookDedupState.serviceToken = "";
+                }
+              }
+            }
+          },
+        };
+      } catch (error) {
+        webhookDedupState.serverUrl = "";
+        webhookDedupState.serviceToken = "";
+        await server.stop();
+        redis.stop();
+        postgres.stop();
+        throw error;
+      }
+    },
+    async run(baseUrl, ctx) {
+      const initialList = await get(baseUrl, "/events");
+      const initialEvents = (initialList.body as Record<string, unknown>)?.events as unknown[] | undefined;
+      assert(ctx, "GET /events before webhook → 200", () => initialList.status === 200);
+      assert(ctx, "GET /events before webhook → empty", () => Array.isArray(initialEvents) && initialEvents.length === 0);
+
+      const eventId = "evt_123";
+      const payload = {
+        provider: "stripe",
+        type: "invoice.paid",
+      };
+
+      const firstWebhook = await fetch(`${baseUrl}/webhook`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-event-id": eventId,
+        },
+        body: JSON.stringify(payload),
+      });
+      const firstBody = await firstWebhook.json() as Record<string, unknown>;
+      const executionId = firstWebhook.headers.get("x-flux-execution-id") ?? "";
+
+      assert(ctx, "POST /webhook first request → 202", () => firstWebhook.status === 202);
+      assert(ctx, "POST /webhook first request → execution id header", () => executionId.length > 0);
+      assert(ctx, "POST /webhook first request → processed header", () => firstWebhook.headers.get("x-webhook-status") === "processed");
+      assert(ctx, "POST /webhook first request → processed body", () => firstBody.status === "processed" && firstBody.eventId === eventId);
+
+      const secondWebhook = await fetch(`${baseUrl}/webhook`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-event-id": eventId,
+        },
+        body: JSON.stringify(payload),
+      });
+      const secondBody = await secondWebhook.json() as Record<string, unknown>;
+
+      assert(ctx, "POST /webhook duplicate request → 200", () => secondWebhook.status === 200);
+      assert(ctx, "POST /webhook duplicate request → duplicate header", () => secondWebhook.headers.get("x-webhook-status") === "duplicate");
+      assert(ctx, "POST /webhook duplicate request → duplicate body", () => secondBody.status === "duplicate" && secondBody.eventId === eventId);
+
+      const afterDuplicateList = await get(baseUrl, "/events");
+      const afterDuplicateEvents = (afterDuplicateList.body as Record<string, unknown>)?.events as Array<Record<string, unknown>> | undefined;
+      assert(ctx, "GET /events after duplicate webhook → one row", () => Array.isArray(afterDuplicateEvents) && afterDuplicateEvents.length === 1);
+
+      const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
+        "replay",
+        executionId,
+        "--url",
+        webhookDedupState.serverUrl,
+        "--token",
+        webhookDedupState.serviceToken,
+        "--diff",
+      ]));
+      const replayEnvelope = JSON.parse(extractReplayOutput(replayStdout)) as {
+        net_response?: { body?: string; status?: number };
+      };
+      const replayBody = JSON.parse(replayEnvelope.net_response?.body ?? "null") as Record<string, unknown>;
+
+      assert(ctx, "flux replay webhook request → ok", () => replayStdout.includes("ok"));
+      assert(ctx, "flux replay webhook request → same JSON response", () => stableJson(replayBody) === stableJson(firstBody));
+      assert(ctx, "flux replay webhook request → 202 status preserved", () => replayEnvelope.net_response?.status === 202);
+      assert(ctx, "flux replay webhook request → Redis recorded", () => replayStdout.includes("REDIS") && replayStdout.includes("(recorded)"));
+      assert(ctx, "flux replay webhook request → Postgres recorded", () => replayStdout.includes("POSTGRES") && replayStdout.includes("(recorded)"));
+
+      const afterReplayList = await get(baseUrl, "/events");
+      const afterReplayEvents = (afterReplayList.body as Record<string, unknown>)?.events as Array<Record<string, unknown>> | undefined;
+      assert(ctx, "GET /events after replay → count unchanged", () => Array.isArray(afterReplayEvents) && afterReplayEvents.length === 1);
     },
   },
 

@@ -1,5 +1,7 @@
 # Idempotency Demo
 
+Flux guarantees idempotent execution across distributed requests. The same request will not produce duplicate side effects, even across retries and replay, while staying fully observable through checkpoints and trace.
+
 Minimal Flux demo that shows idempotent request handling with:
 
 - Redis as the shared-state boundary
@@ -8,6 +10,17 @@ Minimal Flux demo that shows idempotent request handling with:
 
 This example uses the native `Flux.redis.createClient(...)` primitive so it bundles cleanly through `flux build` today. The runtime also supports the compatibility surface `import { createClient } from "redis"`, but the point of this demo is the execution model, not the import style.
 
+## Execution Flow
+
+```text
+Request
+  ↓
+REDIS GET idempotency:key
+  ↓
+MISS → execute → POSTGRES INSERT → REDIS SET
+HIT  → return stored result
+```
+
 The core flow is:
 
 1. read `idempotency:<key>` from Redis
@@ -15,6 +28,8 @@ The core flow is:
 3. otherwise insert the order into Postgres
 4. store the canonical response in Redis with a TTL
 5. return the created order
+
+Redis coordinates the idempotency key. Postgres is the durable source of truth for orders.
 
 ## Setup
 
@@ -120,6 +135,48 @@ The replay should:
 - preserve the original `201` result
 - show recorded Redis and Postgres steps
 - avoid duplicating the order insert
+
+Replay never re-executes Redis or Postgres. It returns recorded checkpoint results.
+
+## Trace Walkthrough
+
+First request:
+
+```text
+REDIS GET "idempotency:order-123" -> null
+POSTGRES INSERT idempotent_orders -> 1 row
+REDIS SET "idempotency:order-123" "{...}" -> "OK"
+```
+
+Duplicate request:
+
+```text
+REDIS GET "idempotency:order-123" -> "{...}"
+```
+
+Replay of the first request:
+
+```text
+REDIS GET -> recorded null
+POSTGRES INSERT -> recorded
+REDIS SET -> recorded
+```
+
+This is the key difference: Flux shows exactly why the duplicate request is skipped and why replay does not create a second order.
+
+## Failure Scenario
+
+If the request crashes after the database write, replay resumes from recorded checkpoints and does not create a duplicate order.
+
+The example also uses a Postgres unique constraint as a durable fallback. Redis prevents duplicate execution quickly; Postgres prevents duplicate data even if two requests race.
+
+## TTL
+
+Idempotency keys expire automatically after one hour:
+
+```ts
+await redis.expire(redisKey, 60 * 60)
+```
 
 ## What this proves
 
