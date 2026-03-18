@@ -1,8 +1,10 @@
 # Flux
 
-Flux is an open-source backend runtime where every execution is a record.
+Flux guarantees safe, replayable execution of distributed systems.
 
-It runs your JS/TS functions, records every execution with full input/output and checkpoint traces, and gives you a CLI to debug production incidents deterministically. The product goal is to make production debugging fast and repeatable because Flux owns the execution path.
+The same request or event will not produce duplicate side effects, even across retries, crashes, or concurrent execution. Every boundary crossing is recorded, replayable, and observable because Flux owns the execution path.
+
+Flux is an open-source backend runtime where every execution is a record. It runs your JS/TS functions, records full input/output and checkpoint traces, and gives you a CLI to debug production incidents deterministically.
 
 Flux is open source under Apache 2.0. You can use, modify, self-host, and
 redistribute the software. The Flux brand, name, and logos are not part of the
@@ -10,6 +12,90 @@ code license. See [LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).
 
 Website: [fluxbase.co](https://fluxbase.co)  
 Docs: [fluxbase.co/docs](https://fluxbase.co/docs)
+
+## The Pattern
+
+Flux makes distributed systems behave like deterministic programs:
+
+```text
+Request/Event
+	↓
+Redis (coordination)
+	↓
+Postgres (durable side effect)
+	↓
+Checkpoint (recorded execution)
+```
+
+The core roles stay explicit:
+
+- Redis coordinates idempotency and deduplication across isolates
+- Postgres holds durable truth
+- Replay preserves correctness by returning recorded checkpoint results
+- Trace makes the decision path visible
+
+## Proven Behavior
+
+Flux now contains two independent proofs of the same execution law.
+
+### Proof 1: Idempotent API
+
+Client retries the same request.
+
+First request:
+
+```text
+REDIS GET "idempotency:123" -> null
+POSTGRES INSERT orders -> 1 row
+REDIS SET "idempotency:123" -> "OK"
+```
+
+Second request:
+
+```text
+REDIS GET "idempotency:123" -> "{...}"
+```
+
+No duplicate order is created.
+
+See [examples/idempotency](examples/idempotency).
+
+### Proof 2: Webhook Deduplication
+
+An external system sends the same event more than once.
+
+First delivery:
+
+```text
+REDIS GET "event:abc" -> null
+POSTGRES INSERT events -> 1 row
+REDIS SET "event:abc" -> "OK"
+```
+
+Retry:
+
+```text
+REDIS GET "event:abc" -> "1"
+```
+
+The event is processed exactly once.
+
+See [examples/webhook_dedup](examples/webhook_dedup).
+
+## Replay Guarantee
+
+If execution crashes mid-way, Flux replays from recorded checkpoints.
+
+```text
+REDIS -> recorded
+POSTGRES -> recorded
+```
+
+That means:
+
+- no side effects run twice
+- replay remains deterministic
+- the system stays correct after failure
 
 ## Why Flux Exists
 
@@ -95,7 +181,7 @@ The experience is:
 
 ## Replay Demo
 
-The shortest proof of the product is the CRUD example in [examples/crud_app](examples/crud_app):
+The shortest proof of the operator workflow is the CRUD example in [examples/crud_app](examples/crud_app):
 
 ```bash
 docker compose -f examples/crud_app/docker-compose.yml up -d postgres
@@ -135,6 +221,19 @@ Flux does not feel like:
 - "just another serverless framework"
 
 The headline is debugging. The rest of the system is proof that debugging can stay coherent across the whole backend.
+
+## Why This Is Different
+
+Most systems rely on retries, locks, and best-effort idempotency.
+
+Flux guarantees:
+
+- deterministic execution
+- no duplicate side effects
+- full replayability
+- built-in traceability
+
+Flux is not a framework. Flux is a runtime that controls side effects.
 
 ## Architecture At A Glance
 
