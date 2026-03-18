@@ -86,6 +86,13 @@ flux ps
 flux status
 ```
 
+When listener mode starts successfully, the runtime prints a boot execution line before it begins serving requests:
+
+```text
+[boot] execution_id=...
+[ready] listening on http://127.0.0.1:3000
+```
+
 ## Execution Commands
 
 ```bash

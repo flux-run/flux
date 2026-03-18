@@ -87,6 +87,22 @@ impl IsolatePool {
         })
     }
 
+    pub fn new_with_mode(size: usize, artifact: RuntimeArtifact, is_server_mode: bool) -> Result<Self> {
+        let mut workers = Vec::with_capacity(size);
+        for id in 0..size {
+            let sender = spawn_isolate_worker_with_mode(id, artifact.clone(), is_server_mode)?;
+            workers.push(IsolateWorker { sender });
+        }
+
+        Ok(Self {
+            workers,
+            next: AtomicUsize::new(0),
+            queue_send_timeout: Duration::from_secs(30),
+            result_timeout: Duration::from_secs(120),
+            is_server_mode,
+        })
+    }
+
     pub async fn execute(&self, payload: serde_json::Value, context: ExecutionContext) -> ExecutionResult {
         self.execute_with_recorded(payload, context, Vec::new()).await
     }
@@ -308,6 +324,122 @@ fn spawn_isolate_worker(
             "failed to receive isolate worker initialization status: {err}"
         )),
     }
+}
+
+fn spawn_isolate_worker_with_mode(
+    isolate_id: usize,
+    artifact: RuntimeArtifact,
+    is_server_mode: bool,
+) -> Result<mpsc::Sender<WorkItem>> {
+    let (tx, mut rx) = mpsc::channel::<WorkItem>(64);
+
+    std::thread::Builder::new()
+        .name(format!("flux-isolate-{}", isolate_id))
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(_) => {
+                    return;
+                }
+            };
+
+            let local_set = tokio::task::LocalSet::new();
+
+            local_set.block_on(&runtime, async move {
+                while let Some(work) = rx.recv().await {
+                    let context = work.context.clone();
+                    let started = std::time::Instant::now();
+
+                    let isolate_result = match &artifact {
+                        RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, isolate_id),
+                        RuntimeArtifact::Built(artifact) => JsIsolate::new_from_artifact(artifact).await,
+                    };
+
+                    let mut isolate = match isolate_result {
+                        Ok(iso) => iso,
+                        Err(err) => {
+                            let _ = work.result_tx.send(error_result(
+                                work.context,
+                                format!("failed to initialize isolate: {err:#}"),
+                            ));
+                            continue;
+                        }
+                    };
+
+                    let result = if is_server_mode {
+                        match work.net_request {
+                            Some(net_req) => match isolate.dispatch_request(work.context.clone(), net_req).await {
+                                Ok(NetRequestExecution { response: net_resp, checkpoints, logs }) => ExecutionResult {
+                                    execution_id: context.execution_id,
+                                    request_id: context.request_id,
+                                    code_version: context.code_version,
+                                    status: "ok".to_string(),
+                                    body: serde_json::json!({
+                                        "net_response": {
+                                            "status": net_resp.status,
+                                            "headers": net_resp.headers,
+                                            "body": net_resp.body,
+                                        }
+                                    }),
+                                    error: None,
+                                    duration_ms: started.elapsed().as_millis() as i32,
+                                    checkpoints,
+                                    logs,
+                                },
+                                Err(err) => error_result(work.context, err.to_string()),
+                            },
+                            None => error_result(work.context, "server-mode isolate received non-HTTP work item"),
+                        }
+                    } else {
+                        match isolate.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
+                            Ok(JsExecutionOutput { output, checkpoints, error, logs }) => {
+                                let (status, body, error) = match error {
+                                    Some(err) => ("error".to_string(), serde_json::Value::Null, Some(err)),
+                                    None => (
+                                        "ok".to_string(),
+                                        serde_json::json!({
+                                            "isolate_id": isolate_id,
+                                            "output": output,
+                                        }),
+                                        None,
+                                    ),
+                                };
+                                ExecutionResult {
+                                    execution_id: context.execution_id,
+                                    request_id: context.request_id,
+                                    code_version: context.code_version,
+                                    status,
+                                    body,
+                                    error,
+                                    duration_ms: started.elapsed().as_millis() as i32,
+                                    checkpoints,
+                                    logs,
+                                }
+                            }
+                            Err(err) => ExecutionResult {
+                                execution_id: context.execution_id,
+                                request_id: context.request_id,
+                                code_version: context.code_version,
+                                status: "error".to_string(),
+                                body: serde_json::Value::Null,
+                                error: Some(err.to_string()),
+                                duration_ms: started.elapsed().as_millis() as i32,
+                                checkpoints: vec![],
+                                logs: vec![],
+                            },
+                        }
+                    };
+
+                    let _ = work.result_tx.send(result);
+                }
+            });
+        })
+        .map_err(|err| anyhow::anyhow!("failed to spawn isolate worker thread: {err}"))?;
+
+    Ok(tx)
 }
 
 fn error_result(context: ExecutionContext, message: impl Into<String>) -> ExecutionResult {

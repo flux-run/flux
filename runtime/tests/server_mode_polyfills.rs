@@ -7,7 +7,7 @@ use axum::Router;
 use runtime::artifact::build_artifact;
 use runtime::deno_runtime::NetRequest;
 use runtime::isolate_pool::{ExecutionContext, IsolatePool};
-use runtime::{HttpRuntimeConfig, JsIsolate, run_http_runtime};
+use runtime::JsIsolate;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, oneshot};
 
@@ -71,7 +71,6 @@ Deno.serve(async function handler(_request) {{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deno_serve_supports_options_overload_and_onlisten_callback() -> Result<()> {
     let _lock = polyfill_test_lock().lock().await;
-    let runtime_port = reserve_local_port()?;
     let code = r#"
 let listenInfo = null;
 
@@ -87,26 +86,24 @@ Deno.serve(
 );
 "#;
 
-    let runtime_task = tokio::spawn(async move {
-        run_http_runtime(
-            HttpRuntimeConfig {
-                host: "127.0.0.1".to_string(),
-                port: runtime_port,
-                route_name: "ignored".to_string(),
-                isolate_pool_size: 1,
-                server_url: "http://127.0.0.1:50051".to_string(),
-                service_token: String::new(),
+    let pool = IsolatePool::new(1, build_artifact("server.js", code))?;
+    let result = pool
+        .execute_net_request(
+            ExecutionContext::new("deno-serve-onlisten"),
+            NetRequest {
+                req_id: "req-onlisten".to_string(),
+                method: "GET".to_string(),
+                url: "http://example.test/hello".to_string(),
+                headers_json: "[]".to_string(),
+                body: String::new(),
             },
-            build_artifact("server.js", code),
         )
-        .await
-    });
+        .await;
 
-    let response_text = wait_for_http_body(&format!("http://127.0.0.1:{runtime_port}/hello"))
-        .await
-        .context("server-mode HTTP request should succeed")?;
-
-    runtime_task.abort();
+    assert_eq!(result.status, "ok");
+    let response_text = result.body["net_response"]["body"]
+        .as_str()
+        .context("server-mode response body should be a JSON string")?;
 
     let payload: serde_json::Value = serde_json::from_str(&response_text)
         .context("response should be valid JSON")?;
@@ -322,40 +319,6 @@ export default async function handler() {
 fn polyfill_test_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn reserve_local_port() -> Result<u16> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .context("failed to bind an ephemeral TCP port")?;
-    let port = listener
-        .local_addr()
-        .context("failed to read local addr")?
-        .port();
-    drop(listener);
-    Ok(port)
-}
-
-async fn wait_for_http_body(url: &str) -> Result<String> {
-    let mut last_error = None;
-    for _ in 0..50 {
-        match ureq::get(url).call() {
-            Ok(response) => {
-                return response
-                    .into_string()
-                    .map_err(|err| anyhow::anyhow!(err))
-                    .context("failed to read HTTP response body");
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-        }
-    }
-
-    Err(anyhow::anyhow!(
-        "server did not become ready: {}",
-        last_error.unwrap_or_else(|| "unknown error".to_string())
-    ))
 }
 
 async fn spawn_test_server() -> Result<(String, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {

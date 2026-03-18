@@ -23,4 +23,4 @@ pub use http_runtime::{
 	HttpRuntimeConfig,
 	run_http_runtime,
 };
-pub use deno_runtime::JsIsolate;
+pub use deno_runtime::{BootExecutionResult, JsIsolate, boot_runtime_artifact};

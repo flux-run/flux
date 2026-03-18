@@ -78,18 +78,23 @@ This is the long-running production-style runtime path.
 
 1. The CLI starts `flux-runtime` in HTTP/listener mode.
 2. [runtime/src/main.rs](runtime/src/main.rs) validates the entry, prepares the artifact, and calls `run_http_runtime`.
-3. [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs) builds an `IsolatePool` and checks whether the entry is:
+3. [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs) runs an explicit boot execution before binding the listener:
+   - module initialization and top-level async work run under a real execution ID
+   - listener registration is detected during that boot phase
+   - the runtime prints `[boot] execution_id=...`
+4. [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs) builds an `IsolatePool`, binds the socket, and prints `[ready] listening on ...`.
+5. The runtime then serves one of two HTTP execution paths:
    - one-shot handler mode, or
    - server mode via `Deno.serve`
-4. For one-shot handler mode:
+6. For one-shot handler mode:
    - `POST /:route` enters [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs)
    - execution is scheduled through [runtime/src/isolate_pool.rs](runtime/src/isolate_pool.rs)
    - user JS runs inside [runtime/src/deno_runtime.rs](runtime/src/deno_runtime.rs)
    - the execution is optionally recorded through [runtime/src/server_client.rs](runtime/src/server_client.rs)
-5. For server mode:
+7. For server mode:
    - any unmatched path enters [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs)
    - HTTP request state is converted to a `NetRequest`
-   - [runtime/src/isolate_pool.rs](runtime/src/isolate_pool.rs) dispatches the request into a long-lived isolate
+   - [runtime/src/isolate_pool.rs](runtime/src/isolate_pool.rs) dispatches the request into a fresh isolate execution
    - [runtime/src/deno_runtime.rs](runtime/src/deno_runtime.rs) routes it through the registered `Deno.serve` handler
    - the returned `NetResponse` is translated back into an Axum response in [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs)
 

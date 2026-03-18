@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::artifact::RuntimeArtifact;
-use crate::deno_runtime::NetRequest;
+use crate::deno_runtime::{NetRequest, boot_runtime_artifact};
 use crate::isolate_pool::{ExecutionContext, IsolatePool};
 
 #[derive(Debug, Clone)]
@@ -71,8 +71,41 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         bail!("isolate_pool_size must be greater than 0");
     }
 
-    let pool = Arc::new(IsolatePool::new(config.isolate_pool_size, artifact.clone())?);
-    let is_server_mode = pool.is_server_mode;
+    let boot = boot_runtime_artifact(
+        &artifact,
+        ExecutionContext::new(artifact.code_version().to_string()),
+    )
+    .await?;
+
+    println!("[boot] execution_id={}", boot.result.execution_id);
+
+    if !config.service_token.is_empty() {
+        let _ = crate::server_client::record_execution(
+            &config.server_url,
+            &config.service_token,
+            crate::server_client::ExecutionEnvelope {
+                method: "BOOT".to_string(),
+                path: "/__boot".to_string(),
+                request_json: serde_json::json!({
+                    "phase": "boot",
+                    "route": config.route_name,
+                }),
+                result: boot.result.clone(),
+            },
+        )
+        .await;
+    }
+
+    if let Some(error) = boot.result.error.as_ref() {
+        bail!("boot execution failed: {error}");
+    }
+
+    let pool = Arc::new(IsolatePool::new_with_mode(
+        config.isolate_pool_size,
+        artifact.clone(),
+        boot.is_server_mode,
+    )?);
+    let is_server_mode = boot.is_server_mode;
     let state = RuntimeState {
         route_name: config.route_name.clone(),
         code_version: artifact.code_version().to_string(),

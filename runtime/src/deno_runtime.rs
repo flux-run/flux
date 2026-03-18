@@ -32,7 +32,8 @@ use ureq::OrAnyStatus;
 use url::Url;
 use uuid::Uuid;
 
-use crate::isolate_pool::ExecutionContext;
+use crate::artifact::RuntimeArtifact;
+use crate::isolate_pool::{ExecutionContext, ExecutionResult};
 
 const FLUX_PG_SPECIFIER: &str = "flux:pg";
 const MODULE_FILE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "json"];
@@ -490,6 +491,12 @@ pub struct JsExecutionOutput {
     pub checkpoints: Vec<FetchCheckpoint>,
     pub error: Option<String>,
     pub logs: Vec<LogEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BootExecutionResult {
+    pub result: ExecutionResult,
+    pub is_server_mode: bool,
 }
 
 #[derive(Debug)]
@@ -3800,6 +3807,272 @@ impl JsIsolate {
             error: None,
             logs: execution.map(|e| e.logs).unwrap_or_default(),
         })
+    }
+}
+
+pub async fn boot_runtime_artifact(
+    artifact: &RuntimeArtifact,
+    context: ExecutionContext,
+) -> Result<BootExecutionResult> {
+    match artifact {
+        RuntimeArtifact::Inline(artifact) => boot_inline_runtime_artifact(&artifact.code, context).await,
+        RuntimeArtifact::Built(artifact) => boot_built_runtime_artifact(artifact, context).await,
+    }
+}
+
+async fn boot_inline_runtime_artifact(
+    user_code: &str,
+    context: ExecutionContext,
+) -> Result<BootExecutionResult> {
+    let started = std::time::Instant::now();
+    let execution_id = context.execution_id.clone();
+    let request_id = context.request_id.clone();
+    let code_version = context.code_version.clone();
+    let prepared = prepare_user_code(user_code);
+
+    let mut runtime = JsRuntime::new(RuntimeOptions {
+        extensions: vec![flux_runtime_ext::init()],
+        create_params: Some(
+            deno_core::v8::CreateParams::default()
+                .heap_limits(0, V8_HEAP_LIMIT),
+        ),
+        ..Default::default()
+    });
+
+    {
+        let state = runtime.op_state();
+        let mut state = state.borrow_mut();
+        state.put::<RuntimeStateMap>(HashMap::new());
+        state.borrow_mut::<RuntimeStateMap>().insert(
+            execution_id.clone(),
+            RuntimeExecutionState {
+                context,
+                call_index: 0,
+                checkpoints: Vec::new(),
+                recorded: HashMap::new(),
+                recorded_now_ms: None,
+                logs: Vec::new(),
+                recorded_random: Vec::new(),
+                random_index: 0,
+                recorded_uuids: Vec::new(),
+                uuid_index: 0,
+                is_server_mode: false,
+                pending_responses: HashMap::new(),
+                postgres_sessions: HashMap::new(),
+                next_postgres_session_id: 0,
+            },
+        );
+    }
+
+    runtime
+        .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
+        .context("failed to install fetch interceptor")?;
+
+    let eid_json = serde_json::to_string(&execution_id).context("failed to encode boot execution_id")?;
+    runtime
+        .execute_script("flux:set_boot_eid", format!("globalThis.__FLUX_EXECUTION_ID__ = {eid_json};"))
+        .context("failed to set boot execution_id")?;
+
+    let mut error = runtime
+        .execute_script("flux:user_code", prepared)
+        .err()
+        .map(|err| format!("{err:#}"));
+
+    if error.is_none() {
+        match tokio::time::timeout(
+            EXECUTION_TIMEOUT,
+            runtime.run_event_loop(Default::default()),
+        )
+        .await
+        {
+            Err(_) => {
+                error = Some(format!("module initialization timed out after {EXECUTION_TIMEOUT:?}"));
+            }
+            Ok(Err(err)) => {
+                error = Some(format!("{err:#}"));
+            }
+            Ok(Ok(())) => {}
+        }
+    }
+
+    let is_server_mode = probe_server_mode(&mut runtime).unwrap_or(false);
+    let (checkpoints, logs) = take_execution_artifacts(&mut runtime, &execution_id);
+
+    Ok(BootExecutionResult {
+        result: ExecutionResult {
+            execution_id,
+            request_id,
+            code_version,
+            status: if error.is_some() { "error".to_string() } else { "ok".to_string() },
+            body: serde_json::json!({
+                "phase": "boot",
+                "listener_mode": is_server_mode,
+            }),
+            error,
+            duration_ms: started.elapsed().as_millis() as i32,
+            checkpoints,
+            logs,
+        },
+        is_server_mode,
+    })
+}
+
+async fn boot_built_runtime_artifact(
+    artifact: &FluxBuildArtifact,
+    context: ExecutionContext,
+) -> Result<BootExecutionResult> {
+    let started = std::time::Instant::now();
+    let execution_id = context.execution_id.clone();
+    let request_id = context.request_id.clone();
+    let code_version = context.code_version.clone();
+    let source_maps = Rc::new(RefCell::new(HashMap::new()));
+    let modules = artifact
+        .modules
+        .iter()
+        .cloned()
+        .map(|module| (module.specifier.clone(), module))
+        .collect::<HashMap<_, _>>();
+    let mut runtime = JsRuntime::new(RuntimeOptions {
+        module_loader: Some(Rc::new(ArtifactModuleLoader {
+            source_maps,
+            modules,
+        })),
+        extensions: vec![flux_runtime_ext::init()],
+        create_params: Some(
+            deno_core::v8::CreateParams::default()
+                .heap_limits(0, V8_HEAP_LIMIT),
+        ),
+        ..Default::default()
+    });
+
+    {
+        let state = runtime.op_state();
+        let mut state = state.borrow_mut();
+        state.put::<RuntimeStateMap>(HashMap::new());
+        state.borrow_mut::<RuntimeStateMap>().insert(
+            execution_id.clone(),
+            RuntimeExecutionState {
+                context,
+                call_index: 0,
+                checkpoints: Vec::new(),
+                recorded: HashMap::new(),
+                recorded_now_ms: None,
+                logs: Vec::new(),
+                recorded_random: Vec::new(),
+                random_index: 0,
+                recorded_uuids: Vec::new(),
+                uuid_index: 0,
+                is_server_mode: false,
+                pending_responses: HashMap::new(),
+                postgres_sessions: HashMap::new(),
+                next_postgres_session_id: 0,
+            },
+        );
+    }
+
+    runtime
+        .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
+        .context("failed to install fetch interceptor")?;
+
+    let eid_json = serde_json::to_string(&execution_id).context("failed to encode boot execution_id")?;
+    runtime
+        .execute_script("flux:set_boot_eid", format!("globalThis.__FLUX_EXECUTION_ID__ = {eid_json};"))
+        .context("failed to set boot execution_id")?;
+
+    let entry_module = artifact
+        .modules
+        .iter()
+        .find(|module| module.specifier == artifact.entry_specifier)
+        .ok_or_else(|| anyhow::anyhow!("entry module missing from built artifact"))?;
+    let main_module = Url::parse(&artifact.entry_specifier)
+        .with_context(|| format!("invalid entry module specifier: {}", artifact.entry_specifier))?;
+    let transformed_entry = prepare_user_code(&entry_module.source);
+    let transformed_entry = transpile_module_source(
+        &main_module,
+        artifact_media_type(entry_module.media_type.clone()),
+        transformed_entry,
+        None,
+    )
+    .context("failed to transpile built artifact entry module")?;
+
+    let mut error = None;
+    let module_id = match runtime
+        .load_main_es_module_from_code(&main_module, transformed_entry)
+        .await
+    {
+        Ok(module_id) => Some(module_id),
+        Err(err) => {
+            error = Some(format!("{err:#}"));
+            None
+        }
+    };
+
+    if let Some(module_id) = module_id {
+        let evaluation = runtime.mod_evaluate(module_id);
+        match tokio::time::timeout(
+            EXECUTION_TIMEOUT,
+            runtime.run_event_loop(Default::default()),
+        )
+        .await
+        {
+            Err(_) => {
+                error = Some(format!("module initialization timed out after {EXECUTION_TIMEOUT:?}"));
+            }
+            Ok(Err(err)) => {
+                error = Some(format!("{err:#}"));
+            }
+            Ok(Ok(())) => {
+                if let Err(err) = evaluation.await {
+                    error = Some(format!("{err:#}"));
+                }
+            }
+        }
+    }
+
+    let is_server_mode = probe_server_mode(&mut runtime).unwrap_or(false);
+    let (checkpoints, logs) = take_execution_artifacts(&mut runtime, &execution_id);
+
+    Ok(BootExecutionResult {
+        result: ExecutionResult {
+            execution_id,
+            request_id,
+            code_version,
+            status: if error.is_some() { "error".to_string() } else { "ok".to_string() },
+            body: serde_json::json!({
+                "phase": "boot",
+                "listener_mode": is_server_mode,
+            }),
+            error,
+            duration_ms: started.elapsed().as_millis() as i32,
+            checkpoints,
+            logs,
+        },
+        is_server_mode,
+    })
+}
+
+fn probe_server_mode(runtime: &mut JsRuntime) -> Result<bool> {
+    let probe = runtime
+        .execute_script(
+            "flux:probe_server_mode",
+            "typeof globalThis.__flux_net_handler === 'function'",
+        )
+        .context("failed to probe server mode")?;
+    deno_core::scope!(scope, runtime);
+    let local = deno_core::v8::Local::new(scope, probe);
+    Ok(local.is_true())
+}
+
+fn take_execution_artifacts(
+    runtime: &mut JsRuntime,
+    execution_id: &str,
+) -> (Vec<FetchCheckpoint>, Vec<LogEntry>) {
+    let state = runtime.op_state();
+    let mut state = state.borrow_mut();
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    match map.remove(execution_id) {
+        Some(execution) => (execution.checkpoints, execution.logs),
+        None => (Vec::new(), Vec::new()),
     }
 }
 

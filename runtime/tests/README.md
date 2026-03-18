@@ -163,13 +163,14 @@ npm run test:integration -- --suite echo   # one suite only
 
 ### What it tests
 
-HTTP suites start a `flux run --listen` process on a unique port (3100–3199), send real requests, assert responses, then stop the process. Command suites execute `flux run` directly and assert the emitted JSON output.
+HTTP suites start a `flux run --listen` process on a unique port (3100–3199), wait for the runtime to reach its boot and ready phases, send real requests, assert responses, then stop the process. Command suites execute `flux run` directly and assert the emitted JSON output.
 
 | Suite | Handler | Checks |
 |-------|---------|--------|
 | `echo` | `echo.js` | Body reflection, field uppercasing, invalid-JSON 400 |
 | `json-types` | `json-types.js` | null, bool, int, float, string, array, nested object, UTF-8 |
 | `web-apis` | `web-apis.js` | `crypto.randomUUID`, `Date`, `URL`, `TextEncoder`, `btoa/atob`, `structuredClone` |
+| `request-isolation` | `request-isolation.js` | request-scoped globals reset between HTTP executions |
 | `async-ops` | `async-ops.js` | `await`, `Promise.all`, `Promise.race`, `setTimeout`, sequential pipeline |
 | `error-handling` | `error-handling.js` | 404/400/422 explicit responses, sync throw → 5xx, async reject → 5xx |
 | `crud-replay` | `examples/crud_app/main_flux.ts` | HTTP CRUD flow plus `flux replay --diff` verification |
@@ -187,6 +188,7 @@ When a command suite is executed with a Flux server URL and token, `flux run` pr
 - Locates the CLI, runtime, and server binaries under `target/debug/` (or `target/release/` when `FLUX_RELEASE=1`)
 - Builds via `SQLX_OFFLINE=true cargo build -p cli -p runtime -p server` when the binaries are missing
 - Spawns `flux run --listen` with `--host`, `--port`, and `--isolate-pool-size` for HTTP suites
+- Exercises the runtime's explicit boot phase before the listener reaches `[ready]`
 - Polls the port every 100 ms until the isolate is ready (15 s timeout)
 - Kills spawned processes after each suite (`SIGTERM → SIGKILL`)
 

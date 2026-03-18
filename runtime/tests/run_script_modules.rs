@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use runtime::JsIsolate;
+use runtime::isolate_pool::ExecutionContext;
 use serde_json::json;
 
 struct TempDirGuard {
@@ -72,12 +73,17 @@ export function triple(value: number) {
 
     let output = async {
         let mut isolate = JsIsolate::new_for_run_entry(&entry).await?;
-        let (output, _logs) = isolate.run_script(json!({ "value": 7 })).await?;
-        Ok::<_, anyhow::Error>(output)
+        let output = isolate
+            .run_script(
+                json!({ "value": 7 }),
+                ExecutionContext::new("run-script-ts-modules"),
+            )
+            .await?;
+        Ok::<_, anyhow::Error>(output.output)
     }
     .await
     .expect("script mode should succeed");
-    assert_eq!(output, Some(json!({ "doubled": 14, "tripled": 21 })));
+    assert_eq!(output, json!({ "doubled": 14, "tripled": 21 }));
 }
 
 #[tokio::test]
@@ -106,10 +112,12 @@ export function increment(value) {
 
     let output = async {
         let mut isolate = JsIsolate::new_for_run_entry(&entry).await?;
-        let (output, _logs) = isolate.run_script(json!({})).await?;
-        Ok::<_, anyhow::Error>(output)
+        let output = isolate
+            .run_script(json!({}), ExecutionContext::new("run-script-mjs-modules"))
+            .await?;
+        Ok::<_, anyhow::Error>(output.output)
     }
     .await
     .expect("mjs script mode should succeed");
-    assert_eq!(output, Some(json!({ "value": 42 })));
+    assert_eq!(output, json!({ "value": 42 }));
 }
