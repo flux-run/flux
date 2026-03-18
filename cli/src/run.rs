@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use crate::runtime_process::{exec_runtime, find_runtime_binary, find_workspace_root};
-use crate::runtime_server::{execute_server_runtime, RuntimeServerOptions};
+use crate::runtime_server::{RuntimeServerOptions, execute_server_runtime};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {

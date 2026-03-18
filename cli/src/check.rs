@@ -22,7 +22,10 @@ pub async fn execute(args: CheckArgs) -> Result<()> {
             DiagnosticSeverity::Error => "error",
             DiagnosticSeverity::Warning => "warning",
         };
-        println!("{} [{}] {}: {}", level, diagnostic.code, diagnostic.specifier, diagnostic.message);
+        println!(
+            "{} [{}] {}: {}",
+            level, diagnostic.code, diagnostic.specifier, diagnostic.message
+        );
     }
 
     for npm in &analysis.npm_reports {

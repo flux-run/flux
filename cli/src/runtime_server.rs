@@ -78,24 +78,21 @@ fn flux_dir() -> PathBuf {
 
 fn write_runtime_pid(pid: u32) -> Result<()> {
     let dir = flux_dir();
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     std::fs::write(dir.join("runtime.pid"), pid.to_string())
         .context("failed to write ~/.flux/runtime.pid")
 }
 
 fn write_runtime_port(port: u16) -> Result<()> {
     let dir = flux_dir();
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     std::fs::write(dir.join("runtime.port"), port.to_string())
         .context("failed to write ~/.flux/runtime.port")
 }
 
 fn write_runtime_entry(entry: &str) -> Result<()> {
     let dir = flux_dir();
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     std::fs::write(dir.join("runtime.entry"), entry)
         .context("failed to write ~/.flux/runtime.entry")
 }

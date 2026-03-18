@@ -1,13 +1,13 @@
-use std::sync::OnceLock;
 use std::sync::Once;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use rcgen::generate_simple_self_signed;
 use runtime::JsIsolate;
 use runtime::deno_runtime::{ExecutionMode, FetchCheckpoint};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::ServerConfig;
 use runtime::isolate_pool::ExecutionContext;
+use rustls::ServerConfig;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, oneshot};
@@ -19,7 +19,7 @@ async fn tcp_exchange_replays_buffered_response() -> Result<()> {
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_TCP", "1");
     let (port, shutdown_tx, server_task) = spawn_tcp_server(b"PONG:ping", None).await?;
 
-        let code = r#"
+    let code = r#"
 export default function handler({ input }) {
   const result = Flux.net.tcpExchange({
         host: input.host,
@@ -64,7 +64,8 @@ export default function handler({ input }) {
     assert_eq!(live_output.checkpoints[0].method, "exchange");
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
     let mut replay_context = ExecutionContext::new("tcp-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -93,7 +94,7 @@ async fn tcp_exchange_supports_fixed_read_mode() -> Result<()> {
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_TCP", "1");
     let (port, shutdown_tx, server_task) = spawn_tcp_server(b"PONG", Some(4)).await?;
 
-        let code = r#"
+    let code = r#"
 export default function handler({ input }) {
   const result = Flux.net.tcpExchange({
         host: input.host,
@@ -110,7 +111,8 @@ export default function handler({ input }) {
 }
 "#;
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create fixed-read isolate")?;
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create fixed-read isolate")?;
     let output = isolate
         .execute(
             serde_json::json!({ "host": "127.0.0.1", "port": port }),
@@ -120,7 +122,9 @@ export default function handler({ input }) {
         .context("fixed-read execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("tcp fixed server task failed")??;
+    server_task
+        .await
+        .context("tcp fixed server task failed")??;
 
     assert_eq!(output.error, None);
     assert_eq!(
@@ -145,9 +149,7 @@ async fn tcp_exchange_supports_tls_with_custom_ca() -> Result<()> {
         .context("failed to generate test certificate")?;
     let cert_pem = cert.cert.pem();
     let cert_der: CertificateDer<'static> = cert.cert.der().clone();
-    let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
-        cert.key_pair.serialize_der(),
-    ));
+    let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der()));
 
     let server_config = ServerConfig::builder()
         .with_no_client_auth()
@@ -204,7 +206,10 @@ export default function handler({ input }) {
     );
     assert_eq!(output.checkpoints.len(), 1);
     assert_eq!(output.checkpoints[0].boundary, "tcp");
-    assert_eq!(output.checkpoints[0].request.get("tls"), Some(&serde_json::json!(true)));
+    assert_eq!(
+        output.checkpoints[0].request.get("tls"),
+        Some(&serde_json::json!(true))
+    );
 
     Ok(())
 }
@@ -212,7 +217,7 @@ export default function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tcp_exchange_blocks_loopback_by_default_and_never_replays_it() -> Result<()> {
     let _lock = network_test_lock().lock().await;
-        let code = r#"
+    let code = r#"
 export default function handler({ input }) {
   try {
         const result = Flux.net.tcpExchange({ host: input.host, port: input.port, text: "ping" });
@@ -232,14 +237,18 @@ export default function handler({ input }) {
         "port": 5432,
     });
 
-    let mut live_isolate = JsIsolate::new_for_run(code).context("failed to create blocked isolate")?;
+    let mut live_isolate =
+        JsIsolate::new_for_run(code).context("failed to create blocked isolate")?;
     let live_output = live_isolate
         .execute(payload.clone(), ExecutionContext::new("tcp-blocked-live"))
         .await
         .context("blocked tcp execution failed")?;
 
     assert_eq!(live_output.error, None);
-    assert_eq!(live_output.output.get("ok"), Some(&serde_json::json!(false)));
+    assert_eq!(
+        live_output.output.get("ok"),
+        Some(&serde_json::json!(false))
+    );
     let live_message = live_output
         .output
         .get("message")
@@ -280,7 +289,8 @@ export default function handler({ input }) {
         duration_ms: 0,
     }];
 
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create blocked replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create blocked replay isolate")?;
     let mut replay_context = ExecutionContext::new("tcp-blocked-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -289,7 +299,10 @@ export default function handler({ input }) {
         .context("blocked replay tcp execution failed")?;
 
     assert_eq!(replay_output.error, None);
-    assert_eq!(replay_output.output.get("ok"), Some(&serde_json::json!(false)));
+    assert_eq!(
+        replay_output.output.get("ok"),
+        Some(&serde_json::json!(false))
+    );
     assert!(replay_output.checkpoints.is_empty());
 
     Ok(())
@@ -298,7 +311,11 @@ export default function handler({ input }) {
 async fn spawn_tcp_server(
     response: &'static [u8],
     fixed_request_bytes: Option<usize>,
-) -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+) -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind tcp test listener")?;
@@ -337,7 +354,11 @@ async fn spawn_tls_server(
     acceptor: TlsAcceptor,
     response: &'static [u8],
     fixed_request_bytes: usize,
-) -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+) -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind tls test listener")?;

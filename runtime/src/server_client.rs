@@ -16,9 +16,10 @@ pub struct ExecutionEnvelope {
 
 pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelope) -> Result<()> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
 
     let mut request = Request::new(pb::RecordExecutionRequest {
         execution_id: envelope.result.execution_id,
@@ -67,8 +68,10 @@ fn checkpoint_to_proto(checkpoint: FetchCheckpoint) -> pb::CheckpointEntry {
         boundary: checkpoint.boundary,
         url: checkpoint.url,
         method: checkpoint.method,
-        request_json: serde_json::to_string(&checkpoint.request).unwrap_or_else(|_| "null".to_string()),
-        response_json: serde_json::to_string(&checkpoint.response).unwrap_or_else(|_| "null".to_string()),
+        request_json: serde_json::to_string(&checkpoint.request)
+            .unwrap_or_else(|_| "null".to_string()),
+        response_json: serde_json::to_string(&checkpoint.response)
+            .unwrap_or_else(|_| "null".to_string()),
         duration_ms: checkpoint.duration_ms,
     }
 }

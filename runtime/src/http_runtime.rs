@@ -60,15 +60,26 @@ struct InternalResumeRequest {
     recorded_checkpoints: Vec<FetchCheckpoint>,
 }
 
-fn attach_execution_headers<T>(response: &mut Response<T>, execution_id: &str, request_id: &str, code_version: &str) {
+fn attach_execution_headers<T>(
+    response: &mut Response<T>,
+    execution_id: &str,
+    request_id: &str,
+    code_version: &str,
+) {
     if let Ok(value) = HeaderValue::from_str(execution_id) {
-        response.headers_mut().insert(HeaderName::from_static("x-flux-execution-id"), value);
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-flux-execution-id"), value);
     }
     if let Ok(value) = HeaderValue::from_str(request_id) {
-        response.headers_mut().insert(HeaderName::from_static("x-flux-request-id"), value);
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-flux-request-id"), value);
     }
     if let Ok(value) = HeaderValue::from_str(code_version) {
-        response.headers_mut().insert(HeaderName::from_static("x-flux-code-version"), value);
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-flux-code-version"), value);
     }
 }
 
@@ -141,7 +152,10 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     tracing::info!(%addr, route = %config.route_name, "runtime listening");
-    println!("[ready] listening on http://{}:{}", config.host, config.port);
+    println!(
+        "[ready] listening on http://{}:{}",
+        config.host, config.port
+    );
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -203,7 +217,12 @@ async fn handle_request(
             })),
         )
             .into_response();
-        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+        attach_execution_headers(
+            &mut response,
+            &result.execution_id,
+            &result.request_id,
+            &result.code_version,
+        );
         return response;
     }
 
@@ -219,7 +238,12 @@ async fn handle_request(
         })),
     )
         .into_response();
-    attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+    attach_execution_headers(
+        &mut response,
+        &result.execution_id,
+        &result.request_id,
+        &result.code_version,
+    );
     response
 }
 
@@ -249,8 +273,9 @@ async fn handle_net_request(
         .iter()
         .filter_map(|(k, v)| {
             let name = k.as_str();
-            // Never forward auth / internal tokens into user code.
-            if matches!(name, "authorization" | "x-service-token" | "x-internal-token") {
+            // Keep Flux-internal control headers out of user code, but preserve
+            // end-user Authorization so app middleware can implement auth.
+            if matches!(name, "x-service-token" | "x-internal-token") {
                 return None;
             }
             Some([name.to_string(), v.to_str().ok()?.to_string()])
@@ -277,10 +302,19 @@ async fn handle_net_request(
     let req_id = Uuid::new_v4().to_string();
     let net_req = NetRequest {
         req_id,
-        method: request_payload["method"].as_str().unwrap_or("GET").to_string(),
-        url: request_payload["url"].as_str().unwrap_or_default().to_string(),
+        method: request_payload["method"]
+            .as_str()
+            .unwrap_or("GET")
+            .to_string(),
+        url: request_payload["url"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         headers_json,
-        body: request_payload["body"].as_str().unwrap_or_default().to_string(),
+        body: request_payload["body"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
     };
     let context = ExecutionContext::new(state.code_version.clone());
     let result = state.pool.execute_net_request(context, net_req).await;
@@ -290,7 +324,10 @@ async fn handle_net_request(
             &state.server_url,
             &state.service_token,
             crate::server_client::ExecutionEnvelope {
-                method: request_payload["method"].as_str().unwrap_or("GET").to_string(),
+                method: request_payload["method"]
+                    .as_str()
+                    .unwrap_or("GET")
+                    .to_string(),
                 path: uri
                     .path_and_query()
                     .map(|value| value.as_str().to_string())
@@ -304,15 +341,28 @@ async fn handle_net_request(
 
     if let Some(err) = &result.error {
         let mut response = (StatusCode::INTERNAL_SERVER_ERROR, err.clone()).into_response();
-        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+        attach_execution_headers(
+            &mut response,
+            &result.execution_id,
+            &result.request_id,
+            &result.code_version,
+        );
         return response;
     }
 
     // Unpack the net_response envelope written by the worker.
     if let Some(nr) = result.body.get("net_response") {
         let status_code = nr.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
-        let body_str = nr.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let raw_headers = nr.get("headers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let body_str = nr
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let raw_headers = nr
+            .get("headers")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
 
         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut response = Response::new(body_str);
@@ -323,23 +373,36 @@ async fn handle_net_request(
                 if arr.len() == 2 {
                     let k = arr[0].as_str().unwrap_or("");
                     let v = arr[1].as_str().unwrap_or("");
-                    if let (Ok(name), Ok(value)) = (
-                        k.parse::<HeaderName>(),
-                        v.parse::<HeaderValue>(),
-                    ) {
+                    if let (Ok(name), Ok(value)) =
+                        (k.parse::<HeaderName>(), v.parse::<HeaderValue>())
+                    {
                         response.headers_mut().insert(name, value);
                     }
                 }
             }
         }
 
-        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+        attach_execution_headers(
+            &mut response,
+            &result.execution_id,
+            &result.request_id,
+            &result.code_version,
+        );
 
         return response.into_response();
     }
 
-    let mut response = (StatusCode::INTERNAL_SERVER_ERROR, "handler produced no response").into_response();
-    attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+    let mut response = (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "handler produced no response",
+    )
+        .into_response();
+    attach_execution_headers(
+        &mut response,
+        &result.execution_id,
+        &result.request_id,
+        &result.code_version,
+    );
     response
 }
 
@@ -365,7 +428,10 @@ async fn handle_internal_resume(
         Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
     };
 
-    tracing::info!(recorded_checkpoints = payload.recorded_checkpoints.len(), "runtime internal resume request");
+    tracing::info!(
+        recorded_checkpoints = payload.recorded_checkpoints.len(),
+        "runtime internal resume request"
+    );
 
     let mut context = ExecutionContext::new(state.code_version.clone());
     context.mode = ExecutionMode::Replay;
@@ -378,7 +444,9 @@ async fn handle_internal_resume(
     (StatusCode::OK, Json(result)).into_response()
 }
 
-fn request_json_to_net_request(request: &serde_json::Value) -> std::result::Result<NetRequest, String> {
+fn request_json_to_net_request(
+    request: &serde_json::Value,
+) -> std::result::Result<NetRequest, String> {
     let method = request
         .get("method")
         .and_then(|value| value.as_str())
@@ -431,8 +499,9 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     {
-        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
 
         tokio::select! {
             _ = ctrl_c => {}

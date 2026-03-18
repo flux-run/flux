@@ -36,7 +36,9 @@ pub struct ReplayArgs {
 
 pub async fn execute(args: ReplayArgs) -> Result<()> {
     if args.validate && !args.commit {
-        bail!("--validate requires --commit so replay can compare live checkpoint results against recorded checkpoints");
+        bail!(
+            "--validate requires --commit so replay can compare live checkpoint results against recorded checkpoints"
+        );
     }
 
     let auth = resolve_auth(args.url, args.token)?;
@@ -98,10 +100,12 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         let replay_status = colorize_status_label(&response.status, response.duration_ms);
         println!(
             "  original  {:<18}  {}ms",
-            original_status,
-            original.duration_ms
+            original_status, original.duration_ms
         );
-        println!("  replay    {:<18}  {}ms", replay_status, response.duration_ms);
+        println!(
+            "  replay    {:<18}  {}ms",
+            replay_status, response.duration_ms
+        );
     }
 
     if !response.error.is_empty() {
@@ -159,7 +163,11 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     if let Some(original) = &original {
         let original_output = first_non_empty_value(&[
             Some(original.response_json.clone()),
-            if original.error.is_empty() { None } else { Some(original.error.clone()) },
+            if original.error.is_empty() {
+                None
+            } else {
+                Some(original.error.clone())
+            },
         ]);
         let replay_output = first_non_empty_value(&[
             if response.output.is_empty() || response.output == "null" {
@@ -167,7 +175,11 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
             } else {
                 Some(response.output.clone())
             },
-            if response.error.is_empty() { None } else { Some(response.error.clone()) },
+            if response.error.is_empty() {
+                None
+            } else {
+                Some(response.error.clone())
+            },
         ]);
 
         println!();
@@ -397,7 +409,13 @@ fn parse_diff_path(path: &str) -> Vec<String> {
     segments
 }
 
-fn insert_diff(node: &mut DiffTreeNode, segments: &[String], expected: &str, actual: &str, kind: &str) {
+fn insert_diff(
+    node: &mut DiffTreeNode,
+    segments: &[String],
+    expected: &str,
+    actual: &str,
+    kind: &str,
+) {
     if segments.is_empty() {
         node.expected = Some(expected.to_string());
         node.actual = Some(actual.to_string());
@@ -441,16 +459,8 @@ fn render_diff_tree(name: Option<&str>, node: &DiffTreeNode, indent: usize) {
     let child_prefix = " ".repeat(child_indent);
 
     if let (Some(expected), Some(actual)) = (&node.expected, &node.actual) {
-        println!(
-            "{}expected  {}",
-            child_prefix,
-            colorize(expected, ANSI_DIM)
-        );
-        println!(
-            "{}actual    {}",
-            child_prefix,
-            colorize(actual, ANSI_RED)
-        );
+        println!("{}expected  {}", child_prefix, colorize(expected, ANSI_DIM));
+        println!("{}actual    {}", child_prefix, colorize(actual, ANSI_RED));
     }
 
     for (child_name, child_node) in &node.children {
@@ -531,16 +541,23 @@ fn print_explain_view(
         );
 
         if divergence.diffs.is_empty() {
-            println!("    expected  {}", colorize(&divergence.expected_json, ANSI_DIM));
-            println!("    actual    {}", colorize(&divergence.actual_json, ANSI_RED));
+            println!(
+                "    expected  {}",
+                colorize(&divergence.expected_json, ANSI_DIM)
+            );
+            println!(
+                "    actual    {}",
+                colorize(&divergence.actual_json, ANSI_RED)
+            );
         } else {
             if visible_diffs.is_empty() {
-                println!("    {}", colorize("all matching field diffs hidden by --ignore", ANSI_DIM));
+                println!(
+                    "    {}",
+                    colorize("all matching field diffs hidden by --ignore", ANSI_DIM)
+                );
             } else {
-                let owned_diffs: Vec<crate::grpc::ReplayFieldDiffView> = visible_diffs
-                    .into_iter()
-                    .cloned()
-                    .collect();
+                let owned_diffs: Vec<crate::grpc::ReplayFieldDiffView> =
+                    visible_diffs.into_iter().cloned().collect();
                 let tree = build_diff_tree(&owned_diffs);
                 render_diff_tree(None, &tree, 4);
             }
@@ -549,7 +566,10 @@ fn print_explain_view(
 
     if !response.error.is_empty() {
         println!();
-        println!("  error  {}", colorize(sanitize_replay_error(&response.error), ANSI_RED));
+        println!(
+            "  error  {}",
+            colorize(sanitize_replay_error(&response.error), ANSI_RED)
+        );
     }
 
     if !response.output.is_empty() && response.output != "null" {

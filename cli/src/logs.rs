@@ -1,6 +1,6 @@
 use anyhow::Result;
-use clap::Args;
 use chrono::{DateTime, Duration, Utc};
+use clap::Args;
 
 use crate::config::resolve_auth;
 use crate::grpc::list_logs;
@@ -25,7 +25,11 @@ pub struct LogsArgs {
 
 pub async fn execute(args: LogsArgs) -> Result<()> {
     let auth = resolve_auth(args.url, args.token)?;
-    let fetch_limit = if args.status.is_some() || args.path.is_some() || args.since.is_some() || args.search.is_some() {
+    let fetch_limit = if args.status.is_some()
+        || args.path.is_some()
+        || args.since.is_some()
+        || args.search.is_some()
+    {
         (args.limit.saturating_mul(10)).clamp(50, 500)
     } else {
         args.limit
@@ -81,17 +85,15 @@ pub async fn execute(args: LogsArgs) -> Result<()> {
 
         println!(
             "  {}  {}  {}  {}  {:>8}  {}",
-            time,
-            method,
-            path,
-            status,
-            duration,
-            short_id,
+            time, method, path, status, duration, short_id,
         );
     }
 
     println!();
-    println!("  showing last {} — flux logs --limit 100 for more", args.limit);
+    println!(
+        "  showing last {} — flux logs --limit 100 for more",
+        args.limit
+    );
     println!();
 
     Ok(())

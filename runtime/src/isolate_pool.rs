@@ -7,7 +7,10 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::artifact::RuntimeArtifact;
-use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry, NetRequest, NetRequestExecution};
+use crate::deno_runtime::{
+    ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry, NetRequest,
+    NetRequestExecution,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionContext {
@@ -87,7 +90,11 @@ impl IsolatePool {
         })
     }
 
-    pub fn new_with_mode(size: usize, artifact: RuntimeArtifact, is_server_mode: bool) -> Result<Self> {
+    pub fn new_with_mode(
+        size: usize,
+        artifact: RuntimeArtifact,
+        is_server_mode: bool,
+    ) -> Result<Self> {
         let mut workers = Vec::with_capacity(size);
         for id in 0..size {
             let sender = spawn_isolate_worker_with_mode(id, artifact.clone(), is_server_mode)?;
@@ -103,8 +110,13 @@ impl IsolatePool {
         })
     }
 
-    pub async fn execute(&self, payload: serde_json::Value, context: ExecutionContext) -> ExecutionResult {
-        self.execute_with_recorded(payload, context, Vec::new()).await
+    pub async fn execute(
+        &self,
+        payload: serde_json::Value,
+        context: ExecutionContext,
+    ) -> ExecutionResult {
+        self.execute_with_recorded(payload, context, Vec::new())
+            .await
     }
 
     /// Execute user code with pre-recorded checkpoints for replay.
@@ -133,13 +145,21 @@ impl IsolatePool {
         match tokio::time::timeout(self.queue_send_timeout, worker.sender.send(work)).await {
             Ok(Ok(())) => {}
             Ok(Err(_)) => return error_result(context, "isolate worker is unavailable"),
-            Err(_) => return error_result(context, "timed out while waiting for isolate queue capacity"),
+            Err(_) => {
+                return error_result(
+                    context,
+                    "timed out while waiting for isolate queue capacity",
+                );
+            }
         }
 
         match tokio::time::timeout(self.result_timeout, result_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => error_result(context, "isolate worker dropped execution result"),
-            Err(_) => error_result(context, "timed out while waiting for isolate execution result"),
+            Err(_) => error_result(
+                context,
+                "timed out while waiting for isolate execution result",
+            ),
         }
     }
 
@@ -179,13 +199,21 @@ impl IsolatePool {
         match tokio::time::timeout(self.queue_send_timeout, worker.sender.send(work)).await {
             Ok(Ok(())) => {}
             Ok(Err(_)) => return error_result(context, "isolate worker is unavailable"),
-            Err(_) => return error_result(context, "timed out while waiting for isolate queue capacity"),
+            Err(_) => {
+                return error_result(
+                    context,
+                    "timed out while waiting for isolate queue capacity",
+                );
+            }
         }
 
         match tokio::time::timeout(self.result_timeout, result_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => error_result(context, "isolate worker dropped execution result"),
-            Err(_) => error_result(context, "timed out while waiting for isolate execution result"),
+            Err(_) => error_result(
+                context,
+                "timed out while waiting for isolate execution result",
+            ),
         }
     }
 }
@@ -219,7 +247,9 @@ fn spawn_isolate_worker(
             local_set.block_on(&runtime, async move {
                 let isolate_result = match &artifact {
                     RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, isolate_id),
-                    RuntimeArtifact::Built(artifact) => JsIsolate::new_from_artifact(artifact).await,
+                    RuntimeArtifact::Built(artifact) => {
+                        JsIsolate::new_from_artifact(artifact).await
+                    }
                 };
 
                 let is_server_mode = match isolate_result {
@@ -242,8 +272,12 @@ fn spawn_isolate_worker(
                     let started = std::time::Instant::now();
 
                     let isolate_result = match &artifact {
-                        RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, isolate_id),
-                        RuntimeArtifact::Built(artifact) => JsIsolate::new_from_artifact(artifact).await,
+                        RuntimeArtifact::Inline(artifact) => {
+                            JsIsolate::new(&artifact.code, isolate_id)
+                        }
+                        RuntimeArtifact::Built(artifact) => {
+                            JsIsolate::new_from_artifact(artifact).await
+                        }
                     };
 
                     let mut isolate = match isolate_result {
@@ -267,7 +301,11 @@ fn spawn_isolate_worker(
                                 )
                                 .await
                             {
-                                Ok(NetRequestExecution { response: net_resp, checkpoints, logs }) => ExecutionResult {
+                                Ok(NetRequestExecution {
+                                    response: net_resp,
+                                    checkpoints,
+                                    logs,
+                                }) => ExecutionResult {
                                     execution_id: context.execution_id,
                                     request_id: context.request_id,
                                     code_version: context.code_version,
@@ -286,13 +324,30 @@ fn spawn_isolate_worker(
                                 },
                                 Err(err) => error_result(work.context, err.to_string()),
                             },
-                            None => error_result(work.context, "server-mode isolate received non-HTTP work item"),
+                            None => error_result(
+                                work.context,
+                                "server-mode isolate received non-HTTP work item",
+                            ),
                         }
                     } else {
-                        match isolate.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
-                            Ok(JsExecutionOutput { output, checkpoints, error, logs }) => {
+                        match isolate
+                            .execute_with_recorded(
+                                work.payload,
+                                work.context,
+                                work.recorded_checkpoints,
+                            )
+                            .await
+                        {
+                            Ok(JsExecutionOutput {
+                                output,
+                                checkpoints,
+                                error,
+                                logs,
+                            }) => {
                                 let (status, body, error) = match error {
-                                    Some(err) => ("error".to_string(), serde_json::Value::Null, Some(err)),
+                                    Some(err) => {
+                                        ("error".to_string(), serde_json::Value::Null, Some(err))
+                                    }
                                     None => (
                                         "ok".to_string(),
                                         serde_json::json!({
@@ -336,7 +391,9 @@ fn spawn_isolate_worker(
 
     match init_rx.recv() {
         Ok(Ok(is_server_mode)) => Ok((tx, is_server_mode)),
-        Ok(Err(err)) => Err(anyhow::anyhow!("failed to initialize isolate worker: {err}")),
+        Ok(Err(err)) => Err(anyhow::anyhow!(
+            "failed to initialize isolate worker: {err}"
+        )),
         Err(err) => Err(anyhow::anyhow!(
             "failed to receive isolate worker initialization status: {err}"
         )),
@@ -371,8 +428,12 @@ fn spawn_isolate_worker_with_mode(
                     let started = std::time::Instant::now();
 
                     let isolate_result = match &artifact {
-                        RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, isolate_id),
-                        RuntimeArtifact::Built(artifact) => JsIsolate::new_from_artifact(artifact).await,
+                        RuntimeArtifact::Inline(artifact) => {
+                            JsIsolate::new(&artifact.code, isolate_id)
+                        }
+                        RuntimeArtifact::Built(artifact) => {
+                            JsIsolate::new_from_artifact(artifact).await
+                        }
                     };
 
                     let mut isolate = match isolate_result {
@@ -396,7 +457,11 @@ fn spawn_isolate_worker_with_mode(
                                 )
                                 .await
                             {
-                                Ok(NetRequestExecution { response: net_resp, checkpoints, logs }) => ExecutionResult {
+                                Ok(NetRequestExecution {
+                                    response: net_resp,
+                                    checkpoints,
+                                    logs,
+                                }) => ExecutionResult {
                                     execution_id: context.execution_id,
                                     request_id: context.request_id,
                                     code_version: context.code_version,
@@ -415,13 +480,30 @@ fn spawn_isolate_worker_with_mode(
                                 },
                                 Err(err) => error_result(work.context, err.to_string()),
                             },
-                            None => error_result(work.context, "server-mode isolate received non-HTTP work item"),
+                            None => error_result(
+                                work.context,
+                                "server-mode isolate received non-HTTP work item",
+                            ),
                         }
                     } else {
-                        match isolate.execute_with_recorded(work.payload, work.context, work.recorded_checkpoints).await {
-                            Ok(JsExecutionOutput { output, checkpoints, error, logs }) => {
+                        match isolate
+                            .execute_with_recorded(
+                                work.payload,
+                                work.context,
+                                work.recorded_checkpoints,
+                            )
+                            .await
+                        {
+                            Ok(JsExecutionOutput {
+                                output,
+                                checkpoints,
+                                error,
+                                logs,
+                            }) => {
                                 let (status, body, error) = match error {
-                                    Some(err) => ("error".to_string(), serde_json::Value::Null, Some(err)),
+                                    Some(err) => {
+                                        ("error".to_string(), serde_json::Value::Null, Some(err))
+                                    }
                                     None => (
                                         "ok".to_string(),
                                         serde_json::json!({

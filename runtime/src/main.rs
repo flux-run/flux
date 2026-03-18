@@ -2,13 +2,15 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use deno_ast::{EmitOptions, MediaType, ParseParams, TranspileModuleOptions, TranspileOptions};
 use clap::Parser;
+use deno_ast::{EmitOptions, MediaType, ParseParams, TranspileModuleOptions, TranspileOptions};
 use runtime::isolate_pool::{ExecutionContext, ExecutionResult};
 
 #[derive(Parser, Debug)]
 #[command(name = "flux-runtime")]
-#[command(about = "Flux runtime — runs user JS handlers and streams execution records to flux-server")]
+#[command(
+    about = "Flux runtime — runs user JS handlers and streams execution records to flux-server"
+)]
 struct Args {
     /// Entry file to serve (JS, MJS, CJS, TS, or TSX).
     #[arg(long, value_name = "FILE", default_value = "index.js")]
@@ -23,7 +25,12 @@ struct Args {
     server_url: String,
 
     /// Service token for authenticating with flux-server.
-    #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN", default_value = "")]
+    #[arg(
+        long,
+        env = "FLUX_SERVICE_TOKEN",
+        value_name = "TOKEN",
+        default_value = ""
+    )]
     token: String,
 
     /// HTTP listen host.
@@ -57,8 +64,7 @@ struct Args {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -73,14 +79,19 @@ async fn main() -> Result<()> {
             .map_err(|err| anyhow::anyhow!(err))?;
         let route_name = match &artifact {
             runtime::RuntimeArtifact::Built(artifact) => artifact.route_name.clone(),
-            runtime::RuntimeArtifact::Inline(_) => unreachable!("built artifact loader returned inline artifact"),
+            runtime::RuntimeArtifact::Inline(_) => {
+                unreachable!("built artifact loader returned inline artifact")
+            }
         };
 
         println!("server:   {}", args.server_url);
         println!("artifact: {}", artifact_path);
         println!("hash:     {}", artifact.code_version());
         println!("bytes:    {}", artifact.size_bytes());
-        println!("runtime:  http://{}:{}/{}", args.host, args.port, route_name);
+        println!(
+            "runtime:  http://{}:{}/{}",
+            args.host, args.port, route_name
+        );
 
         if args.check_only {
             println!("status:   ready for runtime execution and event streaming");
@@ -163,7 +174,9 @@ async fn main() -> Result<()> {
             .await
             .context("failed to create JS isolate")?;
         let started = Instant::now();
-        let execution = isolate.run_script(input.clone(), context.clone()).await
+        let execution = isolate
+            .run_script(input.clone(), context.clone())
+            .await
             .context("script execution failed")?;
 
         if !args.token.is_empty() {
@@ -171,7 +184,11 @@ async fn main() -> Result<()> {
                 execution_id: context.execution_id.clone(),
                 request_id: context.request_id.clone(),
                 code_version: context.code_version.clone(),
-                status: if execution.error.is_some() { "error".to_string() } else { "ok".to_string() },
+                status: if execution.error.is_some() {
+                    "error".to_string()
+                } else {
+                    "ok".to_string()
+                },
                 body: execution.output.clone(),
                 error: execution.error.clone(),
                 duration_ms: started.elapsed().as_millis() as i32,
@@ -189,7 +206,8 @@ async fn main() -> Result<()> {
                     result,
                 },
             )
-            .await {
+            .await
+            {
                 Ok(()) => println!("execution_id: {}", context.execution_id),
                 Err(error) => eprintln!("warning: failed to record script execution: {error}"),
             }
@@ -200,7 +218,10 @@ async fn main() -> Result<()> {
         }
 
         if !execution.output.is_null() {
-            println!("{}", serde_json::to_string_pretty(&execution.output).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&execution.output).unwrap_or_default()
+            );
         }
         return Ok(());
     }
@@ -209,7 +230,10 @@ async fn main() -> Result<()> {
     println!("entry:    {}", entry.display());
     println!("hash:     {}", artifact.code_version());
     println!("bytes:    {}", artifact.size_bytes());
-    println!("runtime:  http://{}:{}/{}", args.host, args.port, route_name);
+    println!(
+        "runtime:  http://{}:{}/{}",
+        args.host, args.port, route_name
+    );
 
     if args.check_only {
         println!("status:   ready for runtime execution and event streaming");
@@ -255,7 +279,7 @@ fn transpile_typescript(entry: &Path) -> Result<String> {
 
     let media_type = match extension(entry).as_deref() {
         Some("tsx") => MediaType::Tsx,
-        _           => MediaType::TypeScript,
+        _ => MediaType::TypeScript,
     };
 
     // Build a file:// specifier so SWC has a meaningful path in diagnostics.

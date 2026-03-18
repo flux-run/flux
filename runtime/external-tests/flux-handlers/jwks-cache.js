@@ -1,9 +1,11 @@
+const JWKS_URL = Deno.env.get("JWKS_URL") ?? "http://127.0.0.1:9020/.well-known/jwks.json";
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   const bypass = url.pathname === "/jwks-bypass";
 
   try {
-    const response = await fetch("http://127.0.0.1:9020/.well-known/jwks.json", {
+    const response = await fetch(JWKS_URL, {
       headers: bypass ? { "cache-control": "no-cache" } : undefined,
     });
     const json = await response.json();

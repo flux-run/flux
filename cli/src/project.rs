@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
 use deno_ast::swc::ast::{
-    Callee, CallExpr, ExportAll, ImportDecl, Lit, NamedExport, TsImportEqualsDecl,
+    CallExpr, Callee, ExportAll, ImportDecl, Lit, NamedExport, TsImportEqualsDecl,
 };
 use deno_ast::swc::ecma_visit::{Visit, VisitWith};
 use deno_ast::{MediaType, ParseParams, parse_module};
@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shared::project::{
     ArtifactDependency, ArtifactDependencyKind, ArtifactMediaType, ArtifactModule,
-    ArtifactSourceKind, DEFAULT_ARTIFACT_PATH, DEFAULT_PROJECT_CONFIG_PATH,
-    FLUX_PROJECT_VERSION, FluxBuildArtifact, FluxProjectConfig, NpmPackageSnapshot,
+    ArtifactSourceKind, DEFAULT_ARTIFACT_PATH, DEFAULT_PROJECT_CONFIG_PATH, FLUX_PROJECT_VERSION,
+    FluxBuildArtifact, FluxProjectConfig, NpmPackageSnapshot,
 };
 use url::Url;
 
@@ -119,10 +119,9 @@ pub fn resolve_entry_path(entry_override: Option<&str>) -> Result<PathBuf> {
 
 pub fn load_project_config(project_dir: &Path) -> Result<FluxProjectConfig> {
     let path = project_config_path(project_dir);
-    let source = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_str(&source)
-        .with_context(|| format!("failed to parse {}", path.display()))
+    let source =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
 }
 
 pub fn write_project_config(project_dir: &Path, config: &FluxProjectConfig) -> Result<()> {
@@ -172,8 +171,13 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
 
 pub fn resolve_built_artifact(entry: &Path) -> Result<(FluxProjectConfig, PathBuf)> {
     let project_dir = entry.parent().unwrap_or(Path::new("."));
-    let config = load_project_config(project_dir)
-        .with_context(|| format!("missing {} beside {}", DEFAULT_PROJECT_CONFIG_PATH, entry.display()))?;
+    let config = load_project_config(project_dir).with_context(|| {
+        format!(
+            "missing {} beside {}",
+            DEFAULT_PROJECT_CONFIG_PATH,
+            entry.display()
+        )
+    })?;
     let built_artifact = artifact_path(project_dir, &config);
     if !built_artifact.exists() {
         bail!(
@@ -278,7 +282,9 @@ fn collect_watch_entries(dir: &Path, entries: &mut Vec<(String, String)>) -> Res
         }
 
         if !matches!(
-            path.extension().and_then(|value| value.to_str()).unwrap_or_default(),
+            path.extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default(),
             "js" | "mjs" | "jsx" | "ts" | "tsx" | "json"
         ) {
             continue;
@@ -341,10 +347,9 @@ fn resolve_existing_module_path(path: &Path) -> Result<PathBuf> {
 }
 
 fn read_package_manifest(path: &Path) -> Result<PackageManifest> {
-    let source = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_str(&source)
-        .with_context(|| format!("failed to parse {}", path.display()))
+    let source =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
 }
 
 fn resolve_package_entry(package_dir: &Path) -> Result<Option<PathBuf>> {
@@ -354,7 +359,10 @@ fn resolve_package_entry(package_dir: &Path) -> Result<Option<PathBuf>> {
     }
 
     let manifest = read_package_manifest(&manifest_path)?;
-    for candidate in [manifest.module.as_deref(), manifest.main.as_deref()].into_iter().flatten() {
+    for candidate in [manifest.module.as_deref(), manifest.main.as_deref()]
+        .into_iter()
+        .flatten()
+    {
         let resolved = resolve_existing_module_path(&package_dir.join(candidate))?;
         return Ok(Some(resolved));
     }
@@ -402,9 +410,24 @@ fn local_file_dependency<'a>(manifest: &'a PackageManifest, package_name: &str) 
         .dependencies
         .as_ref()
         .and_then(|deps| deps.get(package_name))
-        .or_else(|| manifest.dev_dependencies.as_ref().and_then(|deps| deps.get(package_name)))
-        .or_else(|| manifest.optional_dependencies.as_ref().and_then(|deps| deps.get(package_name)))
-        .or_else(|| manifest.peer_dependencies.as_ref().and_then(|deps| deps.get(package_name)))
+        .or_else(|| {
+            manifest
+                .dev_dependencies
+                .as_ref()
+                .and_then(|deps| deps.get(package_name))
+        })
+        .or_else(|| {
+            manifest
+                .optional_dependencies
+                .as_ref()
+                .and_then(|deps| deps.get(package_name))
+        })
+        .or_else(|| {
+            manifest
+                .peer_dependencies
+                .as_ref()
+                .and_then(|deps| deps.get(package_name))
+        })
         .map(String::as_str)
         .filter(|value| value.starts_with("file:"))
 }
@@ -506,7 +529,12 @@ impl GraphBuilder {
             let loaded = match self.load_module(&specifier).await {
                 Ok(module) => module,
                 Err(err) => {
-                    self.push_diagnostic(DiagnosticSeverity::Error, "load_failed", &specifier, err.to_string());
+                    self.push_diagnostic(
+                        DiagnosticSeverity::Error,
+                        "load_failed",
+                        &specifier,
+                        err.to_string(),
+                    );
                     if let Some(owner) = npm_owner {
                         self.mark_npm(&owner, NpmCompatibility::Incompatible);
                     }
@@ -515,26 +543,37 @@ impl GraphBuilder {
             };
 
             if let Some(snapshot) = &loaded.npm_snapshot {
-                self.npm_snapshots.insert(snapshot.specifier.clone(), snapshot.clone());
+                self.npm_snapshots
+                    .insert(snapshot.specifier.clone(), snapshot.clone());
                 self.npm_status
                     .entry(snapshot.specifier.clone())
                     .or_insert(NpmCompatibility::Compatible);
             }
 
-            self.collect_warning_diagnostics(&loaded.source, &loaded.specifier, npm_owner.as_deref());
+            self.collect_warning_diagnostics(
+                &loaded.source,
+                &loaded.specifier,
+                npm_owner.as_deref(),
+            );
 
             let mut dependencies = Vec::new();
             match analyze_imports(&loaded.specifier, &loaded.source, loaded.media_type.clone()) {
                 Ok(imports) => {
                     for import in imports {
-                        match resolve_dependency_specifier(&import.specifier, &loaded.base_specifier) {
+                        match resolve_dependency_specifier(
+                            &import.specifier,
+                            &loaded.base_specifier,
+                        ) {
                             Ok(resolved) => {
                                 if resolved.starts_with("node:") {
                                     self.push_diagnostic(
                                         DiagnosticSeverity::Error,
                                         "node_import",
                                         &loaded.specifier,
-                                        format!("node: imports are not supported: {}", import.specifier),
+                                        format!(
+                                            "node: imports are not supported: {}",
+                                            import.specifier
+                                        ),
                                     );
                                     if let Some(owner) = npm_owner.as_deref() {
                                         self.mark_npm(owner, NpmCompatibility::Incompatible);
@@ -572,7 +611,12 @@ impl GraphBuilder {
                     }
                 }
                 Err(err) => {
-                    self.push_diagnostic(DiagnosticSeverity::Error, "parse_failed", &loaded.specifier, err.to_string());
+                    self.push_diagnostic(
+                        DiagnosticSeverity::Error,
+                        "parse_failed",
+                        &loaded.specifier,
+                        err.to_string(),
+                    );
                     if let Some(owner) = npm_owner.as_deref() {
                         self.mark_npm(owner, NpmCompatibility::Incompatible);
                     }
@@ -600,11 +644,7 @@ impl GraphBuilder {
             );
         }
 
-        let npm_packages = self
-            .npm_snapshots
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let npm_packages = self.npm_snapshots.values().cloned().collect::<Vec<_>>();
         let modules = self.modules.values().cloned().collect::<Vec<_>>();
 
         let graph_sha256 = {
@@ -725,7 +765,12 @@ impl GraphBuilder {
         })
     }
 
-    fn collect_warning_diagnostics(&mut self, source: &str, specifier: &str, npm_owner: Option<&str>) {
+    fn collect_warning_diagnostics(
+        &mut self,
+        source: &str,
+        specifier: &str,
+        npm_owner: Option<&str>,
+    ) {
         for global in ["Buffer", "process", "__dirname", "__filename", "global"] {
             if contains_identifier(source, global) {
                 self.push_diagnostic(
@@ -753,7 +798,10 @@ impl GraphBuilder {
                     DiagnosticSeverity::Warning,
                     "unsupported_web_api",
                     specifier,
-                    format!("{} is not part of Flux's supported web API surface", web_api),
+                    format!(
+                        "{} is not part of Flux's supported web API surface",
+                        web_api
+                    ),
                 );
                 if let Some(owner) = npm_owner {
                     self.mark_npm(owner, NpmCompatibility::Warning);
@@ -768,8 +816,12 @@ impl GraphBuilder {
             .entry(specifier.to_string())
             .or_insert(NpmCompatibility::Compatible);
         *entry = match (*entry, status) {
-            (NpmCompatibility::Incompatible, _) | (_, NpmCompatibility::Incompatible) => NpmCompatibility::Incompatible,
-            (NpmCompatibility::Warning, _) | (_, NpmCompatibility::Warning) => NpmCompatibility::Warning,
+            (NpmCompatibility::Incompatible, _) | (_, NpmCompatibility::Incompatible) => {
+                NpmCompatibility::Incompatible
+            }
+            (NpmCompatibility::Warning, _) | (_, NpmCompatibility::Warning) => {
+                NpmCompatibility::Warning
+            }
             _ => NpmCompatibility::Compatible,
         };
     }
@@ -809,9 +861,15 @@ impl GraphBuilder {
                     .get(specifier)
                     .unwrap_or(&NpmCompatibility::Compatible);
                 let reason = match status {
-                    NpmCompatibility::Compatible => "no unsupported node or web runtime dependencies detected",
-                    NpmCompatibility::Warning => "package graph uses globals or web APIs that may need review",
-                    NpmCompatibility::Incompatible => "package graph requires unsupported imports or CommonJS behavior",
+                    NpmCompatibility::Compatible => {
+                        "no unsupported node or web runtime dependencies detected"
+                    }
+                    NpmCompatibility::Warning => {
+                        "package graph uses globals or web APIs that may need review"
+                    }
+                    NpmCompatibility::Incompatible => {
+                        "package graph requires unsupported imports or CommonJS behavior"
+                    }
                 };
                 NpmCompatibilityReport {
                     specifier: specifier.clone(),
@@ -929,10 +987,12 @@ impl Visit for ImportCollector {
         if matches!(node.callee, Callee::Import(_)) {
             if let Some(first_arg) = node.args.first() {
                 match first_arg.expr.as_ref() {
-                    deno_ast::swc::ast::Expr::Lit(Lit::Str(value)) => self.imports.push(ImportEdge {
-                        kind: ArtifactDependencyKind::DynamicImport,
-                        specifier: atom_to_string(&value.value),
-                    }),
+                    deno_ast::swc::ast::Expr::Lit(Lit::Str(value)) => {
+                        self.imports.push(ImportEdge {
+                            kind: ArtifactDependencyKind::DynamicImport,
+                            specifier: atom_to_string(&value.value),
+                        })
+                    }
                     deno_ast::swc::ast::Expr::Tpl(template) if template.exprs.is_empty() => {
                         if let Some(quasi) = template.quasis.first() {
                             self.imports.push(ImportEdge {
@@ -941,7 +1001,9 @@ impl Visit for ImportCollector {
                             });
                         }
                     }
-                    _ => self.invalid_dynamic_imports.push("dynamic import".to_string()),
+                    _ => self
+                        .invalid_dynamic_imports
+                        .push("dynamic import".to_string()),
                 }
             }
         }
@@ -1061,7 +1123,7 @@ fn contains_identifier(source: &str, needle: &str) -> bool {
 }
 
 fn flux_pg_module_source() -> &'static str {
-        r#"
+    r#"
 const __fluxPg = globalThis.Flux?.postgres;
 
 if (!__fluxPg || !__fluxPg.NodePgPool || !__fluxPg.nodePgTypes) {
@@ -1242,8 +1304,7 @@ mod tests {
             "import { value } from './dep.ts';\nexport default async function () { return value; }\n",
         )
         .expect("write entry");
-        fs::write(temp.path().join("dep.ts"), "export const value = 42;\n")
-            .expect("write dep");
+        fs::write(temp.path().join("dep.ts"), "export const value = 42;\n").expect("write dep");
 
         let first = analyze_project(&temp.path().join("index.ts"))
             .await
@@ -1270,10 +1331,12 @@ mod tests {
             .expect("analysis");
 
         assert!(has_errors(&analysis.diagnostics));
-        assert!(analysis
-            .diagnostics
-            .iter()
-            .any(|diag| diag.code == "parse_failed" || diag.code == "node_import"));
+        assert!(
+            analysis
+                .diagnostics
+                .iter()
+                .any(|diag| diag.code == "parse_failed" || diag.code == "node_import")
+        );
     }
 
     #[tokio::test]
@@ -1303,11 +1366,11 @@ mod tests {
             .expect("analysis");
 
         assert!(!has_errors(&analysis.diagnostics));
-        assert!(analysis
-            .artifact
-            .modules
-            .iter()
-            .any(|module| module.specifier.contains("/node_modules/local-pkg/index.js")));
+        assert!(analysis.artifact.modules.iter().any(|module| {
+            module
+                .specifier
+                .contains("/node_modules/local-pkg/index.js")
+        }));
         assert!(analysis.npm_reports.is_empty());
     }
 
@@ -1321,7 +1384,8 @@ mod tests {
         .expect("write config");
         fs::write(temp.path().join("index.ts"), "export default 1;\n").expect("write entry");
 
-        let error = resolve_built_artifact(&temp.path().join("index.ts")).expect_err("artifact should be required");
+        let error = resolve_built_artifact(&temp.path().join("index.ts"))
+            .expect_err("artifact should be required");
         assert!(error.to_string().contains("built artifact not found"));
     }
 }

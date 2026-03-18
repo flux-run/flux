@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use sha2::{Digest, Sha256};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::sync::watch;
 use tracing::info;
 
@@ -19,7 +19,10 @@ impl ServerConfig {
 
         let service_token = std::env::var("INTERNAL_SERVICE_TOKEN").ok();
 
-        Self { grpc_port, service_token }
+        Self {
+            grpc_port,
+            service_token,
+        }
     }
 }
 
@@ -45,7 +48,10 @@ impl CoreService {
             println!("Service token: {}", token);
             println!();
             println!("Store this token — it will not be shown again.");
-            println!("Set it on your runtimes: flux serve index.js --token {}", token);
+            println!(
+                "Set it on your runtimes: flux serve index.js --token {}",
+                token
+            );
             println!();
         }
 
@@ -57,10 +63,8 @@ impl CoreService {
         });
 
         let grpc_addr = SocketAddr::from(([0, 0, 0, 0], config.grpc_port));
-        let grpc_service = crate::grpc::InternalAuthGrpc::new(
-            pool,
-            config.service_token.unwrap_or_default(),
-        );
+        let grpc_service =
+            crate::grpc::InternalAuthGrpc::new(pool, config.service_token.unwrap_or_default());
 
         info!(port = config.grpc_port, "Flux server listening (gRPC)");
         crate::grpc::serve(grpc_addr, grpc_service, shutdown_rx).await?;
@@ -78,10 +82,14 @@ async fn init_pool() -> Result<PgPool, sqlx::Error> {
 
     PgPoolOptions::new()
         .max_connections(max_connections)
-        .after_connect(|conn, _meta| Box::pin(async move {
-            sqlx::query("SET search_path = flux, public").execute(conn).await?;
-            Ok(())
-        }))
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET search_path = flux, public")
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect(&database_url)
         .await
 }
@@ -100,12 +108,10 @@ async fn ensure_service_token(pool: &PgPool) -> Result<Option<String>, sqlx::Err
     let raw = format!("flux_sk_{}", uuid::Uuid::new_v4().simple());
     let token_hash = hex::encode(Sha256::digest(raw.as_bytes()));
 
-    sqlx::query(
-        "INSERT INTO flux.service_tokens (service_name, token_hash) VALUES ('*', $1)",
-    )
-    .bind(token_hash)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO flux.service_tokens (service_name, token_hash) VALUES ('*', $1)")
+        .bind(token_hash)
+        .execute(pool)
+        .await?;
 
     Ok(Some(raw))
 }
@@ -202,8 +208,11 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
 
     // Performance indexes — idempotent with IF NOT EXISTS.
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_executions_started_at ON flux.executions (started_at DESC)")
-        .execute(pool).await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_executions_started_at ON flux.executions (started_at DESC)",
+    )
+    .execute(pool)
+    .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_executions_status_started ON flux.executions (status, started_at DESC)")
         .execute(pool).await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_executions_path_started ON flux.executions (path, started_at DESC)")
@@ -225,10 +234,8 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     {
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        )
-        .expect("failed to install SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
 
         tokio::select! {
             _ = ctrl_c         => {}
@@ -239,5 +246,3 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     ctrl_c.await;
 }
-
-

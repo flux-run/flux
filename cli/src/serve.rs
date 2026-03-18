@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 
-use crate::runtime_server::{execute_server_runtime, RuntimeServerOptions};
+use crate::runtime_server::{RuntimeServerOptions, execute_server_runtime};
 
 #[derive(Debug, Args)]
 pub struct ServeArgs {

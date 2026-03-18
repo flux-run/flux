@@ -2,17 +2,19 @@ const http = require("http");
 
 const port = Number(process.env.PORT || 9020);
 
-const jwks = {
-  keys: [
-    {
-      kty: "RSA",
-      kid: "test-key",
-      use: "sig",
-      n: "abc",
-      e: "AQAB",
-    },
-  ],
-};
+const jwks = process.env.JWKS_JSON
+  ? JSON.parse(process.env.JWKS_JSON)
+  : {
+      keys: [
+        {
+          kty: "RSA",
+          kid: "test-key",
+          use: "sig",
+          n: "abc",
+          e: "AQAB",
+        },
+      ],
+    };
 
 const server = http.createServer((req, res) => {
   if (req.url === "/.well-known/jwks.json") {

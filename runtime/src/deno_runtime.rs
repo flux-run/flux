@@ -7,26 +7,40 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Once;
-use std::sync::{OnceLock, RwLock};
 use std::sync::mpsc;
+use std::sync::{OnceLock, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use base64::Engine;
+use base64::engine::general_purpose::{
+    STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE,
+    URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
+};
 use bytes::BytesMut;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, Utc};
-use deno_ast::{EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileModuleOptions, TranspileOptions};
-use deno_core::{JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind, RuntimeOptions, op2, resolve_import, resolve_path};
+use deno_ast::{
+    EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileModuleOptions, TranspileOptions,
+};
+use deno_core::{
+    JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader,
+    ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind,
+    RuntimeOptions, op2, resolve_import, resolve_path,
+};
 use deno_error::JsErrorBox;
 use postgres::config::SslMode as PostgresSslMode;
-use postgres::{Client as PostgresClient, Config as PostgresConfig, NoTls, SimpleQueryMessage};
 use postgres::types::{FromSql, IsNull, ToSql, Type as PostgresType};
+use postgres::{Client as PostgresClient, Config as PostgresConfig, NoTls, SimpleQueryMessage};
 use postgres_rustls::MakeTlsConnector as PostgresMakeTlsConnector;
 use rand::Rng;
+use rsa::pkcs1v15::{Signature as RsaPkcs1v15Signature, VerifyingKey as RsaPkcs1v15VerifyingKey};
+use rsa::signature::Verifier;
+use rsa::{BigUint as RsaBigUint, RsaPublicKey};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use shared::project::{ArtifactMediaType, ArtifactModule, FluxBuildArtifact};
 use tokio_rustls::TlsConnector;
 use ureq::OrAnyStatus;
@@ -136,7 +150,9 @@ fn validate_outbound_host(
             validate_ip_addr(&addr.ip(), allow_loopback).map_err(|_| {
                 JsErrorBox::new(
                     "Error",
-                    format!("{blocked_label} blocked: private/loopback IP addresses are not allowed"),
+                    format!(
+                        "{blocked_label} blocked: private/loopback IP addresses are not allowed"
+                    ),
                 )
             })?;
         }
@@ -175,7 +191,7 @@ fn is_private_ip(ip: &IpAddr) -> bool {
         }
         IpAddr::V6(v6) => {
             (v6.segments()[0] & 0xfe00) == 0xfc00  // fc00::/7 unique-local
-            || (v6.segments()[0] & 0xffc0) == 0xfe80  // fe80::/10 link-local
+            || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
         }
     }
 }
@@ -220,6 +236,13 @@ struct FetchRequestPayload {
     headers: HashMap<String, String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct Rs256VerifyRequest {
+    jwk: serde_json::Value,
+    data_base64: String,
+    signature_base64: String,
+}
+
 #[derive(Debug, Clone, Default)]
 struct HttpCacheControl {
     max_age: Option<u64>,
@@ -258,12 +281,18 @@ fn parse_cache_control(value: Option<&str>) -> HttpCacheControl {
         }
 
         let mut pieces = directive.splitn(2, '=');
-        let key = pieces.next().unwrap_or_default().trim().to_ascii_lowercase();
+        let key = pieces
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
         let raw_value = pieces.next().map(|value| value.trim().trim_matches('"'));
 
         match key.as_str() {
             "max-age" => directives.max_age = raw_value.and_then(|value| value.parse::<u64>().ok()),
-            "s-maxage" => directives.s_maxage = raw_value.and_then(|value| value.parse::<u64>().ok()),
+            "s-maxage" => {
+                directives.s_maxage = raw_value.and_then(|value| value.parse::<u64>().ok())
+            }
             "no-cache" => directives.no_cache = true,
             "no-store" => directives.no_store = true,
             "private" => directives.private = true,
@@ -295,7 +324,12 @@ fn cache_lookup_allowed(headers: &BTreeMap<String, String>) -> bool {
         && !headers.contains_key("if-unmodified-since")
 }
 
-fn cache_store_allowed(method: &str, status: u16, request_headers: &BTreeMap<String, String>, response_headers: &BTreeMap<String, String>) -> Option<Duration> {
+fn cache_store_allowed(
+    method: &str,
+    status: u16,
+    request_headers: &BTreeMap<String, String>,
+    response_headers: &BTreeMap<String, String>,
+) -> Option<Duration> {
     if !matches!(method, "GET" | "HEAD") {
         return None;
     }
@@ -304,12 +338,14 @@ fn cache_store_allowed(method: &str, status: u16, request_headers: &BTreeMap<Str
         return None;
     }
 
-    let request_cache_control = parse_cache_control(request_headers.get("cache-control").map(String::as_str));
+    let request_cache_control =
+        parse_cache_control(request_headers.get("cache-control").map(String::as_str));
     if request_cache_control.no_store {
         return None;
     }
 
-    let response_cache_control = parse_cache_control(response_headers.get("cache-control").map(String::as_str));
+    let response_cache_control =
+        parse_cache_control(response_headers.get("cache-control").map(String::as_str));
     if response_cache_control.no_store || response_cache_control.private {
         return None;
     }
@@ -319,7 +355,8 @@ fn cache_store_allowed(method: &str, status: u16, request_headers: &BTreeMap<Str
         .or(response_cache_control.max_age)
         .or_else(|| {
             let expires_at = parse_http_date(response_headers.get("expires").map(String::as_str))?;
-            let now = parse_http_date(response_headers.get("date").map(String::as_str)).unwrap_or_else(Utc::now);
+            let now = parse_http_date(response_headers.get("date").map(String::as_str))
+                .unwrap_or_else(Utc::now);
             let delta = expires_at.signed_duration_since(now);
             if delta.num_seconds() <= 0 {
                 None
@@ -332,7 +369,10 @@ fn cache_store_allowed(method: &str, status: u16, request_headers: &BTreeMap<Str
         return None;
     }
 
-    let vary = response_headers.get("vary").map(String::as_str).unwrap_or("");
+    let vary = response_headers
+        .get("vary")
+        .map(String::as_str)
+        .unwrap_or("");
     if vary.split(',').any(|name| name.trim() == "*") {
         return None;
     }
@@ -340,7 +380,10 @@ fn cache_store_allowed(method: &str, status: u16, request_headers: &BTreeMap<Str
     Some(Duration::from_secs(ttl_secs))
 }
 
-fn response_vary_headers(response_headers: &BTreeMap<String, String>, request_headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+fn response_vary_headers(
+    response_headers: &BTreeMap<String, String>,
+    request_headers: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
     response_headers
         .get("vary")
         .map(String::as_str)
@@ -351,7 +394,10 @@ fn response_vary_headers(response_headers: &BTreeMap<String, String>, request_he
             if key.is_empty() || key == "*" {
                 return None;
             }
-            Some((key.clone(), request_headers.get(&key).cloned().unwrap_or_default()))
+            Some((
+                key.clone(),
+                request_headers.get(&key).cloned().unwrap_or_default(),
+            ))
         })
         .collect()
 }
@@ -374,7 +420,11 @@ fn cache_hit_response(response: &serde_json::Value) -> serde_json::Value {
     response
 }
 
-fn cached_http_response(method: &str, url: &str, request_headers: &BTreeMap<String, String>) -> Option<serde_json::Value> {
+fn cached_http_response(
+    method: &str,
+    url: &str,
+    request_headers: &BTreeMap<String, String>,
+) -> Option<serde_json::Value> {
     if !cache_lookup_allowed(request_headers) {
         return None;
     }
@@ -388,7 +438,11 @@ fn cached_http_response(method: &str, url: &str, request_headers: &BTreeMap<Stri
 
     let response = entries
         .iter()
-        .find(|entry| entry.vary_headers.iter().all(|(name, value)| request_headers.get(name).cloned().unwrap_or_default() == *value))
+        .find(|entry| {
+            entry.vary_headers.iter().all(|(name, value)| {
+                request_headers.get(name).cloned().unwrap_or_default() == *value
+            })
+        })
         .map(|entry| cache_hit_response(&entry.response));
 
     if entries.is_empty() {
@@ -419,7 +473,9 @@ fn store_http_response_cache(
     let key = cache_key(method, url);
     if let Ok(mut cache) = http_response_cache().write() {
         let entries = cache.entry(key).or_default();
-        entries.retain(|existing| existing.expires_at > Instant::now() && existing.vary_headers != entry.vary_headers);
+        entries.retain(|existing| {
+            existing.expires_at > Instant::now() && existing.vary_headers != entry.vary_headers
+        });
         entries.push(entry);
     }
 }
@@ -619,7 +675,9 @@ impl PostgresSessionHandle {
             }
             Err(_) => {
                 let _ = thread.join();
-                Err(JsErrorBox::generic("postgres connect failed: session worker exited before initialization"))
+                Err(JsErrorBox::generic(
+                    "postgres connect failed: session worker exited before initialization",
+                ))
             }
         }
     }
@@ -641,7 +699,9 @@ impl PostgresSessionHandle {
         match reply_rx.recv() {
             Ok(Ok(response)) => Ok(PostgresQueryOutcome::Success(response)),
             Ok(Err(err)) => Ok(PostgresQueryOutcome::Error(err)),
-            Err(_) => Err(JsErrorBox::generic("postgres session worker exited unexpectedly")),
+            Err(_) => Err(JsErrorBox::generic(
+                "postgres session worker exited unexpectedly",
+            )),
         }
     }
 
@@ -733,26 +793,97 @@ struct RuntimeExecutionState {
     next_postgres_session_id: u32,
 }
 
-deno_core::extension!(flux_runtime_ext, ops = [
-    op_begin_execution,
-    op_end_execution,
-    op_flux_fetch,
-    op_flux_tcp_exchange,
-    op_flux_postgres_connect,
-    op_flux_postgres_close_session,
-    op_flux_postgres_simple_query,
-    op_flux_postgres_query,
-    op_flux_postgres_session_query,
-    op_flux_env_get,
-    op_flux_now,
-    op_flux_parse_url,
-    op_console,
-    op_timer_delay,
-    op_random,
-    op_random_uuid,
-    op_net_listen,
-    op_net_respond,
-]);
+deno_core::extension!(
+    flux_runtime_ext,
+    ops = [
+        op_begin_execution,
+        op_end_execution,
+        op_crypto_verify_rs256,
+        op_flux_fetch,
+        op_flux_tcp_exchange,
+        op_flux_postgres_connect,
+        op_flux_postgres_close_session,
+        op_flux_postgres_simple_query,
+        op_flux_postgres_query,
+        op_flux_postgres_session_query,
+        op_flux_env_get,
+        op_flux_now,
+        op_flux_parse_url,
+        op_console,
+        op_timer_delay,
+        op_random,
+        op_random_uuid,
+        op_net_listen,
+        op_net_respond,
+    ]
+);
+
+fn decode_base64_field(value: &str, field: &str) -> Result<Vec<u8>, JsErrorBox> {
+    BASE64_STANDARD
+        .decode(value)
+        .map_err(|error| JsErrorBox::type_error(format!("invalid base64 for {field}: {error}")))
+}
+
+fn decode_base64url_field(value: &str, field: &str) -> Result<Vec<u8>, JsErrorBox> {
+    BASE64_URL_SAFE_NO_PAD
+        .decode(value)
+        .or_else(|_| BASE64_URL_SAFE.decode(value))
+        .map_err(|error| JsErrorBox::type_error(format!("invalid base64url for {field}: {error}")))
+}
+
+fn jwk_string_field<'a>(
+    jwk: &'a serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<&'a str, JsErrorBox> {
+    jwk.get(field)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| JsErrorBox::type_error(format!("JWK is missing string field '{field}'")))
+}
+
+#[op2]
+fn op_crypto_verify_rs256(#[serde] request: serde_json::Value) -> Result<bool, JsErrorBox> {
+    let request: Rs256VerifyRequest = serde_json::from_value(request).map_err(|error| {
+        JsErrorBox::type_error(format!("invalid rs256 verify request: {error}"))
+    })?;
+
+    let jwk = request
+        .jwk
+        .as_object()
+        .ok_or_else(|| JsErrorBox::type_error("JWK must be an object"))?;
+
+    let kty = jwk_string_field(jwk, "kty")?;
+    if kty != "RSA" {
+        return Err(JsErrorBox::type_error("only RSA JWKs are supported"));
+    }
+
+    if let Some(alg) = jwk.get("alg").and_then(serde_json::Value::as_str) {
+        if alg != "RS256" {
+            return Err(JsErrorBox::type_error("only RS256 JWKs are supported"));
+        }
+    }
+
+    if let Some(use_field) = jwk.get("use").and_then(serde_json::Value::as_str) {
+        if use_field != "sig" {
+            return Err(JsErrorBox::type_error("RSA JWK must be for signature use"));
+        }
+    }
+
+    let modulus = decode_base64url_field(jwk_string_field(jwk, "n")?, "jwk.n")?;
+    let exponent = decode_base64url_field(jwk_string_field(jwk, "e")?, "jwk.e")?;
+    let data = decode_base64_field(&request.data_base64, "data_base64")?;
+    let signature = decode_base64_field(&request.signature_base64, "signature_base64")?;
+
+    let public_key = RsaPublicKey::new(
+        RsaBigUint::from_bytes_be(&modulus),
+        RsaBigUint::from_bytes_be(&exponent),
+    )
+    .map_err(|error| JsErrorBox::type_error(format!("invalid RSA public key: {error}")))?;
+    let verifying_key = RsaPkcs1v15VerifyingKey::<Sha256>::new(public_key);
+    let signature = RsaPkcs1v15Signature::try_from(signature.as_slice())
+        .map_err(|error| JsErrorBox::type_error(format!("invalid RSA signature: {error}")))?;
+
+    Ok(verifying_key.verify(&data, &signature).is_ok())
+}
 
 #[op2]
 #[string]
@@ -774,19 +905,21 @@ fn op_begin_execution(
     #[string] recorded_uuids_json: String,
     #[string] recorded_now_ms_json: String,
 ) {
-    let recorded_random: Vec<f64> =
-        serde_json::from_str(&recorded_random_json).unwrap_or_default();
+    let recorded_random: Vec<f64> = serde_json::from_str(&recorded_random_json).unwrap_or_default();
     let recorded_uuids: Vec<String> =
         serde_json::from_str(&recorded_uuids_json).unwrap_or_default();
-    let recorded_now_ms: Option<u64> =
-        serde_json::from_str(&recorded_now_ms_json).unwrap_or(None);
+    let recorded_now_ms: Option<u64> = serde_json::from_str(&recorded_now_ms_json).unwrap_or(None);
 
     let exec_state = RuntimeExecutionState {
         context: ExecutionContext {
             execution_id: execution_id.clone(),
             request_id,
             code_version,
-            mode: if is_replay { ExecutionMode::Replay } else { ExecutionMode::Live },
+            mode: if is_replay {
+                ExecutionMode::Replay
+            } else {
+                ExecutionMode::Live
+            },
         },
         call_index: 0,
         checkpoints: Vec::new(),
@@ -814,9 +947,7 @@ fn op_begin_execution(
 #[op2]
 #[string]
 fn op_end_execution(state: &mut OpState, #[string] execution_id: String) -> String {
-    let slot = state
-        .borrow_mut::<RuntimeStateMap>()
-        .remove(&execution_id);
+    let slot = state.borrow_mut::<RuntimeStateMap>().remove(&execution_id);
 
     match slot {
         Some(s) => serde_json::to_string(&serde_json::json!({
@@ -1067,11 +1198,17 @@ fn op_flux_postgres_connect(
         connection_string,
         tls,
         ca_cert_pem,
-    } = serde_json::from_value(request)
-        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres connect request: {err}")))?;
+    } = serde_json::from_value(request).map_err(|err| {
+        JsErrorBox::type_error(format!("invalid postgres connect request: {err}"))
+    })?;
 
     let target = parse_postgres_target(&connection_string)?;
-    validate_outbound_host(&target.host, target.port, "postgres connect", "FLOWBASE_ALLOW_LOOPBACK_POSTGRES")?;
+    validate_outbound_host(
+        &target.host,
+        target.port,
+        "postgres connect",
+        "FLOWBASE_ALLOW_LOOPBACK_POSTGRES",
+    )?;
 
     let (request_id, mode, session_id) = {
         let map = state.borrow_mut::<RuntimeStateMap>();
@@ -1115,7 +1252,9 @@ fn op_flux_postgres_connect(
                 format!("op_flux_postgres_connect: execution_id '{execution_id}' disappeared during connect"),
             )
         })?;
-        execution.postgres_sessions.insert(session_id.clone(), handle);
+        execution
+            .postgres_sessions
+            .insert(session_id.clone(), handle);
     }
 
     tracing::debug!(%request_id, session_id = %session_id, host = %target.host, port = %target.port, "opened postgres session");
@@ -1142,16 +1281,24 @@ fn op_flux_postgres_simple_query(
     } = serde_json::from_value(request)
         .map_err(|err| JsErrorBox::type_error(format!("invalid postgres query request: {err}")))?;
 
-    let parsed_url = Url::parse(&connection_string)
-        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres connection string: {err}")))?;
+    let parsed_url = Url::parse(&connection_string).map_err(|err| {
+        JsErrorBox::type_error(format!("invalid postgres connection string: {err}"))
+    })?;
     if !matches!(parsed_url.scheme(), "postgres" | "postgresql") {
-        return Err(JsErrorBox::type_error("postgres connection string must use postgres:// or postgresql://"));
+        return Err(JsErrorBox::type_error(
+            "postgres connection string must use postgres:// or postgresql://",
+        ));
     }
     let host = parsed_url
         .host_str()
         .ok_or_else(|| JsErrorBox::type_error("postgres connection string missing host"))?;
     let port = parsed_url.port().unwrap_or(5432);
-    validate_outbound_host(host, port, "postgres connect", "FLOWBASE_ALLOW_LOOPBACK_POSTGRES")?;
+    validate_outbound_host(
+        host,
+        port,
+        "postgres connect",
+        "FLOWBASE_ALLOW_LOOPBACK_POSTGRES",
+    )?;
 
     let (request_id, call_index, mode, recorded_checkpoint) = {
         let map = state.borrow_mut::<RuntimeStateMap>();
@@ -1221,7 +1368,12 @@ fn op_flux_postgres_simple_query(
             execution.checkpoints.push(FetchCheckpoint {
                 call_index,
                 boundary: "postgres".to_string(),
-                url: format!("postgres://{}:{}/{}", host, port, parsed_url.path().trim_start_matches('/')),
+                url: format!(
+                    "postgres://{}:{}/{}",
+                    host,
+                    port,
+                    parsed_url.path().trim_start_matches('/')
+                ),
                 method: "simple_query".to_string(),
                 request: request_json,
                 response: response_json.clone(),
@@ -1246,8 +1398,9 @@ fn op_flux_postgres_session_query(
         session_id,
         sql,
         params,
-    } = serde_json::from_value(request)
-        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres session query request: {err}")))?;
+    } = serde_json::from_value(request).map_err(|err| {
+        JsErrorBox::type_error(format!("invalid postgres session query request: {err}"))
+    })?;
 
     let (request_id, call_index, mode, recorded_checkpoint) = {
         let map = state.borrow_mut::<RuntimeStateMap>();
@@ -1300,9 +1453,12 @@ fn op_flux_postgres_session_query(
                 format!("op_flux_postgres_session_query: execution_id '{execution_id}' disappeared before query"),
             )
         })?;
-        let session = execution.postgres_sessions.get(&session_id).ok_or_else(|| {
-            JsErrorBox::type_error(format!("postgres session '{session_id}' is not open"))
-        })?;
+        let session = execution
+            .postgres_sessions
+            .get(&session_id)
+            .ok_or_else(|| {
+                JsErrorBox::type_error(format!("postgres session '{session_id}' is not open"))
+            })?;
         let response = session.query(&sql, &params)?;
         (
             session.target.clone(),
@@ -1368,16 +1524,24 @@ fn op_flux_postgres_query(
     } = serde_json::from_value(request)
         .map_err(|err| JsErrorBox::type_error(format!("invalid postgres query request: {err}")))?;
 
-    let parsed_url = Url::parse(&connection_string)
-        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres connection string: {err}")))?;
+    let parsed_url = Url::parse(&connection_string).map_err(|err| {
+        JsErrorBox::type_error(format!("invalid postgres connection string: {err}"))
+    })?;
     if !matches!(parsed_url.scheme(), "postgres" | "postgresql") {
-        return Err(JsErrorBox::type_error("postgres connection string must use postgres:// or postgresql://"));
+        return Err(JsErrorBox::type_error(
+            "postgres connection string must use postgres:// or postgresql://",
+        ));
     }
     let host = parsed_url
         .host_str()
         .ok_or_else(|| JsErrorBox::type_error("postgres connection string missing host"))?;
     let port = parsed_url.port().unwrap_or(5432);
-    validate_outbound_host(host, port, "postgres connect", "FLOWBASE_ALLOW_LOOPBACK_POSTGRES")?;
+    validate_outbound_host(
+        host,
+        port,
+        "postgres connect",
+        "FLOWBASE_ALLOW_LOOPBACK_POSTGRES",
+    )?;
 
     let (request_id, call_index, mode, recorded_checkpoint) = {
         let map = state.borrow_mut::<RuntimeStateMap>();
@@ -1449,7 +1613,12 @@ fn op_flux_postgres_query(
             execution.checkpoints.push(FetchCheckpoint {
                 call_index,
                 boundary: "postgres".to_string(),
-                url: format!("postgres://{}:{}/{}", host, port, parsed_url.path().trim_start_matches('/')),
+                url: format!(
+                    "postgres://{}:{}/{}",
+                    host,
+                    port,
+                    parsed_url.path().trim_start_matches('/')
+                ),
                 method: "query".to_string(),
                 request: request_json,
                 response: response_json.clone(),
@@ -1472,8 +1641,9 @@ fn op_flux_postgres_close_session(
     let PostgresSessionCloseRequestPayload {
         execution_id,
         session_id,
-    } = serde_json::from_value(request)
-        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres session close request: {err}")))?;
+    } = serde_json::from_value(request).map_err(|err| {
+        JsErrorBox::type_error(format!("invalid postgres session close request: {err}"))
+    })?;
 
     let (request_id, mode) = {
         let map = state.borrow_mut::<RuntimeStateMap>();
@@ -1528,7 +1698,10 @@ struct PostgresTextValue(String);
 struct PostgresByteaText(String);
 
 impl<'a> FromSql<'a> for PostgresNumericText {
-    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    fn from_sql(
+        _ty: &PostgresType,
+        raw: &'a [u8],
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(Self(std::str::from_utf8(raw)?.to_string()))
     }
 
@@ -1538,7 +1711,10 @@ impl<'a> FromSql<'a> for PostgresNumericText {
 }
 
 impl<'a> FromSql<'a> for PostgresJsonText {
-    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    fn from_sql(
+        _ty: &PostgresType,
+        raw: &'a [u8],
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(Self(std::str::from_utf8(raw)?.to_string()))
     }
 
@@ -1548,7 +1724,10 @@ impl<'a> FromSql<'a> for PostgresJsonText {
 }
 
 impl<'a> FromSql<'a> for PostgresArrayText {
-    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    fn from_sql(
+        _ty: &PostgresType,
+        raw: &'a [u8],
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(Self(std::str::from_utf8(raw)?.to_string()))
     }
 
@@ -1569,7 +1748,10 @@ impl<'a> FromSql<'a> for PostgresArrayText {
 }
 
 impl<'a> FromSql<'a> for PostgresTextValue {
-    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    fn from_sql(
+        _ty: &PostgresType,
+        raw: &'a [u8],
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(Self(std::str::from_utf8(raw)?.to_string()))
     }
 
@@ -1589,7 +1771,10 @@ impl<'a> FromSql<'a> for PostgresTextValue {
 }
 
 impl<'a> FromSql<'a> for PostgresByteaText {
-    fn from_sql(_ty: &PostgresType, raw: &'a [u8]) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    fn from_sql(
+        _ty: &PostgresType,
+        raw: &'a [u8],
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(Self(std::str::from_utf8(raw)?.to_string()))
     }
 
@@ -1626,7 +1811,9 @@ impl ToSql for PostgresJsonNumberParam {
                 PostgresType::INT8 => value.to_sql(ty, out),
                 PostgresType::FLOAT4 => (*value as f32).to_sql(ty, out),
                 PostgresType::FLOAT8 => (*value as f64).to_sql(ty, out),
-                _ => Err(format!("unsupported postgres integer parameter type: {}", ty.name()).into()),
+                _ => Err(
+                    format!("unsupported postgres integer parameter type: {}", ty.name()).into(),
+                ),
             },
             Self::Unsigned(value) => match *ty {
                 PostgresType::INT2 => i16::try_from(*value)?.to_sql(ty, out),
@@ -1634,12 +1821,16 @@ impl ToSql for PostgresJsonNumberParam {
                 PostgresType::INT8 => i64::try_from(*value)?.to_sql(ty, out),
                 PostgresType::FLOAT4 => (*value as f32).to_sql(ty, out),
                 PostgresType::FLOAT8 => (*value as f64).to_sql(ty, out),
-                _ => Err(format!("unsupported postgres integer parameter type: {}", ty.name()).into()),
+                _ => Err(
+                    format!("unsupported postgres integer parameter type: {}", ty.name()).into(),
+                ),
             },
             Self::Float(value) => match *ty {
                 PostgresType::FLOAT4 => (*value as f32).to_sql(ty, out),
                 PostgresType::FLOAT8 => value.to_sql(ty, out),
-                _ => Err(format!("unsupported postgres float parameter type: {}", ty.name()).into()),
+                _ => {
+                    Err(format!("unsupported postgres float parameter type: {}", ty.name()).into())
+                }
             },
         }
     }
@@ -1647,7 +1838,11 @@ impl ToSql for PostgresJsonNumberParam {
     fn accepts(ty: &PostgresType) -> bool {
         matches!(
             *ty,
-            PostgresType::INT2 | PostgresType::INT4 | PostgresType::INT8 | PostgresType::FLOAT4 | PostgresType::FLOAT8
+            PostgresType::INT2
+                | PostgresType::INT4
+                | PostgresType::INT8
+                | PostgresType::FLOAT4
+                | PostgresType::FLOAT8
         )
     }
 
@@ -1664,10 +1859,12 @@ fn perform_postgres_simple_query(
     let tls = tls.clone();
     std::thread::spawn(move || {
         let mut client = connect_postgres_client(&connection_string, &tls)?;
-        Ok(match perform_postgres_simple_query_with_client(&mut client, &sql) {
-            Ok(response) => PostgresQueryOutcome::Success(response),
-            Err(err) => PostgresQueryOutcome::Error(err),
-        })
+        Ok(
+            match perform_postgres_simple_query_with_client(&mut client, &sql) {
+                Ok(response) => PostgresQueryOutcome::Success(response),
+                Err(err) => PostgresQueryOutcome::Error(err),
+            },
+        )
     })
     .join()
     .map_err(|_| JsErrorBox::generic("postgres query thread panicked"))?
@@ -1685,10 +1882,12 @@ fn perform_postgres_query(
     let tls = tls.clone();
     std::thread::spawn(move || {
         let mut client = connect_postgres_client(&connection_string, &tls)?;
-        Ok(match perform_postgres_query_with_client(&mut client, &sql, &params) {
-            Ok(response) => PostgresQueryOutcome::Success(response),
-            Err(err) => PostgresQueryOutcome::Error(err),
-        })
+        Ok(
+            match perform_postgres_query_with_client(&mut client, &sql, &params) {
+                Ok(response) => PostgresQueryOutcome::Success(response),
+                Err(err) => PostgresQueryOutcome::Error(err),
+            },
+        )
     })
     .join()
     .map_err(|_| JsErrorBox::generic("postgres query thread panicked"))?
@@ -1756,15 +1955,17 @@ fn perform_postgres_query_with_client(
 ) -> std::result::Result<PostgresSimpleQueryResponse, PostgresDriverError> {
     let mut boxed_params: Vec<Box<dyn ToSql + Sync>> = Vec::new();
     for param in params.iter().cloned() {
-        boxed_params.push(box_postgres_param(param).map_err(|err| PostgresDriverError {
-            message: err.to_string(),
-            code: None,
-            detail: None,
-            constraint: None,
-            schema: None,
-            table: None,
-            column: None,
-        })?);
+        boxed_params.push(
+            box_postgres_param(param).map_err(|err| PostgresDriverError {
+                message: err.to_string(),
+                code: None,
+                detail: None,
+                constraint: None,
+                schema: None,
+                table: None,
+                column: None,
+            })?,
+        );
     }
     let refs: Vec<&(dyn ToSql + Sync)> = boxed_params
         .iter()
@@ -1838,8 +2039,14 @@ fn postgres_outcome_json(outcome: PostgresQueryOutcome, replay: bool) -> serde_j
     }
 }
 
-fn postgres_checkpoint_response_json(response: &serde_json::Value, replay: bool) -> serde_json::Value {
-    let recorded_error = response.get("error").cloned().unwrap_or(serde_json::Value::Null);
+fn postgres_checkpoint_response_json(
+    response: &serde_json::Value,
+    replay: bool,
+) -> serde_json::Value {
+    let recorded_error = response
+        .get("error")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     if !recorded_error.is_null() {
         serde_json::json!({
             "rows": [],
@@ -1872,10 +2079,13 @@ fn postgres_checkpoint_response_json(response: &serde_json::Value, replay: bool)
 }
 
 fn parse_postgres_target(connection_string: &str) -> Result<PostgresConnectionTarget, JsErrorBox> {
-    let parsed_url = Url::parse(connection_string)
-        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres connection string: {err}")))?;
+    let parsed_url = Url::parse(connection_string).map_err(|err| {
+        JsErrorBox::type_error(format!("invalid postgres connection string: {err}"))
+    })?;
     if !matches!(parsed_url.scheme(), "postgres" | "postgresql") {
-        return Err(JsErrorBox::type_error("postgres connection string must use postgres:// or postgresql://"));
+        return Err(JsErrorBox::type_error(
+            "postgres connection string must use postgres:// or postgresql://",
+        ));
     }
     let host = parsed_url
         .host_str()
@@ -1884,7 +2094,12 @@ fn parse_postgres_target(connection_string: &str) -> Result<PostgresConnectionTa
     let port = parsed_url.port().unwrap_or(5432);
 
     Ok(PostgresConnectionTarget {
-        url: format!("postgres://{}:{}/{}", host, port, parsed_url.path().trim_start_matches('/')),
+        url: format!(
+            "postgres://{}:{}/{}",
+            host,
+            port,
+            parsed_url.path().trim_start_matches('/')
+        ),
         host,
         port,
     })
@@ -1894,9 +2109,9 @@ fn connect_postgres_client(
     connection_string: &str,
     tls: &PostgresTlsOptions,
 ) -> Result<PostgresClient, JsErrorBox> {
-    let mut config: PostgresConfig = connection_string
-        .parse()
-        .map_err(|err| JsErrorBox::type_error(format!("invalid postgres connection string: {err}")))?;
+    let mut config: PostgresConfig = connection_string.parse().map_err(|err| {
+        JsErrorBox::type_error(format!("invalid postgres connection string: {err}"))
+    })?;
 
     if tls.enabled {
         config.ssl_mode(PostgresSslMode::Require);
@@ -1942,11 +2157,7 @@ fn box_postgres_param(param: serde_json::Value) -> Result<Box<dyn ToSql + Sync>,
 fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> serde_json::Value {
     let name = column.name();
     let ty = column.type_();
-    let string_value = || {
-        row.try_get::<_, Option<String>>(name)
-            .ok()
-            .flatten()
-    };
+    let string_value = || row.try_get::<_, Option<String>>(name).ok().flatten();
 
     match *ty {
         postgres::types::Type::BOOL => row
@@ -1967,35 +2178,70 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .ok()
             .flatten()
             .map(|value| serde_json::json!(value))
-            .or_else(|| string_value().and_then(|value| value.parse::<i16>().ok().map(|parsed| serde_json::json!(parsed))))
+            .or_else(|| {
+                string_value().and_then(|value| {
+                    value
+                        .parse::<i16>()
+                        .ok()
+                        .map(|parsed| serde_json::json!(parsed))
+                })
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::INT4 => row
             .try_get::<_, Option<i32>>(name)
             .ok()
             .flatten()
             .map(|value| serde_json::json!(value))
-            .or_else(|| string_value().and_then(|value| value.parse::<i32>().ok().map(|parsed| serde_json::json!(parsed))))
+            .or_else(|| {
+                string_value().and_then(|value| {
+                    value
+                        .parse::<i32>()
+                        .ok()
+                        .map(|parsed| serde_json::json!(parsed))
+                })
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::INT8 => row
             .try_get::<_, Option<i64>>(name)
             .ok()
             .flatten()
             .map(|value| serde_json::json!(value))
-            .or_else(|| string_value().and_then(|value| value.parse::<i64>().ok().map(|parsed| serde_json::json!(parsed))))
+            .or_else(|| {
+                string_value().and_then(|value| {
+                    value
+                        .parse::<i64>()
+                        .ok()
+                        .map(|parsed| serde_json::json!(parsed))
+                })
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::FLOAT4 => row
             .try_get::<_, Option<f32>>(name)
             .ok()
             .flatten()
             .map(|value| serde_json::json!(value))
-            .or_else(|| string_value().and_then(|value| value.parse::<f32>().ok().map(|parsed| serde_json::json!(parsed))))
+            .or_else(|| {
+                string_value().and_then(|value| {
+                    value
+                        .parse::<f32>()
+                        .ok()
+                        .map(|parsed| serde_json::json!(parsed))
+                })
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::FLOAT8 => row
             .try_get::<_, Option<f64>>(name)
             .ok()
             .flatten()
             .map(|value| serde_json::json!(value))
-            .or_else(|| string_value().and_then(|value| value.parse::<f64>().ok().map(|parsed| serde_json::json!(parsed))))
+            .or_else(|| {
+                string_value().and_then(|value| {
+                    value
+                        .parse::<f64>()
+                        .ok()
+                        .map(|parsed| serde_json::json!(parsed))
+                })
+            })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::OID => row
             .try_get::<_, Option<u32>>(name)
@@ -2006,7 +2252,13 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
                 row.try_get::<_, Option<PostgresTextValue>>(name)
                     .ok()
                     .flatten()
-                    .and_then(|value| value.0.parse::<u32>().ok().map(|parsed| serde_json::json!(parsed)))
+                    .and_then(|value| {
+                        value
+                            .0
+                            .parse::<u32>()
+                            .ok()
+                            .map(|parsed| serde_json::json!(parsed))
+                    })
             })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::BYTEA => row
@@ -2044,7 +2296,16 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .try_get::<_, Option<NaiveTime>>(name)
             .ok()
             .flatten()
-            .map(|value| serde_json::Value::String(value.format("%H:%M:%S%.f").to_string().trim_end_matches('0').trim_end_matches('.').to_string()))
+            .map(|value| {
+                serde_json::Value::String(
+                    value
+                        .format("%H:%M:%S%.f")
+                        .to_string()
+                        .trim_end_matches('0')
+                        .trim_end_matches('.')
+                        .to_string(),
+                )
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresTextValue>>(name)
                     .ok()
@@ -2062,7 +2323,16 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .try_get::<_, Option<NaiveDateTime>>(name)
             .ok()
             .flatten()
-            .map(|value| serde_json::Value::String(value.format("%Y-%m-%dT%H:%M:%S%.f").to_string().trim_end_matches('0').trim_end_matches('.').to_string()))
+            .map(|value| {
+                serde_json::Value::String(
+                    value
+                        .format("%Y-%m-%dT%H:%M:%S%.f")
+                        .to_string()
+                        .trim_end_matches('0')
+                        .trim_end_matches('.')
+                        .to_string(),
+                )
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresTextValue>>(name)
                     .ok()
@@ -2074,7 +2344,9 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .try_get::<_, Option<DateTime<Utc>>>(name)
             .ok()
             .flatten()
-            .map(|value| serde_json::Value::String(value.to_rfc3339_opts(SecondsFormat::Millis, true)))
+            .map(|value| {
+                serde_json::Value::String(value.to_rfc3339_opts(SecondsFormat::Millis, true))
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresTextValue>>(name)
                     .ok()
@@ -2115,91 +2387,172 @@ fn decode_postgres_row_value(row: &postgres::Row, column: &postgres::Column) -> 
             .try_get::<_, Option<Vec<bool>>>(name)
             .ok()
             .flatten()
-            .map(|values| serde_json::Value::Array(values.into_iter().map(serde_json::Value::Bool).collect()))
+            .map(|values| {
+                serde_json::Value::Array(values.into_iter().map(serde_json::Value::Bool).collect())
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresArrayText>>(name)
                     .ok()
                     .flatten()
-                    .and_then(|value| parse_postgres_text_array(&value.0, parse_postgres_bool_array_element))
+                    .and_then(|value| {
+                        parse_postgres_text_array(&value.0, parse_postgres_bool_array_element)
+                    })
             })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::INT2_ARRAY => row
             .try_get::<_, Option<Vec<i16>>>(name)
             .ok()
             .flatten()
-            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .map(|values| {
+                serde_json::Value::Array(
+                    values
+                        .into_iter()
+                        .map(|value| serde_json::json!(value))
+                        .collect(),
+                )
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresArrayText>>(name)
                     .ok()
                     .flatten()
-                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<i16>().ok().map(|parsed| serde_json::json!(parsed))))
+                    .and_then(|value| {
+                        parse_postgres_text_array(&value.0, |item| {
+                            item.parse::<i16>()
+                                .ok()
+                                .map(|parsed| serde_json::json!(parsed))
+                        })
+                    })
             })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::INT4_ARRAY => row
             .try_get::<_, Option<Vec<i32>>>(name)
             .ok()
             .flatten()
-            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .map(|values| {
+                serde_json::Value::Array(
+                    values
+                        .into_iter()
+                        .map(|value| serde_json::json!(value))
+                        .collect(),
+                )
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresArrayText>>(name)
                     .ok()
                     .flatten()
-                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<i32>().ok().map(|parsed| serde_json::json!(parsed))))
+                    .and_then(|value| {
+                        parse_postgres_text_array(&value.0, |item| {
+                            item.parse::<i32>()
+                                .ok()
+                                .map(|parsed| serde_json::json!(parsed))
+                        })
+                    })
             })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::INT8_ARRAY => row
             .try_get::<_, Option<Vec<i64>>>(name)
             .ok()
             .flatten()
-            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .map(|values| {
+                serde_json::Value::Array(
+                    values
+                        .into_iter()
+                        .map(|value| serde_json::json!(value))
+                        .collect(),
+                )
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresArrayText>>(name)
                     .ok()
                     .flatten()
-                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<i64>().ok().map(|parsed| serde_json::json!(parsed))))
+                    .and_then(|value| {
+                        parse_postgres_text_array(&value.0, |item| {
+                            item.parse::<i64>()
+                                .ok()
+                                .map(|parsed| serde_json::json!(parsed))
+                        })
+                    })
             })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::FLOAT4_ARRAY => row
             .try_get::<_, Option<Vec<f32>>>(name)
             .ok()
             .flatten()
-            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .map(|values| {
+                serde_json::Value::Array(
+                    values
+                        .into_iter()
+                        .map(|value| serde_json::json!(value))
+                        .collect(),
+                )
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresArrayText>>(name)
                     .ok()
                     .flatten()
-                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<f32>().ok().map(|parsed| serde_json::json!(parsed))))
+                    .and_then(|value| {
+                        parse_postgres_text_array(&value.0, |item| {
+                            item.parse::<f32>()
+                                .ok()
+                                .map(|parsed| serde_json::json!(parsed))
+                        })
+                    })
             })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::FLOAT8_ARRAY => row
             .try_get::<_, Option<Vec<f64>>>(name)
             .ok()
             .flatten()
-            .map(|values| serde_json::Value::Array(values.into_iter().map(|value| serde_json::json!(value)).collect()))
+            .map(|values| {
+                serde_json::Value::Array(
+                    values
+                        .into_iter()
+                        .map(|value| serde_json::json!(value))
+                        .collect(),
+                )
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresArrayText>>(name)
                     .ok()
                     .flatten()
-                    .and_then(|value| parse_postgres_text_array(&value.0, |item| item.parse::<f64>().ok().map(|parsed| serde_json::json!(parsed))))
+                    .and_then(|value| {
+                        parse_postgres_text_array(&value.0, |item| {
+                            item.parse::<f64>()
+                                .ok()
+                                .map(|parsed| serde_json::json!(parsed))
+                        })
+                    })
             })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::TEXT_ARRAY | postgres::types::Type::VARCHAR_ARRAY => row
             .try_get::<_, Option<Vec<String>>>(name)
             .ok()
             .flatten()
-            .map(|values| serde_json::Value::Array(values.into_iter().map(serde_json::Value::String).collect()))
+            .map(|values| {
+                serde_json::Value::Array(
+                    values.into_iter().map(serde_json::Value::String).collect(),
+                )
+            })
             .or_else(|| {
                 row.try_get::<_, Option<PostgresArrayText>>(name)
                     .ok()
                     .flatten()
-                    .and_then(|value| parse_postgres_text_array(&value.0, |item| Some(serde_json::Value::String(item.to_string()))))
+                    .and_then(|value| {
+                        parse_postgres_text_array(&value.0, |item| {
+                            Some(serde_json::Value::String(item.to_string()))
+                        })
+                    })
             })
             .unwrap_or(serde_json::Value::Null),
         postgres::types::Type::NUMERIC_ARRAY => row
             .try_get::<_, Option<PostgresArrayText>>(name)
             .ok()
             .flatten()
-            .and_then(|value| parse_postgres_text_array(&value.0, |item| Some(serde_json::Value::String(item.to_string()))))
+            .and_then(|value| {
+                parse_postgres_text_array(&value.0, |item| {
+                    Some(serde_json::Value::String(item.to_string()))
+                })
+            })
             .unwrap_or(serde_json::Value::Null),
         _ => string_value()
             .map(serde_json::Value::String)
@@ -2230,10 +2583,7 @@ fn parse_postgres_bool_array_element(item: &str) -> Option<serde_json::Value> {
     }
 }
 
-fn parse_postgres_text_array<F>(
-    raw: &str,
-    parse_item: F,
-) -> Option<serde_json::Value>
+fn parse_postgres_text_array<F>(raw: &str, parse_item: F) -> Option<serde_json::Value>
 where
     F: Fn(&str) -> Option<serde_json::Value>,
 {
@@ -2252,16 +2602,17 @@ where
     let mut escaped = false;
     let mut quoted_current = false;
 
-    let push_current = |values: &mut Vec<serde_json::Value>, current: &mut String, quoted_current: &mut bool| {
-        let value = if !*quoted_current && current == "NULL" {
-            serde_json::Value::Null
-        } else {
-            parse_item(current).unwrap_or(serde_json::Value::Null)
+    let push_current =
+        |values: &mut Vec<serde_json::Value>, current: &mut String, quoted_current: &mut bool| {
+            let value = if !*quoted_current && current == "NULL" {
+                serde_json::Value::Null
+            } else {
+                parse_item(current).unwrap_or(serde_json::Value::Null)
+            };
+            values.push(value);
+            current.clear();
+            *quoted_current = false;
         };
-        values.push(value);
-        current.clear();
-        *quoted_current = false;
-    };
 
     for ch in inner.chars() {
         if escaped {
@@ -2293,7 +2644,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_postgres_bool_array_element, parse_postgres_text_array, validate_outbound_host};
+    use super::{
+        parse_postgres_bool_array_element, parse_postgres_text_array, validate_outbound_host,
+    };
 
     #[test]
     fn parses_text_arrays() {
@@ -2301,10 +2654,7 @@ mod tests {
             Some(serde_json::Value::String(item.to_string()))
         });
 
-        assert_eq!(
-            parsed,
-            Some(serde_json::json!(["alpha", "beta"]))
-        );
+        assert_eq!(parsed, Some(serde_json::json!(["alpha", "beta"])));
     }
 
     #[test]
@@ -2321,12 +2671,10 @@ mod tests {
 
     #[test]
     fn parses_bool_arrays() {
-        let parsed = parse_postgres_text_array("{t,f,true,false}", parse_postgres_bool_array_element);
+        let parsed =
+            parse_postgres_text_array("{t,f,true,false}", parse_postgres_bool_array_element);
 
-        assert_eq!(
-            parsed,
-            Some(serde_json::json!([true, false, true, false]))
-        );
+        assert_eq!(parsed, Some(serde_json::json!([true, false, true, false])));
     }
 
     #[test]
@@ -2350,14 +2698,13 @@ mod tests {
     }
 }
 
-fn decode_checkpoint_bytes(
-    value: &serde_json::Value,
-    field: &str,
-) -> Result<Vec<u8>, JsErrorBox> {
+fn decode_checkpoint_bytes(value: &serde_json::Value, field: &str) -> Result<Vec<u8>, JsErrorBox> {
     let encoded = value
         .get(field)
         .and_then(|value| value.as_str())
-        .ok_or_else(|| JsErrorBox::type_error(format!("recorded tcp checkpoint missing {field}")))?;
+        .ok_or_else(|| {
+            JsErrorBox::type_error(format!("recorded tcp checkpoint missing {field}"))
+        })?;
     base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|err| JsErrorBox::type_error(format!("invalid recorded tcp payload: {err}")))
@@ -2375,7 +2722,8 @@ fn make_tcp_exchange(
     server_name: Option<&str>,
     ca_cert_pem: Option<&str>,
 ) -> Result<Vec<u8>, JsErrorBox> {
-    let connect_timeout = Duration::from_millis(connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS));
+    let connect_timeout =
+        Duration::from_millis(connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS));
     let read_timeout = Duration::from_millis(read_timeout_ms.unwrap_or(DEFAULT_READ_TIMEOUT_MS));
 
     let mut addrs = (host, port)
@@ -2420,13 +2768,15 @@ fn build_tls_client_config(ca_cert_pem: Option<&str>) -> Result<Arc<ClientConfig
             .map_err(|err| JsErrorBox::type_error(format!("invalid CA certificate PEM: {err}")))?;
 
         if certs.is_empty() {
-            return Err(JsErrorBox::type_error("invalid CA certificate PEM: no certificates found"));
+            return Err(JsErrorBox::type_error(
+                "invalid CA certificate PEM: no certificates found",
+            ));
         }
 
         for cert in certs {
-            roots
-                .add(cert)
-                .map_err(|err| JsErrorBox::type_error(format!("invalid CA certificate PEM: {err}")))?;
+            roots.add(cert).map_err(|err| {
+                JsErrorBox::type_error(format!("invalid CA certificate PEM: {err}"))
+            })?;
         }
     } else {
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -2479,9 +2829,8 @@ fn perform_buffered_exchange<T: Read + Write>(
             Ok(bytes)
         }
         "fixed" => {
-            let expected = read_bytes.ok_or_else(|| {
-                JsErrorBox::type_error("tcp fixed read mode requires readBytes")
-            })?;
+            let expected = read_bytes
+                .ok_or_else(|| JsErrorBox::type_error("tcp fixed read mode requires readBytes"))?;
             if expected > MAX_RESPONSE_BYTES {
                 return Err(JsErrorBox::type_error(format!(
                     "tcp response too large: {expected} bytes exceeds {MAX_RESPONSE_BYTES} byte limit"
@@ -2535,9 +2884,8 @@ fn perform_plain_buffered_exchange(
             Ok(bytes)
         }
         "fixed" => {
-            let expected = read_bytes.ok_or_else(|| {
-                JsErrorBox::type_error("tcp fixed read mode requires readBytes")
-            })?;
+            let expected = read_bytes
+                .ok_or_else(|| JsErrorBox::type_error("tcp fixed read mode requires readBytes"))?;
             if expected > MAX_RESPONSE_BYTES {
                 return Err(JsErrorBox::type_error(format!(
                     "tcp response too large: {expected} bytes exceeds {MAX_RESPONSE_BYTES} byte limit"
@@ -2625,7 +2973,11 @@ fn op_console(
     let map = state.borrow_mut::<RuntimeStateMap>();
     if let Some(exec) = map.get_mut(&execution_id) {
         exec.logs.push(LogEntry {
-            level: if is_err { "error".to_string() } else { "log".to_string() },
+            level: if is_err {
+                "error".to_string()
+            } else {
+                "log".to_string()
+            },
             message: msg.clone(),
         });
     }
@@ -2653,7 +3005,13 @@ fn op_timer_delay(state: &mut OpState, #[string] execution_id: String, delay_ms:
                         .as_ref()
                         .and_then(|checkpoint| checkpoint.response.get("effective_delay_ms"))
                         .and_then(|value| value.as_f64())
-                        .unwrap_or_else(|| if delay_ms.is_sign_negative() { 0.0 } else { delay_ms });
+                        .unwrap_or_else(|| {
+                            if delay_ms.is_sign_negative() {
+                                0.0
+                            } else {
+                                delay_ms
+                            }
+                        });
 
                     if let Some(checkpoint) = recorded {
                         exec.checkpoints.push(checkpoint);
@@ -2677,7 +3035,11 @@ fn op_timer_delay(state: &mut OpState, #[string] execution_id: String, delay_ms:
                     effective_delay_ms
                 }
                 ExecutionMode::Live => {
-                    let effective_delay_ms = if delay_ms.is_sign_negative() { 0.0 } else { delay_ms };
+                    let effective_delay_ms = if delay_ms.is_sign_negative() {
+                        0.0
+                    } else {
+                        delay_ms
+                    };
                     exec.checkpoints.push(FetchCheckpoint {
                         call_index,
                         boundary: "timer".to_string(),
@@ -2783,8 +3145,14 @@ fn op_net_respond(
 
     let map = state.borrow_mut::<RuntimeStateMap>();
     if let Some(exec) = map.get_mut(&execution_id) {
-        exec.pending_responses
-            .insert(req_id, NetResponse { status: status as u16, headers, body });
+        exec.pending_responses.insert(
+            req_id,
+            NetResponse {
+                status: status as u16,
+                headers,
+                body,
+            },
+        );
     }
 }
 
@@ -2812,59 +3180,61 @@ fn make_http_request(
     let response = {
         let mut final_response = None;
         for redirect_count in 0..=MAX_REDIRECTS {
-        validate_fetch_url(&current_url)?;
+            validate_fetch_url(&current_url)?;
 
-        let mut request = agent.request(&current_method, &current_url);
-        for (key, value) in &request_headers {
-            request = request.set(key, value);
-        }
-
-        let response = match current_body.as_deref() {
-            Some(body) => request.send_string(body),
-            None => request.call(),
-        }
-        .or_any_status()
-        .map_err(|err| JsErrorBox::type_error(format!("fetch failed: {err}")))?;
-
-        match response.status() {
-            301 | 302 | 303 | 307 | 308 => {
-                if redirect_count == MAX_REDIRECTS {
-                    return Err(JsErrorBox::type_error("too many redirects"));
-                }
-
-                let location = response.header("location").ok_or_else(|| {
-                    JsErrorBox::type_error("redirect response missing Location header")
-                })?;
-
-                let next_url = url::Url::parse(&current_url)
-                    .and_then(|base| base.join(location))
-                    .map_err(|err| JsErrorBox::type_error(format!("invalid redirect URL: {err}")))?
-                    .to_string();
-
-                if current_url == next_url {
-                    return Err(JsErrorBox::type_error("redirect loop detected"));
-                }
-
-                match response.status() {
-                    301 | 302 if current_method.eq_ignore_ascii_case("POST") => {
-                        current_method = "GET".to_string();
-                        current_body = None;
-                    }
-                    303 if !current_method.eq_ignore_ascii_case("HEAD") => {
-                        current_method = "GET".to_string();
-                        current_body = None;
-                    }
-                    _ => {}
-                }
-
-                current_url = next_url;
-                continue;
+            let mut request = agent.request(&current_method, &current_url);
+            for (key, value) in &request_headers {
+                request = request.set(key, value);
             }
-            _ => {
-                final_response = Some(response);
-                break;
+
+            let response = match current_body.as_deref() {
+                Some(body) => request.send_string(body),
+                None => request.call(),
             }
-        }
+            .or_any_status()
+            .map_err(|err| JsErrorBox::type_error(format!("fetch failed: {err}")))?;
+
+            match response.status() {
+                301 | 302 | 303 | 307 | 308 => {
+                    if redirect_count == MAX_REDIRECTS {
+                        return Err(JsErrorBox::type_error("too many redirects"));
+                    }
+
+                    let location = response.header("location").ok_or_else(|| {
+                        JsErrorBox::type_error("redirect response missing Location header")
+                    })?;
+
+                    let next_url = url::Url::parse(&current_url)
+                        .and_then(|base| base.join(location))
+                        .map_err(|err| {
+                            JsErrorBox::type_error(format!("invalid redirect URL: {err}"))
+                        })?
+                        .to_string();
+
+                    if current_url == next_url {
+                        return Err(JsErrorBox::type_error("redirect loop detected"));
+                    }
+
+                    match response.status() {
+                        301 | 302 if current_method.eq_ignore_ascii_case("POST") => {
+                            current_method = "GET".to_string();
+                            current_body = None;
+                        }
+                        303 if !current_method.eq_ignore_ascii_case("HEAD") => {
+                            current_method = "GET".to_string();
+                            current_body = None;
+                        }
+                        _ => {}
+                    }
+
+                    current_url = next_url;
+                    continue;
+                }
+                _ => {
+                    final_response = Some(response);
+                    break;
+                }
+            }
         }
         final_response.ok_or_else(|| JsErrorBox::type_error("redirect resolution failed"))?
     };
@@ -2875,9 +3245,9 @@ fn make_http_request(
         .and_then(|value: &str| value.parse::<usize>().ok())
     {
         if len > MAX_RESPONSE_BYTES {
-            return Err(JsErrorBox::type_error(
-                format!("response too large: {len} bytes exceeds {MAX_RESPONSE_BYTES} byte limit"),
-            ));
+            return Err(JsErrorBox::type_error(format!(
+                "response too large: {len} bytes exceeds {MAX_RESPONSE_BYTES} byte limit"
+            )));
         }
     }
 
@@ -2901,12 +3271,10 @@ fn make_http_request(
         .map_err(|err: std::io::Error| JsErrorBox::type_error(err.to_string()))?;
 
     if bytes.len() > MAX_RESPONSE_BYTES {
-        return Err(JsErrorBox::type_error(
-            format!(
-                "response body too large: {} bytes exceeds {MAX_RESPONSE_BYTES} byte limit",
-                bytes.len()
-            ),
-        ));
+        return Err(JsErrorBox::type_error(format!(
+            "response body too large: {} bytes exceeds {MAX_RESPONSE_BYTES} byte limit",
+            bytes.len()
+        )));
     }
 
     let text = String::from_utf8_lossy(&bytes).into_owned();
@@ -2920,7 +3288,14 @@ fn make_http_request(
         "body": parsed_body,
     });
 
-    store_http_response_cache(&method, url, &request_headers, &response_headers, &response_json, status);
+    store_http_response_cache(
+        &method,
+        url,
+        &request_headers,
+        &response_headers,
+        &response_json,
+        status,
+    );
 
     Ok(response_json)
 }
@@ -3050,8 +3425,7 @@ fn resolve_existing_module_path(path: &Path) -> Result<PathBuf> {
 fn read_runtime_package_manifest(path: &Path) -> Result<RuntimePackageManifest> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_str(&source)
-        .with_context(|| format!("failed to parse {}", path.display()))
+    serde_json::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
 }
 
 fn resolve_runtime_package_entry(package_dir: &Path) -> Result<Option<PathBuf>> {
@@ -3061,7 +3435,10 @@ fn resolve_runtime_package_entry(package_dir: &Path) -> Result<Option<PathBuf>> 
     }
 
     let manifest = read_runtime_package_manifest(&manifest_path)?;
-    for candidate in [manifest.module.as_deref(), manifest.main.as_deref()].into_iter().flatten() {
+    for candidate in [manifest.module.as_deref(), manifest.main.as_deref()]
+        .into_iter()
+        .flatten()
+    {
         let resolved = resolve_existing_module_path(&package_dir.join(candidate))?;
         return Ok(Some(resolved));
     }
@@ -3113,14 +3490,17 @@ fn runtime_bare_package_parts(specifier: &str) -> Option<(String, Option<String>
     }
 }
 
-fn resolve_local_node_module_specifier(specifier: &str, referrer: &str) -> Result<Option<ModuleSpecifier>> {
+fn resolve_local_node_module_specifier(
+    specifier: &str,
+    referrer: &str,
+) -> Result<Option<ModuleSpecifier>> {
     let (package_name, subpath) = match runtime_bare_package_parts(specifier) {
         Some(parts) => parts,
         None => return Ok(None),
     };
 
-    let referrer_url = Url::parse(referrer)
-        .with_context(|| format!("invalid referrer: {referrer}"))?;
+    let referrer_url =
+        Url::parse(referrer).with_context(|| format!("invalid referrer: {referrer}"))?;
     if referrer_url.scheme() != "file" {
         return Ok(None);
     }
@@ -3202,9 +3582,7 @@ impl ModuleLoader for TypescriptModuleLoader {
 
             let media_type = MediaType::from_path(&path);
             let module_type = match media_type {
-                MediaType::JavaScript | MediaType::Mjs | MediaType::Cjs => {
-                    ModuleType::JavaScript
-                }
+                MediaType::JavaScript | MediaType::Mjs | MediaType::Cjs => ModuleType::JavaScript,
                 MediaType::TypeScript
                 | MediaType::Mts
                 | MediaType::Cts
@@ -3230,14 +3608,9 @@ impl ModuleLoader for TypescriptModuleLoader {
                 ));
             }
 
-            let source = std::fs::read_to_string(&path)
-                .map_err(JsErrorBox::from_err)?;
-            let source = transpile_module_source(
-                module_specifier,
-                media_type,
-                source,
-                Some(&source_maps),
-            )?;
+            let source = std::fs::read_to_string(&path).map_err(JsErrorBox::from_err)?;
+            let source =
+                transpile_module_source(module_specifier, media_type, source, Some(&source_maps))?;
 
             Ok(ModuleSource::new(
                 module_type,
@@ -3271,8 +3644,8 @@ impl ModuleLoader for ArtifactModuleLoader {
                 .iter()
                 .find(|dependency| dependency.specifier == specifier)
             {
-                let resolved = Url::parse(&dependency.resolved_specifier)
-                    .map_err(JsErrorBox::from_err)?;
+                let resolved =
+                    Url::parse(&dependency.resolved_specifier).map_err(JsErrorBox::from_err)?;
                 if self.modules.contains_key(resolved.as_str()) {
                     return Ok(resolved);
                 }
@@ -3357,7 +3730,12 @@ impl ModuleLoader for ArtifactModuleLoader {
             ))
         }
 
-        ModuleLoadResponse::Sync(load_module(source_maps, modules, &module_specifier, &options))
+        ModuleLoadResponse::Sync(load_module(
+            source_maps,
+            modules,
+            &module_specifier,
+            &options,
+        ))
     }
 
     fn get_source_map(&self, specifier: &str) -> Option<Cow<'_, [u8]>> {
@@ -3369,7 +3747,7 @@ impl ModuleLoader for ArtifactModuleLoader {
 }
 
 fn flux_pg_module_js() -> &'static str {
-        r#"
+    r#"
 const __fluxPg = globalThis.Flux?.postgres;
 
 if (!__fluxPg || !__fluxPg.NodePgPool || !__fluxPg.nodePgTypes) {
@@ -3519,13 +3897,10 @@ impl JsIsolate {
     pub async fn new_for_run_entry(entry: &Path) -> Result<Self> {
         let source_maps = Rc::new(RefCell::new(HashMap::new()));
         let mut runtime = JsRuntime::new(RuntimeOptions {
-            module_loader: Some(Rc::new(TypescriptModuleLoader {
-                source_maps,
-            })),
+            module_loader: Some(Rc::new(TypescriptModuleLoader { source_maps })),
             extensions: vec![flux_runtime_ext::init()],
             create_params: Some(
-                deno_core::v8::CreateParams::default()
-                    .heap_limits(0, V8_HEAP_LIMIT),
+                deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
             ),
             ..Default::default()
         });
@@ -3541,7 +3916,9 @@ impl JsIsolate {
             .context("failed to install fetch interceptor")?;
 
         let main_module = resolve_path(
-            entry.to_str().ok_or_else(|| anyhow::anyhow!("invalid entry path: {}", entry.display()))?,
+            entry
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("invalid entry path: {}", entry.display()))?,
             &std::env::current_dir().context("failed to get current working directory")?,
         )
         .with_context(|| format!("failed to resolve module specifier for {}", entry.display()))?;
@@ -3567,19 +3944,20 @@ impl JsIsolate {
             runtime.run_event_loop(Default::default()),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("module initialization timed out after {EXECUTION_TIMEOUT:?}"))?
+        .map_err(|_| {
+            anyhow::anyhow!("module initialization timed out after {EXECUTION_TIMEOUT:?}")
+        })?
         .context("event loop error during module initialization")?;
-        evaluation
-            .await
-            .context("failed to evaluate user module")?;
+        evaluation.await.context("failed to evaluate user module")?;
 
         close_registration_phase(&mut runtime)?;
 
-        let is_server_mode = {
-            probe_server_mode(&mut runtime)?
-        };
+        let is_server_mode = { probe_server_mode(&mut runtime)? };
 
-        Ok(Self { runtime, is_server_mode })
+        Ok(Self {
+            runtime,
+            is_server_mode,
+        })
     }
 
     pub async fn new_from_artifact(artifact: &FluxBuildArtifact) -> Result<Self> {
@@ -3597,8 +3975,7 @@ impl JsIsolate {
             })),
             extensions: vec![flux_runtime_ext::init()],
             create_params: Some(
-                deno_core::v8::CreateParams::default()
-                    .heap_limits(0, V8_HEAP_LIMIT),
+                deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
             ),
             ..Default::default()
         });
@@ -3618,8 +3995,12 @@ impl JsIsolate {
             .iter()
             .find(|module| module.specifier == artifact.entry_specifier)
             .ok_or_else(|| anyhow::anyhow!("entry module missing from built artifact"))?;
-        let main_module = Url::parse(&artifact.entry_specifier)
-            .with_context(|| format!("invalid entry module specifier: {}", artifact.entry_specifier))?;
+        let main_module = Url::parse(&artifact.entry_specifier).with_context(|| {
+            format!(
+                "invalid entry module specifier: {}",
+                artifact.entry_specifier
+            )
+        })?;
         let transformed_entry = prepare_user_code(&entry_module.source);
         let transformed_entry = transpile_module_source(
             &main_module,
@@ -3639,7 +4020,9 @@ impl JsIsolate {
             runtime.run_event_loop(Default::default()),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("module initialization timed out after {EXECUTION_TIMEOUT:?}"))?
+        .map_err(|_| {
+            anyhow::anyhow!("module initialization timed out after {EXECUTION_TIMEOUT:?}")
+        })?
         .context("event loop error during artifact module initialization")?;
         evaluation
             .await
@@ -3647,19 +4030,19 @@ impl JsIsolate {
 
         close_registration_phase(&mut runtime)?;
 
-        let is_server_mode = {
-            probe_server_mode(&mut runtime)?
-        };
+        let is_server_mode = { probe_server_mode(&mut runtime)? };
 
-        Ok(Self { runtime, is_server_mode })
+        Ok(Self {
+            runtime,
+            is_server_mode,
+        })
     }
 
     fn new_internal(_user_code: &str, prepared: String) -> Result<Self> {
         let mut runtime = JsRuntime::new(RuntimeOptions {
             extensions: vec![flux_runtime_ext::init()],
             create_params: Some(
-                deno_core::v8::CreateParams::default()
-                    .heap_limits(0, V8_HEAP_LIMIT),
+                deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
             ),
             ..Default::default()
         });
@@ -3690,7 +4073,10 @@ impl JsIsolate {
             probe_server_mode(&mut runtime)?
         };
 
-        Ok(Self { runtime, is_server_mode })
+        Ok(Self {
+            runtime,
+            is_server_mode,
+        })
     }
 
     /// Dispatch a single HTTP request into a server-mode isolate.  The JS
@@ -3701,7 +4087,8 @@ impl JsIsolate {
         context: ExecutionContext,
         req: NetRequest,
     ) -> Result<NetRequestExecution> {
-        self.dispatch_request_with_recorded(context, req, Vec::new()).await
+        self.dispatch_request_with_recorded(context, req, Vec::new())
+            .await
     }
 
     pub async fn dispatch_request_with_recorded(
@@ -3722,22 +4109,25 @@ impl JsIsolate {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
             let map = state.borrow_mut::<RuntimeStateMap>();
-            map.insert(execution_id.clone(), RuntimeExecutionState {
-                context,
-                call_index: 0,
-                checkpoints: Vec::new(),
-                recorded,
-                recorded_now_ms: None,
-                logs: Vec::new(),
-                recorded_random: Vec::new(),
-                random_index: 0,
-                recorded_uuids: Vec::new(),
-                uuid_index: 0,
-                is_server_mode: true,
-                pending_responses: HashMap::new(),
-                postgres_sessions: HashMap::new(),
-                next_postgres_session_id: 0,
-            });
+            map.insert(
+                execution_id.clone(),
+                RuntimeExecutionState {
+                    context,
+                    call_index: 0,
+                    checkpoints: Vec::new(),
+                    recorded,
+                    recorded_now_ms: None,
+                    logs: Vec::new(),
+                    recorded_random: Vec::new(),
+                    random_index: 0,
+                    recorded_uuids: Vec::new(),
+                    uuid_index: 0,
+                    is_server_mode: true,
+                    pending_responses: HashMap::new(),
+                    postgres_sessions: HashMap::new(),
+                    next_postgres_session_id: 0,
+                },
+            );
         }
 
         // Inject execution_id so the JS shim can thread it through all ops.
@@ -3770,11 +4160,13 @@ impl JsIsolate {
         let exec = map
             .remove(&execution_id)
             .ok_or_else(|| anyhow::anyhow!("state slot missing for execution {execution_id}"))?;
-        let response = exec
-            .pending_responses
-            .into_values()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("handler did not call op_net_respond for req {} (request_id={})", req.req_id, request_id))?;
+        let response = exec.pending_responses.into_values().next().ok_or_else(|| {
+            anyhow::anyhow!(
+                "handler did not call op_net_respond for req {} (request_id={})",
+                req.req_id,
+                request_id
+            )
+        })?;
 
         Ok(NetRequestExecution {
             response,
@@ -3788,7 +4180,8 @@ impl JsIsolate {
         payload: serde_json::Value,
         context: ExecutionContext,
     ) -> Result<JsExecutionOutput> {
-        self.execute_with_recorded(payload, context, Vec::new()).await
+        self.execute_with_recorded(payload, context, Vec::new())
+            .await
     }
 
     /// Execute with pre-recorded checkpoints injected into OpState.
@@ -3800,8 +4193,7 @@ impl JsIsolate {
         context: ExecutionContext,
         recorded_checkpoints: Vec<FetchCheckpoint>,
     ) -> Result<JsExecutionOutput> {
-        self
-            .execute_handler_with_recorded(payload, context, recorded_checkpoints, true)
+        self.execute_handler_with_recorded(payload, context, recorded_checkpoints, true)
             .await
     }
 
@@ -3823,25 +4215,29 @@ impl JsIsolate {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
             let map = state.borrow_mut::<RuntimeStateMap>();
-            map.insert(execution_id.clone(), RuntimeExecutionState {
-                context,
-                call_index: 0,
-                checkpoints: Vec::new(),
-                recorded,
-                recorded_now_ms: None,
-                logs: Vec::new(),
-                recorded_random: Vec::new(),
-                random_index: 0,
-                recorded_uuids: Vec::new(),
-                uuid_index: 0,
-                is_server_mode: false,
-                pending_responses: HashMap::new(),
-                postgres_sessions: HashMap::new(),
-                next_postgres_session_id: 0,
-            });
+            map.insert(
+                execution_id.clone(),
+                RuntimeExecutionState {
+                    context,
+                    call_index: 0,
+                    checkpoints: Vec::new(),
+                    recorded,
+                    recorded_now_ms: None,
+                    logs: Vec::new(),
+                    recorded_random: Vec::new(),
+                    random_index: 0,
+                    recorded_uuids: Vec::new(),
+                    uuid_index: 0,
+                    is_server_mode: false,
+                    pending_responses: HashMap::new(),
+                    postgres_sessions: HashMap::new(),
+                    next_postgres_session_id: 0,
+                },
+            );
         }
 
-        let eid_json = serde_json::to_string(&execution_id).context("failed to encode execution_id")?;
+        let eid_json =
+            serde_json::to_string(&execution_id).context("failed to encode execution_id")?;
         let payload_json = serde_json::to_string(&payload).context("failed to encode payload")?;
         let handler_arg = if wrap_payload_in_input {
             format!("{{ input: {payload_json}, ctx }}")
@@ -3865,7 +4261,7 @@ impl JsIsolate {
                }}\n\
              }})();",
             eid = eid_json,
-                        handler_arg = handler_arg,
+            handler_arg = handler_arg,
         );
 
         self.runtime
@@ -3897,8 +4293,8 @@ impl JsIsolate {
                 .context("failed to deserialize handler result")?
         };
 
-        let envelope: serde_json::Value = serde_json::from_str(&raw)
-            .context("handler result envelope is not valid JSON")?;
+        let envelope: serde_json::Value =
+            serde_json::from_str(&raw).context("handler result envelope is not valid JSON")?;
 
         let (checkpoints, logs) = {
             let state = self.runtime.op_state();
@@ -3950,7 +4346,8 @@ impl JsIsolate {
     ) -> Result<JsExecutionOutput> {
         // Check whether the module registered a handler during initialisation.
         let has_handler = {
-            let check = self.runtime
+            let check = self
+                .runtime
                 .execute_script(
                     "flux:check_handler",
                     "typeof globalThis.__flux_user_handler === 'function'",
@@ -3974,28 +4371,34 @@ impl JsIsolate {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
             let map = state.borrow_mut::<RuntimeStateMap>();
-            map.insert(execution_id.clone(), RuntimeExecutionState {
-                context,
-                call_index: 0,
-                checkpoints: Vec::new(),
-                recorded: HashMap::new(),
-                recorded_now_ms: None,
-                logs: Vec::new(),
-                recorded_random: Vec::new(),
-                random_index: 0,
-                recorded_uuids: Vec::new(),
-                uuid_index: 0,
-                is_server_mode: false,
-                pending_responses: HashMap::new(),
-                postgres_sessions: HashMap::new(),
-                next_postgres_session_id: 0,
-            });
+            map.insert(
+                execution_id.clone(),
+                RuntimeExecutionState {
+                    context,
+                    call_index: 0,
+                    checkpoints: Vec::new(),
+                    recorded: HashMap::new(),
+                    recorded_now_ms: None,
+                    logs: Vec::new(),
+                    recorded_random: Vec::new(),
+                    random_index: 0,
+                    recorded_uuids: Vec::new(),
+                    uuid_index: 0,
+                    is_server_mode: false,
+                    pending_responses: HashMap::new(),
+                    postgres_sessions: HashMap::new(),
+                    next_postgres_session_id: 0,
+                },
+            );
         }
 
         // Tell bootstrap JS which execution_id to use for top-level ops.
         let eid_json = serde_json::to_string(&execution_id).unwrap();
         self.runtime
-            .execute_script("flux:set_script_eid", format!("globalThis.__FLUX_EXECUTION_ID__ = {eid_json};"))
+            .execute_script(
+                "flux:set_script_eid",
+                format!("globalThis.__FLUX_EXECUTION_ID__ = {eid_json};"),
+            )
             .context("failed to set execution_id")?;
 
         tokio::time::timeout(
@@ -4027,7 +4430,9 @@ pub async fn boot_runtime_artifact(
     context: ExecutionContext,
 ) -> Result<BootExecutionResult> {
     match artifact {
-        RuntimeArtifact::Inline(artifact) => boot_inline_runtime_artifact(&artifact.code, context).await,
+        RuntimeArtifact::Inline(artifact) => {
+            boot_inline_runtime_artifact(&artifact.code, context).await
+        }
         RuntimeArtifact::Built(artifact) => boot_built_runtime_artifact(artifact, context).await,
     }
 }
@@ -4044,10 +4449,7 @@ async fn boot_inline_runtime_artifact(
 
     let mut runtime = JsRuntime::new(RuntimeOptions {
         extensions: vec![flux_runtime_ext::init()],
-        create_params: Some(
-            deno_core::v8::CreateParams::default()
-                .heap_limits(0, V8_HEAP_LIMIT),
-        ),
+        create_params: Some(deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT)),
         ..Default::default()
     });
 
@@ -4080,9 +4482,13 @@ async fn boot_inline_runtime_artifact(
         .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
         .context("failed to install fetch interceptor")?;
 
-    let eid_json = serde_json::to_string(&execution_id).context("failed to encode boot execution_id")?;
+    let eid_json =
+        serde_json::to_string(&execution_id).context("failed to encode boot execution_id")?;
     runtime
-        .execute_script("flux:set_boot_eid", format!("globalThis.__FLUX_EXECUTION_ID__ = {eid_json};"))
+        .execute_script(
+            "flux:set_boot_eid",
+            format!("globalThis.__FLUX_EXECUTION_ID__ = {eid_json};"),
+        )
         .context("failed to set boot execution_id")?;
 
     let mut error = runtime
@@ -4098,7 +4504,9 @@ async fn boot_inline_runtime_artifact(
         .await
         {
             Err(_) => {
-                error = Some(format!("module initialization timed out after {EXECUTION_TIMEOUT:?}"));
+                error = Some(format!(
+                    "module initialization timed out after {EXECUTION_TIMEOUT:?}"
+                ));
             }
             Ok(Err(err)) => {
                 error = Some(format!("{err:#}"));
@@ -4117,7 +4525,11 @@ async fn boot_inline_runtime_artifact(
             execution_id,
             request_id,
             code_version,
-            status: if error.is_some() { "error".to_string() } else { "ok".to_string() },
+            status: if error.is_some() {
+                "error".to_string()
+            } else {
+                "ok".to_string()
+            },
             body: serde_json::json!({
                 "phase": "boot",
                 "listener_mode": is_server_mode,
@@ -4152,10 +4564,7 @@ async fn boot_built_runtime_artifact(
             modules,
         })),
         extensions: vec![flux_runtime_ext::init()],
-        create_params: Some(
-            deno_core::v8::CreateParams::default()
-                .heap_limits(0, V8_HEAP_LIMIT),
-        ),
+        create_params: Some(deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT)),
         ..Default::default()
     });
 
@@ -4188,9 +4597,13 @@ async fn boot_built_runtime_artifact(
         .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
         .context("failed to install fetch interceptor")?;
 
-    let eid_json = serde_json::to_string(&execution_id).context("failed to encode boot execution_id")?;
+    let eid_json =
+        serde_json::to_string(&execution_id).context("failed to encode boot execution_id")?;
     runtime
-        .execute_script("flux:set_boot_eid", format!("globalThis.__FLUX_EXECUTION_ID__ = {eid_json};"))
+        .execute_script(
+            "flux:set_boot_eid",
+            format!("globalThis.__FLUX_EXECUTION_ID__ = {eid_json};"),
+        )
         .context("failed to set boot execution_id")?;
 
     let entry_module = artifact
@@ -4198,8 +4611,12 @@ async fn boot_built_runtime_artifact(
         .iter()
         .find(|module| module.specifier == artifact.entry_specifier)
         .ok_or_else(|| anyhow::anyhow!("entry module missing from built artifact"))?;
-    let main_module = Url::parse(&artifact.entry_specifier)
-        .with_context(|| format!("invalid entry module specifier: {}", artifact.entry_specifier))?;
+    let main_module = Url::parse(&artifact.entry_specifier).with_context(|| {
+        format!(
+            "invalid entry module specifier: {}",
+            artifact.entry_specifier
+        )
+    })?;
     let transformed_entry = prepare_user_code(&entry_module.source);
     let transformed_entry = transpile_module_source(
         &main_module,
@@ -4230,7 +4647,9 @@ async fn boot_built_runtime_artifact(
         .await
         {
             Err(_) => {
-                error = Some(format!("module initialization timed out after {EXECUTION_TIMEOUT:?}"));
+                error = Some(format!(
+                    "module initialization timed out after {EXECUTION_TIMEOUT:?}"
+                ));
             }
             Ok(Err(err)) => {
                 error = Some(format!("{err:#}"));
@@ -4253,7 +4672,11 @@ async fn boot_built_runtime_artifact(
             execution_id,
             request_id,
             code_version,
-            status: if error.is_some() { "error".to_string() } else { "ok".to_string() },
+            status: if error.is_some() {
+                "error".to_string()
+            } else {
+                "ok".to_string()
+            },
             body: serde_json::json!({
                 "phase": "boot",
                 "listener_mode": is_server_mode,
@@ -5455,6 +5878,130 @@ globalThis.crypto.getRandomValues = (typedArray) => {
     return typedArray;
 };
 globalThis.crypto.randomUUID = () => Deno.core.ops.op_random_uuid(__flux_eid());
+
+class FluxCryptoKey {
+    constructor({ type, algorithm, extractable, usages, material }) {
+        this.type = type;
+        this.algorithm = algorithm;
+        this.extractable = Boolean(extractable);
+        this.usages = Array.isArray(usages) ? [...usages] : [];
+        Object.defineProperty(this, "__fluxKeyMaterial", {
+            value: material,
+            enumerable: false,
+            configurable: false,
+            writable: false,
+        });
+    }
+}
+
+function __fluxNormalizeSubtleAlgorithmName(algorithm) {
+    if (typeof algorithm === "string") return algorithm.toUpperCase();
+    if (algorithm && typeof algorithm.name === "string") return algorithm.name.toUpperCase();
+    return "";
+}
+
+function __fluxNormalizeHashName(hash) {
+    if (typeof hash === "string") return hash.toUpperCase();
+    if (hash && typeof hash.name === "string") return hash.name.toUpperCase();
+    return "";
+}
+
+function __fluxToUint8Array(value, label) {
+    if (value instanceof Uint8Array) return value;
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) {
+        return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
+    throw new TypeError(`${label} must be an ArrayBuffer or typed array`);
+}
+
+function __fluxBytesToLatin1(bytes) {
+    let output = "";
+    for (const byte of bytes) {
+        output += String.fromCharCode(byte);
+    }
+    return output;
+}
+
+function __fluxBytesToBase64(bytes) {
+    return __fluxBase64Encode(__fluxBytesToLatin1(bytes));
+}
+
+if (typeof globalThis.CryptoKey !== "function") {
+    globalThis.CryptoKey = FluxCryptoKey;
+}
+
+if (!globalThis.crypto.subtle) {
+    globalThis.crypto.subtle = {
+        async importKey(format, keyData, algorithm, extractable, keyUsages) {
+            if (String(format).toLowerCase() !== "jwk") {
+                throw new DOMException("Only JWK key import is supported", "NotSupportedError");
+            }
+
+            const algorithmName = __fluxNormalizeSubtleAlgorithmName(algorithm);
+            const hashName = __fluxNormalizeHashName(algorithm && typeof algorithm === "object" ? algorithm.hash : undefined);
+            if (algorithmName !== "RSASSA-PKCS1-V1_5" || hashName !== "SHA-256") {
+                throw new DOMException("Only RSASSA-PKCS1-v1_5 with SHA-256 is supported", "NotSupportedError");
+            }
+
+            if (!keyData || typeof keyData !== "object") {
+                throw new DOMException("JWK must be an object", "DataError");
+            }
+            if (keyData.kty !== "RSA") {
+                throw new DOMException("Only RSA JWKs are supported", "DataError");
+            }
+            if (typeof keyData.n !== "string" || typeof keyData.e !== "string") {
+                throw new DOMException("RSA JWK must include 'n' and 'e'", "DataError");
+            }
+            if (typeof keyData.d === "string") {
+                throw new DOMException("Private RSA JWK import is not supported", "NotSupportedError");
+            }
+
+            const usages = Array.isArray(keyUsages) ? [...new Set(keyUsages.map((value) => String(value)))] : [];
+            if (usages.length === 0 || usages.some((value) => value !== "verify")) {
+                throw new DOMException("Only 'verify' key usage is supported", "SyntaxError");
+            }
+
+            return new globalThis.CryptoKey({
+                type: "public",
+                algorithm: {
+                    name: "RSASSA-PKCS1-v1_5",
+                    hash: { name: "SHA-256" },
+                },
+                extractable,
+                usages,
+                material: {
+                    format: "jwk",
+                    jwk: { ...keyData },
+                },
+            });
+        },
+
+        async verify(algorithm, key, signature, data) {
+            const algorithmName = __fluxNormalizeSubtleAlgorithmName(algorithm);
+            if (algorithmName !== "RSASSA-PKCS1-V1_5") {
+                throw new DOMException("Only RSASSA-PKCS1-v1_5 verification is supported", "NotSupportedError");
+            }
+            if (!(key instanceof globalThis.CryptoKey) || !key.__fluxKeyMaterial || key.type !== "public") {
+                throw new DOMException("A public CryptoKey is required for verification", "InvalidAccessError");
+            }
+            if (__fluxNormalizeHashName(key.algorithm && key.algorithm.hash) !== "SHA-256") {
+                throw new DOMException("Only SHA-256 verification is supported", "NotSupportedError");
+            }
+            if (!Array.isArray(key.usages) || !key.usages.includes("verify")) {
+                throw new DOMException("CryptoKey does not allow verify usage", "InvalidAccessError");
+            }
+
+            const signatureBytes = __fluxToUint8Array(signature, "signature");
+            const dataBytes = __fluxToUint8Array(data, "data");
+            return Deno.core.ops.op_crypto_verify_rs256({
+                jwk: key.__fluxKeyMaterial.jwk,
+                signature_base64: __fluxBytesToBase64(signatureBytes),
+                data_base64: __fluxBytesToBase64(dataBytes),
+            });
+        },
+    };
+}
 
 // ── fetch ──────────────────────────────────────────────────────────────────
 globalThis.fetch = async function(input, init = undefined) {

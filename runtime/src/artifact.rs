@@ -75,7 +75,11 @@ impl RuntimeArtifact {
     pub fn size_bytes(&self) -> usize {
         match self {
             RuntimeArtifact::Inline(artifact) => artifact.size_bytes,
-            RuntimeArtifact::Built(artifact) => artifact.modules.iter().map(|module| module.size_bytes).sum(),
+            RuntimeArtifact::Built(artifact) => artifact
+                .modules
+                .iter()
+                .map(|module| module.size_bytes)
+                .sum(),
         }
     }
 }

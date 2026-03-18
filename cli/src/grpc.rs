@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use tonic::Request;
-use tonic::metadata::MetadataValue;
 use tonic::Streaming;
+use tonic::metadata::MetadataValue;
 
 pub use shared::pb;
 
@@ -125,9 +125,10 @@ pub struct ResumeView {
 
 pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ValidateTokenRequest {});
     request.metadata_mut().insert(
@@ -151,9 +152,10 @@ pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
 
 pub async fn list_logs(url: &str, token: &str, limit: u32) -> Result<Vec<LogEntry>> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ListLogsRequest { limit });
     request.metadata_mut().insert(
@@ -187,9 +189,10 @@ pub async fn list_logs(url: &str, token: &str, limit: u32) -> Result<Vec<LogEntr
 
 pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<TraceView> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::GetTraceRequest {
         execution_id: execution_id.to_string(),
@@ -243,9 +246,10 @@ pub async fn tail(
     project_id: Option<String>,
 ) -> Result<Streaming<pb::TailEvent>> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::TailRequest {
         project_id: project_id.unwrap_or_default(),
@@ -267,9 +271,10 @@ pub async fn tail(
 
 pub async fn why(url: &str, token: &str, execution_id: &str) -> Result<WhyView> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::WhyRequest {
         execution_id: execution_id.to_string(),
@@ -302,9 +307,10 @@ pub async fn replay(
     validate: bool,
 ) -> Result<ReplayView> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ReplayRequest {
         execution_id: execution_id.to_string(),
@@ -370,9 +376,10 @@ pub async fn resume(
     from_index: Option<i32>,
 ) -> Result<ResumeView> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ResumeRequest {
         execution_id: execution_id.to_string(),

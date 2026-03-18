@@ -19,7 +19,11 @@ pub fn find_workspace_root() -> Option<PathBuf> {
 }
 
 pub fn find_runtime_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "flux-runtime.exe" } else { "flux-runtime" };
+    let name = if cfg!(windows) {
+        "flux-runtime.exe"
+    } else {
+        "flux-runtime"
+    };
     let primary = if release { "release" } else { "debug" };
     let secondary = if release { "debug" } else { "release" };
 

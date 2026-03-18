@@ -17,7 +17,10 @@ pub async fn execute(args: BuildArgs) -> Result<()> {
 
     if has_errors(&analysis.diagnostics) {
         for diagnostic in &analysis.diagnostics {
-            println!("error   [{}] {}: {}", diagnostic.code, diagnostic.specifier, diagnostic.message);
+            println!(
+                "error   [{}] {}: {}",
+                diagnostic.code, diagnostic.specifier, diagnostic.message
+            );
         }
         bail!("build failed due to unsupported imports or syntax")
     }

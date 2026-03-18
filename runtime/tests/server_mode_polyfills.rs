@@ -2,12 +2,12 @@ use std::net::SocketAddr;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use axum::routing::get;
 use axum::Router;
+use axum::routing::get;
+use runtime::JsIsolate;
 use runtime::artifact::build_artifact;
 use runtime::deno_runtime::NetRequest;
 use runtime::isolate_pool::{ExecutionContext, IsolatePool};
-use runtime::JsIsolate;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, oneshot};
 
@@ -32,7 +32,10 @@ Deno.serve(async function handler(_request) {{
     );
 
     let pool = IsolatePool::new(1, build_artifact("server.js", code))?;
-    assert!(pool.is_server_mode, "Deno.serve entry should initialize in server mode");
+    assert!(
+        pool.is_server_mode,
+        "Deno.serve entry should initialize in server mode"
+    );
 
     let result = pool
         .execute_net_request(
@@ -61,8 +64,16 @@ Deno.serve(async function handler(_request) {{
             }
         })
     );
-    assert_eq!(result.checkpoints.len(), 1, "server-mode fetches should be recorded");
-    assert_eq!(result.logs.len(), 1, "server-mode console logs should be preserved");
+    assert_eq!(
+        result.checkpoints.len(),
+        1,
+        "server-mode fetches should be recorded"
+    );
+    assert_eq!(
+        result.logs.len(),
+        1,
+        "server-mode console logs should be preserved"
+    );
     assert!(result.logs[0].message.contains("server hit"));
 
     Ok(())
@@ -105,8 +116,8 @@ Deno.serve(
         .as_str()
         .context("server-mode response body should be a JSON string")?;
 
-    let payload: serde_json::Value = serde_json::from_str(&response_text)
-        .context("response should be valid JSON")?;
+    let payload: serde_json::Value =
+        serde_json::from_str(&response_text).context("response should be valid JSON")?;
     assert_eq!(
         payload,
         serde_json::json!({
@@ -226,7 +237,10 @@ Deno.serve((_req) => {
     let payload: serde_json::Value = serde_json::from_str(response_text)
         .context("late-registration response should be valid JSON")?;
     assert_eq!(payload["ok"], true);
-    assert_eq!(payload["error"], "Deno.serve may only be called during boot");
+    assert_eq!(
+        payload["error"],
+        "Deno.serve may only be called during boot"
+    );
 
     Ok(())
 }
@@ -271,7 +285,10 @@ export default async function handler() {
             "string": "AbortError: This operation was aborted",
         })
     );
-    assert!(output.checkpoints.is_empty(), "pre-aborted fetch must not record a checkpoint");
+    assert!(
+        output.checkpoints.is_empty(),
+        "pre-aborted fetch must not record a checkpoint"
+    );
 
     Ok(())
 }
@@ -298,11 +315,16 @@ export default async function handler() {
     assert_eq!(live_output.checkpoints[0].boundary, "timer");
     assert_eq!(live_output.checkpoints[0].method, "delay");
 
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
     let mut replay_context = ExecutionContext::new("timer-replay");
     replay_context.mode = runtime::deno_runtime::ExecutionMode::Replay;
     let replay_output = replay_isolate
-        .execute_with_recorded(serde_json::json!({}), replay_context, live_output.checkpoints.clone())
+        .execute_with_recorded(
+            serde_json::json!({}),
+            replay_context,
+            live_output.checkpoints.clone(),
+        )
         .await
         .context("replay timer execution failed")?;
 
@@ -334,7 +356,10 @@ export default async function handler() {
 
     let mut isolate = JsIsolate::new_for_run(code).context("failed to create isolate")?;
     let output = isolate
-        .execute(serde_json::json!({}), ExecutionContext::new("wintertc-min-common"))
+        .execute(
+            serde_json::json!({}),
+            ExecutionContext::new("wintertc-min-common"),
+        )
         .await
         .context("wintertc globals execution failed")?;
 
@@ -350,9 +375,88 @@ export default async function handler() {
             "decoded": "Flux",
         })
     );
-    assert!(output.checkpoints.is_empty(), "wintertc globals should not create checkpoints");
-    assert_eq!(output.logs.len(), 1, "reportError should emit exactly one console error");
+    assert!(
+        output.checkpoints.is_empty(),
+        "wintertc globals should not create checkpoints"
+    );
+    assert_eq!(
+        output.logs.len(),
+        1,
+        "reportError should emit exactly one console error"
+    );
     assert!(output.logs[0].message.contains("wintertc report"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn crypto_subtle_import_key_and_verify_support_rs256_jwks() -> Result<()> {
+    let _lock = polyfill_test_lock().lock().await;
+    let code = format!(
+                r#"
+export default async function handler() {{
+    const jwk = {jwk_json};
+    const normalizedSignature = {signature:?}.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedSignature = normalizedSignature.padEnd(Math.ceil(normalizedSignature.length / 4) * 4, "=");
+    const signatureBytes = Uint8Array.from(atob(paddedSignature), (char) => char.charCodeAt(0));
+    const key = await crypto.subtle.importKey(
+        "jwk",
+        jwk,
+        {{ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }},
+        false,
+        ["verify"],
+    );
+    const verified = await crypto.subtle.verify(
+        {{ name: "RSASSA-PKCS1-v1_5" }},
+        key,
+        signatureBytes,
+        new TextEncoder().encode({message:?}),
+    );
+
+    return {{
+        subtleType: typeof crypto.subtle,
+        keyType: key.type,
+        algorithm: key.algorithm.name,
+        verified,
+    }};
+}}
+"#,
+                jwk_json = serde_json::json!({
+                        "kty": "RSA",
+                        "n": "sH2PCgllKet7j4tv8673SrBdTrwlKwmr419UrkJLbyFdg11LTDL0jdikNBEhu-1DSw2zxCXFvpXcjWnNpnhqI4EkO6o8YspnLpfLFwKudNeyIQo59jUFMU1naQCY5EEAdDdbcCEjxHhrLvcnekLYI4fhNQiIahYQyu0dc_Pmvkf69a6KJGJO5T__KcUbOiq__hsHlM4x9IYYxWpvLtNxWi1Fk6igFX5OEX4V5PaUmMH1z9RFTNqqVEpUr5S4_cotvTRuYyHYRsYZsRhJcJzLvthI74tVLPy7fNYdfzcnt_epJgtb14c8CMDTYK3N3Tz-UZy_tTVqYwSZQiAjSkAyzw",
+                        "e": "AQAB",
+                        "alg": "RS256",
+                        "use": "sig",
+                        "kid": "fixture-key",
+                })
+                .to_string(),
+                signature = "ceny8CT3yclvlcBs0lY8gBRXmVg1Sjmcl0FrEjK2MXELbpXs4t9NpVwzu3FPFjfB_IrvU0_NDY4InHGjHchpbjn2RZIurlLEFJWk7Ms4K1-vLylqsOoKU1zIVKd5Dc1lMyseCzrvqKjF8Ffrzi8b6kjZhMdUuMIHk25pbCrEs33l3gT1Rts1Jq5--_VGJU1GJhWK19udxapEikfoG6vDq0PQq-DyylDX3tO_45o648QBGxm-ItBfJRwYcttsEP54bQ8FHkCHq0AFLi8VOUtWb5otA1qQuLWkw1B5hnzFtLvsiyQ8YaEQTYWmofGSMFEROHG8P7S1ShxcqOEvMxwkRw",
+                message = "flux-rs256-fixture",
+        );
+
+    let mut isolate = JsIsolate::new_for_run(&code).context("failed to create isolate")?;
+    let output = isolate
+        .execute(
+            serde_json::json!({}),
+            ExecutionContext::new("crypto-subtle-rs256"),
+        )
+        .await
+        .context("crypto.subtle rs256 execution failed")?;
+
+    assert_eq!(output.error, None);
+    assert_eq!(
+        output.output,
+        serde_json::json!({
+                "subtleType": "object",
+                "keyType": "public",
+                "algorithm": "RSASSA-PKCS1-v1_5",
+                "verified": true,
+        })
+    );
+    assert!(
+        output.checkpoints.is_empty(),
+        "crypto.subtle verification should not create checkpoints"
+    );
 
     Ok(())
 }
@@ -393,9 +497,12 @@ fn polyfill_test_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-async fn spawn_test_server() -> Result<(String, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
-    let router = Router::new()
-        .route("/data", get(|| async { "buffered-response" }));
+async fn spawn_test_server() -> Result<(
+    String,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
+    let router = Router::new().route("/data", get(|| async { "buffered-response" }));
 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

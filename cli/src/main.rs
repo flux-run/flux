@@ -5,13 +5,14 @@ mod build;
 mod check;
 mod config;
 mod config_cmd;
+mod dev;
 mod exec;
 mod grpc;
 mod init;
 mod logs;
 mod process_state;
+mod project;
 mod ps;
-mod dev;
 mod replay;
 mod resume;
 mod run;
@@ -23,7 +24,6 @@ mod status;
 mod tail;
 mod trace;
 mod why;
-mod project;
 
 #[derive(Parser)]
 #[command(name = "flux")]

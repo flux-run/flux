@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
-use std::sync::OnceLock;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
@@ -19,7 +19,7 @@ async fn fetch_replay_returns_buffered_body_via_reader() -> Result<()> {
 
     let (base_url, shutdown_tx, server_task) = spawn_test_server().await?;
 
-                let code = r#"
+    let code = r#"
 export default async function handler({ input }) {
     try {
     const response = await fetch(input.url);
@@ -79,14 +79,22 @@ export default async function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    assert_eq!(recorded.len(), 1, "expected exactly one recorded fetch checkpoint");
-    assert_eq!(recorded[0].response.get("status"), Some(&serde_json::json!(200)));
+    assert_eq!(
+        recorded.len(),
+        1,
+        "expected exactly one recorded fetch checkpoint"
+    );
+    assert_eq!(
+        recorded[0].response.get("status"),
+        Some(&serde_json::json!(200))
+    );
     assert_eq!(
         recorded[0].response.get("body"),
         Some(&serde_json::json!("buffered-response"))
     );
 
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
     let mut replay_context = ExecutionContext::new("fetch-contract-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -97,7 +105,10 @@ export default async function handler({ input }) {
     assert_eq!(replay_output.error, None);
     assert_eq!(replay_output.output, live_output.output);
     assert_eq!(replay_output.checkpoints.len(), 1);
-    assert_eq!(replay_output.checkpoints[0].response.get("status"), Some(&serde_json::json!(200)));
+    assert_eq!(
+        replay_output.checkpoints[0].response.get("status"),
+        Some(&serde_json::json!(200))
+    );
     assert_eq!(
         replay_output.checkpoints[0].response.get("body"),
         Some(&serde_json::json!("buffered-response"))
@@ -141,7 +152,10 @@ export default async function handler({ input }) {
 
     assert_ssrf_result(&live_output.output, "169.254.169.254");
     assert_eq!(live_output.error, None);
-    assert!(live_output.checkpoints.is_empty(), "blocked fetches must not be recorded");
+    assert!(
+        live_output.checkpoints.is_empty(),
+        "blocked fetches must not be recorded"
+    );
 
     let fake_recording = vec![FetchCheckpoint {
         call_index: 0,
@@ -162,7 +176,8 @@ export default async function handler({ input }) {
         duration_ms: 0,
     }];
 
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
     let mut replay_context = ExecutionContext::new("fetch-ssrf-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -172,7 +187,10 @@ export default async function handler({ input }) {
 
     assert_ssrf_result(&replay_output.output, "169.254.169.254");
     assert_eq!(replay_output.error, None);
-    assert!(replay_output.checkpoints.is_empty(), "blocked replay fetches must not be recorded");
+    assert!(
+        replay_output.checkpoints.is_empty(),
+        "blocked replay fetches must not be recorded"
+    );
 
     Ok(())
 }
@@ -203,9 +221,13 @@ export default async function handler({ input }) {
 "#;
 
     let blocked_payload = serde_json::json!({ "url": format!("{localhost_url}/data") });
-    let mut blocked_isolate = JsIsolate::new_for_run(code).context("failed to create blocked isolate")?;
+    let mut blocked_isolate =
+        JsIsolate::new_for_run(code).context("failed to create blocked isolate")?;
     let blocked_output = blocked_isolate
-        .execute(blocked_payload.clone(), ExecutionContext::new("fetch-loopback-blocked"))
+        .execute(
+            blocked_payload.clone(),
+            ExecutionContext::new("fetch-loopback-blocked"),
+        )
         .await
         .context("blocked loopback execution failed")?;
 
@@ -221,13 +243,22 @@ export default async function handler({ input }) {
         .and_then(|value| value.as_str())
         .unwrap_or("");
     assert!(blocked_message.contains("fetch blocked") || blocked_string.contains("fetch blocked"));
-    assert!(blocked_message.contains("private/loopback") || blocked_string.contains("private/loopback"));
-    assert!(blocked_output.checkpoints.is_empty(), "blocked loopback fetch must not be recorded");
+    assert!(
+        blocked_message.contains("private/loopback") || blocked_string.contains("private/loopback")
+    );
+    assert!(
+        blocked_output.checkpoints.is_empty(),
+        "blocked loopback fetch must not be recorded"
+    );
 
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
-    let mut allowed_isolate = JsIsolate::new_for_run(code).context("failed to create allowed isolate")?;
+    let mut allowed_isolate =
+        JsIsolate::new_for_run(code).context("failed to create allowed isolate")?;
     let allowed_output = allowed_isolate
-        .execute(blocked_payload, ExecutionContext::new("fetch-loopback-allowed"))
+        .execute(
+            blocked_payload,
+            ExecutionContext::new("fetch-loopback-allowed"),
+        )
         .await
         .context("allowed loopback execution failed")?;
 
@@ -240,7 +271,11 @@ export default async function handler({ input }) {
             "body": "buffered-response",
         })
     );
-    assert_eq!(allowed_output.checkpoints.len(), 1, "allowed loopback fetch should be recorded");
+    assert_eq!(
+        allowed_output.checkpoints.len(),
+        1,
+        "allowed loopback fetch should be recorded"
+    );
 
     shutdown_tx.send(()).ok();
     server_task.await.context("test server task failed")??;
@@ -284,7 +319,10 @@ export default async function handler({ input }) {
 
     assert_eq!(output.error, None);
     assert_ssrf_result(&output.output, "169.254.169.254");
-    assert!(output.checkpoints.is_empty(), "redirected SSRF fetch must not be recorded");
+    assert!(
+        output.checkpoints.is_empty(),
+        "redirected SSRF fetch must not be recorded"
+    );
 
     shutdown_tx.send(()).ok();
     server_task.await.context("test server task failed")??;
@@ -313,9 +351,13 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/cache"),
     });
 
-    let mut first_isolate = JsIsolate::new_for_run(code).context("failed to create first cache isolate")?;
+    let mut first_isolate =
+        JsIsolate::new_for_run(code).context("failed to create first cache isolate")?;
     let first_output = first_isolate
-        .execute(payload.clone(), ExecutionContext::new("fetch-http-cache-live-1"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("fetch-http-cache-live-1"),
+        )
         .await
         .context("first cached fetch execution failed")?;
 
@@ -331,9 +373,12 @@ export default async function handler({ input }) {
     assert_eq!(hit_count.load(Ordering::SeqCst), 1);
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("cache test server task failed")??;
+    server_task
+        .await
+        .context("cache test server task failed")??;
 
-    let mut second_isolate = JsIsolate::new_for_run(code).context("failed to create second cache isolate")?;
+    let mut second_isolate =
+        JsIsolate::new_for_run(code).context("failed to create second cache isolate")?;
     let second_output = second_isolate
         .execute(payload, ExecutionContext::new("fetch-http-cache-live-2"))
         .await
@@ -349,7 +394,11 @@ export default async function handler({ input }) {
             "source": "memory",
         }))
     );
-    assert_eq!(hit_count.load(Ordering::SeqCst), 1, "second execution should reuse the in-memory cache");
+    assert_eq!(
+        hit_count.load(Ordering::SeqCst),
+        1,
+        "second execution should reuse the in-memory cache"
+    );
 
     Ok(())
 }
@@ -397,27 +446,40 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/cache"),
     });
 
-    let mut prime_isolate = JsIsolate::new_for_run(prime_code).context("failed to create cache prime isolate")?;
+    let mut prime_isolate =
+        JsIsolate::new_for_run(prime_code).context("failed to create cache prime isolate")?;
     let prime_output = prime_isolate
-        .execute(payload.clone(), ExecutionContext::new("fetch-http-cache-prime"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("fetch-http-cache-prime"),
+        )
         .await
         .context("cache prime execution failed")?;
 
     assert_eq!(prime_output.error, None);
-    assert_eq!(prime_output.output.get("status"), Some(&serde_json::json!(200)));
+    assert_eq!(
+        prime_output.output.get("status"),
+        Some(&serde_json::json!(200))
+    );
     assert_eq!(hit_count.load(Ordering::SeqCst), 1);
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("cache bypass test server task failed")??;
+    server_task
+        .await
+        .context("cache bypass test server task failed")??;
 
-    let mut bypass_isolate = JsIsolate::new_for_run(bypass_code).context("failed to create cache bypass isolate")?;
+    let mut bypass_isolate =
+        JsIsolate::new_for_run(bypass_code).context("failed to create cache bypass isolate")?;
     let bypass_output = bypass_isolate
         .execute(payload, ExecutionContext::new("fetch-http-cache-bypass"))
         .await
         .context("cache bypass execution failed")?;
 
     assert_eq!(bypass_output.error, None);
-    assert_eq!(bypass_output.output.get("ok"), Some(&serde_json::json!(false)));
+    assert_eq!(
+        bypass_output.output.get("ok"),
+        Some(&serde_json::json!(false))
+    );
     let message = bypass_output
         .output
         .get("message")
@@ -429,7 +491,11 @@ export default async function handler({ input }) {
         .and_then(|value| value.as_str())
         .unwrap_or("");
     assert!(message.contains("fetch failed") || string.contains("fetch failed"));
-    assert_eq!(hit_count.load(Ordering::SeqCst), 1, "bypass request should not reuse or refresh the in-memory cache after shutdown");
+    assert_eq!(
+        hit_count.load(Ordering::SeqCst),
+        1,
+        "bypass request should not reuse or refresh the in-memory cache after shutdown"
+    );
 
     Ok(())
 }
@@ -475,7 +541,8 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/json"),
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create body contract isolate")?;
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create body contract isolate")?;
     let output = isolate
         .execute(payload, ExecutionContext::new("fetch-body-contract"))
         .await
@@ -492,7 +559,11 @@ export default async function handler({ input }) {
             "cloneText": "{\"ok\":true,\"message\":\"buffered-json\"}",
         })
     );
-    assert_eq!(output.checkpoints.len(), 1, "body contract fetch should be recorded");
+    assert_eq!(
+        output.checkpoints.len(),
+        1,
+        "body contract fetch should be recorded"
+    );
 
     shutdown_tx.send(()).ok();
     server_task.await.context("test server task failed")??;
@@ -510,8 +581,14 @@ fn assert_ssrf_result(result: &serde_json::Value, needle: &str) {
         .get("string")
         .and_then(|value| value.as_str())
         .unwrap_or("");
-    assert!(message.contains("fetch blocked") || string.contains("fetch blocked"), "expected SSRF block result, got: {result}");
-    assert!(message.contains(needle) || string.contains(needle), "expected blocked target in result, got: {result}");
+    assert!(
+        message.contains("fetch blocked") || string.contains("fetch blocked"),
+        "expected SSRF block result, got: {result}"
+    );
+    assert!(
+        message.contains(needle) || string.contains(needle),
+        "expected blocked target in result, got: {result}"
+    );
 }
 
 struct EnvVarGuard {
@@ -547,40 +624,45 @@ fn fetch_test_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-async fn spawn_test_server() -> Result<(String, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_test_server() -> Result<(
+    String,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind test server")?;
-    let addr: SocketAddr = listener.local_addr().context("failed to read test server addr")?;
+    let addr: SocketAddr = listener
+        .local_addr()
+        .context("failed to read test server addr")?;
 
-    let app = Router::new().route(
-        "/data",
-        get(|| async {
-            ([("content-length", "17")], "buffered-response")
-        }),
-    )
-    .route(
-        "/json",
-        get(|| async {
-            (
-                [
-                    ("content-type", "application/json"),
-                    ("content-length", "37"),
-                ],
-                r#"{"ok":true,"message":"buffered-json"}"#,
-            )
-        }),
-    )
-    .route(
-        "/redirect-metadata",
-        get(|| async {
-            (
-                axum::http::StatusCode::FOUND,
-                [("location", "http://169.254.169.254/latest/meta-data")],
-                "redirecting",
-            )
-        }),
-    );
+    let app = Router::new()
+        .route(
+            "/data",
+            get(|| async { ([("content-length", "17")], "buffered-response") }),
+        )
+        .route(
+            "/json",
+            get(|| async {
+                (
+                    [
+                        ("content-type", "application/json"),
+                        ("content-length", "37"),
+                    ],
+                    r#"{"ok":true,"message":"buffered-json"}"#,
+                )
+            }),
+        )
+        .route(
+            "/redirect-metadata",
+            get(|| async {
+                (
+                    axum::http::StatusCode::FOUND,
+                    [("location", "http://169.254.169.254/latest/meta-data")],
+                    "redirecting",
+                )
+            }),
+        );
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let task = tokio::spawn(async move {
@@ -596,11 +678,18 @@ async fn spawn_test_server() -> Result<(String, oneshot::Sender<()>, tokio::task
     Ok((format!("http://{addr}"), shutdown_tx, task))
 }
 
-async fn spawn_cache_test_server() -> Result<(String, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>, Arc<AtomicUsize>)> {
+async fn spawn_cache_test_server() -> Result<(
+    String,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+    Arc<AtomicUsize>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind cache test server")?;
-    let addr: SocketAddr = listener.local_addr().context("failed to read cache test server addr")?;
+    let addr: SocketAddr = listener
+        .local_addr()
+        .context("failed to read cache test server addr")?;
     let hit_count = Arc::new(AtomicUsize::new(0));
     let route_hits = Arc::clone(&hit_count);
 

@@ -1,79 +1,127 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-18T04:36:27.035Z",
+  "timestamp": "2026-03-18T04:51:10.389Z",
   "engine": "node v22.20.0",
-  "passed": 11,
+  "passed": 19,
   "failed": 0,
   "skipped": 0,
-  "total": 11,
+  "total": 19,
   "elapsedMs": 5,
   "passRate": "100.0%",
   "results": [
     {
-      "name": "GET /jwks initial live request → 200",
+      "name": "GET /public without auth → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.009666999999808468
+      "duration": 0.010084000000006199
     },
     {
-      "name": "GET /jwks initial live request → execution id header",
+      "name": "GET /public without auth → unprotected route",
       "passed": true,
       "skipped": false,
-      "duration": 0.00508399999989706
+      "duration": 0.004666000000042914
     },
     {
-      "name": "GET /jwks initial live request → one key",
+      "name": "GET /protected without bearer token → 401",
       "passed": true,
       "skipped": false,
-      "duration": 0.004582999999911408
+      "duration": 0.024249999999938154
     },
     {
-      "name": "GET /jwks after origin shutdown → 200",
+      "name": "GET /protected without bearer token → error message",
       "passed": true,
       "skipped": false,
-      "duration": 0.030917000000044936
+      "duration": 0.0048749999998563
     },
     {
-      "name": "GET /jwks after origin shutdown → cached body preserved",
+      "name": "GET /protected with valid RS256 JWT → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.009500000000116415
+      "duration": 0.009000000000014552
     },
     {
-      "name": "GET /jwks-bypass after origin shutdown → fails",
+      "name": "GET /protected with valid RS256 JWT → execution id header",
       "passed": true,
       "skipped": false,
-      "duration": 0.024957999999969616
+      "duration": 0.004333999999971638
     },
     {
-      "name": "GET /jwks-bypass after origin shutdown → bypass flag true",
+      "name": "GET /protected with valid RS256 JWT → payload surfaced",
       "passed": true,
       "skipped": false,
-      "duration": 0.0047090000002754095
+      "duration": 0.005208000000038737
     },
     {
-      "name": "flux replay jwks request → ok",
+      "name": "GET /protected with wrong audience → 401",
       "passed": true,
       "skipped": false,
-      "duration": 0.012709000000086235
+      "duration": 0.02995799999985138
     },
     {
-      "name": "flux replay jwks request → 200 status preserved",
+      "name": "GET /protected with wrong audience → claim validation error",
       "passed": true,
       "skipped": false,
-      "duration": 0.006541999999626569
+      "duration": 0.005417000000079497
     },
     {
-      "name": "flux replay jwks request → same JSON response",
+      "name": "GET /protected after JWKS origin shutdown → 200",
       "passed": true,
       "skipped": false,
-      "duration": 5.324500000000171
+      "duration": 0.025208999999904336
     },
     {
-      "name": "flux replay jwks request → HTTP step recorded",
+      "name": "GET /protected after JWKS origin shutdown → cached key still verifies",
       "passed": true,
       "skipped": false,
-      "duration": 0.010583000000224274
+      "duration": 0.007958000000144239
+    },
+    {
+      "name": "GET /protected with wrong signature → 401",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.02616600000010294
+    },
+    {
+      "name": "GET /protected with wrong signature → signature failure",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.005084000000124433
+    },
+    {
+      "name": "GET /protected-bypass after JWKS origin shutdown → 503",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.023750000000063665
+    },
+    {
+      "name": "GET /protected-bypass after JWKS origin shutdown → bypass flag true",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003375000000005457
+    },
+    {
+      "name": "flux replay protected JWT request → ok",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.006916000000046552
+    },
+    {
+      "name": "flux replay protected JWT request → 200 status preserved",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004375000000209184
+    },
+    {
+      "name": "flux replay protected JWT request → same JSON response",
+      "passed": true,
+      "skipped": false,
+      "duration": 5.169375000000173
+    },
+    {
+      "name": "flux replay protected JWT request → HTTP step recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.008000000000038199
     }
   ]
 }

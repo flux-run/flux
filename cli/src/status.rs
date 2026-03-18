@@ -50,11 +50,7 @@ pub async fn execute() -> Result<()> {
                 println!();
                 println!(
                     "  last execution  {}  {} {}  {}  {}ms",
-                    time,
-                    last.method,
-                    last.path,
-                    status_symbol,
-                    last.duration_ms
+                    time, last.method, last.path, status_symbol, last.duration_ms
                 );
             }
         }

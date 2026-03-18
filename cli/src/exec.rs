@@ -29,8 +29,8 @@ pub struct ExecArgs {
 
 pub async fn execute(args: ExecArgs) -> Result<()> {
     let auth = resolve_auth(args.url.clone(), args.token.clone())?;
-    let payload_json: serde_json::Value = serde_json::from_str(&args.input)
-        .context("invalid --input JSON")?;
+    let payload_json: serde_json::Value =
+        serde_json::from_str(&args.input).context("invalid --input JSON")?;
 
     let entry = PathBuf::from(&args.entry);
     if !entry.exists() {
@@ -99,7 +99,11 @@ async fn run_one_off(
         .await
         .context("failed to decode runtime response JSON")?;
 
-    let symbol = if status.is_success() { "\x1b[32m✓\x1b[0m" } else { "\x1b[31m✗\x1b[0m" };
+    let symbol = if status.is_success() {
+        "\x1b[32m✓\x1b[0m"
+    } else {
+        "\x1b[31m✗\x1b[0m"
+    };
     println!();
     println!("  {}  exec {}", symbol, route_name);
     println!("  status  {}", status);
@@ -207,8 +211,8 @@ async fn spawn_runtime(
 }
 
 fn pick_free_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .context("failed to bind an ephemeral local port")?;
+    let listener =
+        TcpListener::bind("127.0.0.1:0").context("failed to bind an ephemeral local port")?;
     let port = listener
         .local_addr()
         .context("failed to read local bound address")?
@@ -217,8 +221,7 @@ fn pick_free_port() -> Result<u16> {
 }
 
 fn print_json(value: &serde_json::Value, indent: usize) {
-    let formatted = serde_json::to_string_pretty(value)
-        .unwrap_or_else(|_| value.to_string());
+    let formatted = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
     let prefix = " ".repeat(indent);
     for line in formatted.lines() {
         println!("{}{}", prefix, line);
@@ -243,7 +246,11 @@ fn find_workspace_root() -> Option<PathBuf> {
 }
 
 fn find_runtime_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "flux-runtime.exe" } else { "flux-runtime" };
+    let name = if cfg!(windows) {
+        "flux-runtime.exe"
+    } else {
+        "flux-runtime"
+    };
     let primary = if release { "release" } else { "debug" };
     let secondary = if release { "debug" } else { "release" };
 

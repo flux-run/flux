@@ -46,7 +46,11 @@ pub async fn execute(args: DevArgs) -> Result<()> {
         .clone()
         .or_else(read_config_url)
         .unwrap_or_else(|| "http://127.0.0.1:50051".to_string());
-    let token = args.token.clone().or_else(read_config_token).unwrap_or_default();
+    let token = args
+        .token
+        .clone()
+        .or_else(read_config_token)
+        .unwrap_or_default();
 
     let watch_dir = args
         .watch_dir
@@ -126,7 +130,10 @@ async fn ensure_runtime_binary(workspace_root: &Path, release: bool) -> Result<P
         command.arg("--release");
     }
 
-    let status = command.status().await.context("failed to build flux-runtime")?;
+    let status = command
+        .status()
+        .await
+        .context("failed to build flux-runtime")?;
     if !status.success() {
         anyhow::bail!("failed to build flux-runtime")
     }
@@ -152,7 +159,11 @@ fn find_workspace_root() -> Option<PathBuf> {
 }
 
 fn find_runtime_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "flux-runtime.exe" } else { "flux-runtime" };
+    let name = if cfg!(windows) {
+        "flux-runtime.exe"
+    } else {
+        "flux-runtime"
+    };
     let primary = if release { "release" } else { "debug" };
     let secondary = if release { "debug" } else { "release" };
 

@@ -4,9 +4,9 @@ use anyhow::{Context, Result};
 use rcgen::generate_simple_self_signed;
 use runtime::JsIsolate;
 use runtime::deno_runtime::{ExecutionMode, FetchCheckpoint};
+use runtime::isolate_pool::ExecutionContext;
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use runtime::isolate_pool::ExecutionContext;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, oneshot};
@@ -45,7 +45,9 @@ export default function handler({ input }) {
         .context("live postgres execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres server task failed")??;
+    server_task
+        .await
+        .context("mock postgres server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -61,7 +63,8 @@ export default function handler({ input }) {
     assert_eq!(live_output.checkpoints[0].method, "simple_query");
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create postgres replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create postgres replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -110,16 +113,31 @@ export default function handler({ input }) {
         "sql": "select 1 as value",
     });
 
-    let mut live_isolate = JsIsolate::new_for_run(code).context("failed to create blocked postgres isolate")?;
+    let mut live_isolate =
+        JsIsolate::new_for_run(code).context("failed to create blocked postgres isolate")?;
     let live_output = live_isolate
-        .execute(payload.clone(), ExecutionContext::new("postgres-blocked-live"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("postgres-blocked-live"),
+        )
         .await
         .context("blocked postgres execution failed")?;
 
     assert_eq!(live_output.error, None);
-    assert_eq!(live_output.output.get("ok"), Some(&serde_json::json!(false)));
-    let live_message = live_output.output.get("message").and_then(|value| value.as_str()).unwrap_or("");
-    let live_string = live_output.output.get("string").and_then(|value| value.as_str()).unwrap_or("");
+    assert_eq!(
+        live_output.output.get("ok"),
+        Some(&serde_json::json!(false))
+    );
+    let live_message = live_output
+        .output
+        .get("message")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let live_string = live_output
+        .output
+        .get("string")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     assert!(
         live_message.contains("postgres connect blocked")
             || live_string.contains("postgres connect blocked")
@@ -148,7 +166,8 @@ export default function handler({ input }) {
         duration_ms: 0,
     }];
 
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create blocked postgres replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create blocked postgres replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-blocked-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -157,7 +176,10 @@ export default function handler({ input }) {
         .context("blocked postgres replay execution failed")?;
 
     assert_eq!(replay_output.error, None);
-    assert_eq!(replay_output.output.get("ok"), Some(&serde_json::json!(false)));
+    assert_eq!(
+        replay_output.output.get("ok"),
+        Some(&serde_json::json!(false))
+    );
     assert!(replay_output.checkpoints.is_empty());
 
     Ok(())
@@ -191,14 +213,20 @@ export default function handler({ input }) {
         "params": ["hello"],
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create postgres param isolate")?;
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create postgres param isolate")?;
     let live_output = isolate
-        .execute(payload.clone(), ExecutionContext::new("postgres-param-live"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("postgres-param-live"),
+        )
         .await
         .context("live postgres param execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres param server task failed")??;
+    server_task
+        .await
+        .context("mock postgres param server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -214,7 +242,8 @@ export default function handler({ input }) {
     assert_eq!(live_output.checkpoints[0].method, "query");
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create postgres param replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create postgres param replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-param-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -259,14 +288,17 @@ export default function handler({ input }) {
         "params": [42],
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create postgres int4 param isolate")?;
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create postgres int4 param isolate")?;
     let live_output = isolate
         .execute(payload, ExecutionContext::new("postgres-int4-param-live"))
         .await
         .context("live postgres int4 param execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres int4 param server task failed")??;
+    server_task
+        .await
+        .context("mock postgres int4 param server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -311,14 +343,20 @@ export default function handler({ input }) {
         "params": [42, true, 3.5, "hello"],
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create postgres mixed-type isolate")?;
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create postgres mixed-type isolate")?;
     let live_output = isolate
-        .execute(payload.clone(), ExecutionContext::new("postgres-mixed-types-live"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("postgres-mixed-types-live"),
+        )
         .await
         .context("live postgres mixed-type execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres mixed-type server task failed")??;
+    server_task
+        .await
+        .context("mock postgres mixed-type server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -331,7 +369,8 @@ export default function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create postgres mixed-type replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .context("failed to create postgres mixed-type replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-mixed-types-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -340,8 +379,14 @@ export default function handler({ input }) {
         .context("replay postgres mixed-type execution failed")?;
 
     assert_eq!(replay_output.error, None);
-    assert_eq!(replay_output.output.get("rows"), live_output.output.get("rows"));
-    assert_eq!(replay_output.output.get("replay"), Some(&serde_json::json!(true)));
+    assert_eq!(
+        replay_output.output.get("rows"),
+        live_output.output.get("rows")
+    );
+    assert_eq!(
+        replay_output.output.get("replay"),
+        Some(&serde_json::json!(true))
+    );
 
     Ok(())
 }
@@ -389,14 +434,17 @@ export default function handler({ input }) {
         "caCertPem": cert_pem,
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create postgres tls isolate")?;
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create postgres tls isolate")?;
     let live_output = isolate
         .execute(payload.clone(), ExecutionContext::new("postgres-tls-live"))
         .await
         .context("live postgres TLS execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres tls server task failed")??;
+    server_task
+        .await
+        .context("mock postgres tls server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -410,10 +458,14 @@ export default function handler({ input }) {
     assert_eq!(live_output.checkpoints.len(), 1);
     assert_eq!(live_output.checkpoints[0].boundary, "postgres");
     assert_eq!(live_output.checkpoints[0].method, "simple_query");
-    assert_eq!(live_output.checkpoints[0].request.get("tls"), Some(&serde_json::json!(true)));
+    assert_eq!(
+        live_output.checkpoints[0].request.get("tls"),
+        Some(&serde_json::json!(true))
+    );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create postgres tls replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create postgres tls replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-tls-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -482,14 +534,20 @@ export default async function handler({ input }) {
         "params": ["hello"],
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg shim isolate")?;
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create node-pg shim isolate")?;
     let live_output = isolate
-        .execute(payload.clone(), ExecutionContext::new("postgres-node-pg-shim-live"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("postgres-node-pg-shim-live"),
+        )
         .await
         .context("node-pg shim execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres transaction server task failed")??;
+    server_task
+        .await
+        .context("mock postgres transaction server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -508,11 +566,22 @@ export default async function handler({ input }) {
         })
     );
     assert_eq!(live_output.checkpoints.len(), 3);
-    assert!(live_output.checkpoints.iter().all(|cp| cp.boundary == "postgres"));
-    assert!(live_output.checkpoints.iter().all(|cp| cp.method == "query"));
+    assert!(
+        live_output
+            .checkpoints
+            .iter()
+            .all(|cp| cp.boundary == "postgres")
+    );
+    assert!(
+        live_output
+            .checkpoints
+            .iter()
+            .all(|cp| cp.method == "query")
+    );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create node-pg shim replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create node-pg shim replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-shim-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -561,14 +630,20 @@ export default async function handler({ input }) {
         "sql": "select 12.3400::numeric as amount",
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg numeric parser isolate")?;
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create node-pg numeric parser isolate")?;
     let live_output = isolate
-        .execute(payload.clone(), ExecutionContext::new("postgres-node-pg-numeric-live"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("postgres-node-pg-numeric-live"),
+        )
         .await
         .context("node-pg numeric parser execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres numeric server task failed")??;
+    server_task
+        .await
+        .context("mock postgres numeric server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -582,7 +657,8 @@ export default async function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create node-pg numeric parser replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .context("failed to create node-pg numeric parser replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-numeric-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -658,7 +734,9 @@ export default async function handler({ input }) {
     std::fs::remove_file(&module_path).ok();
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres transaction server task failed")??;
+    server_task
+        .await
+        .context("mock postgres transaction server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -674,7 +752,12 @@ export default async function handler({ input }) {
         })
     );
     assert_eq!(live_output.checkpoints.len(), 3);
-    assert!(live_output.checkpoints.iter().all(|cp| cp.boundary == "postgres"));
+    assert!(
+        live_output
+            .checkpoints
+            .iter()
+            .all(|cp| cp.boundary == "postgres")
+    );
 
     Ok(())
 }
@@ -730,12 +813,17 @@ export default async function handler({ input }) {
         .await
         .context("failed to create pg module error isolate")?;
     let live_output = isolate
-        .execute(payload.clone(), ExecutionContext::new("postgres-pg-error-live"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("postgres-pg-error-live"),
+        )
         .await
         .context("pg module error execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres unique violation server task failed")??;
+    server_task
+        .await
+        .context("mock postgres unique violation server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -754,7 +842,12 @@ export default async function handler({ input }) {
         })
     );
     assert_eq!(live_output.checkpoints.len(), 1);
-    assert!(live_output.checkpoints.iter().all(|cp| cp.boundary == "postgres"));
+    assert!(
+        live_output
+            .checkpoints
+            .iter()
+            .all(|cp| cp.boundary == "postgres")
+    );
 
     let recorded = live_output.checkpoints.clone();
     let mut replay_isolate = JsIsolate::new_for_run_entry(&module_path)
@@ -818,14 +911,20 @@ export default async function handler({ input }) {
         "sql": "select '{\"ok\":true,\"label\":\"json\"}'::jsonb as payload, '{1,2,3}'::int8[] as ids, '{\"alpha\",\"beta\"}'::text[] as tags",
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg json-array parser isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .context("failed to create node-pg json-array parser isolate")?;
     let live_output = isolate
-        .execute(payload.clone(), ExecutionContext::new("postgres-node-pg-json-array-live"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("postgres-node-pg-json-array-live"),
+        )
         .await
         .context("node-pg json-array parser execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres json-array server task failed")??;
+    server_task
+        .await
+        .context("mock postgres json-array server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -845,7 +944,8 @@ export default async function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create node-pg json-array replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .context("failed to create node-pg json-array replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-json-array-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -900,14 +1000,20 @@ export default async function handler({ input }) {
         "sql": "select '2026-03-17'::date as created_on, '12:34:56'::time as starts_at, '12:34:56+00'::timetz as starts_at_tz, '2026-03-17 12:34:56'::timestamp as created_at, '2026-03-17 12:34:56+00'::timestamptz as created_at_utc, '2 days 03:04:05'::interval as elapsed, '123e4567-e89b-12d3-a456-426614174000'::uuid as id",
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg temporal parser isolate")?;
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create node-pg temporal parser isolate")?;
     let live_output = isolate
-        .execute(payload.clone(), ExecutionContext::new("postgres-node-pg-temporal-live"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("postgres-node-pg-temporal-live"),
+        )
         .await
         .context("node-pg temporal parser execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres temporal server task failed")??;
+    server_task
+        .await
+        .context("mock postgres temporal server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -941,7 +1047,8 @@ export default async function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create node-pg temporal replay isolate")?;
+    let mut replay_isolate =
+        JsIsolate::new_for_run(code).context("failed to create node-pg temporal replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-temporal-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -992,14 +1099,20 @@ export default async function handler({ input }) {
         "sql": "select '\\x6869'::bytea as payload, 42::oid as object_id",
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create node-pg bytea/oid parser isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .context("failed to create node-pg bytea/oid parser isolate")?;
     let live_output = isolate
-        .execute(payload.clone(), ExecutionContext::new("postgres-node-pg-bytea-oid-live"))
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("postgres-node-pg-bytea-oid-live"),
+        )
         .await
         .context("node-pg bytea/oid parser execution failed")?;
 
     shutdown_tx.send(()).ok();
-    server_task.await.context("mock postgres bytea/oid server task failed")??;
+    server_task
+        .await
+        .context("mock postgres bytea/oid server task failed")??;
 
     assert_eq!(live_output.error, None);
     assert_eq!(
@@ -1021,7 +1134,8 @@ export default async function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).context("failed to create node-pg bytea/oid replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .context("failed to create node-pg bytea/oid replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-bytea-oid-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -1035,7 +1149,11 @@ export default async function handler({ input }) {
     Ok(())
 }
 
-async fn spawn_mock_postgres_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres listener")?;
@@ -1085,7 +1203,11 @@ async fn spawn_mock_postgres_server() -> Result<(u16, oneshot::Sender<()>, tokio
     Ok((port, shutdown_tx, task))
 }
 
-async fn spawn_mock_postgres_param_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_param_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres param listener")?;
@@ -1173,7 +1295,11 @@ async fn spawn_mock_postgres_param_server() -> Result<(u16, oneshot::Sender<()>,
     Ok((port, shutdown_tx, task))
 }
 
-async fn spawn_mock_postgres_int4_param_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_int4_param_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres int4 param listener")?;
@@ -1264,7 +1390,11 @@ async fn spawn_mock_postgres_int4_param_server() -> Result<(u16, oneshot::Sender
     Ok((port, shutdown_tx, task))
 }
 
-async fn spawn_mock_postgres_transaction_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_transaction_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres transaction listener")?;
@@ -1351,7 +1481,11 @@ async fn spawn_mock_postgres_transaction_server() -> Result<(u16, oneshot::Sende
     Ok((port, shutdown_tx, task))
 }
 
-async fn spawn_mock_postgres_unique_violation_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_unique_violation_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres unique-violation listener")?;
@@ -1403,7 +1537,11 @@ async fn spawn_mock_postgres_unique_violation_server() -> Result<(u16, oneshot::
     Ok((port, shutdown_tx, task))
 }
 
-async fn spawn_mock_postgres_numeric_result_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_numeric_result_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres numeric listener")?;
@@ -1465,7 +1603,11 @@ async fn spawn_mock_postgres_numeric_result_server() -> Result<(u16, oneshot::Se
     Ok((port, shutdown_tx, task))
 }
 
-async fn spawn_mock_postgres_json_array_result_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_json_array_result_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres json-array listener")?;
@@ -1527,7 +1669,11 @@ async fn spawn_mock_postgres_json_array_result_server() -> Result<(u16, oneshot:
     Ok((port, shutdown_tx, task))
 }
 
-async fn spawn_mock_postgres_temporal_result_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_temporal_result_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres temporal listener")?;
@@ -1605,7 +1751,11 @@ async fn spawn_mock_postgres_temporal_result_server() -> Result<(u16, oneshot::S
     Ok((port, shutdown_tx, task))
 }
 
-async fn spawn_mock_postgres_bytea_oid_result_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_bytea_oid_result_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres bytea/oid listener")?;
@@ -1673,7 +1823,11 @@ async fn spawn_mock_postgres_bytea_oid_result_server() -> Result<(u16, oneshot::
     Ok((port, shutdown_tx, task))
 }
 
-async fn spawn_mock_postgres_mixed_types_server() -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_mock_postgres_mixed_types_server() -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres mixed-types listener")?;
@@ -1769,7 +1923,11 @@ async fn spawn_mock_postgres_mixed_types_server() -> Result<(u16, oneshot::Sende
 
 async fn spawn_mock_postgres_tls_server(
     acceptor: TlsAcceptor,
-) -> Result<(u16, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>)> {
+) -> Result<(
+    u16,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("failed to bind mock postgres TLS listener")?;
@@ -1835,9 +1993,15 @@ async fn read_startup_message<S>(socket: &mut S) -> Result<Vec<u8>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let length = socket.read_i32().await.context("failed to read startup length")? as usize;
+    let length = socket
+        .read_i32()
+        .await
+        .context("failed to read startup length")? as usize;
     let mut payload = vec![0; length.saturating_sub(4)];
-    socket.read_exact(&mut payload).await.context("failed to read startup payload")?;
+    socket
+        .read_exact(&mut payload)
+        .await
+        .context("failed to read startup payload")?;
     Ok(payload)
 }
 
@@ -1845,10 +2009,19 @@ async fn read_typed_message<S>(socket: &mut S) -> Result<TypedMessage>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let tag = socket.read_u8().await.context("failed to read message tag")?;
-    let length = socket.read_i32().await.context("failed to read message length")? as usize;
+    let tag = socket
+        .read_u8()
+        .await
+        .context("failed to read message tag")?;
+    let length = socket
+        .read_i32()
+        .await
+        .context("failed to read message length")? as usize;
     let mut payload = vec![0; length.saturating_sub(4)];
-    socket.read_exact(&mut payload).await.context("failed to read message payload")?;
+    socket
+        .read_exact(&mut payload)
+        .await
+        .context("failed to read message payload")?;
     Ok(TypedMessage { tag, payload })
 }
 
@@ -1856,7 +2029,10 @@ async fn write_authentication_ok<S>(socket: &mut S) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    write_message(socket, b'R', |buf| buf.extend_from_slice(&0u32.to_be_bytes())).await
+    write_message(socket, b'R', |buf| {
+        buf.extend_from_slice(&0u32.to_be_bytes())
+    })
+    .await
 }
 
 async fn write_parameter_status<S>(socket: &mut S, key: &[u8], value: &[u8]) -> Result<()>
@@ -1947,7 +2123,11 @@ async fn write_data_row<S>(socket: &mut S, values: &[&[u8]]) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    write_data_row_opt(socket, &values.iter().map(|value| Some(*value)).collect::<Vec<_>>()).await
+    write_data_row_opt(
+        socket,
+        &values.iter().map(|value| Some(*value)).collect::<Vec<_>>(),
+    )
+    .await
 }
 
 async fn write_data_row_opt<S>(socket: &mut S, values: &[Option<&[u8]>]) -> Result<()>
@@ -2049,7 +2229,8 @@ fn parse_bind_first_text_param(payload: &[u8]) -> Result<String> {
     if end > payload.len() {
         anyhow::bail!("bind payload parameter truncated");
     }
-    let value = String::from_utf8(payload[idx..end].to_vec()).context("invalid bind parameter utf8")?;
+    let value =
+        String::from_utf8(payload[idx..end].to_vec()).context("invalid bind parameter utf8")?;
     Ok(value)
 }
 
@@ -2062,7 +2243,10 @@ fn parse_bind_text_params(payload: &[u8]) -> Result<Vec<Option<String>>> {
     parse_bind_params_for_types(payload, &[])
 }
 
-fn parse_bind_params_for_types(payload: &[u8], expected_types: &[&str]) -> Result<Vec<Option<String>>> {
+fn parse_bind_params_for_types(
+    payload: &[u8],
+    expected_types: &[&str],
+) -> Result<Vec<Option<String>>> {
     let mut idx = 0usize;
     idx = skip_c_string(payload, idx)?;
     idx = skip_c_string(payload, idx)?;
@@ -2092,19 +2276,31 @@ fn parse_bind_params_for_types(payload: &[u8], expected_types: &[&str]) -> Resul
         } else if format_codes.len() == 1 {
             format_codes[0]
         } else {
-            *format_codes.get(param_index).ok_or_else(|| anyhow::anyhow!("missing bind format code for parameter"))?
+            *format_codes
+                .get(param_index)
+                .ok_or_else(|| anyhow::anyhow!("missing bind format code for parameter"))?
         };
         let bytes = &payload[idx..end];
-        let value = decode_bind_param_to_string(bytes, format_code, expected_types.get(param_index).copied())?;
+        let value = decode_bind_param_to_string(
+            bytes,
+            format_code,
+            expected_types.get(param_index).copied(),
+        )?;
         idx = end;
         params.push(value);
     }
     Ok(params)
 }
 
-fn decode_bind_param_to_string(bytes: &[u8], format_code: u16, expected_type: Option<&str>) -> Result<Option<String>> {
+fn decode_bind_param_to_string(
+    bytes: &[u8],
+    format_code: u16,
+    expected_type: Option<&str>,
+) -> Result<Option<String>> {
     if format_code == 0 {
-        return Ok(Some(String::from_utf8(bytes.to_vec()).context("invalid bind parameter utf8")?));
+        return Ok(Some(
+            String::from_utf8(bytes.to_vec()).context("invalid bind parameter utf8")?,
+        ));
     }
 
     let value = match expected_type {
@@ -2112,7 +2308,11 @@ fn decode_bind_param_to_string(bytes: &[u8], format_code: u16, expected_type: Op
             if bytes.len() != 1 {
                 anyhow::bail!("invalid binary bool bind length: {}", bytes.len());
             }
-            if bytes[0] == 0 { "f".to_string() } else { "t".to_string() }
+            if bytes[0] == 0 {
+                "f".to_string()
+            } else {
+                "t".to_string()
+            }
         }
         Some("int8") => {
             if bytes.len() != 8 {
@@ -2130,9 +2330,14 @@ fn decode_bind_param_to_string(bytes: &[u8], format_code: u16, expected_type: Op
             if bytes.len() != 8 {
                 anyhow::bail!("invalid binary float8 bind length: {}", bytes.len());
             }
-            f64::from_bits(u64::from_be_bytes(bytes.try_into().expect("checked float8 width"))).to_string()
+            f64::from_bits(u64::from_be_bytes(
+                bytes.try_into().expect("checked float8 width"),
+            ))
+            .to_string()
         }
-        Some("text") | None => String::from_utf8(bytes.to_vec()).context("invalid binary text bind utf8")?,
+        Some("text") | None => {
+            String::from_utf8(bytes.to_vec()).context("invalid binary text bind utf8")?
+        }
         Some(other) => anyhow::bail!("unsupported expected bind type: {other}"),
     };
 
@@ -2172,7 +2377,10 @@ where
     }
     let sync = read_typed_message(socket).await?;
     if sync.tag != b'S' {
-        anyhow::bail!("expected Sync after Parse/Describe, got {:?}", sync.tag as char);
+        anyhow::bail!(
+            "expected Sync after Parse/Describe, got {:?}",
+            sync.tag as char
+        );
     }
 
     write_message(socket, b'1', |_| {}).await?;
@@ -2192,7 +2400,11 @@ where
     match (expected_param, actual_param.as_deref()) {
         (Some(expected), Some(actual)) if expected == actual => {}
         (None, None) => {}
-        (expected, actual) => anyhow::bail!("unexpected bound parameter: expected {:?}, got {:?}", expected, actual),
+        (expected, actual) => anyhow::bail!(
+            "unexpected bound parameter: expected {:?}, got {:?}",
+            expected,
+            actual
+        ),
     }
 
     let execute = read_typed_message(socket).await?;
@@ -2235,7 +2447,10 @@ where
     }
     let sync = read_typed_message(socket).await?;
     if sync.tag != b'S' {
-        anyhow::bail!("expected Sync after Parse/Describe, got {:?}", sync.tag as char);
+        anyhow::bail!(
+            "expected Sync after Parse/Describe, got {:?}",
+            sync.tag as char
+        );
     }
 
     write_message(socket, b'1', |_| {}).await?;
@@ -2295,7 +2510,10 @@ where
     }
     let sync = read_typed_message(socket).await?;
     if sync.tag != b'S' {
-        anyhow::bail!("expected Sync after Parse/Describe, got {:?}", sync.tag as char);
+        anyhow::bail!(
+            "expected Sync after Parse/Describe, got {:?}",
+            sync.tag as char
+        );
     }
 
     write_message(socket, b'1', |_| {}).await?;
@@ -2311,7 +2529,11 @@ where
     match (expected_param, actual_param.as_deref()) {
         (Some(expected), Some(actual)) if expected == actual => {}
         (None, None) => {}
-        (expected, actual) => anyhow::bail!("unexpected bound parameter: expected {:?}, got {:?}", expected, actual),
+        (expected, actual) => anyhow::bail!(
+            "unexpected bound parameter: expected {:?}, got {:?}",
+            expected,
+            actual
+        ),
     }
 
     let execute = read_typed_message(socket).await?;
@@ -2371,12 +2593,18 @@ where
 {
     let mut payload = Vec::new();
     build(&mut payload);
-    socket.write_u8(tag).await.context("failed to write message tag")?;
+    socket
+        .write_u8(tag)
+        .await
+        .context("failed to write message tag")?;
     socket
         .write_i32((payload.len() as i32) + 4)
         .await
         .context("failed to write message length")?;
-    socket.write_all(&payload).await.context("failed to write message payload")?;
+    socket
+        .write_all(&payload)
+        .await
+        .context("failed to write message payload")?;
     Ok(())
 }
 

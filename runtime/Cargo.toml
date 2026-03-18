@@ -52,6 +52,7 @@ tonic = "0.12"
 ureq = "2.12"
 
 rand = "0.8"
+rsa = { version = "0.9.8", features = ["sha2"] }
 rustls = "0.23.28"
 rustls-pemfile = "2.2.0"
 webpki-roots = "0.26.11"

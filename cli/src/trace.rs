@@ -23,10 +23,7 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
     println!();
     println!(
         "  {} {}  {}  {}ms",
-        trace.method,
-        trace.path,
-        trace.status,
-        trace.duration_ms
+        trace.method, trace.path, trace.status, trace.duration_ms
     );
 
     if !trace.error.is_empty() {
@@ -81,14 +78,14 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
 
             println!(
                 "  [{}] TIMER  requested={}ms  effective={}ms",
-                cp.call_index,
-                requested_delay_ms,
-                effective_delay_ms,
+                cp.call_index, requested_delay_ms, effective_delay_ms,
             );
 
             if args.verbose {
-                let request_json = serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
-                let response_json = serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
+                let request_json =
+                    serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
+                let response_json =
+                    serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
 
                 println!("      request");
                 print_json_block(&request_json, true);
@@ -127,8 +124,10 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
             );
 
             if args.verbose {
-                let request_json = serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
-                let response_json = serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
+                let request_json =
+                    serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
+                let response_json =
+                    serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
 
                 println!("      request");
                 print_json_block(&request_json, true);
@@ -172,8 +171,10 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
             );
 
             if args.verbose {
-                let request_json = serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
-                let response_json = serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
+                let request_json =
+                    serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
+                let response_json =
+                    serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
 
                 println!("      request");
                 print_json_block(&request_json, true);
@@ -213,7 +214,8 @@ fn print_json_block(raw: &str, expanded: bool) {
         return;
     }
 
-    let value = serde_json::from_str::<serde_json::Value>(raw).unwrap_or(serde_json::Value::String(raw.to_string()));
+    let value = serde_json::from_str::<serde_json::Value>(raw)
+        .unwrap_or(serde_json::Value::String(raw.to_string()));
     let formatted = serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw.to_string());
     for line in formatted.lines() {
         println!("    {}", line);

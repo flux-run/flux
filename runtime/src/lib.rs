@@ -12,15 +12,8 @@ pub mod isolate_pool;
 pub mod server_client;
 
 pub use artifact::{
-	RuntimeArtifact,
-	RuntimeSubmitRequest,
-	build_artifact,
-	build_artifact_from_file,
-	load_built_artifact_from_file,
-	sha256_hex,
-};
-pub use http_runtime::{
-	HttpRuntimeConfig,
-	run_http_runtime,
+    RuntimeArtifact, RuntimeSubmitRequest, build_artifact, build_artifact_from_file,
+    load_built_artifact_from_file, sha256_hex,
 };
 pub use deno_runtime::{BootExecutionResult, JsIsolate, boot_runtime_artifact};
+pub use http_runtime::{HttpRuntimeConfig, run_http_runtime};

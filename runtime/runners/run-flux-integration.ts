@@ -21,6 +21,7 @@
 
 import { performance }   from "node:perf_hooks";
 import { spawnSync, spawn } from "node:child_process";
+import { generateKeyPairSync, sign as signWithNodeCrypto, type KeyObject } from "node:crypto";
 import { existsSync, readFileSync }  from "node:fs";
 import { resolve }       from "node:path";
 import { dirname }       from "node:path";
@@ -103,6 +104,17 @@ const dbThenRemoteResumeState = {
 const jwksCacheState = {
   serverUrl: "",
   serviceToken: "",
+  jwksPort: 0,
+  jwksUrl: "",
+};
+
+const jwtAuthState = {
+  serverUrl: "",
+  serviceToken: "",
+  jwksPort: 0,
+  jwksUrl: "",
+  issuer: "",
+  audience: "flux-api",
 };
 
 function assert(
@@ -291,12 +303,13 @@ async function startMockRemoteSystem(port: number): Promise<RemoteHandle> {
   };
 }
 
-async function startMockJwksServer(port: number): Promise<RemoteHandle> {
+async function startMockJwksServer(port: number, options: { jwksJson?: string } = {}): Promise<RemoteHandle> {
   const proc = spawn(process.execPath, [JWKS_SERVER_ENTRY], {
     cwd: WORKSPACE_ROOT,
     env: {
       ...process.env,
       PORT: String(port),
+      ...(options.jwksJson ? { JWKS_JSON: options.jwksJson } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -385,6 +398,37 @@ function stableJson(value: unknown): string {
   }
 
   return JSON.stringify(value);
+}
+
+interface GeneratedRs256KeyPair {
+  kid: string;
+  privateKey: KeyObject;
+  publicJwk: Record<string, unknown>;
+}
+
+function generateRs256KeyPair(kid = "test-key"): GeneratedRs256KeyPair {
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const publicJwk = publicKey.export({ format: "jwk" }) as Record<string, unknown>;
+
+  return {
+    kid,
+    privateKey,
+    publicJwk: {
+      ...publicJwk,
+      kid,
+      alg: "RS256",
+      use: "sig",
+      key_ops: ["verify"],
+    },
+  };
+}
+
+function signJwtRs256(privateKey: KeyObject, kid: string, claims: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT", kid })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  const signingInput = `${header}.${payload}`;
+  const signature = signWithNodeCrypto("RSA-SHA256", Buffer.from(signingInput), privateKey).toString("base64url");
+  return `${signingInput}.${signature}`;
 }
 
 function ensureDrizzleExampleDependencies(): void {
@@ -807,6 +851,8 @@ const SUITES: Suite[] = [
     name: "jwks-cache",
     handler: "jwks-cache.js",
     async start(entry, port) {
+      const jwksPort = allocateRemotePort();
+      const jwksUrl = `http://127.0.0.1:${jwksPort}/.well-known/jwks.json`;
       const databasePort = allocateDatabasePort();
       const serverPort = allocateServerPort();
       const serviceToken = "dev-service-token";
@@ -823,12 +869,15 @@ const SUITES: Suite[] = [
       try {
         jwksCacheState.serverUrl = server.url;
         jwksCacheState.serviceToken = serviceToken;
+        jwksCacheState.jwksPort = jwksPort;
+        jwksCacheState.jwksUrl = jwksUrl;
         const runtime = await startRuntime(entry, port, {
           skipVerify: false,
           serverUrl: server.url,
           token: serviceToken,
           env: {
             FLOWBASE_ALLOW_LOOPBACK_FETCH: "1",
+            JWKS_URL: jwksUrl,
           },
         });
 
@@ -844,6 +893,8 @@ const SUITES: Suite[] = [
                 postgres.stop();
                 jwksCacheState.serverUrl = "";
                 jwksCacheState.serviceToken = "";
+                jwksCacheState.jwksPort = 0;
+                jwksCacheState.jwksUrl = "";
               }
             }
           },
@@ -851,14 +902,15 @@ const SUITES: Suite[] = [
       } catch (error) {
         jwksCacheState.serverUrl = "";
         jwksCacheState.serviceToken = "";
+        jwksCacheState.jwksPort = 0;
+        jwksCacheState.jwksUrl = "";
         await server.stop();
         postgres.stop();
         throw error;
       }
     },
     async run(baseUrl, ctx) {
-      const jwksPort = 9020;
-      const jwks = await startMockJwksServer(jwksPort);
+      const jwks = await startMockJwksServer(jwksCacheState.jwksPort);
       try {
         const liveRes = await fetch(`${baseUrl}/jwks`);
         const liveBody = await liveRes.json() as Record<string, unknown>;
@@ -897,6 +949,178 @@ const SUITES: Suite[] = [
         assert(ctx, "flux replay jwks request → 200 status preserved", () => replayEnvelope.net_response?.status === 200);
         assert(ctx, "flux replay jwks request → same JSON response", () => stableJson(replayBody) === stableJson(liveBody));
         assert(ctx, "flux replay jwks request → HTTP step recorded", () => replayStdout.includes("HTTP") && replayStdout.includes("(recorded)"));
+      } finally {
+        await jwks.stop().catch(() => undefined);
+      }
+    },
+  },
+
+  {
+    name: "jwt-auth",
+    handler: "jwt-auth.js",
+    async start(entry, port) {
+      const jwksPort = allocateRemotePort();
+      const jwksUrl = `http://127.0.0.1:${jwksPort}/.well-known/jwks.json`;
+      const issuer = `http://127.0.0.1:${jwksPort}/`;
+      const databasePort = allocateDatabasePort();
+      const serverPort = allocateServerPort();
+      const serviceToken = "dev-service-token";
+      const postgres = await startPostgres(databasePort, {
+        databaseName: "jwt_auth",
+        username: "admin",
+        password: "password123",
+      });
+      const server = await startServer(serverPort, {
+        databaseUrl: postgres.databaseUrl,
+        serviceToken,
+      });
+
+      try {
+        jwtAuthState.serverUrl = server.url;
+        jwtAuthState.serviceToken = serviceToken;
+        jwtAuthState.jwksPort = jwksPort;
+        jwtAuthState.jwksUrl = jwksUrl;
+        jwtAuthState.issuer = issuer;
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          serverUrl: server.url,
+          token: serviceToken,
+          env: {
+            FLOWBASE_ALLOW_LOOPBACK_FETCH: "1",
+            JWKS_URL: jwksUrl,
+            JWT_ISSUER: issuer,
+            JWT_AUDIENCE: jwtAuthState.audience,
+          },
+        });
+
+        return {
+          ...runtime,
+          async stop() {
+            try {
+              await runtime.stop();
+            } finally {
+              try {
+                await server.stop();
+              } finally {
+                postgres.stop();
+                jwtAuthState.serverUrl = "";
+                jwtAuthState.serviceToken = "";
+                jwtAuthState.jwksPort = 0;
+                jwtAuthState.jwksUrl = "";
+                jwtAuthState.issuer = "";
+              }
+            }
+          },
+        };
+      } catch (error) {
+        jwtAuthState.serverUrl = "";
+        jwtAuthState.serviceToken = "";
+        jwtAuthState.jwksPort = 0;
+        jwtAuthState.jwksUrl = "";
+        jwtAuthState.issuer = "";
+        await server.stop();
+        postgres.stop();
+        throw error;
+      }
+    },
+    async run(baseUrl, ctx) {
+      const keyPair = generateRs256KeyPair("jwt-auth-key");
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const validToken = signJwtRs256(keyPair.privateKey, keyPair.kid, {
+        sub: "user-123",
+        scope: "read:messages",
+        iss: jwtAuthState.issuer,
+        aud: jwtAuthState.audience,
+        iat: issuedAt,
+        exp: issuedAt + 3600,
+      });
+      const wrongAudienceToken = signJwtRs256(keyPair.privateKey, keyPair.kid, {
+        sub: "user-123",
+        scope: "read:messages",
+        iss: jwtAuthState.issuer,
+        aud: "wrong-audience",
+        iat: issuedAt,
+        exp: issuedAt + 3600,
+      });
+      const wrongKeyToken = signJwtRs256(generateRs256KeyPair("wrong-key").privateKey, "jwt-auth-key", {
+        sub: "user-123",
+        scope: "read:messages",
+        iss: jwtAuthState.issuer,
+        aud: jwtAuthState.audience,
+        iat: issuedAt,
+        exp: issuedAt + 3600,
+      });
+      const jwks = await startMockJwksServer(jwtAuthState.jwksPort, {
+        jwksJson: JSON.stringify({ keys: [keyPair.publicJwk] }),
+      });
+
+      try {
+        const publicRes = await fetch(`${baseUrl}/public`);
+        const publicBody = await publicRes.json() as Record<string, unknown>;
+        assert(ctx, "GET /public without auth → 200", () => publicRes.status === 200);
+        assert(ctx, "GET /public without auth → unprotected route", () => publicBody.protected === false);
+
+        const missingAuthRes = await fetch(`${baseUrl}/protected`);
+        const missingAuthBody = await missingAuthRes.json() as Record<string, unknown>;
+        assert(ctx, "GET /protected without bearer token → 401", () => missingAuthRes.status === 401);
+        assert(ctx, "GET /protected without bearer token → error message", () => missingAuthBody.error === "missing bearer token");
+
+        const liveRes = await fetch(`${baseUrl}/protected`, {
+          headers: { authorization: `Bearer ${validToken}` },
+        });
+        const liveBody = await liveRes.json() as Record<string, unknown>;
+        const liveExecutionId = liveRes.headers.get("x-flux-execution-id") ?? "";
+        assert(ctx, "GET /protected with valid RS256 JWT → 200", () => liveRes.status === 200);
+        assert(ctx, "GET /protected with valid RS256 JWT → execution id header", () => liveExecutionId.length > 0);
+        assert(ctx, "GET /protected with valid RS256 JWT → payload surfaced", () => liveBody.sub === "user-123" && liveBody.scope === "read:messages");
+
+        const wrongAudienceRes = await fetch(`${baseUrl}/protected`, {
+          headers: { authorization: `Bearer ${wrongAudienceToken}` },
+        });
+        const wrongAudienceBody = await wrongAudienceRes.json() as Record<string, unknown>;
+        assert(ctx, "GET /protected with wrong audience → 401", () => wrongAudienceRes.status === 401);
+        assert(ctx, "GET /protected with wrong audience → claim validation error", () => wrongAudienceBody.error === "audience mismatch");
+
+        await jwks.stop();
+
+        const cachedRes = await fetch(`${baseUrl}/protected`, {
+          headers: { authorization: `Bearer ${validToken}` },
+        });
+        const cachedBody = await cachedRes.json() as Record<string, unknown>;
+        assert(ctx, "GET /protected after JWKS origin shutdown → 200", () => cachedRes.status === 200);
+        assert(ctx, "GET /protected after JWKS origin shutdown → cached key still verifies", () => cachedBody.sub === "user-123" && cachedBody.protected === true);
+
+        const wrongKeyRes = await fetch(`${baseUrl}/protected`, {
+          headers: { authorization: `Bearer ${wrongKeyToken}` },
+        });
+        const wrongKeyBody = await wrongKeyRes.json() as Record<string, unknown>;
+        assert(ctx, "GET /protected with wrong signature → 401", () => wrongKeyRes.status === 401);
+        assert(ctx, "GET /protected with wrong signature → signature failure", () => wrongKeyBody.error === "invalid signature");
+
+        const bypassRes = await fetch(`${baseUrl}/protected-bypass`, {
+          headers: { authorization: `Bearer ${validToken}` },
+        });
+        const bypassBody = await bypassRes.json() as Record<string, unknown>;
+        assert(ctx, "GET /protected-bypass after JWKS origin shutdown → 503", () => bypassRes.status === 503);
+        assert(ctx, "GET /protected-bypass after JWKS origin shutdown → bypass flag true", () => bypassBody.bypass === true);
+
+        const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
+          "replay",
+          liveExecutionId,
+          "--url",
+          jwtAuthState.serverUrl,
+          "--token",
+          jwtAuthState.serviceToken,
+          "--diff",
+        ]));
+        const replayEnvelope = JSON.parse(extractReplayOutput(replayStdout)) as {
+          net_response?: { body?: string; status?: number };
+        };
+        const replayBody = JSON.parse(replayEnvelope.net_response?.body ?? "null") as Record<string, unknown>;
+        assert(ctx, "flux replay protected JWT request → ok", () => replayStdout.includes("ok"));
+        assert(ctx, "flux replay protected JWT request → 200 status preserved", () => replayEnvelope.net_response?.status === 200);
+        assert(ctx, "flux replay protected JWT request → same JSON response", () => stableJson(replayBody) === stableJson(liveBody));
+        assert(ctx, "flux replay protected JWT request → HTTP step recorded", () => replayStdout.includes("HTTP") && replayStdout.includes("(recorded)"));
       } finally {
         await jwks.stop().catch(() => undefined);
       }

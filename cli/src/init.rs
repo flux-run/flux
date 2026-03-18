@@ -49,8 +49,8 @@ async fn init_auth() -> Result<()> {
         }
     };
 
-    let token = rpassword::prompt_password("Service token: ")
-        .context("failed to read service token")?;
+    let token =
+        rpassword::prompt_password("Service token: ").context("failed to read service token")?;
 
     let normalized_url = normalize_grpc_url(&url);
     let auth_mode = validate_service_token(&normalized_url, &token).await?;

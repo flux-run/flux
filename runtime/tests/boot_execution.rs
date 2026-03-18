@@ -13,10 +13,16 @@ Deno.serve(() => new Response("ok"));
 "#,
     );
 
-    let boot = boot_runtime_artifact(&artifact, ExecutionContext::new(artifact.code_version().to_string()))
-        .await?;
+    let boot = boot_runtime_artifact(
+        &artifact,
+        ExecutionContext::new(artifact.code_version().to_string()),
+    )
+    .await?;
 
-    assert!(boot.is_server_mode, "boot should detect listener registration");
+    assert!(
+        boot.is_server_mode,
+        "boot should detect listener registration"
+    );
     assert_eq!(boot.result.status, "ok");
     assert_eq!(boot.result.error, None);
     assert_eq!(boot.result.body["phase"], "boot");
