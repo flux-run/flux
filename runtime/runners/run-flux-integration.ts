@@ -47,6 +47,7 @@ const CRUD_INIT_SQL = resolve(CRUD_APP_DIR, "init.sql");
 const DB_THEN_REMOTE_DIR = resolve(EXAMPLES_DIR, "db_then_remote");
 const DB_THEN_REMOTE_INIT_SQL = resolve(DB_THEN_REMOTE_DIR, "init.sql");
 const DRIZZLE_DIR = resolve(EXAMPLES_DIR, "drizzle");
+const JWKS_SERVER_ENTRY = resolve(HANDLERS_DIR, "jwks_server.js");
 
 // Each suite gets its own port in the 3100-3199 range so suites can run
 // sequentially without port conflicts when multiple are enabled.
@@ -97,6 +98,11 @@ const dbThenRemoteResumeState = {
   serverUrl: "",
   serviceToken: "",
   remotePort: 0,
+};
+
+const jwksCacheState = {
+  serverUrl: "",
+  serviceToken: "",
 };
 
 function assert(
@@ -268,6 +274,53 @@ async function startMockRemoteSystem(port: number): Promise<RemoteHandle> {
   if (Date.now() >= deadline) {
     proc.kill("SIGTERM");
     throw new Error(`mock remote system did not start within 15000ms on port ${port}`);
+  }
+
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    async stop() {
+      proc.kill("SIGTERM");
+      await Promise.race([
+        new Promise<void>((resolvePromise) => proc.once("exit", () => resolvePromise())),
+        sleep(3000),
+      ]);
+      if (!proc.killed) {
+        proc.kill("SIGKILL");
+      }
+    },
+  };
+}
+
+async function startMockJwksServer(port: number): Promise<RemoteHandle> {
+  const proc = spawn(process.execPath, [JWKS_SERVER_ENTRY], {
+    cwd: WORKSPACE_ROOT,
+    env: {
+      ...process.env,
+      PORT: String(port),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  proc.on("error", (error) => {
+    throw new Error(`failed to start mock jwks server: ${error.message}`);
+  });
+
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/.well-known/jwks.json`);
+      if (response.status === 200) {
+        break;
+      }
+    } catch {
+      await sleep(100);
+      continue;
+    }
+  }
+
+  if (Date.now() >= deadline) {
+    proc.kill("SIGTERM");
+    throw new Error(`mock jwks server did not start within 15000ms on port ${port}`);
   }
 
   return {
@@ -747,6 +800,106 @@ const SUITES: Suite[] = [
       const listAfterReplay = await get(baseUrl, "/todos");
       const todosAfterReplay = listAfterReplay.body as any[];
       assert(ctx, "GET /todos after replay → count unchanged", () => Array.isArray(todosAfterReplay) && todosAfterReplay.length === 1);
+    },
+  },
+
+  {
+    name: "jwks-cache",
+    handler: "jwks-cache.js",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const serverPort = allocateServerPort();
+      const serviceToken = "dev-service-token";
+      const postgres = await startPostgres(databasePort, {
+        databaseName: "jwks_cache",
+        username: "admin",
+        password: "password123",
+      });
+      const server = await startServer(serverPort, {
+        databaseUrl: postgres.databaseUrl,
+        serviceToken,
+      });
+
+      try {
+        jwksCacheState.serverUrl = server.url;
+        jwksCacheState.serviceToken = serviceToken;
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          serverUrl: server.url,
+          token: serviceToken,
+          env: {
+            FLOWBASE_ALLOW_LOOPBACK_FETCH: "1",
+          },
+        });
+
+        return {
+          ...runtime,
+          async stop() {
+            try {
+              await runtime.stop();
+            } finally {
+              try {
+                await server.stop();
+              } finally {
+                postgres.stop();
+                jwksCacheState.serverUrl = "";
+                jwksCacheState.serviceToken = "";
+              }
+            }
+          },
+        };
+      } catch (error) {
+        jwksCacheState.serverUrl = "";
+        jwksCacheState.serviceToken = "";
+        await server.stop();
+        postgres.stop();
+        throw error;
+      }
+    },
+    async run(baseUrl, ctx) {
+      const jwksPort = 9020;
+      const jwks = await startMockJwksServer(jwksPort);
+      try {
+        const liveRes = await fetch(`${baseUrl}/jwks`);
+        const liveBody = await liveRes.json() as Record<string, unknown>;
+        const liveExecutionId = liveRes.headers.get("x-flux-execution-id") ?? "";
+        assert(ctx, "GET /jwks initial live request → 200", () => liveRes.status === 200);
+        assert(ctx, "GET /jwks initial live request → execution id header", () => liveExecutionId.length > 0);
+        assert(ctx, "GET /jwks initial live request → one key", () => liveBody.keys === 1 && liveBody.bypass === false);
+
+        await jwks.stop();
+
+        const cachedRes = await fetch(`${baseUrl}/jwks`);
+        const cachedBody = await cachedRes.json() as Record<string, unknown>;
+        assert(ctx, "GET /jwks after origin shutdown → 200", () => cachedRes.status === 200);
+        assert(ctx, "GET /jwks after origin shutdown → cached body preserved", () => cachedBody.keys === 1 && cachedBody.bypass === false);
+
+        const bypassRes = await fetch(`${baseUrl}/jwks-bypass`);
+        const bypassBody = await bypassRes.json() as Record<string, unknown>;
+        assert(ctx, "GET /jwks-bypass after origin shutdown → fails", () => bypassRes.status === 502);
+        assert(ctx, "GET /jwks-bypass after origin shutdown → bypass flag true", () => bypassBody.bypass === true);
+
+        const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
+          "replay",
+          liveExecutionId,
+          "--url",
+          jwksCacheState.serverUrl,
+          "--token",
+          jwksCacheState.serviceToken,
+          "--diff",
+        ]));
+        const replayEnvelope = JSON.parse(extractReplayOutput(replayStdout)) as {
+          net_response?: { body?: string; status?: number };
+        };
+        const replayBody = JSON.parse(replayEnvelope.net_response?.body ?? "null") as Record<string, unknown>;
+
+        assert(ctx, "flux replay jwks request → ok", () => replayStdout.includes("ok"));
+        assert(ctx, "flux replay jwks request → 200 status preserved", () => replayEnvelope.net_response?.status === 200);
+        assert(ctx, "flux replay jwks request → same JSON response", () => stableJson(replayBody) === stableJson(liveBody));
+        assert(ctx, "flux replay jwks request → HTTP step recorded", () => replayStdout.includes("HTTP") && replayStdout.includes("(recorded)"));
+      } finally {
+        await jwks.stop().catch(() => undefined);
+      }
     },
   },
 

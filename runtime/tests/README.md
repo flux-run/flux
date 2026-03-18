@@ -174,6 +174,7 @@ HTTP suites start a `flux run --listen` process on a unique port (3100–3199), 
 | `async-ops` | `async-ops.js` | `await`, `Promise.all`, `Promise.race`, `setTimeout`, sequential pipeline |
 | `error-handling` | `error-handling.js` | 404/400/422 explicit responses, sync throw → 5xx, async reject → 5xx |
 | `crud-replay` | `examples/crud_app/main_flux.ts` | HTTP CRUD flow plus `flux replay --diff` verification |
+| `jwks-cache` | `jwks-cache.js` | listener-level JWKS fetch caching, explicit `no-cache` bypass, and replay preferring recorded HTTP checkpoints |
 | `db-then-remote-resume` | `examples/db_then_remote/main_flux.ts` | failed DB checkpoint is reused and `flux resume` completes remote delivery without duplicate inserts |
 | `drizzle-crud` | `examples/drizzle/crud.ts` | direct `flux run`, Drizzle insert/select/update against disposable Postgres |
 | `drizzle-transaction` | `examples/drizzle/transaction.ts` | direct `flux run`, Drizzle transaction semantics against disposable Postgres |
