@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -5,9 +6,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use axum::Router;
+use axum::extract::Query;
 use axum::routing::get;
 use runtime::JsIsolate;
-use runtime::deno_runtime::{ExecutionMode, FetchCheckpoint};
+use runtime::deno_runtime::{ExecutionMode, FetchCheckpoint, reset_http_response_cache_for_tests};
 use runtime::isolate_pool::ExecutionContext;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, oneshot};
@@ -334,6 +336,7 @@ export default async function handler({ input }) {
 async fn fetch_reuses_standard_cache_control_across_live_executions() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _cache = CacheResetGuard::new();
     let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
 
     let code = r#"
@@ -407,6 +410,7 @@ export default async function handler({ input }) {
 async fn fetch_request_no_cache_bypasses_shared_memory_cache() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _cache = CacheResetGuard::new();
     let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
 
     let prime_code = r#"
@@ -496,6 +500,189 @@ export default async function handler({ input }) {
         1,
         "bypass request should not reuse or refresh the in-memory cache after shutdown"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_cache_evicts_least_recently_used_entry_when_entry_limit_is_reached() -> Result<()> {
+    let _lock = fetch_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _max_entries = EnvVarGuard::set("FLOWBASE_HTTP_CACHE_MAX_ENTRIES", "1");
+    let _cache = CacheResetGuard::new();
+    let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
+
+    let code = r#"
+export default async function handler({ input }) {
+    try {
+        const response = await fetch(input.url);
+        return {
+            ok: true,
+            status: response.status,
+            body: await response.json(),
+        };
+    } catch (err) {
+        return {
+            ok: false,
+            message: err?.message ?? null,
+            string: String(err),
+        };
+    }
+}
+"#;
+
+    let first_payload = serde_json::json!({
+        "url": format!("{base_url}/cache?slot=first"),
+    });
+    let second_payload = serde_json::json!({
+        "url": format!("{base_url}/cache?slot=second"),
+    });
+
+    let mut first_isolate =
+        JsIsolate::new_for_run(code).context("failed to create first LRU isolate")?;
+    let first_output = first_isolate
+        .execute(
+            first_payload.clone(),
+            ExecutionContext::new("fetch-http-cache-lru-first"),
+        )
+        .await
+        .context("first LRU execution failed")?;
+    assert_eq!(first_output.error, None);
+    assert_eq!(
+        first_output.output.get("ok"),
+        Some(&serde_json::json!(true))
+    );
+
+    let mut second_isolate =
+        JsIsolate::new_for_run(code).context("failed to create second LRU isolate")?;
+    let second_output = second_isolate
+        .execute(
+            second_payload.clone(),
+            ExecutionContext::new("fetch-http-cache-lru-second"),
+        )
+        .await
+        .context("second LRU execution failed")?;
+    assert_eq!(second_output.error, None);
+    assert_eq!(
+        second_output.output.get("ok"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(hit_count.load(Ordering::SeqCst), 2);
+
+    shutdown_tx.send(()).ok();
+    server_task
+        .await
+        .context("LRU cache test server task failed")??;
+
+    let mut cached_isolate =
+        JsIsolate::new_for_run(code).context("failed to create retained-cache isolate")?;
+    let cached_output = cached_isolate
+        .execute(
+            second_payload,
+            ExecutionContext::new("fetch-http-cache-lru-retained"),
+        )
+        .await
+        .context("retained cache execution failed")?;
+    assert_eq!(cached_output.error, None);
+    assert_eq!(
+        cached_output.output.get("ok"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(cached_output.checkpoints.len(), 1);
+    assert_eq!(
+        cached_output.checkpoints[0].response.get("cache"),
+        Some(&serde_json::json!({
+            "hit": true,
+            "source": "memory",
+        }))
+    );
+
+    let mut evicted_isolate =
+        JsIsolate::new_for_run(code).context("failed to create evicted-cache isolate")?;
+    let evicted_output = evicted_isolate
+        .execute(
+            first_payload,
+            ExecutionContext::new("fetch-http-cache-lru-evicted"),
+        )
+        .await
+        .context("evicted cache execution failed")?;
+    assert_eq!(evicted_output.error, None);
+    assert_eq!(
+        evicted_output.output.get("ok"),
+        Some(&serde_json::json!(false))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_cache_skips_entries_that_exceed_memory_budget() -> Result<()> {
+    let _lock = fetch_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _max_bytes = EnvVarGuard::set("FLOWBASE_HTTP_CACHE_MAX_BYTES", "128");
+    let _cache = CacheResetGuard::new();
+    let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
+
+    let code = r#"
+export default async function handler({ input }) {
+    try {
+        const response = await fetch(input.url);
+        return {
+            ok: true,
+            status: response.status,
+            body: await response.json(),
+        };
+    } catch (err) {
+        return {
+            ok: false,
+            message: err?.message ?? null,
+            string: String(err),
+        };
+    }
+}
+"#;
+
+    let payload = serde_json::json!({
+        "url": format!("{base_url}/cache?size=large"),
+    });
+
+    let mut prime_isolate =
+        JsIsolate::new_for_run(code).context("failed to create large-response cache isolate")?;
+    let prime_output = prime_isolate
+        .execute(
+            payload.clone(),
+            ExecutionContext::new("fetch-http-cache-large-prime"),
+        )
+        .await
+        .context("large-response cache prime failed")?;
+    assert_eq!(prime_output.error, None);
+    assert_eq!(
+        prime_output.output.get("ok"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(hit_count.load(Ordering::SeqCst), 1);
+
+    shutdown_tx.send(()).ok();
+    server_task
+        .await
+        .context("large-response cache test server task failed")??;
+
+    let mut second_isolate =
+        JsIsolate::new_for_run(code).context("failed to create large-response replay isolate")?;
+    let second_output = second_isolate
+        .execute(
+            payload,
+            ExecutionContext::new("fetch-http-cache-large-after-shutdown"),
+        )
+        .await
+        .context("large-response cache follow-up failed")?;
+
+    assert_eq!(second_output.error, None);
+    assert_eq!(
+        second_output.output.get("ok"),
+        Some(&serde_json::json!(false))
+    );
+    assert_eq!(hit_count.load(Ordering::SeqCst), 1);
 
     Ok(())
 }
@@ -619,6 +806,21 @@ impl Drop for EnvVarGuard {
     }
 }
 
+struct CacheResetGuard;
+
+impl CacheResetGuard {
+    fn new() -> Self {
+        reset_http_response_cache_for_tests();
+        Self
+    }
+}
+
+impl Drop for CacheResetGuard {
+    fn drop(&mut self) {
+        reset_http_response_cache_for_tests();
+    }
+}
+
 fn fetch_test_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -695,10 +897,15 @@ async fn spawn_cache_test_server() -> Result<(
 
     let app = Router::new().route(
         "/cache",
-        get(move || {
+        get(move |Query(query): Query<HashMap<String, String>>| {
             let route_hits = Arc::clone(&route_hits);
             async move {
                 let request_count = route_hits.fetch_add(1, Ordering::SeqCst) + 1;
+                let value = if query.get("size").map(String::as_str) == Some("large") {
+                    "x".repeat(512)
+                } else {
+                    "cached-response".to_string()
+                };
                 (
                     [
                         ("content-type", "application/json"),
@@ -706,7 +913,7 @@ async fn spawn_cache_test_server() -> Result<(
                     ],
                     serde_json::json!({
                         "requestCount": request_count,
-                        "value": "cached-response",
+                        "value": value,
                     })
                     .to_string(),
                 )

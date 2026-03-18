@@ -78,6 +78,8 @@ const BLOCKED_HOSTS: &[&str] = &[
 
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_READ_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_HTTP_CACHE_MAX_ENTRIES: usize = 1_000;
+const DEFAULT_HTTP_CACHE_MAX_BYTES: usize = 50 * 1024 * 1024;
 
 /// Validate that a URL is safe to fetch — blocks SSRF to cloud metadata and private IPs.
 fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), JsErrorBox> {
@@ -258,13 +260,221 @@ struct HttpCacheEntry {
     vary_headers: BTreeMap<String, String>,
     response: serde_json::Value,
     expires_at: Instant,
+    size_bytes: usize,
+    last_accessed_tick: u64,
 }
 
-type HttpResponseCacheMap = HashMap<String, Vec<HttpCacheEntry>>;
+#[derive(Debug, Clone, Copy)]
+struct HttpCacheLimits {
+    max_entries: usize,
+    max_bytes: usize,
+}
 
-fn http_response_cache() -> &'static RwLock<HttpResponseCacheMap> {
-    static CACHE: OnceLock<RwLock<HttpResponseCacheMap>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+#[derive(Debug, Default)]
+struct HttpResponseCache {
+    entries_by_key: HashMap<String, Vec<HttpCacheEntry>>,
+    total_entries: usize,
+    total_bytes: usize,
+    access_tick: u64,
+}
+
+impl HttpResponseCache {
+    fn clear(&mut self) {
+        self.entries_by_key.clear();
+        self.total_entries = 0;
+        self.total_bytes = 0;
+        self.access_tick = 0;
+    }
+
+    fn next_access_tick(&mut self) -> u64 {
+        self.access_tick = self.access_tick.saturating_add(1);
+        self.access_tick
+    }
+
+    fn remove_expired_entries(&mut self, now: Instant) {
+        let mut empty_keys = Vec::new();
+        for (key, entries) in self.entries_by_key.iter_mut() {
+            let mut removed_entries = 0usize;
+            let mut removed_bytes = 0usize;
+            entries.retain(|entry| {
+                let keep = entry.expires_at > now;
+                if !keep {
+                    removed_entries += 1;
+                    removed_bytes += entry.size_bytes;
+                }
+                keep
+            });
+
+            self.total_entries = self.total_entries.saturating_sub(removed_entries);
+            self.total_bytes = self.total_bytes.saturating_sub(removed_bytes);
+
+            if entries.is_empty() {
+                empty_keys.push(key.clone());
+            }
+        }
+
+        for key in empty_keys {
+            self.entries_by_key.remove(&key);
+        }
+    }
+
+    fn apply_limits(&mut self, limits: HttpCacheLimits, now: Instant) {
+        self.remove_expired_entries(now);
+
+        if limits.max_entries == 0 || limits.max_bytes == 0 {
+            self.clear();
+            return;
+        }
+
+        while self.total_entries > limits.max_entries || self.total_bytes > limits.max_bytes {
+            let mut candidate: Option<(String, BTreeMap<String, String>, u64)> = None;
+
+            for (key, entries) in &self.entries_by_key {
+                for entry in entries {
+                    let replace = candidate
+                        .as_ref()
+                        .map(|(_, _, tick)| entry.last_accessed_tick < *tick)
+                        .unwrap_or(true);
+                    if replace {
+                        candidate = Some((
+                            key.clone(),
+                            entry.vary_headers.clone(),
+                            entry.last_accessed_tick,
+                        ));
+                    }
+                }
+            }
+
+            let Some((key, vary_headers, _)) = candidate else {
+                break;
+            };
+
+            self.remove_entry(&key, &vary_headers);
+        }
+    }
+
+    fn remove_entry(&mut self, key: &str, vary_headers: &BTreeMap<String, String>) {
+        let mut should_remove_key = false;
+        if let Some(entries) = self.entries_by_key.get_mut(key) {
+            if let Some(index) = entries
+                .iter()
+                .position(|entry| &entry.vary_headers == vary_headers)
+            {
+                let removed = entries.remove(index);
+                self.total_entries = self.total_entries.saturating_sub(1);
+                self.total_bytes = self.total_bytes.saturating_sub(removed.size_bytes);
+            }
+            should_remove_key = entries.is_empty();
+        }
+
+        if should_remove_key {
+            self.entries_by_key.remove(key);
+        }
+    }
+
+    fn lookup(
+        &mut self,
+        key: &str,
+        request_headers: &BTreeMap<String, String>,
+        now: Instant,
+        limits: HttpCacheLimits,
+    ) -> Option<serde_json::Value> {
+        self.apply_limits(limits, now);
+
+        let found_index = {
+            let entries = self.entries_by_key.get(key)?;
+            entries.iter().position(|entry| {
+                entry.vary_headers.iter().all(|(name, value)| {
+                    request_headers.get(name).cloned().unwrap_or_default() == *value
+                })
+            })
+        }?;
+
+        let access_tick = self.next_access_tick();
+        let response = {
+            let entries = self.entries_by_key.get_mut(key)?;
+            let entry = entries.get_mut(found_index)?;
+            entry.last_accessed_tick = access_tick;
+            entry.response.clone()
+        };
+
+        Some(cache_hit_response(&response))
+    }
+
+    fn store(
+        &mut self,
+        key: String,
+        limits: HttpCacheLimits,
+        now: Instant,
+        mut entry: HttpCacheEntry,
+    ) {
+        self.apply_limits(limits, now);
+
+        if limits.max_entries == 0 || limits.max_bytes == 0 {
+            return;
+        }
+
+        if entry.size_bytes > limits.max_bytes {
+            return;
+        }
+
+        self.remove_entry(&key, &entry.vary_headers);
+
+        entry.last_accessed_tick = self.next_access_tick();
+        let entries = self.entries_by_key.entry(key).or_default();
+        entries.push(entry.clone());
+        self.total_entries += 1;
+        self.total_bytes += entry.size_bytes;
+        self.apply_limits(limits, now);
+    }
+}
+
+fn http_response_cache_limits() -> HttpCacheLimits {
+    HttpCacheLimits {
+        max_entries: read_cache_limit_env(
+            "FLOWBASE_HTTP_CACHE_MAX_ENTRIES",
+            DEFAULT_HTTP_CACHE_MAX_ENTRIES,
+        ),
+        max_bytes: read_cache_limit_env(
+            "FLOWBASE_HTTP_CACHE_MAX_BYTES",
+            DEFAULT_HTTP_CACHE_MAX_BYTES,
+        ),
+    }
+}
+
+fn read_cache_limit_env(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+
+fn estimate_cache_entry_size(
+    key: &str,
+    vary_headers: &BTreeMap<String, String>,
+    response: &serde_json::Value,
+) -> usize {
+    let vary_size = vary_headers
+        .iter()
+        .map(|(header, value)| header.len() + value.len())
+        .sum::<usize>();
+    let response_size = serde_json::to_vec(response)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+
+    key.len() + vary_size + response_size
+}
+
+fn http_response_cache() -> &'static RwLock<HttpResponseCache> {
+    static CACHE: OnceLock<RwLock<HttpResponseCache>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HttpResponseCache::default()))
+}
+
+#[doc(hidden)]
+pub fn reset_http_response_cache_for_tests() {
+    if let Ok(mut cache) = http_response_cache().write() {
+        cache.clear();
+    }
 }
 
 fn parse_cache_control(value: Option<&str>) -> HttpCacheControl {
@@ -430,26 +640,11 @@ fn cached_http_response(
     }
 
     let key = cache_key(method, url);
+    let now = Instant::now();
+    let limits = http_response_cache_limits();
     let cache = http_response_cache();
     let mut cache = cache.write().ok()?;
-    let entries = cache.get_mut(&key)?;
-    let now = Instant::now();
-    entries.retain(|entry| entry.expires_at > now);
-
-    let response = entries
-        .iter()
-        .find(|entry| {
-            entry.vary_headers.iter().all(|(name, value)| {
-                request_headers.get(name).cloned().unwrap_or_default() == *value
-            })
-        })
-        .map(|entry| cache_hit_response(&entry.response));
-
-    if entries.is_empty() {
-        cache.remove(&key);
-    }
-
-    response
+    cache.lookup(&key, request_headers, now, limits)
 }
 
 fn store_http_response_cache(
@@ -468,15 +663,17 @@ fn store_http_response_cache(
         vary_headers: response_vary_headers(response_headers, request_headers),
         response: response.clone(),
         expires_at: Instant::now() + ttl,
+        size_bytes: 0,
+        last_accessed_tick: 0,
     };
 
     let key = cache_key(method, url);
     if let Ok(mut cache) = http_response_cache().write() {
-        let entries = cache.entry(key).or_default();
-        entries.retain(|existing| {
-            existing.expires_at > Instant::now() && existing.vary_headers != entry.vary_headers
-        });
-        entries.push(entry);
+        let now = Instant::now();
+        let limits = http_response_cache_limits();
+        let mut entry = entry;
+        entry.size_bytes = estimate_cache_entry_size(&key, &entry.vary_headers, &entry.response);
+        cache.store(key, limits, now, entry);
     }
 }
 
