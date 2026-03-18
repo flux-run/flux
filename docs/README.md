@@ -8,6 +8,7 @@ This documentation set is rebuilt for the current Flux CLI and runtime architect
 - [bundled-artifacts.md](bundled-artifacts.md) — official v1 developer path: build first, then run
 - [cli.md](cli.md) — full command surface and usage patterns
 - [production-debugging.md](production-debugging.md) — incident workflow
+- [self-hosting.md](self-hosting.md) — starting the server with and without Docker
 - [concepts.md](concepts.md) — execution-record mental model
 - [compatibility.md](compatibility.md) — supported frameworks and services
 - [SPEC.md](SPEC.md) — scope and product guarantees
