@@ -1,109 +1,109 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-18T06:24:46.734Z",
+  "timestamp": "2026-03-18T06:48:32.335Z",
   "engine": "node v22.20.0",
   "passed": 16,
   "failed": 0,
   "skipped": 0,
   "total": 16,
-  "elapsedMs": 9,
+  "elapsedMs": 5,
   "passRate": "100.0%",
   "results": [
     {
       "name": "GET /orders before create → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.0058750000002874
+      "duration": 0.0061670000000049185
     },
     {
       "name": "GET /orders before create → empty",
       "passed": true,
       "skipped": false,
-      "duration": 0.0054169999998521234
+      "duration": 0.005457999999862295
     },
     {
       "name": "POST /orders first request → 201",
       "passed": true,
       "skipped": false,
-      "duration": 0.008667000000059488
+      "duration": 0.007333000000016909
     },
     {
       "name": "POST /orders first request → execution id header",
       "passed": true,
       "skipped": false,
-      "duration": 0.004334000000199012
+      "duration": 0.004042000000026746
     },
     {
       "name": "POST /orders first request → created status header",
       "passed": true,
       "skipped": false,
-      "duration": 0.006207999999787717
+      "duration": 0.006499999999959982
     },
     {
       "name": "POST /orders first request → order payload",
       "passed": true,
       "skipped": false,
-      "duration": 0.006665999999768246
+      "duration": 0.006832999999915046
     },
     {
       "name": "POST /orders second request → same status",
       "passed": true,
       "skipped": false,
-      "duration": 0.028166999999939435
+      "duration": 0.026957999999922322
     },
     {
       "name": "POST /orders second request → replayed status header",
       "passed": true,
       "skipped": false,
-      "duration": 0.012042000000292319
+      "duration": 0.013082999999824096
     },
     {
       "name": "POST /orders second request → same JSON response",
       "passed": true,
       "skipped": false,
-      "duration": 8.500624999999673
+      "duration": 5.029667000000245
     },
     {
       "name": "GET /orders after duplicate request → one row",
       "passed": true,
       "skipped": false,
-      "duration": 0.030874999999923602
+      "duration": 0.029540999999881024
     },
     {
       "name": "flux replay idempotent order → ok",
       "passed": true,
       "skipped": false,
-      "duration": 0.012166999999863037
+      "duration": 0.009958000000096945
     },
     {
       "name": "flux replay idempotent order → same JSON response",
       "passed": true,
       "skipped": false,
-      "duration": 0.027749999999741704
+      "duration": 0.02583299999969313
     },
     {
       "name": "flux replay idempotent order → 201 status preserved",
       "passed": true,
       "skipped": false,
-      "duration": 0.004917000000205007
+      "duration": 0.004333999999744265
     },
     {
       "name": "flux replay idempotent order → Redis recorded",
       "passed": true,
       "skipped": false,
-      "duration": 0.004999999999654392
+      "duration": 0.004540999999790074
     },
     {
       "name": "flux replay idempotent order → Postgres recorded",
       "passed": true,
       "skipped": false,
-      "duration": 0.003290999999990163
+      "duration": 0.0027500000001055014
     },
     {
       "name": "GET /orders after replay → count unchanged",
       "passed": true,
       "skipped": false,
-      "duration": 0.030125000000225555
+      "duration": 0.02874999999994543
     }
   ]
 }

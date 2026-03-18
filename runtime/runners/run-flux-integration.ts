@@ -20,7 +20,7 @@
  */
 
 import { performance }   from "node:perf_hooks";
-import { spawnSync, spawn } from "node:child_process";
+import { spawnSync, spawn, type ChildProcess } from "node:child_process";
 import { generateKeyPairSync, sign as signWithNodeCrypto, type KeyObject } from "node:crypto";
 import { existsSync, readFileSync }  from "node:fs";
 import { resolve }       from "node:path";
@@ -113,6 +113,18 @@ const idempotencyState = {
   serviceToken: "",
 };
 
+const idempotencyCrashState = {
+  serverUrl: "",
+  serviceToken: "",
+  databaseUrl: "",
+  redisUrl: "",
+  postgresContainerName: "",
+  redisContainerName: "",
+  entry: "",
+  port: 0,
+  runtime: null as RuntimeHandle | null,
+};
+
 const webhookDedupState = {
   serverUrl: "",
   serviceToken: "",
@@ -189,6 +201,41 @@ function runCheckedCommand(
   }
 
   return result.stdout ?? "";
+}
+
+async function waitForProcessExit(proc: ChildProcess, timeoutMs = 5_000): Promise<number | null> {
+  if (proc.exitCode !== null) {
+    return proc.exitCode;
+  }
+
+  if (proc.signalCode !== null) {
+    return null;
+  }
+
+  return await Promise.race([
+    new Promise<number | null>((resolve) => {
+      proc.once("exit", (code) => resolve(code));
+    }),
+    sleep(timeoutMs).then(() => {
+      throw new Error(`process did not exit within ${timeoutMs}ms`);
+    }),
+  ]);
+}
+
+function queryPostgresScalar(
+  containerName: string,
+  username: string,
+  databaseName: string,
+  sql: string,
+): string {
+  return runCheckedCommand(
+    "docker",
+    ["exec", "-i", containerName, "psql", "-U", username, "-d", databaseName, "-t", "-A", "-c", sql],
+  ).trim();
+}
+
+function redisRaw(containerName: string, ...args: string[]): string {
+  return runCheckedCommand("docker", ["exec", containerName, "redis-cli", "--raw", ...args]).trim();
 }
 
 async function waitForPostgres(
@@ -1076,6 +1123,258 @@ const SUITES: Suite[] = [
       const afterReplayList = await get(baseUrl, "/orders");
       const afterReplayOrders = (afterReplayList.body as Record<string, unknown>)?.orders as Array<Record<string, unknown>> | undefined;
       assert(ctx, "GET /orders after replay → count unchanged", () => Array.isArray(afterReplayOrders) && afterReplayOrders.length === 1);
+    },
+  },
+
+  {
+    name: "idempotency-crash-before-checkpoint",
+    handler: "idempotency/main_flux.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const redisPort = allocateRedisPort();
+      const serverPort = allocateServerPort();
+      const serviceToken = "dev-service-token";
+      const postgres = await startPostgres(databasePort, {
+        databaseName: "idempotency_demo",
+        username: "admin",
+        password: "password123",
+        initSql: readFileSync(IDEMPOTENCY_INIT_SQL, "utf8"),
+      });
+      const redis = await startRedis(redisPort);
+      const server = await startServer(serverPort, {
+        databaseUrl: postgres.databaseUrl,
+        serviceToken,
+      });
+
+      try {
+        idempotencyCrashState.serverUrl = server.url;
+        idempotencyCrashState.serviceToken = serviceToken;
+        idempotencyCrashState.databaseUrl = postgres.databaseUrl;
+        idempotencyCrashState.redisUrl = redis.redisUrl;
+        idempotencyCrashState.postgresContainerName = postgres.containerName;
+        idempotencyCrashState.redisContainerName = redis.containerName;
+        idempotencyCrashState.entry = entry;
+        idempotencyCrashState.port = port;
+
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          serverUrl: server.url,
+          token: serviceToken,
+          env: {
+            DATABASE_URL: postgres.databaseUrl,
+            REDIS_URL: redis.redisUrl,
+            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+            FLUX_CRASH_AFTER_POSTGRES_COMMIT_BEFORE_CHECKPOINT: "1",
+          },
+        });
+        idempotencyCrashState.runtime = runtime;
+
+        return {
+          ...runtime,
+          async stop() {
+            try {
+              idempotencyCrashState.runtime = null;
+              await runtime.stop();
+            } finally {
+              try {
+                await server.stop();
+              } finally {
+                try {
+                  redis.stop();
+                } finally {
+                  postgres.stop();
+                  idempotencyCrashState.serverUrl = "";
+                  idempotencyCrashState.serviceToken = "";
+                  idempotencyCrashState.databaseUrl = "";
+                  idempotencyCrashState.redisUrl = "";
+                  idempotencyCrashState.postgresContainerName = "";
+                  idempotencyCrashState.redisContainerName = "";
+                  idempotencyCrashState.entry = "";
+                  idempotencyCrashState.port = 0;
+                }
+              }
+            }
+          },
+        };
+      } catch (error) {
+        idempotencyCrashState.serverUrl = "";
+        idempotencyCrashState.serviceToken = "";
+        idempotencyCrashState.databaseUrl = "";
+        idempotencyCrashState.redisUrl = "";
+        idempotencyCrashState.postgresContainerName = "";
+        idempotencyCrashState.redisContainerName = "";
+        idempotencyCrashState.entry = "";
+        idempotencyCrashState.port = 0;
+        idempotencyCrashState.runtime = null;
+        await server.stop();
+        redis.stop();
+        postgres.stop();
+        throw error;
+      }
+    },
+    async run(baseUrl, ctx) {
+      const requestBody = {
+        sku: "flux-shirt",
+        quantity: 1,
+      };
+      const idempotencyKey = "order-123";
+      const redisKey = `idempotency:${idempotencyKey}`;
+
+      const initialList = await get(baseUrl, "/orders");
+      const initialOrders = (initialList.body as Record<string, unknown>)?.orders as unknown[] | undefined;
+      assert(ctx, "GET /orders before crash test → 200", () => initialList.status === 200);
+      assert(ctx, "GET /orders before crash test → empty", () => Array.isArray(initialOrders) && initialOrders.length === 0);
+
+      const initialPostCount = queryPostgresScalar(
+        idempotencyCrashState.postgresContainerName,
+        "admin",
+        "idempotency_demo",
+        `SELECT count(*) FROM idempotent_orders WHERE idempotency_key = '${idempotencyKey}';`,
+      );
+      assert(ctx, "precondition → Postgres row absent", () => initialPostCount === "0");
+      assert(ctx, "precondition → Redis key absent", () => redisRaw(idempotencyCrashState.redisContainerName, "get", redisKey) === "");
+
+      let crashed = false;
+      try {
+        await fetch(`${baseUrl}/orders`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey,
+          },
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(5_000),
+        });
+      } catch {
+        crashed = true;
+      }
+      assert(ctx, "POST /orders first request → connection fails on crash", () => crashed);
+
+      const originalRuntime = idempotencyCrashState.runtime;
+      if (!originalRuntime) {
+        throw new Error("idempotency crash runtime handle missing");
+      }
+      const exitCode = await waitForProcessExit(originalRuntime.process);
+      assert(ctx, "runtime exits after crash hook fires", () => exitCode === 1);
+
+      const rowCountAfterCrash = queryPostgresScalar(
+        idempotencyCrashState.postgresContainerName,
+        "admin",
+        "idempotency_demo",
+        `SELECT count(*) FROM idempotent_orders WHERE idempotency_key = '${idempotencyKey}';`,
+      );
+      assert(ctx, "after crash → exactly one durable row exists", () => rowCountAfterCrash === "1");
+
+      const postExecutionsAfterCrash = queryPostgresScalar(
+        idempotencyCrashState.postgresContainerName,
+        "admin",
+        "idempotency_demo",
+        "SELECT count(*) FROM flux.executions WHERE method = 'POST' AND path = '/orders';",
+      );
+      assert(ctx, "after crash → no phantom POST execution recorded", () => postExecutionsAfterCrash === "0");
+      assert(ctx, "after crash → Redis key still absent", () => redisRaw(idempotencyCrashState.redisContainerName, "get", redisKey) === "");
+
+      const retryRuntime = await startRuntime(idempotencyCrashState.entry, idempotencyCrashState.port, {
+        skipVerify: false,
+        serverUrl: idempotencyCrashState.serverUrl,
+        token: idempotencyCrashState.serviceToken,
+        env: {
+          DATABASE_URL: idempotencyCrashState.databaseUrl,
+          REDIS_URL: idempotencyCrashState.redisUrl,
+          FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+          FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+        },
+      });
+
+      try {
+        const durableList = await get(`${retryRuntime.baseUrl}`, "/orders");
+        const durableOrders = (durableList.body as Record<string, unknown>)?.orders as Array<Record<string, unknown>> | undefined;
+        const durableOrder = Array.isArray(durableOrders) ? durableOrders[0] : undefined;
+        assert(ctx, "retry precondition → durable order visible through API", () => durableList.status === 200 && Array.isArray(durableOrders) && durableOrders.length === 1);
+
+        const retryResponse = await fetch(`${retryRuntime.baseUrl}/orders`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey,
+          },
+          body: JSON.stringify(requestBody),
+        });
+        const retryBody = await retryResponse.json() as Record<string, unknown>;
+        const executionId = retryResponse.headers.get("x-flux-execution-id") ?? "";
+
+        assert(ctx, "retry request → 201", () => retryResponse.status === 201);
+        assert(ctx, "retry request → execution id header", () => executionId.length > 0);
+        assert(ctx, "retry request → created status header", () => retryResponse.headers.get("x-idempotency-status") === "created");
+        assert(ctx, "retry request → response matches durable row", () => {
+          const order = retryBody.order as Record<string, unknown> | undefined;
+          return stableJson(order) === stableJson(durableOrder);
+        });
+
+        const rowCountAfterRetry = queryPostgresScalar(
+          idempotencyCrashState.postgresContainerName,
+          "admin",
+          "idempotency_demo",
+          `SELECT count(*) FROM idempotent_orders WHERE idempotency_key = '${idempotencyKey}';`,
+        );
+        assert(ctx, "after retry → still one durable row", () => rowCountAfterRetry === "1");
+
+        const redisStoredResponse = redisRaw(idempotencyCrashState.redisContainerName, "get", redisKey);
+        const redisTtl = Number(redisRaw(idempotencyCrashState.redisContainerName, "ttl", redisKey));
+        assert(ctx, "after retry → Redis key populated", () => redisStoredResponse.length > 0);
+        assert(ctx, "after retry → Redis TTL present", () => Number.isInteger(redisTtl) && redisTtl > 0);
+        assert(ctx, "after retry → Redis value matches canonical response", () => {
+          const parsed = JSON.parse(redisStoredResponse) as { body?: unknown };
+          return stableJson(parsed.body) === stableJson(retryBody);
+        });
+
+        const traceStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
+          "trace",
+          executionId,
+          "--url",
+          idempotencyCrashState.serverUrl,
+          "--token",
+          idempotencyCrashState.serviceToken,
+        ]));
+        assert(ctx, "flux trace retry execution → Redis boundary present", () => traceStdout.includes("REDIS"));
+        assert(ctx, "flux trace retry execution → Postgres boundary present", () => traceStdout.includes("POSTGRES"));
+
+        const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
+          "replay",
+          executionId,
+          "--url",
+          idempotencyCrashState.serverUrl,
+          "--token",
+          idempotencyCrashState.serviceToken,
+          "--diff",
+        ]));
+        const replayEnvelope = JSON.parse(extractReplayOutput(replayStdout)) as {
+          net_response?: { body?: string; status?: number };
+        };
+        const replayBody = JSON.parse(replayEnvelope.net_response?.body ?? "null") as Record<string, unknown>;
+
+        assert(ctx, "flux replay retry execution → ok", () => replayStdout.includes("ok"));
+        assert(ctx, "flux replay retry execution → same JSON response", () => stableJson(replayBody) === stableJson(retryBody));
+        assert(ctx, "flux replay retry execution → 201 status preserved", () => replayEnvelope.net_response?.status === 201);
+        assert(ctx, "flux replay retry execution → Redis recorded only", () => replayStdout.includes("REDIS") && replayStdout.includes("(recorded)"));
+        assert(ctx, "flux replay retry execution → Postgres recorded only", () => replayStdout.includes("POSTGRES") && replayStdout.includes("(recorded)"));
+
+        const thirdResponse = await fetch(`${retryRuntime.baseUrl}/orders`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey,
+          },
+          body: JSON.stringify(requestBody),
+        });
+        const thirdBody = await thirdResponse.json() as Record<string, unknown>;
+        assert(ctx, "third request after retry → replayed header", () => thirdResponse.headers.get("x-idempotency-status") === "replayed");
+        assert(ctx, "third request after retry → same JSON response", () => stableJson(thirdBody) === stableJson(retryBody));
+      } finally {
+        await retryRuntime.stop();
+      }
     },
   },
 

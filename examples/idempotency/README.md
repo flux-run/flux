@@ -166,7 +166,13 @@ This is the key difference: Flux shows exactly why the duplicate request is skip
 
 ## Failure Scenario
 
-If the request crashes after the database write, replay resumes from recorded checkpoints and does not create a duplicate order.
+If the request crashes after the database write but before Flux records the execution, the first attempt may have no replayable history at all.
+
+In that case, correctness comes from retry convergence rather than replay completeness:
+
+- Redis still misses because the key was never written
+- Postgres unique enforcement prevents a second durable order
+- the retry reconstructs the canonical response from durable truth and then writes Redis
 
 The example also uses a Postgres unique constraint as a durable fallback. Redis prevents duplicate execution quickly; Postgres prevents duplicate data even if two requests race.
 

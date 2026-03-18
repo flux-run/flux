@@ -175,6 +175,7 @@ HTTP suites start a `flux run --listen` process on a unique port (3100–3199), 
 | `error-handling` | `error-handling.js` | 404/400/422 explicit responses, sync throw → 5xx, async reject → 5xx |
 | `crud-replay` | `examples/crud_app/main_flux.ts` | HTTP CRUD flow plus `flux replay --diff` verification |
 | `idempotency-redis` | `examples/idempotency/main_flux.ts` | Redis-backed idempotency keys plus Postgres insert suppression and replay verification |
+| `idempotency-crash-before-checkpoint` | `examples/idempotency/main_flux.ts` | one-shot runtime crash after durable Postgres commit but before checkpoint capture; retry converges via durable truth and replay stays honest |
 | `webhook-dedup` | `examples/webhook_dedup/main_flux.ts` | Redis-backed webhook deduplication plus durable event recording and replay verification |
 | `jwks-cache` | `jwks-cache.js` | listener-level JWKS fetch caching, explicit `no-cache` bypass, and replay preferring recorded HTTP checkpoints |
 | `jwt-auth` | `jwt-auth.js` | RS256 bearer-token middleware backed by cached JWKS, claim checks, origin-failure resilience, and replay verification |

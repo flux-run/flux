@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Once;
 use std::sync::mpsc;
@@ -81,6 +82,36 @@ const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_READ_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_HTTP_CACHE_MAX_ENTRIES: usize = 1_000;
 const DEFAULT_HTTP_CACHE_MAX_BYTES: usize = 50 * 1024 * 1024;
+static CRASH_AFTER_POSTGRES_COMMIT_BEFORE_CHECKPOINT: AtomicBool = AtomicBool::new(true);
+
+fn postgres_sql_is_write(sql: &str) -> bool {
+    matches!(
+        sql.split_whitespace()
+            .next()
+            .map(|value| value.to_ascii_uppercase())
+            .as_deref(),
+        Some("INSERT" | "UPDATE" | "DELETE" | "MERGE")
+    )
+}
+
+fn maybe_crash_after_postgres_commit_before_checkpoint(sql: &str) {
+    if !postgres_sql_is_write(sql) {
+        return;
+    }
+
+    let enabled = std::env::var("FLUX_CRASH_AFTER_POSTGRES_COMMIT_BEFORE_CHECKPOINT")
+        .map(|value| value == "1")
+        .unwrap_or(false);
+
+    if enabled
+        && CRASH_AFTER_POSTGRES_COMMIT_BEFORE_CHECKPOINT.swap(false, Ordering::SeqCst)
+    {
+        tracing::error!(
+            "crashing after postgres commit before checkpoint capture by request"
+        );
+        std::process::exit(1);
+    }
+}
 
 /// Validate that a URL is safe to fetch — blocks SSRF to cloud metadata and private IPs.
 fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), JsErrorBox> {
@@ -1603,6 +1634,7 @@ fn op_flux_postgres_simple_query(
             ca_cert_pem,
         },
     )?;
+    maybe_crash_after_postgres_commit_before_checkpoint(&sql);
     let duration_ms = started.elapsed().as_millis() as i32;
 
     let request_json = serde_json::json!({
@@ -1719,6 +1751,7 @@ fn op_flux_postgres_session_query(
             started.elapsed().as_millis() as i32,
         )
     };
+    maybe_crash_after_postgres_commit_before_checkpoint(&sql);
 
     let request_json = serde_json::json!({
         "url": target.url,
@@ -1847,6 +1880,7 @@ fn op_flux_postgres_query(
             ca_cert_pem,
         },
     )?;
+    maybe_crash_after_postgres_commit_before_checkpoint(&sql);
     let duration_ms = started.elapsed().as_millis() as i32;
 
     let request_json = serde_json::json!({

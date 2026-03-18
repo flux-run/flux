@@ -14,7 +14,7 @@ If Flux handles this case correctly, the rest of the failure matrix becomes much
 Status:
 
 - specified
-- not yet fully executable in the test harness
+- executable via the `idempotency-crash-before-checkpoint` integration suite
 
 ## Why This Case Comes First
 
@@ -75,9 +75,9 @@ Expected precondition checks:
 
 The failure injection point must be runtime-owned.
 
-Inject a fatal process abort in [../runtime/src/deno_runtime.rs](../runtime/src/deno_runtime.rs) inside `op_flux_postgres_simple_query`, at this exact timing:
+Inject a fatal process abort in [../runtime/src/deno_runtime.rs](../runtime/src/deno_runtime.rs) with the one-shot env flag `FLUX_CRASH_AFTER_POSTGRES_COMMIT_BEFORE_CHECKPOINT=1`, at this exact timing inside the write-query path used by the idempotency example:
 
-1. `perform_postgres_simple_query(...)` has already returned success
+1. `perform_postgres_query(...)` has already returned success
 2. the Postgres write is already committed
 3. `execution.checkpoints.push(...)` has not run yet
 4. control has not returned to user JavaScript
@@ -90,6 +90,8 @@ This is the precise split-brain moment:
 - Flux has not durably recorded the boundary crossing
 
 Anything later is a different spec.
+
+The hook is one-shot per runtime process so the retry path can proceed normally after the first crash.
 
 ## 3. Expected Trace
 
