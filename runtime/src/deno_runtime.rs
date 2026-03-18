@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Once;
+use std::sync::{OnceLock, RwLock};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -217,6 +218,210 @@ struct FetchRequestPayload {
     method: String,
     body: Option<String>,
     headers: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct HttpCacheControl {
+    max_age: Option<u64>,
+    s_maxage: Option<u64>,
+    no_cache: bool,
+    no_store: bool,
+    private: bool,
+    public: bool,
+}
+
+#[derive(Debug, Clone)]
+struct HttpCacheEntry {
+    vary_headers: BTreeMap<String, String>,
+    response: serde_json::Value,
+    expires_at: Instant,
+}
+
+type HttpResponseCacheMap = HashMap<String, Vec<HttpCacheEntry>>;
+
+fn http_response_cache() -> &'static RwLock<HttpResponseCacheMap> {
+    static CACHE: OnceLock<RwLock<HttpResponseCacheMap>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn parse_cache_control(value: Option<&str>) -> HttpCacheControl {
+    let mut directives = HttpCacheControl::default();
+
+    let Some(value) = value else {
+        return directives;
+    };
+
+    for part in value.split(',') {
+        let directive = part.trim();
+        if directive.is_empty() {
+            continue;
+        }
+
+        let mut pieces = directive.splitn(2, '=');
+        let key = pieces.next().unwrap_or_default().trim().to_ascii_lowercase();
+        let raw_value = pieces.next().map(|value| value.trim().trim_matches('"'));
+
+        match key.as_str() {
+            "max-age" => directives.max_age = raw_value.and_then(|value| value.parse::<u64>().ok()),
+            "s-maxage" => directives.s_maxage = raw_value.and_then(|value| value.parse::<u64>().ok()),
+            "no-cache" => directives.no_cache = true,
+            "no-store" => directives.no_store = true,
+            "private" => directives.private = true,
+            "public" => directives.public = true,
+            _ => {}
+        }
+    }
+
+    directives
+}
+
+fn parse_http_date(value: Option<&str>) -> Option<DateTime<Utc>> {
+    let value = value?.trim();
+    DateTime::parse_from_rfc2822(value)
+        .ok()
+        .map(|parsed| parsed.with_timezone(&Utc))
+}
+
+fn cache_lookup_allowed(headers: &BTreeMap<String, String>) -> bool {
+    let cache_control = parse_cache_control(headers.get("cache-control").map(String::as_str));
+    if cache_control.no_cache || cache_control.no_store || cache_control.max_age == Some(0) {
+        return false;
+    }
+
+    !matches!(headers.get("pragma"), Some(value) if value.eq_ignore_ascii_case("no-cache"))
+        && !headers.contains_key("if-none-match")
+        && !headers.contains_key("if-modified-since")
+        && !headers.contains_key("if-match")
+        && !headers.contains_key("if-unmodified-since")
+}
+
+fn cache_store_allowed(method: &str, status: u16, request_headers: &BTreeMap<String, String>, response_headers: &BTreeMap<String, String>) -> Option<Duration> {
+    if !matches!(method, "GET" | "HEAD") {
+        return None;
+    }
+
+    if !(200..300).contains(&status) {
+        return None;
+    }
+
+    let request_cache_control = parse_cache_control(request_headers.get("cache-control").map(String::as_str));
+    if request_cache_control.no_store {
+        return None;
+    }
+
+    let response_cache_control = parse_cache_control(response_headers.get("cache-control").map(String::as_str));
+    if response_cache_control.no_store || response_cache_control.private {
+        return None;
+    }
+
+    let ttl_secs = response_cache_control
+        .s_maxage
+        .or(response_cache_control.max_age)
+        .or_else(|| {
+            let expires_at = parse_http_date(response_headers.get("expires").map(String::as_str))?;
+            let now = parse_http_date(response_headers.get("date").map(String::as_str)).unwrap_or_else(Utc::now);
+            let delta = expires_at.signed_duration_since(now);
+            if delta.num_seconds() <= 0 {
+                None
+            } else {
+                Some(delta.num_seconds() as u64)
+            }
+        })?;
+
+    if ttl_secs == 0 {
+        return None;
+    }
+
+    let vary = response_headers.get("vary").map(String::as_str).unwrap_or("");
+    if vary.split(',').any(|name| name.trim() == "*") {
+        return None;
+    }
+
+    Some(Duration::from_secs(ttl_secs))
+}
+
+fn response_vary_headers(response_headers: &BTreeMap<String, String>, request_headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    response_headers
+        .get("vary")
+        .map(String::as_str)
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|name| {
+            let key = name.trim().to_ascii_lowercase();
+            if key.is_empty() || key == "*" {
+                return None;
+            }
+            Some((key.clone(), request_headers.get(&key).cloned().unwrap_or_default()))
+        })
+        .collect()
+}
+
+fn cache_key(method: &str, url: &str) -> String {
+    format!("{method}:{url}")
+}
+
+fn cache_hit_response(response: &serde_json::Value) -> serde_json::Value {
+    let mut response = response.clone();
+    if let Some(object) = response.as_object_mut() {
+        object.insert(
+            "cache".to_string(),
+            serde_json::json!({
+                "hit": true,
+                "source": "memory",
+            }),
+        );
+    }
+    response
+}
+
+fn cached_http_response(method: &str, url: &str, request_headers: &BTreeMap<String, String>) -> Option<serde_json::Value> {
+    if !cache_lookup_allowed(request_headers) {
+        return None;
+    }
+
+    let key = cache_key(method, url);
+    let cache = http_response_cache();
+    let mut cache = cache.write().ok()?;
+    let entries = cache.get_mut(&key)?;
+    let now = Instant::now();
+    entries.retain(|entry| entry.expires_at > now);
+
+    let response = entries
+        .iter()
+        .find(|entry| entry.vary_headers.iter().all(|(name, value)| request_headers.get(name).cloned().unwrap_or_default() == *value))
+        .map(|entry| cache_hit_response(&entry.response));
+
+    if entries.is_empty() {
+        cache.remove(&key);
+    }
+
+    response
+}
+
+fn store_http_response_cache(
+    method: &str,
+    url: &str,
+    request_headers: &BTreeMap<String, String>,
+    response_headers: &BTreeMap<String, String>,
+    response: &serde_json::Value,
+    status: u16,
+) {
+    let Some(ttl) = cache_store_allowed(method, status, request_headers, response_headers) else {
+        return;
+    };
+
+    let entry = HttpCacheEntry {
+        vary_headers: response_vary_headers(response_headers, request_headers),
+        response: response.clone(),
+        expires_at: Instant::now() + ttl,
+    };
+
+    let key = cache_key(method, url);
+    if let Ok(mut cache) = http_response_cache().write() {
+        let entries = cache.entry(key).or_default();
+        entries.retain(|existing| existing.expires_at > Instant::now() && existing.vary_headers != entry.vary_headers);
+        entries.push(entry);
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2590,9 +2795,19 @@ fn make_http_request(
     headers: Option<HashMap<String, String>>,
 ) -> Result<serde_json::Value, JsErrorBox> {
     let agent = ureq::builder().redirects(0).build();
-    let request_headers = headers.unwrap_or_default();
+    let request_headers: BTreeMap<String, String> = headers
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, value)| (key.to_ascii_lowercase(), value))
+        .collect();
+    let method = method.to_ascii_uppercase();
+
+    if let Some(response) = cached_http_response(&method, url, &request_headers) {
+        return Ok(response);
+    }
+
     let mut current_url = url.to_string();
-    let mut current_method = method.to_string();
+    let mut current_method = method.clone();
     let mut current_body = body;
     let response = {
         let mut final_response = None;
@@ -2699,11 +2914,15 @@ fn make_http_request(
     let parsed_body = serde_json::from_str::<serde_json::Value>(&text)
         .unwrap_or_else(|_| serde_json::Value::String(text));
 
-    Ok(serde_json::json!({
+    let response_json = serde_json::json!({
         "status": status,
         "headers": response_headers,
         "body": parsed_body,
-    }))
+    });
+
+    store_http_response_cache(&method, url, &request_headers, &response_headers, &response_json, status);
+
+    Ok(response_json)
 }
 
 /// Maximum V8 heap size: 128 MB.

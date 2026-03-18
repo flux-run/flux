@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::OnceLock;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use axum::Router;
@@ -291,6 +293,148 @@ export default async function handler({ input }) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_reuses_standard_cache_control_across_live_executions() -> Result<()> {
+    let _lock = fetch_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
+
+    let code = r#"
+export default async function handler({ input }) {
+    const response = await fetch(input.url);
+    return {
+        status: response.status,
+        body: await response.json(),
+        cacheControl: response.headers.get("cache-control"),
+    };
+}
+"#;
+
+    let payload = serde_json::json!({
+        "url": format!("{base_url}/cache"),
+    });
+
+    let mut first_isolate = JsIsolate::new_for_run(code).context("failed to create first cache isolate")?;
+    let first_output = first_isolate
+        .execute(payload.clone(), ExecutionContext::new("fetch-http-cache-live-1"))
+        .await
+        .context("first cached fetch execution failed")?;
+
+    assert_eq!(first_output.error, None);
+    assert_eq!(
+        first_output.output,
+        serde_json::json!({
+            "status": 200,
+            "body": { "requestCount": 1, "value": "cached-response" },
+            "cacheControl": "public, max-age=600",
+        })
+    );
+    assert_eq!(hit_count.load(Ordering::SeqCst), 1);
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("cache test server task failed")??;
+
+    let mut second_isolate = JsIsolate::new_for_run(code).context("failed to create second cache isolate")?;
+    let second_output = second_isolate
+        .execute(payload, ExecutionContext::new("fetch-http-cache-live-2"))
+        .await
+        .context("second cached fetch execution failed")?;
+
+    assert_eq!(second_output.error, None);
+    assert_eq!(second_output.output, first_output.output);
+    assert_eq!(second_output.checkpoints.len(), 1);
+    assert_eq!(
+        second_output.checkpoints[0].response.get("cache"),
+        Some(&serde_json::json!({
+            "hit": true,
+            "source": "memory",
+        }))
+    );
+    assert_eq!(hit_count.load(Ordering::SeqCst), 1, "second execution should reuse the in-memory cache");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_request_no_cache_bypasses_shared_memory_cache() -> Result<()> {
+    let _lock = fetch_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
+
+    let prime_code = r#"
+export default async function handler({ input }) {
+    const response = await fetch(input.url);
+    return {
+        status: response.status,
+        body: await response.json(),
+    };
+}
+"#;
+
+    let bypass_code = r#"
+export default async function handler({ input }) {
+    try {
+        const response = await fetch(input.url, {
+            headers: {
+                "cache-control": "no-cache",
+            },
+        });
+        return {
+            ok: true,
+            status: response.status,
+            body: await response.text(),
+        };
+    } catch (err) {
+        return {
+            ok: false,
+            message: err?.message ?? null,
+            string: String(err),
+        };
+    }
+}
+"#;
+
+    let payload = serde_json::json!({
+        "url": format!("{base_url}/cache"),
+    });
+
+    let mut prime_isolate = JsIsolate::new_for_run(prime_code).context("failed to create cache prime isolate")?;
+    let prime_output = prime_isolate
+        .execute(payload.clone(), ExecutionContext::new("fetch-http-cache-prime"))
+        .await
+        .context("cache prime execution failed")?;
+
+    assert_eq!(prime_output.error, None);
+    assert_eq!(prime_output.output.get("status"), Some(&serde_json::json!(200)));
+    assert_eq!(hit_count.load(Ordering::SeqCst), 1);
+
+    shutdown_tx.send(()).ok();
+    server_task.await.context("cache bypass test server task failed")??;
+
+    let mut bypass_isolate = JsIsolate::new_for_run(bypass_code).context("failed to create cache bypass isolate")?;
+    let bypass_output = bypass_isolate
+        .execute(payload, ExecutionContext::new("fetch-http-cache-bypass"))
+        .await
+        .context("cache bypass execution failed")?;
+
+    assert_eq!(bypass_output.error, None);
+    assert_eq!(bypass_output.output.get("ok"), Some(&serde_json::json!(false)));
+    let message = bypass_output
+        .output
+        .get("message")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let string = bypass_output
+        .output
+        .get("string")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    assert!(message.contains("fetch failed") || string.contains("fetch failed"));
+    assert_eq!(hit_count.load(Ordering::SeqCst), 1, "bypass request should not reuse or refresh the in-memory cache after shutdown");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_body_consumption_and_clone_follow_web_semantics() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
     let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
@@ -450,4 +594,47 @@ async fn spawn_test_server() -> Result<(String, oneshot::Sender<()>, tokio::task
     });
 
     Ok((format!("http://{addr}"), shutdown_tx, task))
+}
+
+async fn spawn_cache_test_server() -> Result<(String, oneshot::Sender<()>, tokio::task::JoinHandle<Result<()>>, Arc<AtomicUsize>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("failed to bind cache test server")?;
+    let addr: SocketAddr = listener.local_addr().context("failed to read cache test server addr")?;
+    let hit_count = Arc::new(AtomicUsize::new(0));
+    let route_hits = Arc::clone(&hit_count);
+
+    let app = Router::new().route(
+        "/cache",
+        get(move || {
+            let route_hits = Arc::clone(&route_hits);
+            async move {
+                let request_count = route_hits.fetch_add(1, Ordering::SeqCst) + 1;
+                (
+                    [
+                        ("content-type", "application/json"),
+                        ("cache-control", "public, max-age=600"),
+                    ],
+                    serde_json::json!({
+                        "requestCount": request_count,
+                        "value": "cached-response",
+                    })
+                    .to_string(),
+                )
+            }
+        }),
+    );
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .context("cache test server exited with error")?;
+        Ok(())
+    });
+
+    Ok((format!("http://{addr}"), shutdown_tx, task, hit_count))
 }
