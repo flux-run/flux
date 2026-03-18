@@ -1,109 +1,61 @@
 # Flux
 
-Flux guarantees safe, replayable execution of distributed systems.
+Flux makes every request debuggable, replayable, and resumable.
 
-Concurrent, retried, or failed executions over shared state converge to one durable outcome, while recorded history remains honest. Every boundary crossing that Flux actually records stays observable and replayable because Flux owns the execution path.
+At its core, Flux is an open-source backend runtime that records everything that happens during a request, so you can see exactly what happened, understand why it happened, reproduce it safely, or continue from failure. 
 
-Flux is an open-source backend runtime where every execution is a record. It runs your JS/TS functions, records full input/output and checkpoint traces, and gives you a CLI to debug production incidents deterministically.
-
-Flux is open source under Apache 2.0. You can use, modify, self-host, and
-redistribute the software. The Flux brand, name, and logos are not part of the
-code license. See [LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).
+To make this reliable, Flux controls all side effects (like database queries or external API calls) and stores their results. 
 
 Website: [fluxbase.co](https://fluxbase.co)  
 Docs: [fluxbase.co/docs](https://fluxbase.co/docs)
 
-## The Pattern
+## The Core Mental Model
 
-Flux makes distributed systems behave like deterministic programs:
-
-```text
-Request/Event
-	↓
-Redis (coordination)
-	↓
-Postgres (durable side effect)
-	↓
-Checkpoint (recorded execution)
-```
-
-The core roles stay explicit:
-
-- Redis coordinates idempotency and deduplication across isolates
-- Postgres holds durable truth
-- Replay preserves correctness by returning recorded checkpoint results
-- Trace makes the decision path visible
-
-## Proven Behavior
-
-Flux now contains two independent proofs of the same execution law.
-
-### Proof 1: Idempotent API
-
-Client retries the same request.
-
-First request:
+Every request becomes a recorded execution timeline.
 
 ```text
-REDIS GET "idempotency:123" -> null
-POSTGRES INSERT orders -> 1 row
-REDIS SET "idempotency:123" -> "OK"
+Request
+  ↓
+Flux Runtime
+  ↓
+Step 1 → fetch()
+Step 2 → postgres.query()
+Step 3 → redis.get()
+Step 4 → ...
+  ↓
+Execution Trace (stored)
 ```
 
-Second request:
+## What Flux Gives You
+
+### 1. 📍 `flux trace` — What happened?
+Shows the full execution timeline with real events, real data, and no guessing.
+
+### 2. 🤔 `flux why` — Why did this happen?
+Explains decisions. For example: why did it hit the database? Because there was a cache miss. This provides debugging clarity, not just logs.
+
+### 3. ▶️ `flux replay` — What would happen again?
+Re-runs using recorded data. It uses the recorded database response and API responses, ensuring there are no duplicated side effects. This enables deterministic, safe reproduction of bugs.
+
+### 4. 🔁 `flux resume` — Continue after failure
+If a request failed at step 3, you can resume execution right from step 3. No need to restart the whole flow and risk duplicate side-effects.
+
+### 5. 📡 `flux tail` — Live execution
+Watch your system run structured traces in real time. Like `tail -f`, but for full execution workflows.
+
+## The Real Product Loop
 
 ```text
-REDIS GET "idempotency:123" -> "{...}"
+Request fails
+   ↓
+flux trace   → see what happened
+   ↓
+flux why     → understand cause
+   ↓
+flux replay  → reproduce safely
+   ↓
+flux resume  → continue execution
 ```
-
-No duplicate order is created.
-
-See [examples/idempotency](examples/idempotency).
-
-### Proof 2: Webhook Deduplication
-
-An external system sends the same event more than once.
-
-First delivery:
-
-```text
-REDIS GET "event:abc" -> null
-POSTGRES INSERT events -> 1 row
-REDIS SET "event:abc" -> "OK"
-```
-
-Retry:
-
-```text
-REDIS GET "event:abc" -> "1"
-```
-
-The event is processed exactly once.
-
-See [examples/webhook_dedup](examples/webhook_dedup).
-
-## Replay Guarantee
-
-Flux has two replay modes.
-
-Deterministic replay reuses recorded checkpoints only:
-
-```text
-REDIS -> recorded
-POSTGRES -> recorded
-```
-
-In deterministic replay:
-
-- recorded side effects are not re-executed
-- replay remains deterministic
-- missing history is never fabricated
-
-When replay or resume continues past a live boundary, the guarantee changes:
-
-- recorded history before the live boundary stays fixed
-- live boundaries after that point may diverge
-- continuation is not the same thing as deterministic replay
 
 ## Why Flux Exists
 

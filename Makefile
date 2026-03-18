@@ -1,14 +1,10 @@
 .PHONY: dev api server build migrate install install-cli install-server clean test-async-wiring test-platform test-product-loop test-system deploy-with-migrate generate-types smoke-auth-runtime
 
 # ── Full stack ──────────────────────────────────────────────────────────────
-# Starts API.
+# Starts Server for development.
 dev:
-	@echo "Starting Flux dev API…"
-	@make api
-
-# ── Individual services ─────────────────────────────────────────────────────
-api:
-	cd api && SQLX_OFFLINE=true cargo run
+	@echo "Starting Flux dev Server…"
+	SQLX_OFFLINE=true cargo run -p server
 
 # Monolith server.
 server:
@@ -53,7 +49,7 @@ deploy-dry-run:
 # Regenerate sqlx offline cache — run against direct (non-pooler) DB connection.
 # Usage: make sqlx-prepare DB_URL="postgresql://..."
 sqlx-prepare:
-	cd api && DATABASE_URL="$(DB_URL)" cargo sqlx prepare
+	cd server && DATABASE_URL="$(DB_URL)" cargo sqlx prepare
 
 migrate:
 	psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -f schemas/v0.1.sql
@@ -74,14 +70,12 @@ install-server:
 
 # ── Clean ────────────────────────────────────────────────────────────────────
 clean:
-	cd api && cargo clean
+	cargo clean
 
 # ── API Types (TypeScript codegen) ──────────────────────────────────────────
-# Generates TypeScript bindings from Rust types via ts-rs.
-# Output: shared/api_contract/bindings/*.ts
+# (No longer required with monorepo protobuf sharing, kept as placeholder)
 generate-types:
-	cargo test -p api_contract --features ts
-	@echo "TypeScript bindings written to shared/api_contract/bindings/"
+	@echo "Skipped"
 
 # ── Async Wiring Test ───────────────────────────────────────────────────────
 # Runs deterministic staging wiring test for API/Runtime queue execution path.

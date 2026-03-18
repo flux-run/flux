@@ -16,25 +16,16 @@ Thank you for your interest in contributing! This guide covers everything you ne
 ## Project structure
 
 ```
-Flux is a mixed Rust + TypeScript monorepo:
+Flux is a Rust monorepo:
 
 Rust workspace (Cargo.toml):
-  api/           Management plane — function registry, secrets
-  gateway/       Public edge — routing, auth, rate limiting
-  runtime/       Serverless executor — Deno V8 isolates
-  data-engine/   DB query engine — mutation recording, hooks, cron
-  queue/         Async job worker — DB polling, retries, DLQ
-  server/        Monolith — all five services in one binary
-  cli/           `flux` CLI binary
-
-TypeScript workspaces (package.json):
-  frontend/      Marketing site + docs (Next.js)
-  dashboard/     Management UI (Next.js)
-  packages/functions   @flux/functions SDK
-  packages/sdk         @flux/sdk
+  cli/       developer and operator CLI (`flux` binary)
+  server/    gRPC server + Postgres execution store (`flux-server` binary)
+  runtime/   Deno V8 isolate executor (`flux-runtime` binary)
+  shared/    protobuf definitions shared by CLI, server, and runtime
 ```
 
-See [`docs/framework.md`](docs/framework.md) for the full design spec.
+See [`docs/single-binary-architecture.md`](docs/single-binary-architecture.md) for the full design spec.
 
 ---
 
@@ -64,9 +55,6 @@ docker run -d --name flux-pg \
   -e POSTGRES_DB=flux \
   -e POSTGRES_PASSWORD=password \
   -p 5432:5432 postgres:16
-
-# Copy and edit the env file
-cp api/.env.example api/.env   # set DATABASE_URL if needed
 ```
 
 ### 2. Build and run the server monolith
@@ -82,28 +70,10 @@ LOCAL_MODE=true \
 
 The server starts all five services on port **4000**.
 
-### 3. Run the frontend (optional)
-
-```bash
-cd frontend
-npm install
-npm run dev    # → http://localhost:3000
-```
-
-### 4. Run the dashboard (optional)
-
-```bash
-cd dashboard
-npm install
-npm run dev    # → http://localhost:5173
-```
-
 ### Using `make`
 
 ```bash
-make dev        # API + dashboard in parallel
-make api        # Run API service only
-make dashboard  # Run dashboard only
+make dev        # Run the server monolith
 make build      # Build all services
 ```
 
@@ -116,10 +86,10 @@ make build      # Build all services
 cargo test --workspace
 
 # Single service
-cd api && cargo test
+cargo test -p server
 
 # Single test with output
-cd api && cargo test route::functions -- --nocapture
+cargo test -p server route::functions -- --nocapture
 
 # Integration tests
 make test-async-wiring    # Gateway → Queue → Worker → Runtime

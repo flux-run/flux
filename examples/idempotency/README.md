@@ -1,12 +1,11 @@
 # Idempotency Demo
 
-Flux guarantees idempotent outcomes across distributed requests. The same logical request converges to one durable order, even across retries, crashes, and replay, while staying fully observable through checkpoints and trace.
+This example demonstrates how to implement an idempotent API route using Redis and Postgres. Because Flux records every boundary crossing, the idempotency flow is completely observable through `flux trace`, and can be safely reproduced with `flux replay` without creating duplicate side-effects.
 
-Minimal Flux demo that shows idempotent request handling with:
-
-- Redis as the shared-state boundary
-- Postgres as the durable side-effect boundary
-- replay preserving the original result without duplicating inserts
+Minimal demo highlighting:
+- Redis used as an application-level idempotency cache
+- Postgres used as the durable database
+- `flux replay` safely preserving the original result by reusing recorded checkpoints
 
 This example uses the native `Flux.redis.createClient(...)` primitive so it bundles cleanly through `flux build` today. The runtime also supports the compatibility surface `import { createClient } from "redis"`, but the point of this demo is the execution model, not the import style.
 
@@ -186,11 +185,6 @@ await redis.expire(redisKey, 60 * 60)
 
 ## What this proves
 
-This demo is not just "Redis support".
+This demo shows that **user-defined application logic** (like checking an idempotency key in Redis) is cleanly recorded and observed by Flux. 
 
-It demonstrates that Flux can guarantee idempotent execution with:
-
-- shared state across isolates
-- durable convergence to one logical effect
-- replay-safe request handling
-- traceable boundary behavior
+Flux does not provide or mandate idempotency itself—it simply records the external calls your code makes. If your application logic uses Redis, Flux intercepts those calls, logs them, and safely mocks them out during `flux replay` so you can debug the execution path locally.

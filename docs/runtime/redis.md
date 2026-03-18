@@ -2,11 +2,11 @@
 
 This document defines the Redis v1 contract in Flux.
 
-Redis in Flux is a deterministic command boundary. It is not a Redis client, SDK, or socket escape hatch.
+Redis is just another external boundary exposed to user code. Flux intercepts these commands and treats them like any other side effect (like `fetch` or `postgres.query`). Flux does *not* rely on Redis for correctness.
 
 ## Core Rule
 
-Flux owns Redis side effects.
+Flux records Redis commands.
 
 User code may use a compatibility surface like `import { createClient } from "redis"`, but execution always flows through the Flux runtime boundary:
 
@@ -14,9 +14,9 @@ User code may use a compatibility surface like `import { createClient } from "re
 - the shim translates the call into a command envelope
 - `op_flux_redis_command` executes the command in Rust
 - Flux records the request and response as a checkpoint
-- replay returns the recorded response without touching Redis
+- replay returns the recorded response without touching a live Redis server
 
-That means Redis follows the same product model as other Flux-owned boundaries:
+That means Redis follows the same product model as other Flux-enumerated boundaries:
 
 - `fetch` is an HTTP boundary
 - `postgres` is a SQL boundary
