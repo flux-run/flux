@@ -1,5 +1,0 @@
-{
-  "flux_version": "0.2",
-  "entry": "./error-handling.js",
-  "artifact": "./.flux/artifact.json"
-}
