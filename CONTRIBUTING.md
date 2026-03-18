@@ -68,7 +68,7 @@ LOCAL_MODE=true \
   ./target/debug/server
 ```
 
-The server starts all five services on port **4000**.
+The server starts all core services on port **4000**.
 
 ### Using `make`
 
@@ -92,7 +92,7 @@ cargo test -p server
 cargo test -p server route::functions -- --nocapture
 
 # Integration tests
-make test-async-wiring    # Gateway → Queue → Worker → Runtime
+make test-async-wiring    # Server → Queue → Worker → Runtime
 make test-platform        # Full platform suite
 ```
 
@@ -103,7 +103,7 @@ make test-platform        # Full platform suite
 1. **Fork** the repo and create a branch: `git checkout -b fix/my-bug`
 2. **Make your changes** — keep them focused and small
 3. **Test** — run `cargo test` and ensure CI would pass
-4. **Commit** with a clear message: `fix: handle nil pointer in gateway routing`
+4. **Commit** with a clear message: `fix: handle nil pointer in server routing`
 5. **Push** and open a PR against `main`
 6. Fill in the PR description — explain *what* and *why*, not just *what*
 
@@ -114,7 +114,7 @@ PRs that include tests for the changed behaviour are merged faster.
 ## Coding conventions
 
 **Rust:**
-- `edition = "2024"` for core services; `"2021"` for `data-engine`, `queue`, `shared/`
+- `edition = "2024"` for core services; `"2021"` for legacy crates or shared/
 - `SQLX_OFFLINE=true` — use `sqlx::query_as(...)` runtime functions, not macros
 - Each service follows the library + binary pattern: `src/lib.rs` + `src/main.rs`
 - Errors: propagate with `?`, return `Result` from route handlers
