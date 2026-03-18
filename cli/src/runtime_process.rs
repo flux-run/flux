@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, Context};
 
 pub fn find_workspace_root() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
@@ -81,10 +81,10 @@ pub async fn exec_runtime(
 
     let status = cmd
         .spawn()
-        .context("failed to spawn flux-runtime")?
+        .with_context(|| "failed to spawn flux-runtime")?
         .wait()
         .await
-        .context("flux-runtime exited unexpectedly")?;
+        .with_context(|| "flux-runtime exited unexpectedly")?;
 
     if !status.success() {
         bail!("flux-runtime exited with {}", status);
