@@ -20,7 +20,7 @@
  */
 
 import { performance }   from "node:perf_hooks";
-import { spawnSync }     from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { existsSync, readFileSync }  from "node:fs";
 import { resolve }       from "node:path";
 import { dirname }       from "node:path";
@@ -44,6 +44,8 @@ const HANDLERS_DIR = resolve(__dirname, "../external-tests/flux-handlers");
 const EXAMPLES_DIR = resolve(WORKSPACE_ROOT, "examples");
 const CRUD_APP_DIR = resolve(EXAMPLES_DIR, "crud_app");
 const CRUD_INIT_SQL = resolve(CRUD_APP_DIR, "init.sql");
+const DB_THEN_REMOTE_DIR = resolve(EXAMPLES_DIR, "db_then_remote");
+const DB_THEN_REMOTE_INIT_SQL = resolve(DB_THEN_REMOTE_DIR, "init.sql");
 const DRIZZLE_DIR = resolve(EXAMPLES_DIR, "drizzle");
 
 // Each suite gets its own port in the 3100-3199 range so suites can run
@@ -56,6 +58,9 @@ function allocateDatabasePort() { return nextDatabasePort++; }
 
 let nextServerPort = 51051;
 function allocateServerPort() { return nextServerPort++; }
+
+let nextRemotePort = 39010;
+function allocateRemotePort() { return nextRemotePort++; }
 
 // ---------------------------------------------------------------------------
 // Assertion helper
@@ -78,9 +83,20 @@ interface PostgresConfig {
   initSql?: string;
 }
 
+interface RemoteHandle {
+  baseUrl: string;
+  stop(): Promise<void>;
+}
+
 const crudReplayState = {
   serverUrl: "",
   serviceToken: "",
+};
+
+const dbThenRemoteResumeState = {
+  serverUrl: "",
+  serviceToken: "",
+  remotePort: 0,
 };
 
 function assert(
@@ -211,6 +227,62 @@ async function startDrizzlePostgres(hostPort: number): Promise<PostgresHandle> {
     username: "admin",
     password: "password123",
   });
+}
+
+async function startDbThenRemotePostgres(hostPort: number): Promise<PostgresHandle> {
+  return startPostgres(hostPort, {
+    databaseName: "db_then_remote",
+    username: "admin",
+    password: "password123",
+    initSql: readFileSync(DB_THEN_REMOTE_INIT_SQL, "utf8"),
+  });
+}
+
+async function startMockRemoteSystem(port: number): Promise<RemoteHandle> {
+  const proc = spawn(process.execPath, [resolve(DB_THEN_REMOTE_DIR, "remote_system.js")], {
+    cwd: WORKSPACE_ROOT,
+    env: {
+      ...process.env,
+      PORT: String(port),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  proc.on("error", (error) => {
+    throw new Error(`failed to start mock remote system: ${error.message}`);
+  });
+
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/__healthcheck__`);
+      if (response.status === 404) {
+        break;
+      }
+    } catch {
+      await sleep(100);
+      continue;
+    }
+  }
+
+  if (Date.now() >= deadline) {
+    proc.kill("SIGTERM");
+    throw new Error(`mock remote system did not start within 15000ms on port ${port}`);
+  }
+
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    async stop() {
+      proc.kill("SIGTERM");
+      await Promise.race([
+        new Promise<void>((resolvePromise) => proc.once("exit", () => resolvePromise())),
+        sleep(3000),
+      ]);
+      if (!proc.killed) {
+        proc.kill("SIGKILL");
+      }
+    },
+  };
 }
 
 function extractReplayOutput(stdout: string): string {
@@ -675,6 +747,131 @@ const SUITES: Suite[] = [
       const listAfterReplay = await get(baseUrl, "/todos");
       const todosAfterReplay = listAfterReplay.body as any[];
       assert(ctx, "GET /todos after replay → count unchanged", () => Array.isArray(todosAfterReplay) && todosAfterReplay.length === 1);
+    },
+  },
+
+  {
+    name: "db-then-remote-resume",
+    handler: "db_then_remote/main_flux.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const serverPort = allocateServerPort();
+      const remotePort = allocateRemotePort();
+      const serviceToken = "dev-service-token";
+      const postgres = await startDbThenRemotePostgres(databasePort);
+      const server = await startServer(serverPort, {
+        databaseUrl: postgres.databaseUrl,
+        serviceToken,
+      });
+
+      try {
+        dbThenRemoteResumeState.serverUrl = server.url;
+        dbThenRemoteResumeState.serviceToken = serviceToken;
+        dbThenRemoteResumeState.remotePort = remotePort;
+
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          serverUrl: server.url,
+          token: serviceToken,
+          env: {
+            DATABASE_URL: postgres.databaseUrl,
+            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLOWBASE_ALLOW_LOOPBACK_FETCH: "1",
+            REMOTE_BASE_URL: `http://127.0.0.1:${remotePort}`,
+          },
+        });
+
+        return {
+          ...runtime,
+          async stop() {
+            try {
+              await runtime.stop();
+            } finally {
+              try {
+                await server.stop();
+              } finally {
+                postgres.stop();
+                dbThenRemoteResumeState.serverUrl = "";
+                dbThenRemoteResumeState.serviceToken = "";
+                dbThenRemoteResumeState.remotePort = 0;
+              }
+            }
+          },
+        };
+      } catch (error) {
+        dbThenRemoteResumeState.serverUrl = "";
+        dbThenRemoteResumeState.serviceToken = "";
+        dbThenRemoteResumeState.remotePort = 0;
+        await server.stop();
+        postgres.stop();
+        throw error;
+      }
+    },
+    async run(baseUrl, ctx) {
+      const initialList = await get(baseUrl, "/dispatches");
+      const initialRows = initialList.body as any[];
+      assert(ctx, "GET /dispatches before failure → 200", () => initialList.status === 200);
+      assert(ctx, "GET /dispatches before failure → empty", () => Array.isArray(initialRows) && initialRows.length === 0);
+
+      const failedRes = await fetch(`${baseUrl}/dispatches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          orderId: "order-1",
+          message: "first-dispatch",
+        }),
+      });
+      const failedExecutionId = failedRes.headers.get("x-flux-execution-id") ?? "";
+
+      assert(ctx, "POST /dispatches with remote offline → 500", () => failedRes.status === 500);
+      assert(ctx, "POST /dispatches with remote offline → execution id header", () => failedExecutionId.length > 0);
+
+      const listAfterFailure = await get(baseUrl, "/dispatches");
+      const pendingRows = listAfterFailure.body as Array<Record<string, unknown>>;
+      const pendingRow = Array.isArray(pendingRows) ? pendingRows[0] : undefined;
+      assert(ctx, "GET /dispatches after failure → one pending row", () => Array.isArray(pendingRows) && pendingRows.length === 1);
+      assert(ctx, "GET /dispatches after failure → row is pending", () => pendingRow?.status === "pending");
+      assert(ctx, "GET /dispatches after failure → remoteStatus absent", () => pendingRow?.remoteStatus == null);
+
+      const remote = await startMockRemoteSystem(dbThenRemoteResumeState.remotePort);
+      try {
+        const resumeStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
+          "resume",
+          failedExecutionId,
+          "--url",
+          dbThenRemoteResumeState.serverUrl,
+          "--token",
+          dbThenRemoteResumeState.serviceToken,
+        ]));
+
+        const resumeEnvelope = JSON.parse(extractReplayOutput(resumeStdout)) as {
+          net_response?: { body?: string; status?: number };
+        };
+        const resumeBody = JSON.parse(resumeEnvelope.net_response?.body ?? "null") as {
+          dispatch?: { id?: number; status?: string; remoteStatus?: number; orderId?: string };
+          remote?: { status?: number };
+        };
+
+        assert(ctx, "flux resume → starts after recorded checkpoint", () => resumeStdout.includes("from checkpoint 1"));
+        assert(ctx, "flux resume → first Postgres step recorded", () => resumeStdout.includes("[0] POSTGRES") && resumeStdout.includes("(recorded)"));
+        assert(ctx, "flux resume → remote HTTP step live", () => resumeStdout.includes("[1] HTTP") && resumeStdout.includes("(live)"));
+        assert(ctx, "flux resume → completion Postgres step live", () => resumeStdout.includes("[2] POSTGRES") && resumeStdout.includes("(live)"));
+        assert(ctx, "flux resume → returns 201", () => resumeEnvelope.net_response?.status === 201);
+        assert(ctx, "flux resume → response marks dispatch delivered", () => resumeBody.dispatch?.status === "delivered" && resumeBody.remote?.status === 200);
+
+        const listAfterResume = await get(baseUrl, "/dispatches");
+        const resumedRows = listAfterResume.body as Array<Record<string, unknown>>;
+        const resumedRow = Array.isArray(resumedRows) ? resumedRows[0] : undefined;
+
+        assert(ctx, "GET /dispatches after resume → still one row", () => Array.isArray(resumedRows) && resumedRows.length === 1);
+        assert(ctx, "GET /dispatches after resume → same row id reused", () => resumedRow?.id === pendingRow?.id && resumedRow?.id === resumeBody.dispatch?.id);
+        assert(ctx, "GET /dispatches after resume → row delivered", () => resumedRow?.status === "delivered");
+        assert(ctx, "GET /dispatches after resume → remoteStatus recorded", () => resumedRow?.remoteStatus === 200);
+        assert(ctx, "GET /dispatches after resume → original order retained", () => resumedRow?.orderId === "order-1");
+      } finally {
+        await remote.stop();
+      }
     },
   },
 

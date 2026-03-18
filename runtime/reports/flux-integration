@@ -1,49 +1,121 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-18T02:53:49.625Z",
+  "timestamp": "2026-03-18T03:57:55.180Z",
   "engine": "node v22.20.0",
-  "passed": 6,
+  "passed": 18,
   "failed": 0,
   "skipped": 0,
-  "total": 6,
+  "total": 18,
   "elapsedMs": 0,
   "passRate": "100.0%",
   "results": [
     {
-      "name": "GET /counter first request → 200",
+      "name": "GET /dispatches before failure → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.006542000000081316
+      "duration": 0.008125000000291038
     },
     {
-      "name": "GET /counter first request → counter is 1",
+      "name": "GET /dispatches before failure → empty",
       "passed": true,
       "skipped": false,
-      "duration": 0.00454200000012861
+      "duration": 0.006125000000338332
     },
     {
-      "name": "GET /counter second request → 200",
+      "name": "POST /dispatches with remote offline → 500",
       "passed": true,
       "skipped": false,
-      "duration": 0.015790999999808264
+      "duration": 0.05037499999980355
     },
     {
-      "name": "GET /counter second request → counter resets to 1",
+      "name": "POST /dispatches with remote offline → execution id header",
       "passed": true,
       "skipped": false,
-      "duration": 0.005167000000255939
+      "duration": 0.005541999999877589
     },
     {
-      "name": "GET /object-id → 200",
+      "name": "GET /dispatches after failure → one pending row",
       "passed": true,
       "skipped": false,
-      "duration": 0.02204200000005585
+      "duration": 0.038000000000010914
     },
     {
-      "name": "GET /object-id → request-local object starts at 1",
+      "name": "GET /dispatches after failure → row is pending",
       "passed": true,
       "skipped": false,
-      "duration": 0.00520799999958399
+      "duration": 0.007958000000144239
+    },
+    {
+      "name": "GET /dispatches after failure → remoteStatus absent",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.00537499999973079
+    },
+    {
+      "name": "flux resume → starts after recorded checkpoint",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.015292000000044936
+    },
+    {
+      "name": "flux resume → first Postgres step recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.006582999999864114
+    },
+    {
+      "name": "flux resume → remote HTTP step live",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0058330000001660665
+    },
+    {
+      "name": "flux resume → completion Postgres step live",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004417000000103144
+    },
+    {
+      "name": "flux resume → returns 201",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.00437499999998181
+    },
+    {
+      "name": "flux resume → response marks dispatch delivered",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003624999999829015
+    },
+    {
+      "name": "GET /dispatches after resume → still one row",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.03208300000005693
+    },
+    {
+      "name": "GET /dispatches after resume → same row id reused",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.00687500000003638
+    },
+    {
+      "name": "GET /dispatches after resume → row delivered",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003250000000207365
+    },
+    {
+      "name": "GET /dispatches after resume → remoteStatus recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.002290999999786436
+    },
+    {
+      "name": "GET /dispatches after resume → original order retained",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0019999999999527063
     }
   ]
 }
