@@ -9,6 +9,7 @@ This documentation set is rebuilt for the current Flux CLI and runtime architect
 - [cli.md](cli.md) — full command surface and usage patterns
 - [production-debugging.md](production-debugging.md) — incident workflow
 - [concepts.md](concepts.md) — execution-record mental model
+- [compatibility.md](compatibility.md) — supported frameworks and services
 - [SPEC.md](SPEC.md) — scope and product guarantees
 
 ## Architecture
