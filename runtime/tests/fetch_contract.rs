@@ -390,13 +390,7 @@ export default async function handler({ input }) {
     assert_eq!(second_output.error, None);
     assert_eq!(second_output.output, first_output.output);
     assert_eq!(second_output.checkpoints.len(), 1);
-    assert_eq!(
-        second_output.checkpoints[0].response.get("cache"),
-        Some(&serde_json::json!({
-            "hit": true,
-            "source": "memory",
-        }))
-    );
+    assert_cache_hit_metadata(&second_output.checkpoints[0].response);
     assert_eq!(
         hit_count.load(Ordering::SeqCst),
         1,
@@ -589,13 +583,7 @@ export default async function handler({ input }) {
         Some(&serde_json::json!(true))
     );
     assert_eq!(cached_output.checkpoints.len(), 1);
-    assert_eq!(
-        cached_output.checkpoints[0].response.get("cache"),
-        Some(&serde_json::json!({
-            "hit": true,
-            "source": "memory",
-        }))
-    );
+    assert_cache_hit_metadata(&cached_output.checkpoints[0].response);
 
     let mut evicted_isolate =
         JsIsolate::new_for_run(code).context("failed to create evicted-cache isolate")?;
@@ -775,6 +763,22 @@ fn assert_ssrf_result(result: &serde_json::Value, needle: &str) {
     assert!(
         message.contains(needle) || string.contains(needle),
         "expected blocked target in result, got: {result}"
+    );
+}
+
+fn assert_cache_hit_metadata(response: &serde_json::Value) {
+    let cache = response
+        .get("cache")
+        .unwrap_or_else(|| panic!("expected cache metadata in response: {response}"));
+
+    assert_eq!(cache.get("hit"), Some(&serde_json::json!(true)));
+    assert_eq!(cache.get("source"), Some(&serde_json::json!("memory")));
+    assert!(
+        cache
+            .get("age_ms")
+            .and_then(|value| value.as_u64())
+            .is_some(),
+        "expected numeric age_ms in cache metadata: {cache}"
     );
 }
 

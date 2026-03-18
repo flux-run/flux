@@ -232,7 +232,43 @@ fn checkpoint_annotation(boundary: &str, response: &serde_json::Value) -> String
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
 
+    let age = cache
+        .get("age_ms")
+        .and_then(|value| value.as_u64())
+        .map(format_cache_age);
+
+    if let Some(age) = age {
+        return format!("  cache hit ({source}, age={age})");
+    }
+
     format!("  cache hit ({source})")
+}
+
+fn format_cache_age(age_ms: u64) -> String {
+    if age_ms < 1_000 {
+        return "<1s".to_string();
+    }
+
+    let total_seconds = age_ms / 1_000;
+    let hours = total_seconds / 3_600;
+    let minutes = (total_seconds % 3_600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        if minutes > 0 {
+            return format!("{hours}h {minutes}m");
+        }
+        return format!("{hours}h");
+    }
+
+    if minutes > 0 {
+        if seconds > 0 {
+            return format!("{minutes}m {seconds}s");
+        }
+        return format!("{minutes}m");
+    }
+
+    format!("{seconds}s")
 }
 
 fn print_json_block(raw: &str, expanded: bool) {
@@ -251,12 +287,28 @@ fn print_json_block(raw: &str, expanded: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::checkpoint_annotation;
+    use super::{checkpoint_annotation, format_cache_age};
 
     #[test]
     fn shows_memory_cache_hit_for_http_checkpoint() {
         let response = serde_json::json!({
             "status": 200,
+            "cache": {
+                "hit": true,
+                "source": "memory",
+                "age_ms": 123_456
+            }
+        });
+
+        assert_eq!(
+            checkpoint_annotation("http", &response),
+            "  cache hit (memory, age=2m 3s)"
+        );
+    }
+
+    #[test]
+    fn falls_back_when_cache_age_is_missing() {
+        let response = serde_json::json!({
             "cache": {
                 "hit": true,
                 "source": "memory"
@@ -291,5 +343,15 @@ mod tests {
         });
 
         assert_eq!(checkpoint_annotation("http", &response), "");
+    }
+
+    #[test]
+    fn formats_subsecond_cache_age() {
+        assert_eq!(format_cache_age(999), "<1s");
+    }
+
+    #[test]
+    fn formats_hour_scale_cache_age() {
+        assert_eq!(format_cache_age(3_780_000), "1h 3m");
     }
 }

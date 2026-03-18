@@ -259,6 +259,7 @@ struct HttpCacheControl {
 struct HttpCacheEntry {
     vary_headers: BTreeMap<String, String>,
     response: serde_json::Value,
+    cached_at: Instant,
     expires_at: Instant,
     size_bytes: usize,
     last_accessed_tick: u64,
@@ -395,10 +396,10 @@ impl HttpResponseCache {
             let entries = self.entries_by_key.get_mut(key)?;
             let entry = entries.get_mut(found_index)?;
             entry.last_accessed_tick = access_tick;
-            entry.response.clone()
+            cache_hit_response(entry, now)
         };
 
-        Some(cache_hit_response(&response))
+        Some(response)
     }
 
     fn store(
@@ -616,14 +617,21 @@ fn cache_key(method: &str, url: &str) -> String {
     format!("{method}:{url}")
 }
 
-fn cache_hit_response(response: &serde_json::Value) -> serde_json::Value {
-    let mut response = response.clone();
+fn cache_hit_response(entry: &HttpCacheEntry, now: Instant) -> serde_json::Value {
+    let mut response = entry.response.clone();
+    let age_ms = now
+        .checked_duration_since(entry.cached_at)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
     if let Some(object) = response.as_object_mut() {
         object.insert(
             "cache".to_string(),
             serde_json::json!({
                 "hit": true,
                 "source": "memory",
+                "age_ms": age_ms,
             }),
         );
     }
@@ -662,6 +670,7 @@ fn store_http_response_cache(
     let entry = HttpCacheEntry {
         vary_headers: response_vary_headers(response_headers, request_headers),
         response: response.clone(),
+        cached_at: Instant::now(),
         expires_at: Instant::now() + ttl,
         size_bytes: 0,
         last_accessed_tick: 0,
