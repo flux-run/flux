@@ -69,6 +69,16 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     )
     .await?;
 
+    let original = if original.is_some() || !response.steps.iter().any(|step| step.used_recorded) {
+        original
+    } else {
+        Some(get_trace(&auth.url, &auth.token, &args.execution_id).await?)
+    };
+    let recorded_cache_hits = original
+        .as_ref()
+        .map(recorded_cache_hit_map)
+        .unwrap_or_default();
+
     let status_symbol = if response.status == "ok" {
         "\x1b[32m✓\x1b[0m"
     } else {
@@ -76,7 +86,13 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     };
 
     if args.explain {
-        print_explain_view(short_id, &response, args.validate, &args.ignore);
+        print_explain_view(
+            short_id,
+            &response,
+            &recorded_cache_hits,
+            args.validate,
+            &args.ignore,
+        );
         if args.validate && response.divergence.is_some() {
             std::process::exit(REPLAY_DIVERGENCE_EXIT_CODE);
         }
@@ -92,20 +108,22 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         println!("  validation  live checkpoints must match recorded checkpoints");
     }
 
-    if let Some(original) = &original {
-        println!();
-        println!("  comparing original vs replay");
-        println!();
-        let original_status = colorize_status_label(&original.status, original.duration_ms);
-        let replay_status = colorize_status_label(&response.status, response.duration_ms);
-        println!(
-            "  original  {:<18}  {}ms",
-            original_status, original.duration_ms
-        );
-        println!(
-            "  replay    {:<18}  {}ms",
-            replay_status, response.duration_ms
-        );
+    if args.diff {
+        if let Some(original) = &original {
+            println!();
+            println!("  comparing original vs replay");
+            println!();
+            let original_status = colorize_status_label(&original.status, original.duration_ms);
+            let replay_status = colorize_status_label(&response.status, response.duration_ms);
+            println!(
+                "  original  {:<18}  {}ms",
+                original_status, original.duration_ms
+            );
+            println!(
+                "  replay    {:<18}  {}ms",
+                replay_status, response.duration_ms
+            );
+        }
     }
 
     if !response.error.is_empty() {
@@ -141,14 +159,20 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
 
     println!();
     for step in &response.steps {
-        let validation_state = if step.validated { ", validated" } else { "" };
+        let source = replay_step_source_label(
+            step,
+            recorded_cache_hits
+                .get(&step.call_index)
+                .copied()
+                .unwrap_or(false),
+        );
         println!(
             "  [{}] {}  {}  {}ms  ({})",
             step.call_index,
             step.boundary.to_uppercase(),
             step.url,
             step.duration_ms,
-            format!("{}{}", step.source, validation_state)
+            source
         );
 
         if args.diff {
@@ -160,32 +184,34 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         }
     }
 
-    if let Some(original) = &original {
-        let original_output = first_non_empty_value(&[
-            Some(original.response_json.clone()),
-            if original.error.is_empty() {
-                None
-            } else {
-                Some(original.error.clone())
-            },
-        ]);
-        let replay_output = first_non_empty_value(&[
-            if response.output.is_empty() || response.output == "null" {
-                None
-            } else {
-                Some(response.output.clone())
-            },
-            if response.error.is_empty() {
-                None
-            } else {
-                Some(response.error.clone())
-            },
-        ]);
+    if args.diff {
+        if let Some(original) = &original {
+            let original_output = first_non_empty_value(&[
+                Some(original.response_json.clone()),
+                if original.error.is_empty() {
+                    None
+                } else {
+                    Some(original.error.clone())
+                },
+            ]);
+            let replay_output = first_non_empty_value(&[
+                if response.output.is_empty() || response.output == "null" {
+                    None
+                } else {
+                    Some(response.output.clone())
+                },
+                if response.error.is_empty() {
+                    None
+                } else {
+                    Some(response.error.clone())
+                },
+            ]);
 
-        println!();
-        println!("  output");
-        for line in json_diff_lines(&original_output, &replay_output) {
-            println!("  {}", colorize_diff_line(&line));
+            println!();
+            println!("  output");
+            for line in json_diff_lines(&original_output, &replay_output) {
+                println!("  {}", colorize_diff_line(&line));
+            }
         }
     }
 
@@ -201,6 +227,42 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn recorded_cache_hit_map(trace: &crate::grpc::TraceView) -> BTreeMap<i32, bool> {
+    trace
+        .checkpoints
+        .iter()
+        .filter_map(|checkpoint| {
+            if checkpoint.boundary != "http" {
+                return None;
+            }
+
+            let response = serde_json::from_slice::<serde_json::Value>(&checkpoint.response)
+                .unwrap_or_default();
+            let hit = response
+                .get("cache")
+                .and_then(|cache| cache.get("hit"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+
+            Some((checkpoint.call_index, hit))
+        })
+        .collect()
+}
+
+fn replay_step_source_label(
+    step: &crate::grpc::ReplayStepView,
+    originally_cache_hit: bool,
+) -> String {
+    let mut segments = vec![step.source.clone()];
+    if step.used_recorded && originally_cache_hit {
+        segments.push("originally cache hit".to_string());
+    }
+    if step.validated {
+        segments.push("validated".to_string());
+    }
+    segments.join(", ")
 }
 
 fn first_non_empty_value(candidates: &[Option<String>]) -> serde_json::Value {
@@ -471,6 +533,7 @@ fn render_diff_tree(name: Option<&str>, node: &DiffTreeNode, indent: usize) {
 fn print_explain_view(
     short_id: &str,
     response: &crate::grpc::ReplayView,
+    recorded_cache_hits: &BTreeMap<i32, bool>,
     validate: bool,
     ignore_patterns: &[String],
 ) {
@@ -494,12 +557,22 @@ fn print_explain_view(
 
     println!();
     for step in &response.steps {
-        let summary = match (step.source.as_str(), step.validated) {
-            ("recorded", _) => colorize("recorded", ANSI_GREEN),
-            ("live", true) => colorize("live (validated)", ANSI_YELLOW),
-            ("live", false) => "live".to_string(),
-            _ => step.source.clone(),
-        };
+        let summary = colorize(
+            replay_step_source_label(
+                step,
+                recorded_cache_hits
+                    .get(&step.call_index)
+                    .copied()
+                    .unwrap_or(false),
+            ),
+            if step.source == "recorded" {
+                ANSI_GREEN
+            } else if step.source == "live" && step.validated {
+                ANSI_YELLOW
+            } else {
+                ANSI_DIM
+            },
+        );
 
         let diverged = response
             .divergence
@@ -578,4 +651,77 @@ fn print_explain_view(
     }
 
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{recorded_cache_hit_map, replay_step_source_label};
+
+    #[test]
+    fn marks_recorded_step_as_originally_cache_hit() {
+        let step = crate::grpc::ReplayStepView {
+            call_index: 2,
+            boundary: "http".to_string(),
+            url: "https://example.test/jwks".to_string(),
+            used_recorded: true,
+            duration_ms: 3,
+            source: "recorded".to_string(),
+            validated: false,
+        };
+
+        assert_eq!(
+            replay_step_source_label(&step, true),
+            "recorded, originally cache hit"
+        );
+    }
+
+    #[test]
+    fn preserves_validation_suffix_for_live_step() {
+        let step = crate::grpc::ReplayStepView {
+            call_index: 2,
+            boundary: "http".to_string(),
+            url: "https://example.test/jwks".to_string(),
+            used_recorded: false,
+            duration_ms: 3,
+            source: "live".to_string(),
+            validated: true,
+        };
+
+        assert_eq!(replay_step_source_label(&step, false), "live, validated");
+    }
+
+    #[test]
+    fn extracts_cache_hits_from_original_trace() {
+        let trace = crate::grpc::TraceView {
+            execution_id: "exec-1".to_string(),
+            method: "GET".to_string(),
+            path: "/".to_string(),
+            status: "200".to_string(),
+            duration_ms: 5,
+            error: String::new(),
+            request_json: "{}".to_string(),
+            response_json: "{}".to_string(),
+            checkpoints: vec![
+                crate::grpc::TraceCheckpoint {
+                    call_index: 1,
+                    boundary: "http".to_string(),
+                    request: br#"{}"#.to_vec(),
+                    response: br#"{"cache":{"hit":true,"source":"memory","age_ms":1000}}"#.to_vec(),
+                    duration_ms: 1,
+                },
+                crate::grpc::TraceCheckpoint {
+                    call_index: 2,
+                    boundary: "http".to_string(),
+                    request: br#"{}"#.to_vec(),
+                    response: br#"{"status":200}"#.to_vec(),
+                    duration_ms: 1,
+                },
+            ],
+            logs: vec![],
+        };
+
+        let hits = recorded_cache_hit_map(&trace);
+        assert_eq!(hits.get(&1), Some(&true));
+        assert_eq!(hits.get(&2), Some(&false));
+    }
 }
