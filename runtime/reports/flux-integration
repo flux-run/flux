@@ -1,91 +1,91 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-17T20:02:43.920Z",
+  "timestamp": "2026-03-17T20:48:12.159Z",
   "engine": "node v22.20.0",
   "passed": 13,
   "failed": 0,
   "skipped": 0,
   "total": 13,
-  "elapsedMs": 5,
+  "elapsedMs": 0,
   "passRate": "100.0%",
   "results": [
     {
-      "name": "flux run examples/drizzle/crud.ts → inserted row",
+      "name": "GET /todos before create → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.019583000000011452
+      "duration": 0.005415999999968335
     },
     {
-      "name": "flux run examples/drizzle/crud.ts → selected row",
+      "name": "GET /todos before create → empty",
       "passed": true,
       "skipped": false,
-      "duration": 0.005959000000075321
+      "duration": 0.005000000000109139
     },
     {
-      "name": "flux run examples/drizzle/crud.ts → updated row",
+      "name": "POST /todos → 201",
       "passed": true,
       "skipped": false,
-      "duration": 0.004000000000132786
+      "duration": 0.008374999999887223
     },
     {
-      "name": "flux run examples/drizzle/transaction.ts → inserted row",
+      "name": "POST /todos → execution id header",
       "passed": true,
       "skipped": false,
-      "duration": 0.039791999999579275
+      "duration": 0.005749999999807187
     },
     {
-      "name": "flux run examples/drizzle/transaction.ts → selected row",
+      "name": "POST /todos → title persisted",
       "passed": true,
       "skipped": false,
-      "duration": 0.007749999999759893
+      "duration": 0.0034160000000156288
     },
     {
-      "name": "flux run examples/drizzle/transaction.ts → updated row",
+      "name": "POST /todos → completed false",
       "passed": true,
       "skipped": false,
-      "duration": 0.005333000000064203
+      "duration": 0.00287499999967622
     },
     {
-      "name": "flux run examples/drizzle/transaction.ts → final persisted row",
+      "name": "GET /todos after create → one row",
       "passed": true,
       "skipped": false,
-      "duration": 0.011541999999735708
+      "duration": 0.029416000000310305
     },
     {
-      "name": "flux run examples/drizzle/crud.ts with recording → execution id emitted",
+      "name": "flux replay → ok",
       "passed": true,
       "skipped": false,
-      "duration": 0.014000000000123691
+      "duration": 0.012375000000247383
     },
     {
-      "name": "flux run examples/drizzle/crud.ts with recording → output captured",
+      "name": "flux replay → same JSON response",
       "passed": true,
       "skipped": false,
-      "duration": 0.005834000000504602
+      "duration": 0.010500000000320142
     },
     {
-      "name": "flux replay for drizzle CRUD → ok",
+      "name": "flux replay → 201 status preserved",
       "passed": true,
       "skipped": false,
-      "duration": 0.012750000000778527
+      "duration": 0.0070420000001831795
     },
     {
-      "name": "flux replay for drizzle CRUD → same JSON output",
+      "name": "flux replay → Postgres step recorded",
       "passed": true,
       "skipped": false,
-      "duration": 4.994458000000122
+      "duration": 0.007041000000299391
     },
     {
-      "name": "flux replay for drizzle CRUD → Postgres recorded",
+      "name": "flux replay → writes suppressed",
       "passed": true,
       "skipped": false,
-      "duration": 0.017375000000356522
+      "duration": 0.003208000000086031
     },
     {
-      "name": "flux replay for drizzle CRUD → writes suppressed",
+      "name": "GET /todos after replay → count unchanged",
       "passed": true,
       "skipped": false,
-      "duration": 0.0039999999999054126
+      "duration": 0.03449999999975262
     }
   ]
 }
