@@ -799,6 +799,12 @@ struct RedisDriverError {
 }
 
 impl RedisDriverError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
     fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "message": self.message,
@@ -1892,6 +1898,8 @@ fn op_flux_redis_command(
     } = serde_json::from_value(request)
         .map_err(|err| JsErrorBox::type_error(format!("invalid redis command request: {err}")))?;
 
+    let command = validate_redis_command(&command, &args)?;
+
     let target = parse_redis_target(&connection_string)?;
     validate_outbound_host(
         &target.host,
@@ -1963,7 +1971,7 @@ fn op_flux_redis_command(
                 call_index,
                 boundary: "redis".to_string(),
                 url: target.url.clone(),
-                method: command.to_ascii_uppercase(),
+                method: command.clone(),
                 request: request_json,
                 response: response_json.clone(),
                 duration_ms,
@@ -2517,13 +2525,61 @@ fn parse_redis_target(connection_string: &str) -> Result<RedisConnectionTarget, 
     })
 }
 
+fn blocked_redis_feature_error(feature: &str) -> JsErrorBox {
+    let verb = match feature {
+        "pub/sub" => "is",
+        _ => "are",
+    };
+    JsErrorBox::generic(format!(
+        "Redis {feature} {verb} not supported in Flux (non-deterministic execution)"
+    ))
+}
+
+fn normalize_redis_command(command: &str) -> Result<String, JsErrorBox> {
+    let normalized = command.trim().to_ascii_uppercase();
+    if normalized.is_empty() {
+        return Err(JsErrorBox::type_error("redis command is required"));
+    }
+    Ok(normalized)
+}
+
+fn validate_redis_command(command: &str, args: &[serde_json::Value]) -> Result<String, JsErrorBox> {
+    let normalized = normalize_redis_command(command)?;
+
+    match normalized.as_str() {
+        "MULTI" | "EXEC" | "WATCH" | "UNWATCH" => {
+            return Err(blocked_redis_feature_error("transactions"));
+        }
+        "SUBSCRIBE" | "PSUBSCRIBE" | "UNSUBSCRIBE" | "PUNSUBSCRIBE" | "PUBLISH" => {
+            return Err(blocked_redis_feature_error("pub/sub"));
+        }
+        "BLPOP" | "BRPOP" | "BZPOPMIN" | "BZPOPMAX" => {
+            return Err(blocked_redis_feature_error("blocking commands"));
+        }
+        "XREAD" | "XREADGROUP" => {
+            let uses_block = args.iter().any(|value| {
+                value
+                    .as_str()
+                    .map(|text| text.eq_ignore_ascii_case("BLOCK"))
+                    .unwrap_or(false)
+            });
+            if uses_block {
+                return Err(blocked_redis_feature_error("blocking commands"));
+            }
+        }
+        _ => {}
+    }
+
+    Ok(normalized)
+}
+
 fn perform_redis_command(
     target: &RedisConnectionTarget,
     command: &str,
     args: &[serde_json::Value],
 ) -> Result<RedisCommandOutcome, JsErrorBox> {
     let target = target.clone();
-    let command = command.to_string();
+    let command = normalize_redis_command(command)?;
     let args = args.to_vec();
     std::thread::spawn(move || {
         let mut stream = connect_redis_stream(&target)?;
@@ -2557,9 +2613,9 @@ fn perform_redis_command(
             .collect::<Result<Vec<_>, _>>()?;
 
         match send_redis_command(&mut stream, &command, &encoded_args)? {
-            RedisRespValue::Error(error) => Ok(RedisCommandOutcome::Error(RedisDriverError {
-                message: error,
-            })),
+            RedisRespValue::Error(error) => {
+                Ok(RedisCommandOutcome::Error(RedisDriverError::new(error)))
+            }
             response => Ok(RedisCommandOutcome::Success(redis_resp_to_json(response))),
         }
     })
@@ -2643,10 +2699,11 @@ fn send_redis_command(
 fn ensure_redis_ok(response: RedisRespValue) -> Result<(), RedisDriverError> {
     match response {
         RedisRespValue::SimpleString(value) if value.eq_ignore_ascii_case("OK") => Ok(()),
-        RedisRespValue::Error(message) => Err(RedisDriverError { message }),
-        other => Err(RedisDriverError {
-            message: format!("unexpected redis response: {:?}", other),
-        }),
+        RedisRespValue::Error(message) => Err(RedisDriverError::new(message)),
+        other => Err(RedisDriverError::new(format!(
+            "unexpected redis response: {:?}",
+            other
+        ))),
     }
 }
 
@@ -7218,19 +7275,21 @@ function __flux_redis_response_or_throw(response) {
     }
     return response ?? {};
 }
+function __flux_redis_unsupported(feature) {
+    const verb = feature === "pub/sub" ? "is" : "are";
+    throw new Error(`Redis ${feature} ${verb} not supported in Flux (non-deterministic execution)`);
+}
 class FluxRedisClient {
     constructor(options = {}) {
         this.url = String(options?.url ?? options?.connectionString ?? "");
         this.__closed = false;
-        this.__connected = false;
     }
 
     async connect() {
         if (this.__closed) {
             throw new Error("Flux.redis client has already been closed");
         }
-        this.__connected = true;
-        return this;
+        return;
     }
 
     async sendCommand(parts) {
@@ -7240,11 +7299,15 @@ class FluxRedisClient {
         if (!Array.isArray(parts) || parts.length === 0) {
             throw new TypeError("Flux.redis sendCommand expects a non-empty command array");
         }
+        const commandParts = parts.map((part) => String(part));
+        if (!commandParts[0]) {
+            throw new TypeError("Flux.redis sendCommand requires a command name");
+        }
 
         const response = globalThis.Flux.redis.command({
             connectionString: this.url,
-            command: String(parts[0] ?? ""),
-            args: parts.slice(1),
+            command: commandParts[0],
+            args: commandParts.slice(1),
         });
         return response.value;
     }
@@ -7261,8 +7324,16 @@ class FluxRedisClient {
         return this.sendCommand(["DEL", ...keys]);
     }
 
+    async exists(key) {
+        return this.sendCommand(["EXISTS", key]);
+    }
+
     async incr(key) {
         return this.sendCommand(["INCR", key]);
+    }
+
+    async decr(key) {
+        return this.sendCommand(["DECR", key]);
     }
 
     async hGet(key, field) {
@@ -7273,17 +7344,66 @@ class FluxRedisClient {
         return this.sendCommand(["HSET", key, field, value]);
     }
 
+    async hDel(key, field) {
+        return this.sendCommand(["HDEL", key, field]);
+    }
+
     async expire(key, seconds) {
         return this.sendCommand(["EXPIRE", key, seconds]);
     }
 
-    async quit() {
-        this.__closed = true;
-        return "OK";
+    async ttl(key) {
+        return this.sendCommand(["TTL", key]);
     }
 
-    disconnect() {
+    multi() {
+        return __flux_redis_unsupported("transactions");
+    }
+
+    exec() {
+        return __flux_redis_unsupported("transactions");
+    }
+
+    watch() {
+        return __flux_redis_unsupported("transactions");
+    }
+
+    unwatch() {
+        return __flux_redis_unsupported("transactions");
+    }
+
+    subscribe() {
+        return __flux_redis_unsupported("pub/sub");
+    }
+
+    psubscribe() {
+        return __flux_redis_unsupported("pub/sub");
+    }
+
+    publish() {
+        return __flux_redis_unsupported("pub/sub");
+    }
+
+    unsubscribe() {
+        return __flux_redis_unsupported("pub/sub");
+    }
+
+    pipeline() {
+        return __flux_redis_unsupported("pipelines");
+    }
+
+    batch() {
+        return __flux_redis_unsupported("pipelines");
+    }
+
+    async quit() {
         this.__closed = true;
+        return;
+    }
+
+    async disconnect() {
+        this.__closed = true;
+        return;
     }
 }
 globalThis.Flux.redis.command = function(options = {}) {

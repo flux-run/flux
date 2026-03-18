@@ -185,6 +185,41 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
             continue;
         }
 
+        if cp.boundary == "redis" {
+            let command = req
+                .get("command")
+                .and_then(|value| value.as_str())
+                .unwrap_or("COMMAND");
+            let args_preview = redis_args_preview(&req);
+            let value_preview = redis_result_preview(&res);
+
+            println!(
+                "  [{}] REDIS  {}{}  {}ms  → {}",
+                cp.call_index,
+                command,
+                if args_preview.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {args_preview}")
+                },
+                cp.duration_ms,
+                value_preview,
+            );
+
+            if args.verbose {
+                let request_json =
+                    serde_json::to_string(&req).unwrap_or_else(|_| "null".to_string());
+                let response_json =
+                    serde_json::to_string(&res).unwrap_or_else(|_| "null".to_string());
+
+                println!("      request");
+                print_json_block(&request_json, true);
+                println!("      response");
+                print_json_block(&response_json, true);
+            }
+            continue;
+        }
+
         println!(
             "  [{}] {}  {}  {}ms  → {}{}",
             cp.call_index,
@@ -271,6 +306,41 @@ fn format_cache_age(age_ms: u64) -> String {
     format!("{seconds}s")
 }
 
+fn redis_args_preview(request: &serde_json::Value) -> String {
+    request
+        .get("args")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .map(compact_trace_value)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+}
+
+fn redis_result_preview(response: &serde_json::Value) -> String {
+    if let Some(message) = response
+        .get("error")
+        .and_then(|value| value.get("message"))
+        .and_then(|value| value.as_str())
+    {
+        return format!("error: {message}");
+    }
+
+    compact_trace_value(response.get("value").unwrap_or(&serde_json::Value::Null))
+}
+
+fn compact_trace_value(value: &serde_json::Value) -> String {
+    let rendered = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+    if rendered.len() <= 80 {
+        return rendered;
+    }
+
+    format!("{}...", &rendered[..77])
+}
+
 fn print_json_block(raw: &str, expanded: bool) {
     if !expanded {
         println!("    (hidden, use --verbose)");
@@ -287,7 +357,9 @@ fn print_json_block(raw: &str, expanded: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{checkpoint_annotation, format_cache_age};
+    use super::{
+        checkpoint_annotation, format_cache_age, redis_args_preview, redis_result_preview,
+    };
 
     #[test]
     fn shows_memory_cache_hit_for_http_checkpoint() {
@@ -353,5 +425,39 @@ mod tests {
     #[test]
     fn formats_hour_scale_cache_age() {
         assert_eq!(format_cache_age(3_780_000), "1h 3m");
+    }
+
+    #[test]
+    fn formats_redis_command_arguments_for_trace() {
+        let request = serde_json::json!({
+            "args": ["user:1", "field"]
+        });
+
+        assert_eq!(redis_args_preview(&request), "\"user:1\" \"field\"");
+    }
+
+    #[test]
+    fn formats_redis_result_value_for_trace() {
+        let response = serde_json::json!({
+            "value": 42,
+            "error": serde_json::Value::Null,
+        });
+
+        assert_eq!(redis_result_preview(&response), "42");
+    }
+
+    #[test]
+    fn formats_redis_error_for_trace() {
+        let response = serde_json::json!({
+            "value": serde_json::Value::Null,
+            "error": {
+                "message": "Redis blocking commands are not supported in Flux (non-deterministic execution)"
+            }
+        });
+
+        assert_eq!(
+            redis_result_preview(&response),
+            "error: Redis blocking commands are not supported in Flux (non-deterministic execution)"
+        );
     }
 }

@@ -202,22 +202,38 @@ export default async function handler({ input }) {
     const client = createClient({ url: input.connectionString });
     await client.connect();
     await client.set("count", "1");
+    const exists = await client.exists("count");
     const incremented = await client.incr("count");
+    const decremented = await client.decr("count");
     const value = await client.get("count");
     await client.hSet("profile", "name", "flux");
     const field = await client.hGet("profile", "name");
     const expired = await client.expire("profile", 60);
-    const deleted = await client.del("profile");
+    const ttl = await client.ttl("profile");
+    const hashDeleted = await client.hDel("profile", "name");
     const echoed = await client.sendCommand(["GET", "count"]);
+    const deleted = await client.del("count");
+    let blocked = null;
+    try {
+        client.multi();
+    } catch (error) {
+        blocked = String(error?.message ?? error);
+    }
     await client.quit();
+    await client.disconnect();
 
     return {
         value,
         echoed,
+        exists,
         incremented,
+        decremented,
         field,
         expired,
+        ttl,
+        hashDeleted,
         deleted,
+        blocked,
         isClient: client instanceof Flux.redis.FluxRedisClient,
     };
 }
@@ -246,16 +262,21 @@ export default async function handler({ input }) {
     assert_eq!(
         output.output,
         serde_json::json!({
-            "value": "2",
-            "echoed": "2",
+            "value": "1",
+            "echoed": "1",
+            "exists": 1,
             "incremented": 2,
+            "decremented": 1,
             "field": "flux",
             "expired": 1,
+            "ttl": 60,
+            "hashDeleted": 1,
             "deleted": 1,
+            "blocked": "Redis transactions are not supported in Flux (non-deterministic execution)",
             "isClient": true,
         })
     );
-    assert_eq!(output.checkpoints.len(), 8);
+    assert_eq!(output.checkpoints.len(), 12);
     assert!(
         output
             .checkpoints
@@ -266,10 +287,58 @@ export default async function handler({ input }) {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn redis_boundary_blocks_nondeterministic_commands() -> Result<()> {
+    let _lock = redis_test_lock().lock().await;
+    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_REDIS", "1");
+
+    let code = r#"
+export default function handler({ input }) {
+    try {
+        Flux.redis.command({
+            connectionString: input.connectionString,
+            command: "BLPOP",
+            args: ["jobs", "0"],
+        });
+        return { ok: true };
+    } catch (error) {
+        return {
+            ok: false,
+            message: String(error?.message ?? error),
+        };
+    }
+}
+"#;
+
+    let payload = serde_json::json!({
+        "connectionString": "redis://127.0.0.1:6379/0",
+    });
+
+    let mut isolate =
+        JsIsolate::new_for_run(code).context("failed to create blocked-command isolate")?;
+    let output = isolate
+        .execute(payload, ExecutionContext::new("redis-blocked-command"))
+        .await
+        .context("blocked command execution failed")?;
+
+    assert_eq!(output.error, None);
+    assert_eq!(
+        output.output,
+        serde_json::json!({
+            "ok": false,
+            "message": "Redis blocking commands are not supported in Flux (non-deterministic execution)",
+        })
+    );
+    assert!(output.checkpoints.is_empty());
+
+    Ok(())
+}
+
 #[derive(Default)]
 struct RedisState {
     strings: HashMap<String, String>,
     hashes: HashMap<String, HashMap<String, String>>,
+    expirations: HashMap<String, i64>,
 }
 
 async fn spawn_mock_redis_server() -> Result<(
@@ -340,10 +409,17 @@ async fn handle_redis_connection(
                 let mut guard = state.lock().await;
                 for key in command.iter().skip(1) {
                     if guard.strings.remove(key).is_some() || guard.hashes.remove(key).is_some() {
+                        guard.expirations.remove(key);
                         deleted += 1;
                     }
                 }
                 write_integer(socket, deleted).await?;
+            }
+            "EXISTS" => {
+                let key = command.get(1).cloned().unwrap_or_default();
+                let guard = state.lock().await;
+                let exists = guard.strings.contains_key(&key) || guard.hashes.contains_key(&key);
+                write_integer(socket, if exists { 1 } else { 0 }).await?;
             }
             "INCR" => {
                 let key = command.get(1).cloned().unwrap_or_default();
@@ -354,6 +430,18 @@ async fn handle_redis_connection(
                     .and_then(|value| value.parse::<i64>().ok())
                     .unwrap_or(0)
                     + 1;
+                guard.strings.insert(key, next.to_string());
+                write_integer(socket, next).await?;
+            }
+            "DECR" => {
+                let key = command.get(1).cloned().unwrap_or_default();
+                let mut guard = state.lock().await;
+                let next = guard
+                    .strings
+                    .get(&key)
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .unwrap_or(0)
+                    - 1;
                 guard.strings.insert(key, next.to_string());
                 write_integer(socket, next).await?;
             }
@@ -382,7 +470,54 @@ async fn handle_redis_connection(
                 };
                 write_integer(socket, inserted).await?;
             }
-            "EXPIRE" => write_integer(socket, 1).await?,
+            "HDEL" => {
+                let key = command.get(1).cloned().unwrap_or_default();
+                let field = command.get(2).cloned().unwrap_or_default();
+                let mut guard = state.lock().await;
+                let deleted = guard
+                    .hashes
+                    .get_mut(&key)
+                    .and_then(|hash| hash.remove(&field))
+                    .map(|_| 1)
+                    .unwrap_or(0);
+                if guard
+                    .hashes
+                    .get(&key)
+                    .map(|hash| hash.is_empty())
+                    .unwrap_or(false)
+                {
+                    guard.hashes.remove(&key);
+                    guard.expirations.remove(&key);
+                }
+                write_integer(socket, deleted).await?;
+            }
+            "EXPIRE" => {
+                let key = command.get(1).cloned().unwrap_or_default();
+                let seconds = command
+                    .get(2)
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .unwrap_or(0);
+                let mut guard = state.lock().await;
+                let exists = guard.strings.contains_key(&key) || guard.hashes.contains_key(&key);
+                if exists {
+                    guard.expirations.insert(key, seconds);
+                    write_integer(socket, 1).await?;
+                } else {
+                    write_integer(socket, 0).await?;
+                }
+            }
+            "TTL" => {
+                let key = command.get(1).cloned().unwrap_or_default();
+                let guard = state.lock().await;
+                let ttl = if let Some(seconds) = guard.expirations.get(&key) {
+                    *seconds
+                } else if guard.strings.contains_key(&key) || guard.hashes.contains_key(&key) {
+                    -1
+                } else {
+                    -2
+                };
+                write_integer(socket, ttl).await?;
+            }
             _ => write_error(socket, "ERR unknown command").await?,
         }
     }
