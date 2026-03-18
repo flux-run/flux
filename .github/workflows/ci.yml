@@ -29,6 +29,8 @@ env:
   # Baked into the CLI binary so telemetry works in released builds.
   # Set this secret in: GitHub repo → Settings → Secrets → Actions → New secret
   FLUX_POSTHOG_KEY: ${{ secrets.FLUX_POSTHOG_KEY }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  V8_FROM_SOURCE: "0"
 
 jobs:
   test:
@@ -63,7 +65,7 @@ jobs:
             cross:    false
             ext:      ""
 
-          - runner:    macos-13            # native x86_64 runner
+          - runner:    macos-14            # cross-compile to AMD64 on ARM runner
             target:   x86_64-apple-darwin
             os-label: macOS
             arch:     amd64
@@ -119,7 +121,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}-ci
+          key: ${{ matrix.target }}-ci-v3
 
       - name: Install cross (Linux ARM64 only)
         if: matrix.cross == true
