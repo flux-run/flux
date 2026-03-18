@@ -525,6 +525,29 @@ const SUITES: Suite[] = [
     },
   },
 
+  // ── 4. Request isolation ─────────────────────────────────────────────────
+  {
+    name: "request-isolation",
+    handler: "request-isolation.js",
+    async run(baseUrl, ctx) {
+      {
+        const first = await get(baseUrl, "/counter");
+        assert(ctx, "GET /counter first request → 200", () => first.status === 200);
+        assert(ctx, "GET /counter first request → counter is 1", () => (first.body as any)?.counter === 1);
+      }
+      {
+        const second = await get(baseUrl, "/counter");
+        assert(ctx, "GET /counter second request → 200", () => second.status === 200);
+        assert(ctx, "GET /counter second request → counter resets to 1", () => (second.body as any)?.counter === 1);
+      }
+      {
+        const third = await get(baseUrl, "/object-id");
+        assert(ctx, "GET /object-id → 200", () => third.status === 200);
+        assert(ctx, "GET /object-id → request-local object starts at 1", () => (third.body as any)?.seen === 1);
+      }
+    },
+  },
+
   // ── 6. Bundled framework app ───────────────────────────────────────────
   {
     name: "bundled-hono",

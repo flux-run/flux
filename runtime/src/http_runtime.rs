@@ -100,6 +100,7 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     tracing::info!(%addr, route = %config.route_name, "runtime listening");
+    println!("[ready] listening on http://{}:{}", config.host, config.port);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

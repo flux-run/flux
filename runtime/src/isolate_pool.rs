@@ -196,10 +196,11 @@ fn spawn_isolate_worker(
                     RuntimeArtifact::Built(artifact) => JsIsolate::new_from_artifact(artifact).await,
                 };
 
-                let mut isolate = match isolate_result {
+                let is_server_mode = match isolate_result {
                     Ok(iso) => {
-                        let _ = init_tx.send(Ok(iso.is_server_mode));
-                        iso
+                        let detected = iso.is_server_mode;
+                        let _ = init_tx.send(Ok(detected));
+                        detected
                     }
                     Err(err) => {
                         let _ = init_tx.send(Err(format!("{:#}", err)));
@@ -207,24 +208,30 @@ fn spawn_isolate_worker(
                     }
                 };
 
-                let server_mode = isolate.is_server_mode;
-
-                // Process work items.  In handler mode we run them serially (the
-                // isolate is re-created after each call in the original design;
-                // here we keep it alive and rely on the per-execution HashMap to
-                // isolate state).  In server mode the isolate is inherently
-                // long-lived and we dispatch each request serially through the
-                // single Deno.serve handler.
-                //
-                // Full `spawn_local` concurrency is ready for when the upstream
-                // deno_core event loop supports interleaved calls; for now each
-                // work item drives the event loop to completion before the next
-                // is accepted, which is safe and correct.
+                // Process work items serially per worker. Each HTTP execution gets
+                // a fresh isolate so requests reuse the program artifact, not the
+                // previous request's JS heap.
                 while let Some(work) = rx.recv().await {
                     let context = work.context.clone();
                     let started = std::time::Instant::now();
 
-                    let result = if server_mode {
+                    let isolate_result = match &artifact {
+                        RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, isolate_id),
+                        RuntimeArtifact::Built(artifact) => JsIsolate::new_from_artifact(artifact).await,
+                    };
+
+                    let mut isolate = match isolate_result {
+                        Ok(iso) => iso,
+                        Err(err) => {
+                            let _ = work.result_tx.send(error_result(
+                                work.context,
+                                format!("failed to initialize isolate: {err:#}"),
+                            ));
+                            continue;
+                        }
+                    };
+
+                    let result = if is_server_mode {
                         match work.net_request {
                             Some(net_req) => match isolate.dispatch_request(work.context.clone(), net_req).await {
                                 Ok(NetRequestExecution { response: net_resp, checkpoints, logs }) => ExecutionResult {
