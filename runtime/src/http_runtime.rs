@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::artifact::RuntimeArtifact;
-use crate::deno_runtime::{NetRequest, boot_runtime_artifact};
+use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, NetRequest, boot_runtime_artifact};
 use crate::isolate_pool::{ExecutionContext, IsolatePool};
 
 #[derive(Debug, Clone)]
@@ -52,6 +52,12 @@ struct HealthResponse {
     status: String,
     route: String,
     code_version: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InternalResumeRequest {
+    request: serde_json::Value,
+    recorded_checkpoints: Vec<FetchCheckpoint>,
 }
 
 fn attach_execution_headers<T>(response: &mut Response<T>, execution_id: &str, request_id: &str, code_version: &str) {
@@ -120,11 +126,13 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         tracing::info!("server mode detected — routing all traffic through Deno.serve handler");
         Router::new()
             .route("/health", get(health))
+            .route("/__flux_internal/resume", post(handle_internal_resume))
             .fallback(handle_net_request)
             .with_state(state)
     } else {
         Router::new()
             .route("/health", get(health))
+            .route("/__flux_internal/resume", post(handle_internal_resume))
             .route("/:route", post(handle_request))
             .with_state(state)
     };
@@ -333,6 +341,87 @@ async fn handle_net_request(
     let mut response = (StatusCode::INTERNAL_SERVER_ERROR, "handler produced no response").into_response();
     attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
     response
+}
+
+async fn handle_internal_resume(
+    State(state): State<RuntimeState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<InternalResumeRequest>,
+) -> impl IntoResponse {
+    if state.service_token.is_empty() {
+        return (StatusCode::FORBIDDEN, "runtime internal resume is disabled").into_response();
+    }
+
+    let provided = headers
+        .get("x-internal-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if provided != state.service_token {
+        return (StatusCode::UNAUTHORIZED, "invalid internal token").into_response();
+    }
+
+    let net_req = match request_json_to_net_request(&payload.request) {
+        Ok(net_req) => net_req,
+        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+    };
+
+    tracing::info!(recorded_checkpoints = payload.recorded_checkpoints.len(), "runtime internal resume request");
+
+    let mut context = ExecutionContext::new(state.code_version.clone());
+    context.mode = ExecutionMode::Replay;
+
+    let result = state
+        .pool
+        .execute_net_request_with_recorded(context, net_req, payload.recorded_checkpoints)
+        .await;
+
+    (StatusCode::OK, Json(result)).into_response()
+}
+
+fn request_json_to_net_request(request: &serde_json::Value) -> std::result::Result<NetRequest, String> {
+    let method = request
+        .get("method")
+        .and_then(|value| value.as_str())
+        .unwrap_or("GET")
+        .to_string();
+    let url = request
+        .get("url")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "resume request missing url".to_string())?
+        .to_string();
+    let body = request
+        .get("body")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let headers_list = request
+        .get("headers")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "resume request missing headers array".to_string())?
+        .iter()
+        .filter_map(|entry| {
+            let parts = entry.as_array()?;
+            if parts.len() != 2 {
+                return None;
+            }
+            Some([
+                parts[0].as_str()?.to_string(),
+                parts[1].as_str()?.to_string(),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    let headers_json = serde_json::to_string(&headers_list)
+        .map_err(|error| format!("failed to encode headers: {error}"))?;
+
+    Ok(NetRequest {
+        req_id: Uuid::new_v4().to_string(),
+        method,
+        url,
+        headers_json,
+        body,
+    })
 }
 
 async fn shutdown_signal() {

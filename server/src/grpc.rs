@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::collections::HashMap;
 
 use reqwest::Client;
+use reqwest::Url;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgListener};
 use subtle::ConstantTimeEq;
@@ -323,6 +324,50 @@ fn summarize_http_response(value: &serde_json::Value) -> String {
     };
 
     format!("status={} body={}", status, shortened_body)
+}
+
+async fn perform_runtime_resume(
+    request_json: &serde_json::Value,
+    recorded_checkpoints: Vec<serde_json::Value>,
+    token: &str,
+) -> Result<serde_json::Value, Status> {
+    let original_url = request_json
+        .get("url")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| Status::failed_precondition("resume currently requires an HTTP listener execution"))?;
+
+    let mut resume_url = Url::parse(original_url)
+        .map_err(|error| Status::internal(format!("failed to parse runtime url: {error}")))?;
+    resume_url.set_path("/__flux_internal/resume");
+    resume_url.set_query(None);
+
+    let response = Client::new()
+        .post(resume_url)
+        .header("x-internal-token", token)
+        .json(&serde_json::json!({
+            "request": request_json,
+            "recorded_checkpoints": recorded_checkpoints,
+        }))
+        .send()
+        .await
+        .map_err(|error| Status::internal(format!("resume runtime call failed: {error}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "failed to read runtime error response".to_string());
+        return Err(Status::internal(format!(
+            "resume runtime rejected request: {} {}",
+            status, body
+        )));
+    }
+
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|error| Status::internal(format!("failed to decode runtime resume response: {error}")))
 }
 
 fn compact_json(value: &serde_json::Value) -> String {
@@ -1029,6 +1074,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::ResumeRequest>,
     ) -> Result<Response<pb::ResumeResponse>, Status> {
+        let auth_token = InternalAuthGrpc::read_bearer_token(request.metadata()).unwrap_or_default();
         let _auth_mode = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
 
@@ -1080,6 +1126,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .iter()
             .map(|(call_index, _, _, _, _, _, _)| *call_index)
             .max()
+            .map(|call_index| call_index + 1)
             .unwrap_or(0);
         let from_index = if req.from_index < 0 {
             inferred_from_index
@@ -1090,11 +1137,86 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let resume_execution_id = uuid::Uuid::new_v4();
         let resume_request_id = uuid::Uuid::new_v4();
 
-        let mut steps = Vec::with_capacity(checkpoint_rows.len());
-        let mut total_duration_ms = 0i32;
-        let mut final_status = "ok".to_string();
-        let mut final_error = String::new();
-        let mut final_output = serde_json::Value::Null;
+        let recorded_checkpoints = checkpoint_rows
+            .iter()
+            .filter(|(call_index, _, _, _, _, _, _)| *call_index < from_index)
+            .map(|(call_index, boundary, url, method, request_json, response_json, duration_ms)| {
+                serde_json::json!({
+                    "call_index": *call_index as u32,
+                    "boundary": boundary,
+                    "url": url
+                        .clone()
+                        .or_else(|| {
+                            request_json
+                                .get("url")
+                                .and_then(|value| value.as_str())
+                                .map(|value| value.to_string())
+                        })
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    "method": method
+                        .clone()
+                        .or_else(|| {
+                            request_json
+                                .get("method")
+                                .and_then(|value| value.as_str())
+                                .map(|value| value.to_string())
+                        })
+                        .unwrap_or_else(|| "GET".to_string()),
+                    "request": request_json,
+                    "response": response_json,
+                    "duration_ms": *duration_ms,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let result = perform_runtime_resume(&source_request_json, recorded_checkpoints.clone(), &auth_token).await?;
+
+        let recorded_call_indexes = recorded_checkpoints
+            .iter()
+            .filter_map(|checkpoint| checkpoint.get("call_index").and_then(|value| value.as_i64()).map(|value| value as i32))
+            .collect::<std::collections::HashSet<_>>();
+
+        let checkpoints = result
+            .get("checkpoints")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let logs = result
+            .get("logs")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let request_id = result
+            .get("request_id")
+            .and_then(|value| value.as_str())
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            .unwrap_or(resume_request_id);
+        let result_status = result
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("error")
+            .to_string();
+        let result_body = result
+            .get("body")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let result_error = result
+            .get("error")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let result_duration_ms = result
+            .get("duration_ms")
+            .and_then(|value| value.as_i64())
+            .unwrap_or_default() as i32;
+        let result_code_version = result
+            .get("code_version")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| code_sha.clone());
+
+        let mut steps = Vec::with_capacity(checkpoints.len());
 
         let mut tx = self
             .pool
@@ -1102,55 +1224,38 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .await
             .map_err(|e| Status::internal(format!("failed to begin resume transaction: {e}")))?;
 
-        for (call_index, boundary, url, cp_method, request_json, response_json, _duration_ms) in checkpoint_rows {
-            let step_url = url.unwrap_or_else(|| {
-                request_json
-                    .get("url")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string()
-            });
-
-            let step_method = cp_method.or_else(|| {
-                request_json
-                    .get("method")
-                    .and_then(|v| v.as_str())
-                    .map(|v| v.to_string())
-            });
-
-            if call_index < from_index || boundary != "http" {
-                sqlx::query(
-                    "INSERT INTO flux.checkpoints
-                     (execution_id, call_index, boundary, url, method, request, response, duration_ms)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-                )
-                .bind(resume_execution_id)
-                .bind(call_index)
-                .bind(boundary.clone())
-                .bind(step_url.clone())
-                .bind(step_method)
-                .bind(request_json)
-                .bind(response_json)
-                .bind(0i32)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| Status::internal(format!("failed to persist recorded resume checkpoint: {e}")))?;
-
-                steps.push(pb::ReplayStep {
-                    call_index,
-                    boundary,
-                    url: step_url,
-                    used_recorded: true,
-                    duration_ms: 0,
-                    source: "recorded".to_string(),
-                    validated: false,
-                });
-
-                continue;
-            }
-
-            let (live_response, duration_ms) = perform_live_http_call(&request_json).await?;
-            total_duration_ms += duration_ms;
+        for checkpoint in &checkpoints {
+            let call_index = checkpoint
+                .get("call_index")
+                .and_then(|value| value.as_i64())
+                .unwrap_or_default() as i32;
+            let boundary = checkpoint
+                .get("boundary")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let url = checkpoint
+                .get("url")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let method = checkpoint
+                .get("method")
+                .and_then(|value| value.as_str())
+                .unwrap_or("GET")
+                .to_string();
+            let request_json = checkpoint
+                .get("request")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let response_json = checkpoint
+                .get("response")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let duration_ms = checkpoint
+                .get("duration_ms")
+                .and_then(|value| value.as_i64())
+                .unwrap_or_default() as i32;
 
             sqlx::query(
                 "INSERT INTO flux.checkpoints
@@ -1160,42 +1265,31 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .bind(resume_execution_id)
             .bind(call_index)
             .bind(boundary.clone())
-            .bind(step_url.clone())
-            .bind(step_method)
+            .bind(url.clone())
+            .bind(method)
             .bind(request_json)
-            .bind(live_response.clone())
+            .bind(response_json)
             .bind(duration_ms)
             .execute(&mut *tx)
             .await
-            .map_err(|e| Status::internal(format!("failed to persist live resume checkpoint: {e}")))?;
+            .map_err(|e| Status::internal(format!("failed to persist resume checkpoint: {e}")))?;
 
             steps.push(pb::ReplayStep {
                 call_index,
                 boundary,
-                url: step_url,
-                used_recorded: false,
+                url,
+                used_recorded: recorded_call_indexes.contains(&call_index),
                 duration_ms,
-                source: "live".to_string(),
+                source: if recorded_call_indexes.contains(&call_index) {
+                    "recorded".to_string()
+                } else {
+                    "live".to_string()
+                },
                 validated: false,
             });
-
-            final_output = live_response
-                .get("body")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-
-            let status_code = live_response
-                .get("status")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            if status_code >= 400 || status_code == 0 {
-                final_status = "error".to_string();
-                final_error = format!("external service returned {}", status_code);
-                break;
-            }
         }
 
-        let output_json = serde_json::to_string(&final_output).unwrap_or_else(|_| "null".to_string());
+        let output_json = serde_json::to_string(&result_body).unwrap_or_else(|_| "null".to_string());
 
         sqlx::query(
             "INSERT INTO flux.executions
@@ -1203,18 +1297,33 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
              VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10)",
         )
         .bind(resume_execution_id)
-        .bind(resume_request_id)
+        .bind(request_id)
         .bind(method)
         .bind(path)
-        .bind(final_status.clone())
+        .bind(result_status.clone())
         .bind(source_request_json)
-        .bind(final_output)
-        .bind(final_error.clone())
-        .bind(code_sha)
-        .bind(total_duration_ms)
+        .bind(result_body.clone())
+        .bind(result_error.clone())
+        .bind(result_code_version)
+        .bind(result_duration_ms)
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to persist resume execution: {e}")))?;
+
+        for (seq, log) in logs.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO flux.execution_console_logs
+                 (execution_id, seq, level, message)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(resume_execution_id)
+            .bind(seq as i32)
+            .bind(log.get("level").and_then(|value| value.as_str()).unwrap_or("info"))
+            .bind(log.get("message").and_then(|value| value.as_str()).unwrap_or_default())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(format!("failed to persist resume logs: {e}")))?;
+        }
 
         tx.commit()
             .await
@@ -1222,10 +1331,10 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         Ok(Response::new(pb::ResumeResponse {
             execution_id: resume_execution_id.to_string(),
-            status: final_status,
+            status: result_status,
             output: output_json,
-            error: final_error,
-            duration_ms: total_duration_ms,
+            error: result_error,
+            duration_ms: result_duration_ms,
             from_index,
             steps,
         }))

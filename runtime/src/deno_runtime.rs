@@ -3482,8 +3482,21 @@ impl JsIsolate {
         context: ExecutionContext,
         req: NetRequest,
     ) -> Result<NetRequestExecution> {
+        self.dispatch_request_with_recorded(context, req, Vec::new()).await
+    }
+
+    pub async fn dispatch_request_with_recorded(
+        &mut self,
+        context: ExecutionContext,
+        req: NetRequest,
+        recorded_checkpoints: Vec<FetchCheckpoint>,
+    ) -> Result<NetRequestExecution> {
         let execution_id = context.execution_id.clone();
         let request_id = context.request_id.clone();
+        let recorded: HashMap<u32, FetchCheckpoint> = recorded_checkpoints
+            .into_iter()
+            .map(|cp| (cp.call_index, cp))
+            .collect();
 
         // Register a state slot for this request.
         {
@@ -3494,7 +3507,7 @@ impl JsIsolate {
                 context,
                 call_index: 0,
                 checkpoints: Vec::new(),
-                recorded: HashMap::new(),
+                recorded,
                 recorded_now_ms: None,
                 logs: Vec::new(),
                 recorded_random: Vec::new(),

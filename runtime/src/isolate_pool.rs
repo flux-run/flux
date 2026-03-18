@@ -150,6 +150,16 @@ impl IsolatePool {
         context: ExecutionContext,
         net_request: NetRequest,
     ) -> ExecutionResult {
+        self.execute_net_request_with_recorded(context, net_request, Vec::new())
+            .await
+    }
+
+    pub async fn execute_net_request_with_recorded(
+        &self,
+        context: ExecutionContext,
+        net_request: NetRequest,
+        recorded_checkpoints: Vec<FetchCheckpoint>,
+    ) -> ExecutionResult {
         if self.workers.is_empty() {
             return error_result(context, "isolate pool is empty");
         }
@@ -161,7 +171,7 @@ impl IsolatePool {
         let work = WorkItem {
             payload: serde_json::Value::Null,
             context: context.clone(),
-            recorded_checkpoints: Vec::new(),
+            recorded_checkpoints,
             net_request: Some(net_request),
             result_tx,
         };
@@ -249,7 +259,14 @@ fn spawn_isolate_worker(
 
                     let result = if is_server_mode {
                         match work.net_request {
-                            Some(net_req) => match isolate.dispatch_request(work.context.clone(), net_req).await {
+                            Some(net_req) => match isolate
+                                .dispatch_request_with_recorded(
+                                    work.context.clone(),
+                                    net_req,
+                                    work.recorded_checkpoints,
+                                )
+                                .await
+                            {
                                 Ok(NetRequestExecution { response: net_resp, checkpoints, logs }) => ExecutionResult {
                                     execution_id: context.execution_id,
                                     request_id: context.request_id,
@@ -371,7 +388,14 @@ fn spawn_isolate_worker_with_mode(
 
                     let result = if is_server_mode {
                         match work.net_request {
-                            Some(net_req) => match isolate.dispatch_request(work.context.clone(), net_req).await {
+                            Some(net_req) => match isolate
+                                .dispatch_request_with_recorded(
+                                    work.context.clone(),
+                                    net_req,
+                                    work.recorded_checkpoints,
+                                )
+                                .await
+                            {
                                 Ok(NetRequestExecution { response: net_resp, checkpoints, logs }) => ExecutionResult {
                                     execution_id: context.execution_id,
                                     request_id: context.request_id,
