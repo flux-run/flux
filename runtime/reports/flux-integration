@@ -1,91 +1,49 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-17T20:48:12.159Z",
+  "timestamp": "2026-03-18T02:53:49.625Z",
   "engine": "node v22.20.0",
-  "passed": 13,
+  "passed": 6,
   "failed": 0,
   "skipped": 0,
-  "total": 13,
+  "total": 6,
   "elapsedMs": 0,
   "passRate": "100.0%",
   "results": [
     {
-      "name": "GET /todos before create → 200",
+      "name": "GET /counter first request → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.005415999999968335
+      "duration": 0.006542000000081316
     },
     {
-      "name": "GET /todos before create → empty",
+      "name": "GET /counter first request → counter is 1",
       "passed": true,
       "skipped": false,
-      "duration": 0.005000000000109139
+      "duration": 0.00454200000012861
     },
     {
-      "name": "POST /todos → 201",
+      "name": "GET /counter second request → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.008374999999887223
+      "duration": 0.015790999999808264
     },
     {
-      "name": "POST /todos → execution id header",
+      "name": "GET /counter second request → counter resets to 1",
       "passed": true,
       "skipped": false,
-      "duration": 0.005749999999807187
+      "duration": 0.005167000000255939
     },
     {
-      "name": "POST /todos → title persisted",
+      "name": "GET /object-id → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.0034160000000156288
+      "duration": 0.02204200000005585
     },
     {
-      "name": "POST /todos → completed false",
+      "name": "GET /object-id → request-local object starts at 1",
       "passed": true,
       "skipped": false,
-      "duration": 0.00287499999967622
-    },
-    {
-      "name": "GET /todos after create → one row",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.029416000000310305
-    },
-    {
-      "name": "flux replay → ok",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.012375000000247383
-    },
-    {
-      "name": "flux replay → same JSON response",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.010500000000320142
-    },
-    {
-      "name": "flux replay → 201 status preserved",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.0070420000001831795
-    },
-    {
-      "name": "flux replay → Postgres step recorded",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.007041000000299391
-    },
-    {
-      "name": "flux replay → writes suppressed",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.003208000000086031
-    },
-    {
-      "name": "GET /todos after replay → count unchanged",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.03449999999975262
+      "duration": 0.00520799999958399
     }
   ]
 }
