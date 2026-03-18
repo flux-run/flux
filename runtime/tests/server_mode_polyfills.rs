@@ -160,6 +160,78 @@ Deno.serve({ signal: controller.signal }, () => new Response("should not run"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deno_serve_rejects_duplicate_listener_registration_during_boot() -> Result<()> {
+    let _lock = polyfill_test_lock().lock().await;
+    let artifact = build_artifact(
+        "server.js",
+        r#"
+Deno.serve(() => new Response("first"));
+Deno.serve(() => new Response("second"));
+"#,
+    );
+
+    let boot = runtime::boot_runtime_artifact(
+        &artifact,
+        ExecutionContext::new(artifact.code_version().to_string()),
+    )
+    .await?;
+
+    assert_eq!(boot.result.status, "error");
+    assert!(
+        boot.result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Deno.serve may only register one listener during boot")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deno_serve_rejects_listener_registration_after_boot() -> Result<()> {
+    let _lock = polyfill_test_lock().lock().await;
+    let code = r#"
+Deno.serve((_req) => {
+  try {
+    Deno.serve(() => new Response("late"));
+    return Response.json({ ok: false });
+  } catch (err) {
+    return Response.json({
+      ok: true,
+      error: String(err && err.message ? err.message : err),
+    });
+  }
+});
+"#;
+
+    let pool = IsolatePool::new(1, build_artifact("server.js", code))?;
+    let result = pool
+        .execute_net_request(
+            ExecutionContext::new("deno-serve-late-register"),
+            NetRequest {
+                req_id: "req-late-register".to_string(),
+                method: "GET".to_string(),
+                url: "http://example.test/hello".to_string(),
+                headers_json: "[]".to_string(),
+                body: String::new(),
+            },
+        )
+        .await;
+
+    assert_eq!(result.status, "ok");
+    let response_text = result.body["net_response"]["body"]
+        .as_str()
+        .context("late-registration response body should be a JSON string")?;
+    let payload: serde_json::Value = serde_json::from_str(response_text)
+        .context("late-registration response should be valid JSON")?;
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["error"], "Deno.serve may only be called during boot");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_rejects_preaborted_signal_without_network_call() -> Result<()> {
     let _lock = polyfill_test_lock().lock().await;
     let code = r#"

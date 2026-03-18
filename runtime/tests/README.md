@@ -180,6 +180,8 @@ HTTP suites start a `flux run --listen` process on a unique port (3100–3199), 
 
 HTTP handler files live in `runtime/external-tests/flux-handlers/`. They use `Deno.serve(...)` so they are valid `flux run --listen` entry targets. The Drizzle suites run the checked-in examples from `examples/drizzle/` after installing their local `node_modules` with `npm ci` when needed.
 
+Listener registration is now a boot-only operation: the runtime allows `Deno.serve(...)` during the boot execution, then closes registration before request executions begin.
+
 When a command suite is executed with a Flux server URL and token, `flux run` prints an `execution_id:` line before the final JSON payload. Integration replay suites capture that ID and assert the stored execution can be replayed deterministically.
 
 ### Binary management

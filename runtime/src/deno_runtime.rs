@@ -3354,16 +3354,10 @@ impl JsIsolate {
             .await
             .context("failed to evaluate user module")?;
 
+        close_registration_phase(&mut runtime)?;
+
         let is_server_mode = {
-            let probe = runtime
-                .execute_script(
-                    "flux:probe_server_mode",
-                    "typeof globalThis.__flux_net_handler === 'function'",
-                )
-                .context("failed to probe server mode")?;
-            deno_core::scope!(scope, &mut runtime);
-            let local = deno_core::v8::Local::new(scope, probe);
-            local.is_true()
+            probe_server_mode(&mut runtime)?
         };
 
         Ok(Self { runtime, is_server_mode })
@@ -3432,16 +3426,10 @@ impl JsIsolate {
             .await
             .context("failed to evaluate built artifact entry module")?;
 
+        close_registration_phase(&mut runtime)?;
+
         let is_server_mode = {
-            let probe = runtime
-                .execute_script(
-                    "flux:probe_server_mode",
-                    "typeof globalThis.__flux_net_handler === 'function'",
-                )
-                .context("failed to probe server mode")?;
-            deno_core::scope!(scope, &mut runtime);
-            let local = deno_core::v8::Local::new(scope, probe);
-            local.is_true()
+            probe_server_mode(&mut runtime)?
         };
 
         Ok(Self { runtime, is_server_mode })
@@ -3472,23 +3460,15 @@ impl JsIsolate {
             .execute_script("flux:user_code", prepared)
             .context("failed to load user code")?;
 
+        close_registration_phase(&mut runtime)?;
+
         // Check if the module called Deno.serve() during init.
         // In the new model, server-mode detection uses a bootstrap execution slot.
         let is_server_mode = {
             let state = runtime.op_state();
             let state = state.borrow();
-            // Deno.serve wires up __flux_net_handler; check for it instead of OpState.
-            // (no state slot exists yet — we check the JS side via a script)
             drop(state);
-            let probe = runtime
-                .execute_script(
-                    "flux:probe_server_mode",
-                    "typeof globalThis.__flux_net_handler === 'function'",
-                )
-                .context("failed to probe server mode")?;
-            deno_core::scope!(scope, &mut runtime);
-            let local = deno_core::v8::Local::new(scope, probe);
-            local.is_true()
+            probe_server_mode(&mut runtime)?
         };
 
         Ok(Self { runtime, is_server_mode })
@@ -3895,6 +3875,8 @@ async fn boot_inline_runtime_artifact(
         }
     }
 
+    close_registration_phase(&mut runtime)?;
+
     let is_server_mode = probe_server_mode(&mut runtime).unwrap_or(false);
     let (checkpoints, logs) = take_execution_artifacts(&mut runtime, &execution_id);
 
@@ -4029,6 +4011,8 @@ async fn boot_built_runtime_artifact(
         }
     }
 
+    close_registration_phase(&mut runtime)?;
+
     let is_server_mode = probe_server_mode(&mut runtime).unwrap_or(false);
     let (checkpoints, logs) = take_execution_artifacts(&mut runtime, &execution_id);
 
@@ -4061,6 +4045,16 @@ fn probe_server_mode(runtime: &mut JsRuntime) -> Result<bool> {
     deno_core::scope!(scope, runtime);
     let local = deno_core::v8::Local::new(scope, probe);
     Ok(local.is_true())
+}
+
+fn close_registration_phase(runtime: &mut JsRuntime) -> Result<()> {
+    runtime
+        .execute_script(
+            "flux:close_registration_phase",
+            "globalThis.__flux_registration_open = false;",
+        )
+        .context("failed to close listener registration phase")?;
+    Ok(())
 }
 
 fn take_execution_artifacts(
@@ -5784,6 +5778,8 @@ if (typeof Deno.env.get !== "function") {
 
 globalThis.__flux_net_handler = null;
 globalThis.__flux_net_server = null;
+globalThis.__flux_registration_open = true;
+globalThis.__flux_listener_registered = false;
 
 function __flux_close_server(serverState, reason = undefined) {
     if (!serverState || serverState.closed) return;
@@ -5796,6 +5792,13 @@ function __flux_close_server(serverState, reason = undefined) {
 }
 
 Deno.serve = function(optionsOrHandler, maybeHandler = undefined) {
+    if (!globalThis.__flux_registration_open) {
+        throw new Error("Deno.serve may only be called during boot");
+    }
+    if (globalThis.__flux_listener_registered) {
+        throw new Error("Deno.serve may only register one listener during boot");
+    }
+
     let options = null;
     let handler;
 
@@ -5839,6 +5842,7 @@ Deno.serve = function(optionsOrHandler, maybeHandler = undefined) {
         server,
     };
 
+    globalThis.__flux_listener_registered = true;
     globalThis.__flux_net_server = serverState;
     globalThis.__flux_net_handler = handler;
 

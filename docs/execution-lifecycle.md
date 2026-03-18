@@ -81,6 +81,7 @@ This is the long-running production-style runtime path.
 3. [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs) runs an explicit boot execution before binding the listener:
    - module initialization and top-level async work run under a real execution ID
    - listener registration is detected during that boot phase
+   - listener registration is closed once boot completes
    - the runtime prints `[boot] execution_id=...`
 4. [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs) builds an `IsolatePool`, binds the socket, and prints `[ready] listening on ...`.
 5. The runtime then serves one of two HTTP execution paths:
@@ -96,6 +97,7 @@ This is the long-running production-style runtime path.
    - HTTP request state is converted to a `NetRequest`
    - [runtime/src/isolate_pool.rs](runtime/src/isolate_pool.rs) dispatches the request into a fresh isolate execution
    - [runtime/src/deno_runtime.rs](runtime/src/deno_runtime.rs) routes it through the registered `Deno.serve` handler
+   - late `Deno.serve()` calls are rejected because listener registration is no longer open after boot
    - the returned `NetResponse` is translated back into an Axum response in [runtime/src/http_runtime.rs](runtime/src/http_runtime.rs)
 
 ### Debug Start Points
