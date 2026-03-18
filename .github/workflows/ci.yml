@@ -63,7 +63,7 @@ jobs:
             cross:    false
             ext:      ""
 
-          - runner:    macos-14            # cross-compile to AMD64 on ARM runner
+          - runner:    macos-13            # native x86_64 runner
             target:   x86_64-apple-darwin
             os-label: macOS
             arch:     amd64

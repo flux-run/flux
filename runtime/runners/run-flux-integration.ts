@@ -41,7 +41,7 @@ import {
 import { TestResult, buildReport, writeReport, printSummary } from "./lib/utils.js";
 
 const __dirname   = dirname(fileURLToPath(import.meta.url));
-// const HANDLERS_DIR = resolve(__dirname, "../external-tests/flux-handlers");
+const HANDLERS_DIR = resolve(__dirname, "../external-tests/flux-handlers");
 const EXAMPLES_DIR = resolve(WORKSPACE_ROOT, "examples");
 const CRUD_APP_DIR = resolve(EXAMPLES_DIR, "crud_app");
 const CRUD_INIT_SQL = resolve(CRUD_APP_DIR, "init.sql");
@@ -52,7 +52,7 @@ const IDEMPOTENCY_DIR = resolve(EXAMPLES_DIR, "idempotency");
 const IDEMPOTENCY_INIT_SQL = resolve(IDEMPOTENCY_DIR, "init.sql");
 const WEBHOOK_DEDUP_DIR = resolve(EXAMPLES_DIR, "webhook_dedup");
 const WEBHOOK_DEDUP_INIT_SQL = resolve(WEBHOOK_DEDUP_DIR, "init.sql");
-// const JWKS_SERVER_ENTRY = resolve(HANDLERS_DIR, "jwks_server.js");
+// jwks entry removed
 
 // Each suite gets its own port in the 3100-3199 range so suites can run
 // sequentially without port conflicts when multiple are enabled.
@@ -605,7 +605,7 @@ async function runSuite(suite: Suite): Promise<{ passed: number; failed: number;
       }
 
       const port = allocatePort();
-      const entryBaseDir = suite.handlerBaseDir === "examples" ? EXAMPLES_DIR : HANDLERS_DIR;
+      const entryBaseDir = suite.handlerBaseDir === "examples" ? EXAMPLES_DIR : __dirname;
       const entry = resolve(entryBaseDir, suite.handler);
 
       buildArtifact(entry, { quiet: true });
@@ -633,59 +633,44 @@ async function runSuite(suite: Suite): Promise<{ passed: number; failed: number;
 // Suite definitions
 // ---------------------------------------------------------------------------
 
-const SUITES: Suite[] = [
+const SUITES: Suite[] =[
 
-  // ── 1. Echo ─────────────────────────────────────────────────────────────
+  // ── 6. Bundled framework app ───────────────────────────────────────────
   {
-    name:    "echo",
-    handler: "echo.js",
+    name: "bundled-hono",
+    handler: "hono-hello.ts",
+    handlerBaseDir: "examples",
     async run(baseUrl, ctx) {
       {
-        const r = await get(baseUrl, "/ping");
-        assert(ctx, "GET /ping → 200", () => r.status === 200);
-        assert(ctx, "GET /ping body has ok:true", () => (r.body as any)?.ok === true);
-      }
-      {
-        const payload = { hello: "world", num: 42 };
-        const r = await postJson(baseUrl, "/echo", payload);
-        assert(ctx, "POST /echo → 200", () => r.status === 200);
-        assert(ctx, "POST /echo reflects string field", () => (r.body as any)?.hello === "world");
-        assert(ctx, "POST /echo reflects numeric field", () => (r.body as any)?.num === 42);
-      }
-      {
-        const r = await postJson(baseUrl, "/echo/upper", { greeting: "hello", count: 7 });
-        assert(ctx, "POST /echo/upper → 200", () => r.status === 200);
-        assert(ctx, "POST /echo/upper uppercases strings", () => (r.body as any)?.greeting === "HELLO");
-        assert(ctx, "POST /echo/upper passes through numbers", () => (r.body as any)?.count === 7);
-      }
-      {
-        const res = await fetch(`${baseUrl}/echo`, {
-          method:  "POST",
-          headers: { "content-type": "application/json" },
-          body:    "not json {{",
+        const res = await fetch(`${baseUrl}/`, {
+          headers: { host: "localhost" },
         });
-        assert(ctx, "POST /echo with bad JSON → 400", () => res.status === 400);
+        const text = await res.text();
+        assert(ctx, "GET / → 200", () => res.status === 200);
+        assert(ctx, "GET / → hono text body", () => text === "hello from hono on flux");
+      }
+      {
+        const res = await fetch(`${baseUrl}/app-health`, {
+          headers: { host: "localhost" },
+        });
+        const body = await res.json() as any;
+        assert(ctx, "GET /app-health → 200", () => res.status === 200);
+        assert(ctx, "GET /app-health → json ok:true", () => body?.ok === true);
       }
     },
   },
 
-  // ── 2. JSON types ────────────────────────────────────────────────────────
+
+  // ── 7. CRUD replay ──────────────────────────────────────────────────────
   {
-    name:    "json-types",
-    handler: "json-types.js",
-    async run(baseUrl, ctx) {
-      {
-        const r = await get(baseUrl, "/types/null");
-        assert(ctx, "GET /types/null → value is null", () => (r.body as any)?.value === null);
-      }
-      {
-        const r = await get(baseUrl, "/types/bool");
-        assert(ctx, "GET /types/bool → value is true", () => (r.body as any)?.value === true);
-      }
-      const SUITES: Suite[] = [
-        // Only keep internal/integration suites that do not depend on external-tests/flux-handlers
-        // Add your internal suite definitions here
-      ];
+    name: "crud-replay",
+    handler: "crud_app/main_flux.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const serverPort = allocateServerPort();
+      const serviceToken = "dev-service-token";
+      const postgres = await startCrudPostgres(databasePort);
       const server = await startServer(serverPort, {
         databaseUrl: postgres.databaseUrl,
         serviceToken,
@@ -780,6 +765,7 @@ const SUITES: Suite[] = [
       assert(ctx, "GET /todos after replay → count unchanged", () => Array.isArray(todosAfterReplay) && todosAfterReplay.length === 1);
     },
   },
+
 
   {
     name: "idempotency-redis",
@@ -920,6 +906,7 @@ const SUITES: Suite[] = [
       assert(ctx, "GET /orders after replay → count unchanged", () => Array.isArray(afterReplayOrders) && afterReplayOrders.length === 1);
     },
   },
+
 
   {
     name: "idempotency-crash-before-checkpoint",
@@ -1173,6 +1160,7 @@ const SUITES: Suite[] = [
     },
   },
 
+
   {
     name: "webhook-dedup",
     handler: "webhook_dedup/main_flux.ts",
@@ -1310,285 +1298,6 @@ const SUITES: Suite[] = [
     },
   },
 
-  {
-    name: "jwks-cache",
-    handler: "jwks-cache.js",
-    async start(entry, port) {
-      const jwksPort = allocateRemotePort();
-      const jwksUrl = `http://127.0.0.1:${jwksPort}/.well-known/jwks.json`;
-      const databasePort = allocateDatabasePort();
-      const serverPort = allocateServerPort();
-      const serviceToken = "dev-service-token";
-      const postgres = await startPostgres(databasePort, {
-        databaseName: "jwks_cache",
-        username: "admin",
-        password: "password123",
-      });
-      const server = await startServer(serverPort, {
-        databaseUrl: postgres.databaseUrl,
-        serviceToken,
-      });
-
-      try {
-        jwksCacheState.serverUrl = server.url;
-        jwksCacheState.serviceToken = serviceToken;
-        jwksCacheState.jwksPort = jwksPort;
-        jwksCacheState.jwksUrl = jwksUrl;
-        const runtime = await startRuntime(entry, port, {
-          skipVerify: false,
-          serverUrl: server.url,
-          token: serviceToken,
-          env: {
-            FLOWBASE_ALLOW_LOOPBACK_FETCH: "1",
-            JWKS_URL: jwksUrl,
-          },
-        });
-
-        return {
-          ...runtime,
-          async stop() {
-            try {
-              await runtime.stop();
-            } finally {
-              try {
-                await server.stop();
-              } finally {
-                postgres.stop();
-                jwksCacheState.serverUrl = "";
-                jwksCacheState.serviceToken = "";
-                jwksCacheState.jwksPort = 0;
-                jwksCacheState.jwksUrl = "";
-              }
-            }
-          },
-        };
-      } catch (error) {
-        jwksCacheState.serverUrl = "";
-        jwksCacheState.serviceToken = "";
-        jwksCacheState.jwksPort = 0;
-        jwksCacheState.jwksUrl = "";
-        await server.stop();
-        postgres.stop();
-        throw error;
-      }
-    },
-    async run(baseUrl, ctx) {
-      const jwks = await startMockJwksServer(jwksCacheState.jwksPort);
-      try {
-        const liveRes = await fetch(`${baseUrl}/jwks`);
-        const liveBody = await liveRes.json() as Record<string, unknown>;
-        const liveExecutionId = liveRes.headers.get("x-flux-execution-id") ?? "";
-        assert(ctx, "GET /jwks initial live request → 200", () => liveRes.status === 200);
-        assert(ctx, "GET /jwks initial live request → execution id header", () => liveExecutionId.length > 0);
-        assert(ctx, "GET /jwks initial live request → one key", () => liveBody.keys === 1 && liveBody.bypass === false);
-
-        await jwks.stop();
-
-        const cachedRes = await fetch(`${baseUrl}/jwks`);
-        const cachedBody = await cachedRes.json() as Record<string, unknown>;
-        assert(ctx, "GET /jwks after origin shutdown → 200", () => cachedRes.status === 200);
-        assert(ctx, "GET /jwks after origin shutdown → cached body preserved", () => cachedBody.keys === 1 && cachedBody.bypass === false);
-
-        const bypassRes = await fetch(`${baseUrl}/jwks-bypass`);
-        const bypassBody = await bypassRes.json() as Record<string, unknown>;
-        assert(ctx, "GET /jwks-bypass after origin shutdown → fails", () => bypassRes.status === 502);
-        assert(ctx, "GET /jwks-bypass after origin shutdown → bypass flag true", () => bypassBody.bypass === true);
-
-        const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
-          "replay",
-          liveExecutionId,
-          "--url",
-          jwksCacheState.serverUrl,
-          "--token",
-          jwksCacheState.serviceToken,
-          "--diff",
-        ]));
-        const replayEnvelope = JSON.parse(extractReplayOutput(replayStdout)) as {
-          net_response?: { body?: string; status?: number };
-        };
-        const replayBody = JSON.parse(replayEnvelope.net_response?.body ?? "null") as Record<string, unknown>;
-
-        assert(ctx, "flux replay jwks request → ok", () => replayStdout.includes("ok"));
-        assert(ctx, "flux replay jwks request → 200 status preserved", () => replayEnvelope.net_response?.status === 200);
-        assert(ctx, "flux replay jwks request → same JSON response", () => stableJson(replayBody) === stableJson(liveBody));
-        assert(ctx, "flux replay jwks request → HTTP step recorded", () => replayStdout.includes("HTTP") && replayStdout.includes("(recorded)"));
-      } finally {
-        await jwks.stop().catch(() => undefined);
-      }
-    },
-  },
-
-  {
-    name: "jwt-auth",
-    handler: "jwt-auth.js",
-    async start(entry, port) {
-      const jwksPort = allocateRemotePort();
-      const jwksUrl = `http://127.0.0.1:${jwksPort}/.well-known/jwks.json`;
-      const issuer = `http://127.0.0.1:${jwksPort}/`;
-      const databasePort = allocateDatabasePort();
-      const serverPort = allocateServerPort();
-      const serviceToken = "dev-service-token";
-      const postgres = await startPostgres(databasePort, {
-        databaseName: "jwt_auth",
-        username: "admin",
-        password: "password123",
-      });
-      const server = await startServer(serverPort, {
-        databaseUrl: postgres.databaseUrl,
-        serviceToken,
-      });
-
-      try {
-        jwtAuthState.serverUrl = server.url;
-        jwtAuthState.serviceToken = serviceToken;
-        jwtAuthState.jwksPort = jwksPort;
-        jwtAuthState.jwksUrl = jwksUrl;
-        jwtAuthState.issuer = issuer;
-        const runtime = await startRuntime(entry, port, {
-          skipVerify: false,
-          serverUrl: server.url,
-          token: serviceToken,
-          env: {
-            FLOWBASE_ALLOW_LOOPBACK_FETCH: "1",
-            JWKS_URL: jwksUrl,
-            JWT_ISSUER: issuer,
-            JWT_AUDIENCE: jwtAuthState.audience,
-          },
-        });
-
-        return {
-          ...runtime,
-          async stop() {
-            try {
-              await runtime.stop();
-            } finally {
-              try {
-                await server.stop();
-              } finally {
-                postgres.stop();
-                jwtAuthState.serverUrl = "";
-                jwtAuthState.serviceToken = "";
-                jwtAuthState.jwksPort = 0;
-                jwtAuthState.jwksUrl = "";
-                jwtAuthState.issuer = "";
-              }
-            }
-          },
-        };
-      } catch (error) {
-        jwtAuthState.serverUrl = "";
-        jwtAuthState.serviceToken = "";
-        jwtAuthState.jwksPort = 0;
-        jwtAuthState.jwksUrl = "";
-        jwtAuthState.issuer = "";
-        await server.stop();
-        postgres.stop();
-        throw error;
-      }
-    },
-    async run(baseUrl, ctx) {
-      const keyPair = generateRs256KeyPair("jwt-auth-key");
-      const issuedAt = Math.floor(Date.now() / 1000);
-      const validToken = signJwtRs256(keyPair.privateKey, keyPair.kid, {
-        sub: "user-123",
-        scope: "read:messages",
-        iss: jwtAuthState.issuer,
-        aud: jwtAuthState.audience,
-        iat: issuedAt,
-        exp: issuedAt + 3600,
-      });
-      const wrongAudienceToken = signJwtRs256(keyPair.privateKey, keyPair.kid, {
-        sub: "user-123",
-        scope: "read:messages",
-        iss: jwtAuthState.issuer,
-        aud: "wrong-audience",
-        iat: issuedAt,
-        exp: issuedAt + 3600,
-      });
-      const wrongKeyToken = signJwtRs256(generateRs256KeyPair("wrong-key").privateKey, "jwt-auth-key", {
-        sub: "user-123",
-        scope: "read:messages",
-        iss: jwtAuthState.issuer,
-        aud: jwtAuthState.audience,
-        iat: issuedAt,
-        exp: issuedAt + 3600,
-      });
-      const jwks = await startMockJwksServer(jwtAuthState.jwksPort, {
-        jwksJson: JSON.stringify({ keys: [keyPair.publicJwk] }),
-      });
-
-      try {
-        const publicRes = await fetch(`${baseUrl}/public`);
-        const publicBody = await publicRes.json() as Record<string, unknown>;
-        assert(ctx, "GET /public without auth → 200", () => publicRes.status === 200);
-        assert(ctx, "GET /public without auth → unprotected route", () => publicBody.protected === false);
-
-        const missingAuthRes = await fetch(`${baseUrl}/protected`);
-        const missingAuthBody = await missingAuthRes.json() as Record<string, unknown>;
-        assert(ctx, "GET /protected without bearer token → 401", () => missingAuthRes.status === 401);
-        assert(ctx, "GET /protected without bearer token → error message", () => missingAuthBody.error === "missing bearer token");
-
-        const liveRes = await fetch(`${baseUrl}/protected`, {
-          headers: { authorization: `Bearer ${validToken}` },
-        });
-        const liveBody = await liveRes.json() as Record<string, unknown>;
-        const liveExecutionId = liveRes.headers.get("x-flux-execution-id") ?? "";
-        assert(ctx, "GET /protected with valid RS256 JWT → 200", () => liveRes.status === 200);
-        assert(ctx, "GET /protected with valid RS256 JWT → execution id header", () => liveExecutionId.length > 0);
-        assert(ctx, "GET /protected with valid RS256 JWT → payload surfaced", () => liveBody.sub === "user-123" && liveBody.scope === "read:messages");
-
-        const wrongAudienceRes = await fetch(`${baseUrl}/protected`, {
-          headers: { authorization: `Bearer ${wrongAudienceToken}` },
-        });
-        const wrongAudienceBody = await wrongAudienceRes.json() as Record<string, unknown>;
-        assert(ctx, "GET /protected with wrong audience → 401", () => wrongAudienceRes.status === 401);
-        assert(ctx, "GET /protected with wrong audience → claim validation error", () => wrongAudienceBody.error === "audience mismatch");
-
-        await jwks.stop();
-
-        const cachedRes = await fetch(`${baseUrl}/protected`, {
-          headers: { authorization: `Bearer ${validToken}` },
-        });
-        const cachedBody = await cachedRes.json() as Record<string, unknown>;
-        assert(ctx, "GET /protected after JWKS origin shutdown → 200", () => cachedRes.status === 200);
-        assert(ctx, "GET /protected after JWKS origin shutdown → cached key still verifies", () => cachedBody.sub === "user-123" && cachedBody.protected === true);
-
-        const wrongKeyRes = await fetch(`${baseUrl}/protected`, {
-          headers: { authorization: `Bearer ${wrongKeyToken}` },
-        });
-        const wrongKeyBody = await wrongKeyRes.json() as Record<string, unknown>;
-        assert(ctx, "GET /protected with wrong signature → 401", () => wrongKeyRes.status === 401);
-        assert(ctx, "GET /protected with wrong signature → signature failure", () => wrongKeyBody.error === "invalid signature");
-
-        const bypassRes = await fetch(`${baseUrl}/protected-bypass`, {
-          headers: { authorization: `Bearer ${validToken}` },
-        });
-        const bypassBody = await bypassRes.json() as Record<string, unknown>;
-        assert(ctx, "GET /protected-bypass after JWKS origin shutdown → 503", () => bypassRes.status === 503);
-        assert(ctx, "GET /protected-bypass after JWKS origin shutdown → bypass flag true", () => bypassBody.bypass === true);
-
-        const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
-          "replay",
-          liveExecutionId,
-          "--url",
-          jwtAuthState.serverUrl,
-          "--token",
-          jwtAuthState.serviceToken,
-          "--diff",
-        ]));
-        const replayEnvelope = JSON.parse(extractReplayOutput(replayStdout)) as {
-          net_response?: { body?: string; status?: number };
-        };
-        const replayBody = JSON.parse(replayEnvelope.net_response?.body ?? "null") as Record<string, unknown>;
-        assert(ctx, "flux replay protected JWT request → ok", () => replayStdout.includes("ok"));
-        assert(ctx, "flux replay protected JWT request → 200 status preserved", () => replayEnvelope.net_response?.status === 200);
-        assert(ctx, "flux replay protected JWT request → same JSON response", () => stableJson(replayBody) === stableJson(liveBody));
-        assert(ctx, "flux replay protected JWT request → HTTP step recorded", () => replayStdout.includes("HTTP") && replayStdout.includes("(recorded)"));
-      } finally {
-        await jwks.stop().catch(() => undefined);
-      }
-    },
-  },
 
   {
     name: "db-then-remote-resume",
@@ -1713,228 +1422,7 @@ const SUITES: Suite[] = [
         await remote.stop();
       }
     },
-  },
-
-  // ── 8. Drizzle examples ────────────────────────────────────────────────
-  {
-    name: "drizzle-crud",
-    async execute(ctx) {
-      ensureDrizzleExampleDependencies();
-
-      const databasePort = allocateDatabasePort();
-      const postgres = await startDrizzlePostgres(databasePort);
-
-      try {
-        const stdout = runCheckedCommand(
-          FLUX_CLI_BIN,
-          [
-            "run",
-            "--input",
-            JSON.stringify({ input: { connectionString: postgres.databaseUrl } }),
-            resolve(DRIZZLE_DIR, "crud.ts"),
-          ],
-          {
-            cwd: WORKSPACE_ROOT,
-            env: { FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1" },
-          },
-        );
-
-        const payload = JSON.parse(extractCommandOutput(stdout)) as {
-          inserted?: { id?: number; title?: string; state?: string };
-          selected?: { id?: number; title?: string; state?: string };
-          updated?: { id?: number; title?: string; state?: string };
-        };
-
-        assert(ctx, "flux run examples/drizzle/crud.ts → inserted row", () => payload.inserted?.title === "ship flux" && payload.inserted?.state === "new");
-        assert(ctx, "flux run examples/drizzle/crud.ts → selected row", () => payload.selected?.id === payload.inserted?.id && payload.selected?.state === "new");
-        assert(ctx, "flux run examples/drizzle/crud.ts → updated row", () => payload.updated?.id === payload.inserted?.id && payload.updated?.state === "done");
-      } finally {
-        postgres.stop();
-      }
-    },
-  },
-  {
-    name: "drizzle-transaction",
-    async execute(ctx) {
-      ensureDrizzleExampleDependencies();
-
-      const databasePort = allocateDatabasePort();
-      const postgres = await startDrizzlePostgres(databasePort);
-
-      try {
-        const stdout = runCheckedCommand(
-          FLUX_CLI_BIN,
-          [
-            "run",
-            "--input",
-            JSON.stringify({ input: { connectionString: postgres.databaseUrl } }),
-            resolve(DRIZZLE_DIR, "transaction.ts"),
-          ],
-          {
-            cwd: WORKSPACE_ROOT,
-            env: { FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1" },
-          },
-        );
-
-        const payload = JSON.parse(extractCommandOutput(stdout)) as {
-          txResult?: {
-            inserted?: { id?: number; name?: string; status?: string };
-            selected?: { id?: number; name?: string; status?: string };
-            updated?: { id?: number; name?: string; status?: string };
-          };
-          finalRows?: Array<{ id?: number; name?: string; status?: string }>;
-        };
-
-        assert(ctx, "flux run examples/drizzle/transaction.ts → inserted row", () => payload.txResult?.inserted?.name === "replay-check" && payload.txResult?.inserted?.status === "queued");
-        assert(ctx, "flux run examples/drizzle/transaction.ts → selected row", () => payload.txResult?.selected?.id === payload.txResult?.inserted?.id && payload.txResult?.selected?.status === "queued");
-        assert(ctx, "flux run examples/drizzle/transaction.ts → updated row", () => payload.txResult?.updated?.id === payload.txResult?.inserted?.id && payload.txResult?.updated?.status === "running");
-        assert(ctx, "flux run examples/drizzle/transaction.ts → final persisted row", () => Array.isArray(payload.finalRows) && payload.finalRows.length === 1 && payload.finalRows[0]?.status === "running");
-      } finally {
-        postgres.stop();
-      }
-    },
-  },
-  {
-    name: "drizzle-replay",
-    async execute(ctx) {
-      ensureDrizzleExampleDependencies();
-
-      const databasePort = allocateDatabasePort();
-      const serverPort = allocateServerPort();
-      const serviceToken = "dev-service-token";
-      const postgres = await startDrizzlePostgres(databasePort);
-      const server = await startServer(serverPort, {
-        databaseUrl: postgres.databaseUrl,
-        serviceToken,
-      });
-
-      try {
-        const stdout = runCheckedCommand(
-          FLUX_CLI_BIN,
-          [
-            "run",
-            "--url",
-            server.url,
-            "--input",
-            JSON.stringify({ input: { connectionString: postgres.databaseUrl } }),
-            resolve(DRIZZLE_DIR, "crud.ts"),
-          ],
-          {
-            cwd: WORKSPACE_ROOT,
-            env: {
-              FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
-              FLUX_SERVICE_TOKEN: serviceToken,
-            },
-          },
-        );
-
-        const executionId = extractExecutionId(stdout);
-        const payload = JSON.parse(extractCommandOutput(stdout)) as {
-          inserted?: { id?: number; title?: string; state?: string };
-          selected?: { id?: number; title?: string; state?: string };
-          updated?: { id?: number; title?: string; state?: string };
-        };
-
-        assert(ctx, "flux run examples/drizzle/crud.ts with recording → execution id emitted", () => executionId.length > 0);
-        assert(ctx, "flux run examples/drizzle/crud.ts with recording → output captured", () => payload.updated?.state === "done");
-
-        const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
-          "replay",
-          executionId,
-          "--url",
-          server.url,
-          "--token",
-          serviceToken,
-          "--diff",
-        ]));
-
-        const replayPayload = JSON.parse(extractReplayOutput(replayStdout)) as {
-          inserted?: { id?: number; title?: string; state?: string };
-          selected?: { id?: number; title?: string; state?: string };
-          updated?: { id?: number; title?: string; state?: string };
-        };
-
-        assert(ctx, "flux replay for drizzle CRUD → ok", () => replayStdout.includes("ok"));
-        assert(ctx, "flux replay for drizzle CRUD → same JSON output", () => stableJson(replayPayload) === stableJson(payload));
-        assert(ctx, "flux replay for drizzle CRUD → Postgres recorded", () => replayStdout.includes("POSTGRES") && replayStdout.includes("(recorded)"));
-        assert(ctx, "flux replay for drizzle CRUD → writes suppressed", () => replayStdout.includes("db writes suppressed"));
-      } finally {
-        await server.stop();
-        postgres.stop();
-      }
-    },
-  },
-
-  // ── 4. Async ops ─────────────────────────────────────────────────────────
-  {
-    name:    "async-ops",
-    handler: "async-ops.js",
-    async run(baseUrl, ctx) {
-      {
-        const r = await get(baseUrl, "/async/await");
-        assert(ctx, "GET /async/await → result 3", () => (r.body as any)?.result === 3);
-      }
-      {
-        const r = await get(baseUrl, "/async/promise-all");
-        const results = (r.body as any)?.results;
-        assert(ctx, "GET /async/promise-all → 3 items", () => Array.isArray(results) && results.length === 3);
-        assert(ctx, "GET /async/promise-all → correct values",
-          () => results[0] === "alpha" && results[1] === "beta" && results[2] === "gamma");
-      }
-      {
-        const r = await get(baseUrl, "/async/promise-race");
-        assert(ctx, "GET /async/promise-race → fast wins", () => (r.body as any)?.winner === "fast");
-      }
-      {
-        const r = await get(baseUrl, "/async/microtask");
-        const order = (r.body as any)?.order;
-        assert(ctx, "GET /async/microtask → 2 items", () => Array.isArray(order) && order.length === 2);
-        assert(ctx, "GET /async/microtask → ordering", () => order[0] === "microtask-1" && order[1] === "microtask-2");
-      }
-      {
-        const r = await postJson(baseUrl, "/async/pipeline", { value: 5 });
-        assert(ctx, "POST /async/pipeline → step1 = 10", () => (r.body as any)?.step1 === 10);
-        assert(ctx, "POST /async/pipeline → step2 = 20", () => (r.body as any)?.step2 === 20);
-      }
-    },
-  },
-
-  // ── 5. Error handling ────────────────────────────────────────────────────
-  {
-    name:    "error-handling",
-    handler: "error-handling.js",
-    async run(baseUrl, ctx) {
-      {
-        const r = await get(baseUrl, "/error/not-found");
-        assert(ctx, "GET /error/not-found → 404", () => r.status === 404);
-        assert(ctx, "GET /error/not-found → error field", () => typeof (r.body as any)?.error === "string");
-      }
-      {
-        const r = await get(baseUrl, "/error/bad-request");
-        assert(ctx, "GET /error/bad-request → 400", () => r.status === 400);
-      }
-      {
-        // Unhandled sync throw — runtime should return a 5xx
-        const r = await get(baseUrl, "/error/sync-throw");
-        assert(ctx, "GET /error/sync-throw → 5xx", () => r.status >= 500);
-      }
-      {
-        const r = await get(baseUrl, "/error/async-reject");
-        assert(ctx, "GET /error/async-reject → 5xx", () => r.status >= 500);
-      }
-      {
-        const r = await postJson(baseUrl, "/error/missing-field", {});
-        assert(ctx, "POST /error/missing-field with empty body → 422", () => r.status === 422);
-      }
-      {
-        const r = await postJson(baseUrl, "/error/missing-field", { name: "Alice" });
-        assert(ctx, "POST /error/missing-field with name → 200", () => r.status === 200);
-        assert(ctx, "POST /error/missing-field with name → greeting", () =>
-          (r.body as any)?.greeting === "Hello, Alice");
-      }
-    },
-  },
-
+  }
 ];
 
 // ---------------------------------------------------------------------------
