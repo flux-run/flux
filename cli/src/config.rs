@@ -29,8 +29,7 @@ impl CliConfig {
 
         let raw = std::fs::read_to_string(&source_path)
             .with_context(|| format!("failed to read {}", source_path.display()))?;
-        toml::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", source_path.display()))
+        toml::from_str(&raw).with_context(|| format!("failed to parse {}", source_path.display()))
     }
 
     pub fn save(&self) -> Result<()> {
@@ -41,8 +40,7 @@ impl CliConfig {
         }
 
         let raw = toml::to_string_pretty(self).context("failed to serialize CLI config")?;
-        std::fs::write(&path, raw)
-            .with_context(|| format!("failed to write {}", path.display()))
+        std::fs::write(&path, raw).with_context(|| format!("failed to write {}", path.display()))
     }
 }
 
@@ -52,11 +50,27 @@ pub fn resolve_auth(url: Option<String>, token: Option<String>) -> Result<Resolv
     let url = url
         .or(config.url)
         .or_else(load_server_url_from_port_file)
-        .ok_or_else(|| anyhow::anyhow!("missing server URL\n\nrun:\n  flux init"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing server URL\n\nrun:\n  flux init --auth"))?;
 
     let token = token
         .or(config.token)
-        .ok_or_else(|| anyhow::anyhow!("missing service token\n\nrun:\n  flux init"))?;
+        .ok_or_else(|| anyhow::anyhow!("missing service token\n\nrun:\n  flux init --auth"))?;
+
+    Ok(ResolvedAuth {
+        url: normalize_grpc_url(&url),
+        token,
+    })
+}
+
+pub fn resolve_optional_auth(url: Option<String>, token: Option<String>) -> Result<ResolvedAuth> {
+    let config = CliConfig::load()?;
+
+    let url = url
+        .or(config.url)
+        .or_else(load_server_url_from_port_file)
+        .unwrap_or_else(|| "http://127.0.0.1:50051".to_string());
+
+    let token = token.or(config.token).unwrap_or_default();
 
     Ok(ResolvedAuth {
         url: normalize_grpc_url(&url),

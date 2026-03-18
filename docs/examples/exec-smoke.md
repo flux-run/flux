@@ -4,16 +4,21 @@ A shortest-path local sanity check using `flux exec`.
 
 ## Goal
 
-- execute a function file once without keeping runtime running
+- execute a JS file once without keeping the runtime running
 - print output immediately
 - capture an execution record for follow-up debugging
 
 ## Steps
 
 ```bash
-flux server start --database-url postgres://localhost:5432/postgres
+# 1. Start the server
+flux server start --database-url postgres://postgres:postgres@localhost:5432/flux
+
+# 2. One-time auth setup
 flux init
-flux exec index.ts --payload '{"health":"ok"}'
+
+# 3. Run a one-off execution
+flux exec examples/hello.js --input '{"health":"ok"}'
 ```
 
 ## Optional Follow-up
@@ -26,6 +31,6 @@ flux why <execution_id>
 
 ## What to Look For
 
-- `flux exec` exits cleanly with function output
+- `flux exec` exits cleanly with function output printed
 - a new execution appears in `flux logs`
-- trace/why commands work on that execution ID
+- `flux trace` and `flux why` work on that execution ID

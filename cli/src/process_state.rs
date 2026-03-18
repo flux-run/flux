@@ -18,7 +18,9 @@ pub fn server_info() -> ProcessInfo {
     let pid = read_pid(&pid_path).ok().flatten();
     let port = read_port(flux_dir().join("server.port")).ok().flatten();
     let running = pid.map(is_pid_running).unwrap_or(false);
-    let started_at = std::fs::metadata(&pid_path).ok().and_then(|m| m.modified().ok());
+    let started_at = std::fs::metadata(&pid_path)
+        .ok()
+        .and_then(|m| m.modified().ok());
 
     ProcessInfo {
         name: "flux-server",
@@ -36,7 +38,9 @@ pub fn runtime_info() -> ProcessInfo {
     let port = read_port(flux_dir().join("runtime.port")).ok().flatten();
     let entry = read_entry(flux_dir().join("runtime.entry")).ok().flatten();
     let running = pid.map(is_pid_running).unwrap_or(false);
-    let started_at = std::fs::metadata(&pid_path).ok().and_then(|m| m.modified().ok());
+    let started_at = std::fs::metadata(&pid_path)
+        .ok()
+        .and_then(|m| m.modified().ok());
 
     ProcessInfo {
         name: "flux-runtime",

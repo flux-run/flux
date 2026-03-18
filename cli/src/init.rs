@@ -1,11 +1,38 @@
 use anyhow::{Context, Result};
+use clap::Args;
 use std::io::Write;
 
 use crate::config::CliConfig;
 use crate::grpc::{normalize_grpc_url, validate_service_token};
+use crate::project::scaffold_project;
 
-pub async fn execute() -> Result<()> {
-    println!("Flux init\n");
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    #[arg(long)]
+    pub auth: bool,
+
+    #[arg(long)]
+    pub force: bool,
+}
+
+pub async fn execute(args: InitArgs) -> Result<()> {
+    if args.auth {
+        return init_auth().await;
+    }
+
+    let cwd = std::env::current_dir().context("failed to read current directory")?;
+    scaffold_project(&cwd, args.force)?;
+
+    println!("created  {}/flux.json", cwd.display());
+    println!("created  {}/index.ts", cwd.display());
+    println!("next     flux dev");
+    println!("auth     flux init --auth  (or flux auth --url <server>)");
+
+    Ok(())
+}
+
+async fn init_auth() -> Result<()> {
+    println!("Flux auth init\n");
 
     let mut url = String::new();
     print!("Server URL (default: localhost:50051): ");
@@ -22,8 +49,8 @@ pub async fn execute() -> Result<()> {
         }
     };
 
-    let token = rpassword::prompt_password("Service token: ")
-        .context("failed to read service token")?;
+    let token =
+        rpassword::prompt_password("Service token: ").context("failed to read service token")?;
 
     let normalized_url = normalize_grpc_url(&url);
     let auth_mode = validate_service_token(&normalized_url, &token).await?;
@@ -37,8 +64,6 @@ pub async fn execute() -> Result<()> {
     println!("\n✓ saved config to ~/.flux/config.toml");
     println!("  server: {}", normalized_url);
     println!("  auth:   {}", auth_mode);
-    println!("\ntry:");
-    println!("  flux logs");
 
     Ok(())
 }

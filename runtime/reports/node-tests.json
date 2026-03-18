@@ -1,0 +1,432 @@
+{
+  "suite": "Node.js Core Tests",
+  "timestamp": "2026-03-17T05:51:39.577Z",
+  "engine": "node v22.20.0",
+  "passed": 0,
+  "failed": 59,
+  "skipped": 1,
+  "total": 60,
+  "elapsedMs": 963,
+  "passRate": "0.0%",
+  "results": [
+    {
+      "name": "test-bootstrap-modules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: process is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-bootstrap-modules.js:5:14\n",
+      "duration": 113
+    },
+    {
+      "name": "test-buffer-constructor-node-modules-paths.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-buffer-constructor-node-modules-paths.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-buffer-constructor-node-modules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-buffer-constructor-node-modules.js:3:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-buffer-constructor-outside-node-modules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-buffer-constructor-outside-node-modules.js:4:16",
+      "duration": 15
+    },
+    {
+      "name": "test-diagnostics-channel-module-import-error.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-diagnostics-channel-module-import-error.js:2:16",
+      "duration": 14
+    },
+    {
+      "name": "test-diagnostics-channel-module-import.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-diagnostics-channel-module-import.js:2:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-diagnostics-channel-module-require-error.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-diagnostics-channel-module-require-error.js:2:1",
+      "duration": 14
+    },
+    {
+      "name": "test-diagnostics-channel-module-require.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-diagnostics-channel-module-require.js:2:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-eslint-required-modules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-eslint-required-modules.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-inspector-module.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "test-internal-module-require.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-internal-module-require.js:10:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-internal-module-wrap.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-internal-module-wrap.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-internal-modules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-internal-modules.js:2:1\n",
+      "duration": 14
+    },
+    {
+      "name": "test-internal-util-isinsidenodemodules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-internal-util-isinsidenodemodules.js:5:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-builtin.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-builtin.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-cache.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-cache.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-children.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-children.js:3:1\n",
+      "duration": 13
+    },
+    {
+      "name": "test-module-circular-dependency-warning.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-circular-dependency-warning.js:3:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-circular-symlinks.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-circular-symlinks.js:15:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-create-require-multibyte.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-create-require-multibyte.js:3:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-create-require.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-create-require.js:3:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-globalpaths-nodepath.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-globalpaths-nodepath.js:23:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-isBuiltin.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-isBuiltin.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-loading-deprecated.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-loading-deprecated.js:3:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-loading-error.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-loading-error.js:23:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-loading-globalpaths.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-loading-globalpaths.js:2:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-main-extension-lookup.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-main-extension-lookup.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-main-fail.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-main-fail.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-main-preserve-symlinks-fail.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-main-preserve-symlinks-fail.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-multi-extensions.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-multi-extensions.js:5:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-nodemodulepaths.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-nodemodulepaths.js:24:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-parent-deprecation.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-parent-deprecation.js:4:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-parent-setter-deprecation.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-parent-setter-deprecation.js:4:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-print-timing.mjs",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: failed to load user module\n    1: No such file or directory (os error 2)\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-prototype-mutation.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-prototype-mutation.js:2:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-readonly.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-readonly.js:3:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-relative-lookup.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-relative-lookup.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-run-main-monkey-patch.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-run-main-monkey-patch.js:6:1\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-setsourcemapssupport.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-setsourcemapssupport.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-stat.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-stat.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-strip-types.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-strip-types.js:3:16\n",
+      "duration": 16
+    },
+    {
+      "name": "test-module-symlinked-peer-modules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-symlinked-peer-modules.js:11:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-version.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-version.js:2:1\n",
+      "duration": 14
+    },
+    {
+      "name": "test-module-wrap.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-wrap.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-module-wrapper.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-module-wrapper.js:2:1\n",
+      "duration": 15
+    },
+    {
+      "name": "test-permission-fs-internal-module-stat.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-permission-fs-internal-module-stat.js:4:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-runner-module-mocking.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-runner-module-mocking.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-shadow-realm-allowed-builtin-modules.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-shadow-realm-allowed-builtin-modules.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-shadow-realm-gc-module.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-shadow-realm-gc-module.js:9:16\n",
+      "duration": 16
+    },
+    {
+      "name": "test-shadow-realm-module.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-shadow-realm-module.js:3:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-shadow-realm-preload-module.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-shadow-realm-preload-module.js:2:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-after-evaluate.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-after-evaluate.js:10:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-basic.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-basic.js:5:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-vm-module-cached-data.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-cached-data.js:5:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-dynamic-import-promise.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-dynamic-import-promise.js:4:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-vm-module-dynamic-import.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-dynamic-import.js:5:16\n",
+      "duration": 14
+    },
+    {
+      "name": "test-vm-module-dynamic-namespace.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-dynamic-namespace.js:5:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-errors.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-errors.js:5:16\n",
+      "duration": 15
+    },
+    {
+      "name": "test-vm-module-evaluate-source-text-module.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-evaluate-source-text-module.js:5:16\n",
+      "duration": 16
+    },
+    {
+      "name": "test-vm-module-evaluate-synthethic-module-rejection.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: ReferenceError: require is not defined\n           at file:///Users/shashisharma/code/self/flowbase/runtime/external-tests/node-core/parallel/test-vm-module-evaluate-synthethic-module-rejection.",
+      "duration": 15
+    }
+  ]
+}

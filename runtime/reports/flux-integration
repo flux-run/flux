@@ -1,0 +1,577 @@
+{
+  "suite": "flux-integration",
+  "timestamp": "2026-03-18T08:18:58.248Z",
+  "engine": "node v22.20.0",
+  "passed": 94,
+  "failed": 0,
+  "skipped": 0,
+  "total": 94,
+  "elapsedMs": 143,
+  "passRate": "100.0%",
+  "results": [
+    {
+      "name": "GET / → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.010999999999967258
+    },
+    {
+      "name": "GET / → hono text body",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0037919999999758147
+    },
+    {
+      "name": "GET /app-health → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.009915999999975611
+    },
+    {
+      "name": "GET /app-health → json ok:true",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0048749999998563
+    },
+    {
+      "name": "GET /todos before create → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.031083000000307948
+    },
+    {
+      "name": "GET /todos before create → empty",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.011458999999831576
+    },
+    {
+      "name": "POST /todos → 201",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.009166999999706604
+    },
+    {
+      "name": "POST /todos → execution id header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.006499999999959982
+    },
+    {
+      "name": "POST /todos → title persisted",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003665999999611813
+    },
+    {
+      "name": "POST /todos → completed false",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004333000000315224
+    },
+    {
+      "name": "GET /todos after create → one row",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.039583000000675383
+    },
+    {
+      "name": "flux replay → ok",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0072079999999914435
+    },
+    {
+      "name": "flux replay → same JSON response",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.009667000000263215
+    },
+    {
+      "name": "flux replay → 201 status preserved",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004124999999476131
+    },
+    {
+      "name": "flux replay → Postgres step recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.005041999999775726
+    },
+    {
+      "name": "flux replay → writes suppressed",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0027919999993173406
+    },
+    {
+      "name": "GET /todos after replay → count unchanged",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.032666999999491964
+    },
+    {
+      "name": "GET /orders before create → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.027708000000529864
+    },
+    {
+      "name": "GET /orders before create → empty",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.008875000000443833
+    },
+    {
+      "name": "POST /orders first request → 201",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.02787499999976717
+    },
+    {
+      "name": "POST /orders first request → execution id header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003959000000577362
+    },
+    {
+      "name": "POST /orders first request → created status header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0069590000002790475
+    },
+    {
+      "name": "POST /orders first request → order payload",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.010000000000218279
+    },
+    {
+      "name": "POST /orders second request → same status",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.02320800000052259
+    },
+    {
+      "name": "POST /orders second request → replayed status header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.009417000000212283
+    },
+    {
+      "name": "POST /orders second request → same JSON response",
+      "passed": true,
+      "skipped": false,
+      "duration": 5.227332999999817
+    },
+    {
+      "name": "GET /orders after duplicate request → one row",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.031957999999576714
+    },
+    {
+      "name": "flux replay idempotent order → ok",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.030749999999898137
+    },
+    {
+      "name": "flux replay idempotent order → same JSON response",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.027249999999185093
+    },
+    {
+      "name": "flux replay idempotent order → 201 status preserved",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.006083000000216998
+    },
+    {
+      "name": "flux replay idempotent order → Redis recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.005291999999826658
+    },
+    {
+      "name": "flux replay idempotent order → Postgres recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003125000000181899
+    },
+    {
+      "name": "GET /orders after replay → count unchanged",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.032167000000299595
+    },
+    {
+      "name": "GET /orders before crash test → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.02974999999969441
+    },
+    {
+      "name": "GET /orders before crash test → empty",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.01020799999969313
+    },
+    {
+      "name": "precondition → Postgres row absent",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.032333000001017353
+    },
+    {
+      "name": "precondition → Redis key absent",
+      "passed": true,
+      "skipped": false,
+      "duration": 74.44000000000051
+    },
+    {
+      "name": "POST /orders first request → connection fails on crash",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.005375000000640284
+    },
+    {
+      "name": "runtime exits after crash hook fires",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004166000000623171
+    },
+    {
+      "name": "after crash → exactly one durable row exists",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.03395799999998417
+    },
+    {
+      "name": "after crash → no phantom POST execution recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.03424999999879219
+    },
+    {
+      "name": "after crash → Redis key still absent",
+      "passed": true,
+      "skipped": false,
+      "duration": 61.917333000001236
+    },
+    {
+      "name": "retry precondition → durable order visible through API",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.03674999999930151
+    },
+    {
+      "name": "retry request → 201",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.028500000000349246
+    },
+    {
+      "name": "retry request → execution id header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004582999999911408
+    },
+    {
+      "name": "retry request → created status header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.007416000000375789
+    },
+    {
+      "name": "retry request → response matches durable row",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.026584000001093955
+    },
+    {
+      "name": "after retry → still one durable row",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.035916000000725035
+    },
+    {
+      "name": "after retry → Redis key populated",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.03691699999944831
+    },
+    {
+      "name": "after retry → Redis TTL present",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.011167000000568805
+    },
+    {
+      "name": "after retry → Redis value matches canonical response",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.04379200000039418
+    },
+    {
+      "name": "flux trace retry execution → Redis boundary present",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.020249999999577994
+    },
+    {
+      "name": "flux trace retry execution → Postgres boundary present",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.005083000000013271
+    },
+    {
+      "name": "flux replay retry execution → ok",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.023083000000042375
+    },
+    {
+      "name": "flux replay retry execution → same JSON response",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.02770799999962037
+    },
+    {
+      "name": "flux replay retry execution → 201 status preserved",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.007999999999810825
+    },
+    {
+      "name": "flux replay retry execution → Redis recorded only",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.006957999999940512
+    },
+    {
+      "name": "flux replay retry execution → Postgres recorded only",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003875000000334694
+    },
+    {
+      "name": "third request after retry → replayed header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.029333000000406173
+    },
+    {
+      "name": "third request after retry → same JSON response",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.022207999998499872
+    },
+    {
+      "name": "GET /events before webhook → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.02991699999984121
+    },
+    {
+      "name": "GET /events before webhook → empty",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.009125000000494765
+    },
+    {
+      "name": "POST /webhook first request → 202",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.030375000000276486
+    },
+    {
+      "name": "POST /webhook first request → execution id header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004124999999476131
+    },
+    {
+      "name": "POST /webhook first request → processed header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.008042000001296401
+    },
+    {
+      "name": "POST /webhook first request → processed body",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004625000001396984
+    },
+    {
+      "name": "POST /webhook duplicate request → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.030208000000129687
+    },
+    {
+      "name": "POST /webhook duplicate request → duplicate header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.015916999998808024
+    },
+    {
+      "name": "POST /webhook duplicate request → duplicate body",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.006459000000177184
+    },
+    {
+      "name": "GET /events after duplicate webhook → one row",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.040957999999591266
+    },
+    {
+      "name": "flux replay webhook request → ok",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.04862500000126602
+    },
+    {
+      "name": "flux replay webhook request → same JSON response",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.04179100000146718
+    },
+    {
+      "name": "flux replay webhook request → 202 status preserved",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.007082999998601736
+    },
+    {
+      "name": "flux replay webhook request → Redis recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.010374999999839929
+    },
+    {
+      "name": "flux replay webhook request → Postgres recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003582999999707681
+    },
+    {
+      "name": "GET /events after replay → count unchanged",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0375000000003638
+    },
+    {
+      "name": "GET /dispatches before failure → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.029249999999592546
+    },
+    {
+      "name": "GET /dispatches before failure → empty",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.009333000001788605
+    },
+    {
+      "name": "POST /dispatches with remote offline → 500",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.032707999998820014
+    },
+    {
+      "name": "POST /dispatches with remote offline → execution id header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.006083000000216998
+    },
+    {
+      "name": "GET /dispatches after failure → one pending row",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.033458000001701294
+    },
+    {
+      "name": "GET /dispatches after failure → row is pending",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0048749999987194315
+    },
+    {
+      "name": "GET /dispatches after failure → remoteStatus absent",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.002749999999650754
+    },
+    {
+      "name": "flux resume → starts after recorded checkpoint",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.06650000000081491
+    },
+    {
+      "name": "flux resume → first Postgres step recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.057708000000275206
+    },
+    {
+      "name": "flux resume → remote HTTP step live",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.016125000001920853
+    },
+    {
+      "name": "flux resume → completion Postgres step live",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004124999999476131
+    },
+    {
+      "name": "flux resume → returns 201",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0052500000019790605
+    },
+    {
+      "name": "flux resume → response marks dispatch delivered",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.008416000000579515
+    },
+    {
+      "name": "GET /dispatches after resume → still one row",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.036959000000933884
+    },
+    {
+      "name": "GET /dispatches after resume → same row id reused",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0071250000000873115
+    },
+    {
+      "name": "GET /dispatches after resume → row delivered",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003249999997933628
+    },
+    {
+      "name": "GET /dispatches after resume → remoteStatus recorded",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0022080000017012935
+    },
+    {
+      "name": "GET /dispatches after resume → original order retained",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0018330000020796433
+    }
+  ]
+}

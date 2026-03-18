@@ -4,19 +4,28 @@ A minimal end-to-end example to verify the local Flux loop.
 
 ## Goal
 
-- start server/runtime
+- start server and runtime
 - send one request
-- inspect execution details
+- inspect the execution record
 
 ## Steps
 
 ```bash
-flux server start --database-url postgres://localhost:5432/postgres
+# 1. Start the gRPC server
+flux server start --database-url postgres://postgres:postgres@localhost:5432/flux
+
+# 2. One-time auth setup
 flux init
-flux serve index.ts
-curl -sS -X POST http://127.0.0.1:3000/index \
+
+# 3. Run the JS entry file as an HTTP listener
+flux run examples/hello.js --listen
+
+# 4. Send a request
+curl -sS -X POST http://127.0.0.1:3000/hello \
   -H 'content-type: application/json' \
   -d '{"name":"world"}'
+
+# 5. Inspect
 flux logs --limit 10
 flux trace <execution_id> --verbose
 flux why <execution_id>

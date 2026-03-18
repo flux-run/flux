@@ -17,8 +17,9 @@ pub struct AuthArgs {
 pub async fn execute(args: AuthArgs) -> Result<()> {
     let token = match args.token {
         Some(token) => token,
-        None => rpassword::prompt_password("Service token: ")
-            .context("failed to read service token")?,
+        None => {
+            rpassword::prompt_password("Service token: ").context("failed to read service token")?
+        }
     };
 
     let url = normalize_grpc_url(&args.url);
@@ -38,6 +39,3 @@ pub async fn execute(args: AuthArgs) -> Result<()> {
 
     Ok(())
 }
-
-
-

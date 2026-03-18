@@ -1,0 +1,198 @@
+{
+  "suite": "Web Platform Tests (url · fetch · encoding)",
+  "timestamp": "2026-03-17T06:27:56.012Z",
+  "engine": "node v22.20.0",
+  "passed": 16,
+  "failed": 5,
+  "skipped": 9,
+  "total": 30,
+  "elapsedMs": 2829,
+  "passRate": "76.2%",
+  "results": [
+    {
+      "name": "IdnaTestV2-removed.window.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 2350
+    },
+    {
+      "name": "IdnaTestV2.window.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: ToASCII(\"xn--xn--a--gua.pt\") V4; V2 (ignored): Expected TypeError but got Error\n       ToASCII(\"xn--xn---epa\") V4; V2 (ignored): Expected TypeError but got Error\n           at globalThis",
+      "duration": 83
+    },
+    {
+      "name": "historical.any.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "idlharness.any.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "javascript-urls.window.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "percent-encoding.window.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "a-element-origin.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "a-element.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "toascii.window.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "url-constructor.any.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Parsing: <:#> against <http://example.org/foo/bar>: hash\n       Parsing: <#> against <http://example.org/foo/bar>: hash\n       Parsing: <?> against <http://example.org/foo/bar>: search\n ",
+      "duration": 48
+    },
+    {
+      "name": "url-origin.any.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Origin parsing: <blob:blob:https://example.org/> without base: origin\n       Origin parsing: <blob:ftp://host/path> without base: origin\n       Origin parsing: <blob:ws://example.org/> w",
+      "duration": 38
+    },
+    {
+      "name": "url-searchparams.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 19
+    },
+    {
+      "name": "url-setters-a-area.window.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "url-setters-stripping.any.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Setting protocol with leading U+0000 (https:): invalid URL: relative URL without a base\n       Setting protocol with U+0000 before inserted colon (https:): invalid URL: relative URL with",
+      "duration": 27
+    },
+    {
+      "name": "url-setters.any.js",
+      "passed": false,
+      "skipped": true,
+      "duration": 0
+    },
+    {
+      "name": "url-statics-canparse.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 17
+    },
+    {
+      "name": "url-statics-parse.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 18
+    },
+    {
+      "name": "url-tojson.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 17
+    },
+    {
+      "name": "urlencoded-parser.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 19
+    },
+    {
+      "name": "urlsearchparams-append.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 17
+    },
+    {
+      "name": "urlsearchparams-constructor.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 19
+    },
+    {
+      "name": "urlsearchparams-delete.any.js",
+      "passed": false,
+      "skipped": false,
+      "error": "Error: failed to create JS isolate\n\nCaused by:\n    0: event loop error during module initialization\n    1: Error: Changing the query of a URL with an opaque path with trailing spaces: space !== space   %20\n       Changing the query of a URL with an opaque path with trailing spaces and a fragment: sp",
+      "duration": 17
+    },
+    {
+      "name": "urlsearchparams-foreach.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 18
+    },
+    {
+      "name": "urlsearchparams-get.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 18
+    },
+    {
+      "name": "urlsearchparams-getall.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 16
+    },
+    {
+      "name": "urlsearchparams-has.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 16
+    },
+    {
+      "name": "urlsearchparams-set.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 17
+    },
+    {
+      "name": "urlsearchparams-size.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 16
+    },
+    {
+      "name": "urlsearchparams-sort.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 18
+    },
+    {
+      "name": "urlsearchparams-stringifier.any.js",
+      "passed": true,
+      "skipped": false,
+      "duration": 18
+    }
+  ]
+}

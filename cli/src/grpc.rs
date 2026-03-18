@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use tonic::Request;
-use tonic::metadata::MetadataValue;
 use tonic::Streaming;
+use tonic::metadata::MetadataValue;
 
 pub use shared::pb;
 
@@ -28,6 +28,12 @@ pub struct TraceCheckpoint {
 }
 
 #[derive(Debug, Clone)]
+pub struct TraceConsoleLog {
+    pub level: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct TraceView {
     pub execution_id: String,
     pub method: String,
@@ -38,6 +44,7 @@ pub struct TraceView {
     pub request_json: String,
     pub response_json: String,
     pub checkpoints: Vec<TraceCheckpoint>,
+    pub logs: Vec<TraceConsoleLog>,
 }
 
 fn friendly_connect_error(endpoint: &str, err: tonic::transport::Error) -> anyhow::Error {
@@ -72,6 +79,26 @@ pub struct ReplayStepView {
     pub url: String,
     pub used_recorded: bool,
     pub duration_ms: i32,
+    pub source: String,
+    pub validated: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplayDivergenceView {
+    pub checkpoint_index: i32,
+    pub boundary: String,
+    pub url: String,
+    pub expected_json: String,
+    pub actual_json: String,
+    pub diffs: Vec<ReplayFieldDiffView>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplayFieldDiffView {
+    pub path: String,
+    pub expected_json: String,
+    pub actual_json: String,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +109,7 @@ pub struct ReplayView {
     pub error: String,
     pub duration_ms: i32,
     pub steps: Vec<ReplayStepView>,
+    pub divergence: Option<ReplayDivergenceView>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,9 +125,10 @@ pub struct ResumeView {
 
 pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ValidateTokenRequest {});
     request.metadata_mut().insert(
@@ -123,9 +152,10 @@ pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
 
 pub async fn list_logs(url: &str, token: &str, limit: u32) -> Result<Vec<LogEntry>> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ListLogsRequest { limit });
     request.metadata_mut().insert(
@@ -159,9 +189,10 @@ pub async fn list_logs(url: &str, token: &str, limit: u32) -> Result<Vec<LogEntr
 
 pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<TraceView> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::GetTraceRequest {
         execution_id: execution_id.to_string(),
@@ -198,6 +229,14 @@ pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<Tra
                 duration_ms: cp.duration_ms,
             })
             .collect(),
+        logs: response
+            .logs
+            .into_iter()
+            .map(|log| TraceConsoleLog {
+                level: log.level,
+                message: log.message,
+            })
+            .collect(),
     })
 }
 
@@ -207,9 +246,10 @@ pub async fn tail(
     project_id: Option<String>,
 ) -> Result<Streaming<pb::TailEvent>> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::TailRequest {
         project_id: project_id.unwrap_or_default(),
@@ -231,9 +271,10 @@ pub async fn tail(
 
 pub async fn why(url: &str, token: &str, execution_id: &str) -> Result<WhyView> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::WhyRequest {
         execution_id: execution_id.to_string(),
@@ -263,16 +304,19 @@ pub async fn replay(
     execution_id: &str,
     commit: bool,
     from_index: i32,
+    validate: bool,
 ) -> Result<ReplayView> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ReplayRequest {
         execution_id: execution_id.to_string(),
         commit,
         from_index,
+        validate,
     });
     request.metadata_mut().insert(
         "authorization",
@@ -301,8 +345,27 @@ pub async fn replay(
                 url: step.url,
                 used_recorded: step.used_recorded,
                 duration_ms: step.duration_ms,
+                source: step.source,
+                validated: step.validated,
             })
             .collect(),
+        divergence: response.divergence.map(|divergence| ReplayDivergenceView {
+            checkpoint_index: divergence.checkpoint_index,
+            boundary: divergence.boundary,
+            url: divergence.url,
+            expected_json: divergence.expected_json,
+            actual_json: divergence.actual_json,
+            diffs: divergence
+                .diffs
+                .into_iter()
+                .map(|diff| ReplayFieldDiffView {
+                    path: diff.path,
+                    expected_json: diff.expected_json,
+                    actual_json: diff.actual_json,
+                    kind: diff.kind,
+                })
+                .collect(),
+        }),
     })
 }
 
@@ -313,9 +376,10 @@ pub async fn resume(
     from_index: Option<i32>,
 ) -> Result<ResumeView> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .map_err(|e| friendly_connect_error(&endpoint, e))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
 
     let mut request = Request::new(pb::ResumeRequest {
         execution_id: execution_id.to_string(),
@@ -349,6 +413,8 @@ pub async fn resume(
                 url: step.url,
                 used_recorded: step.used_recorded,
                 duration_ms: step.duration_ms,
+                source: step.source,
+                validated: step.validated,
             })
             .collect(),
     })

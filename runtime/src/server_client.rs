@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use tonic::Request;
 use tonic::metadata::MetadataValue;
 
-use crate::deno_runtime::FetchCheckpoint;
+use crate::deno_runtime::{FetchCheckpoint, LogEntry};
 use crate::isolate_pool::ExecutionResult;
 
 pub use shared::pb;
@@ -16,9 +16,10 @@ pub struct ExecutionEnvelope {
 
 pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelope) -> Result<()> {
     let endpoint = normalize_grpc_url(url);
-    let mut client = pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
-        .await
-        .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
 
     let mut request = Request::new(pb::RecordExecutionRequest {
         execution_id: envelope.result.execution_id,
@@ -38,6 +39,12 @@ pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelop
             .checkpoints
             .into_iter()
             .map(checkpoint_to_proto)
+            .collect(),
+        logs: envelope
+            .result
+            .logs
+            .into_iter()
+            .map(log_entry_to_proto)
             .collect(),
     });
 
@@ -61,9 +68,18 @@ fn checkpoint_to_proto(checkpoint: FetchCheckpoint) -> pb::CheckpointEntry {
         boundary: checkpoint.boundary,
         url: checkpoint.url,
         method: checkpoint.method,
-        request_json: serde_json::to_string(&checkpoint.request).unwrap_or_else(|_| "null".to_string()),
-        response_json: serde_json::to_string(&checkpoint.response).unwrap_or_else(|_| "null".to_string()),
+        request_json: serde_json::to_string(&checkpoint.request)
+            .unwrap_or_else(|_| "null".to_string()),
+        response_json: serde_json::to_string(&checkpoint.response)
+            .unwrap_or_else(|_| "null".to_string()),
         duration_ms: checkpoint.duration_ms,
+    }
+}
+
+fn log_entry_to_proto(entry: LogEntry) -> pb::ConsoleLogEntry {
+    pb::ConsoleLogEntry {
+        level: entry.level,
+        message: entry.message,
     }
 }
 

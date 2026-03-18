@@ -1,6 +1,6 @@
 [package]
 name = "cli"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [[bin]]
@@ -11,13 +11,19 @@ path = "src/main.rs"
 anyhow = "1"
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4.5.60", features = ["derive", "env"] }
+deno_ast = { version = "0.53.1", features = ["visit"] }
 dirs = "6.0.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rpassword = "7.4.0"
+sha2 = "0.10"
 shared = { path = "../shared" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "process"] }
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread", "process", "time"] }
 toml = "0.8"
 tonic = { version = "0.12", features = ["transport"] }
 prost = "0.13"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"

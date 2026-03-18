@@ -35,7 +35,11 @@ pub async fn execute(args: ResumeArgs) -> Result<()> {
     println!();
 
     for step in &response.steps {
-        let source = if step.used_recorded { "recorded" } else { "live" };
+        let source = if step.used_recorded {
+            "recorded"
+        } else {
+            "live"
+        };
         println!(
             "  [{}] {}  {}  {}ms  ({})",
             step.call_index,
@@ -47,8 +51,15 @@ pub async fn execute(args: ResumeArgs) -> Result<()> {
     }
 
     println!();
-    let status_symbol = if response.status == "ok" { "✓" } else { "✗" };
-    println!("  {}  {}  {}ms", status_symbol, response.status, response.duration_ms);
+    let status_symbol = if response.status == "ok" {
+        "✓"
+    } else {
+        "✗"
+    };
+    println!(
+        "  {}  {}  {}ms",
+        status_symbol, response.status, response.duration_ms
+    );
 
     if !response.error.is_empty() {
         println!("  error  {}", response.error);

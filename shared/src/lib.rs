@@ -7,3 +7,5 @@
 pub mod pb {
     tonic::include_proto!("flux.internal.v1");
 }
+
+pub mod project;

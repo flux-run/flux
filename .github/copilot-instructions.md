@@ -1,188 +1,94 @@
-# Flux Copilot Instructions
+# Flux Workspace Guardrails
 
-## What Flux Is
+## Golden Rule
 
-Flux is a **backend framework where every execution is a record** — think "Git for backend execution." Every function invocation automatically captures timing spans, database mutations (before/after state), external HTTP calls, and the deployed code SHA, all linked by a single `request_id`. This enables commands like `flux why <id>` (root cause in 10s) and `flux incident replay <id>` (re-run with recorded state).
+Flux owns all side effects.
 
-**Core primitives:** Function · Database · Queue. Everything else composes from these.
+JavaScript execution is untrusted and must not directly access external systems, time, or randomness without going through Flux-controlled ops.
 
-**Single source of truth:** All state lives in PostgreSQL. No Redis, no Kafka, no managed queues.
+## Determinism Rules
 
-## Repository Structure
+- All side effects must be observable, serializable, and replayable.
+- If a side effect cannot be deterministically recorded and replayed, it must not be exposed to user code.
+- Prefer synchronous, fully buffered boundaries for side effects.
+- Do not introduce streaming or partial-consumption APIs unless they are fully deterministic and replay-safe.
 
-Mixed Rust + TypeScript monorepo:
+## Product Scope
 
-- **Rust workspace** (`Cargo.toml`): `api`, `gateway`, `runtime`, `data-engine`, `queue`, `server` (monolith), `cli`, `shared/job_contract`
-- **Node workspaces** (`package.json`): `frontend` (marketing site + docs), `dashboard` (management UI), `packages/functions`, `packages/sdk`, `packages/wasm-sdk`
-- **`schemas/`**: Single canonical SQL baseline — `schemas/v0.1.sql` (applied idempotently via `include_str!` in `cli/src/dev.rs`)
-- **`docs/`**: Authoritative specs — read `docs/framework.md` (1742 lines) for the full design
+- Strengthen Flux as a deterministic execution engine for backend code.
+- Preserve Flux-owned fetch, time, randomness, logging, and request dispatch boundaries.
+- Treat Web Platform Tests and node-core tests as compatibility measurement tools, not automatic pass targets.
+- Do not treat unsupported browser-only or Node-only behavior as a product bug unless it blocks the backend execution model Flux actually supports.
+- Do not reintroduce broad Deno web or Node extension surfaces unless the change is explicitly required and consistent with Flux's recording model.
 
-## Services & Ports
+## Module Responsibility Map
 
-| Service | Port | Role |
-|---------|------|------|
-| `api` | 8080 | Management plane — function registry, secrets, schema management |
-| `gateway` | 8081 | Public edge — routing, auth, rate limiting, trace root creation |
-| `data-engine` | 8082 | DB query engine — mutation recording, hooks, cron |
-| `runtime` | 8083 | Serverless executor — Deno V8 isolates run user functions |
-| `queue` | 8084 | Async job worker — DB polling, retries, dead-letter queue |
-| `server` | 4000 | Monolith — all 5 services in one binary (dev & default) |
-| `dashboard` | 5173 | Next.js management UI |
+### runtime/src/deno_runtime.rs
 
-**Dev mode** (`docker-compose.dev.yml`): single `server` binary on :4000 + PostgreSQL on :5432.  
-**Production** (`docker-compose.yml`): all five services as separate containers, horizontally scalable (`--scale gateway=4 --scale runtime=8`).
+Owns the deterministic host/runtime boundary.
 
-**Architecture direction:** The goal is fully in-process communication (no inter-process HTTP hops between services). The `server` crate is the target monolith. `docs/single-binary-architecture.md` tracks this migration.
+- Keep Flux-controlled ops here: fetch, time, randomness, logging, URL parsing, and server dispatch.
+- Keep the minimal JS bootstrap here when host-owned behavior must be projected into user code.
+- Keep ESM and TypeScript module loading behavior here when it is part of runtime execution semantics.
+- Do not move CLI concerns, process orchestration, or config loading into this file.
+- Do not expose new side effects here unless they satisfy the determinism rules above.
 
-## Build & Run Commands
+### runtime/src/http_runtime.rs
 
-```bash
-make dev                        # Start API + dashboard in parallel
-make api                        # Run API service (SQLX_OFFLINE=true cargo run)
-make dashboard                  # Run dashboard (npm run dev)
+Owns the HTTP request/response bridge around runtime execution.
 
-make build                      # Build all services
-make build SERVICE=api          # Build one service
-make build-docker               # Build Docker images for all services
-```
+- Keep Axum routing, health endpoints, request parsing, and response shaping here.
+- Keep the translation between inbound HTTP traffic and `IsolatePool` execution here.
+- Keep request-header filtering for user-code safety here.
+- Do not implement JS execution semantics, replay rules, or host ops here.
 
-## Test Commands
+### runtime/src/isolate_pool.rs
 
-```bash
-make test-async-wiring          # Deterministic staging test: Gateway → Queue → Worker → Runtime
-make test-platform              # Full platform test suite
+Owns isolate concurrency, worker lifecycle, queueing, and execution scheduling.
 
-# Run a single Rust test:
-cd <service> && cargo test <test_name>
-cd <service> && cargo test -- --nocapture   # with output
+- Keep worker creation, queue timeouts, result timeouts, and round-robin scheduling here.
+- Keep execution envelopes and server-mode dispatch scheduling here.
+- Do not implement HTTP routing, CLI contracts, or new host APIs here.
 
-# Run tests for a specific module:
-cd api && cargo test route::functions
-```
+### runtime/src/server_client.rs
 
-## Database Commands
+Owns outbound recording transport to `flux-server`.
 
-```bash
-make migrate                    # Apply schemas/v0.1.sql to the database
-```
+- Keep gRPC connection setup, auth metadata, and execution-record serialization here.
+- Keep protobuf mapping and endpoint normalization here.
+- Do not execute JS, own runtime semantics, or decide what should be recorded here.
 
-SQLx offline mode is enabled for development (`SQLX_OFFLINE=true`). The codebase uses `sqlx::query_as(...)` runtime functions (not macros), so no `.sqlx` cache or `sqlx prepare` step is needed.
+### runtime/src/main.rs
 
-## Database Schema Architecture
+Owns flux-runtime process bootstrapping and mode selection.
 
-Three Postgres schemas:
-- **`flux.*`** — All Flux system tables (platform internals + queue): `flux.api_*`, `flux.gateway_*`, `flux.runtime_*`, `flux.queue_*`, `flux.jobs`, `flux.job_logs`, `flux.dead_letter_jobs`
-- **`flux_internal.*`** — Data-engine introspection tables (table/column metadata, hooks, events, cron, mutations)
-- **`public.*`** — User application tables created by `flux db push`
+- Parse runtime flags.
+- Validate and resolve the entry file.
+- Choose between script mode and HTTP serving mode.
+- Prepare the runtime artifact and hand execution off to the runtime library.
+- Do not implement web-platform behavior or compatibility shims here.
 
-**Ownership rule:** Write to another service's tables only via that service's API endpoint. Exception: the observability tables (`execution_records`, `execution_spans`, `execution_mutations`, `execution_calls`) are append-only and can be written directly by their owning service for hot-path performance.
+### cli/src/run.rs
 
-**Search path:** User functions see only `public.*`. System services see `flux, public` (resolves system tables first).
+Owns the flux run CLI contract.
 
-Mutation recording is **atomic with the data write** — the before/after log is committed in the same transaction. Rolling back the data write rolls back the log.
+- Validate CLI inputs.
+- Discover the workspace root and runtime binary.
+- Translate CLI arguments into the flux-runtime invocation contract.
+- Keep this file focused on process handoff.
+- Do not duplicate runtime semantics or implement host APIs here.
 
-## Key Architecture Patterns
+## Cross-Layer Rules
 
-### All Rust Services Follow Library + Binary Pattern
-Every service has `src/lib.rs` + `src/main.rs`. The `server` crate composes all service libraries into the monolith binary.
+- `cli/src/run.rs` must not call runtime internals directly beyond process handoff.
+- `runtime/src/deno_runtime.rs` must not depend on CLI modules, config lookup, or command parsing.
+- `runtime/src/http_runtime.rs` must not implement JS platform behavior or deterministic host ops.
+- `runtime/src/isolate_pool.rs` must not perform direct external side effects on behalf of user code.
+- No file should both execute user JavaScript and perform real side effects outside Flux-controlled ops.
 
-### Async Jobs Are Database-Backed
-The `queue` service polls PostgreSQL (default every 200ms). Job lifecycle: `PENDING → RUNNING → COMPLETED | FAILED → RETRY | DEAD_LETTER`. Visibility timeout: 5 minutes. Max 3 retries with exponential backoff (1s → 2s → ... → 60s). Idempotency keys prevent duplicate execution.
+## Change Heuristics
 
-### SQLx for All Database Access
-All SQL uses `sqlx::query_as(...)` runtime functions (not macros — no `.sqlx` cache needed). The single schema baseline lives in `schemas/v0.1.sql` and is embedded into the CLI binary via `include_str!`.
-
-### Gateway Routing Uses In-Memory Snapshot
-Routes are stored as an in-memory `HashMap<(METHOD, path), function>`, refreshed via Postgres `LISTEN/NOTIFY` for zero-latency updates. All user functions are `POST` endpoints — this is intentional for webhook compatibility.
-
-### Secrets Are Never Logged
-Secrets are injected into the Deno V8 isolate at runtime via an LRU cache (30s TTL), encrypted at rest with AES-256-GCM. They never appear in execution records, logs, or error messages.
-
-### Rust Edition Split
-- Core services: `edition = "2024"` — `api`, `gateway`, `runtime`, `cli`, `server`
-- Supporting crates: `edition = "2021"` — `data-engine`, `queue`, `shared/job_contract`
-
-## User-Facing Function Authoring (TypeScript SDK)
-
-Functions are authored using `@flux/functions` (`packages/functions`), built with `tsup` (ESM + CJS + types), Zod is an optional peer dep.
-
-```typescript
-// functions/create_user/index.ts
-import { defineFunction } from "@flux/functions";
-
-export default defineFunction({
-  input: CreateUserSchema,
-  output: UserSchema,
-  handler: async (input, ctx) => {
-    const user = await ctx.db.users.insert({ ...input });
-    await ctx.queue.push("send_welcome_email", { userId: user.id });
-    return user;
-  },
-});
-```
-
-**The `ctx` object** is the single interface to all Flux capabilities:
-
-| `ctx.*` | Purpose |
-|---------|---------|
-| `ctx.db.<table>.<op>()` | Typed DB access (mutations are auto-recorded) |
-| `ctx.queue.push(fn, payload, opts)` | Enqueue async job |
-| `ctx.function.invoke(name, input)` | Call another function (same `request_id`) |
-| `ctx.secrets.get(key)` | Read encrypted secret |
-| `ctx.log.info/warn/error()` | Structured log |
-| `ctx.error(code, error, message)` | Throw structured error |
-| `ctx.requestId` | UUID propagated through entire execution |
-
-**Project layout expected by Flux:**
-```
-my-app/
-├── flux.toml           # project manifest (port, reload, deploy target, limits)
-├── functions/          # each subdir = POST /{name} endpoint
-├── middleware/         # auth.ts, etc.
-├── schemas/            # raw SQL files (source of truth for DB schema)
-└── .flux/              # build output, local Postgres data
-```
-
-## Observability & Debugging CLI
-
-Every execution record includes: `request_id`, `function_name`, `code_sha`, `input`, `output`, `error`, `duration_ms`, linked spans, mutations, and external calls.
-
-| Command | What it does |
-|---------|--------------|
-| `flux trace <id>` | Full distributed trace as waterfall |
-| `flux why <id>` | Root cause in 10s — error + DB mutations + fix suggestion |
-| `flux tail [--errors]` | Live request stream |
-| `flux state history <table> --id <row-id>` | Full version history of a row |
-| `flux state blame <table>` | Last writer per row |
-| `flux incident replay <id>` | Re-run with same input + `code_sha`, externals mocked |
-| `flux trace diff <a> <b>` | Compare two executions field-by-field |
-| `flux bug bisect --function <fn> --good <sha> --bad <sha>` | Binary-search commits to find regression |
-
-Automatic detections: slow spans (>500ms), N+1 queries (same table ≥3 times), missing indexes, root cause pattern matching (timeouts, constraint violations, permission errors).
-
-## Environment Variables
-
-| Variable | Used By | Purpose |
-|----------|---------|---------|
-| `DATABASE_URL` | All Rust services | PostgreSQL connection string |
-| `INTERNAL_SERVICE_TOKEN` | Gateway, API | Service-to-service auth |
-| `LOCAL_MODE` / `FLUX_LOCAL` | Various | Dev mode — disables JWT, tenant routing |
-| `PORT` | All services | Service listen port |
-| `WORKER_POLL_INTERVAL_MS` | Queue | Job polling interval (default 200ms) |
-
-## Implementation Status
-
-As of March 2026, the project is in **Phase 0** (proving the debugging magic). The Rust infrastructure (CLI, Gateway, Runtime, Data Engine, Queue, API) is built. Still in progress: `flux dev` orchestrator with embedded Postgres, `flux.toml` parser, hot reload, and end-to-end `flux trace` / `flux why` output formatting.
-
-See `docs/implementation-status.md` for the full phase breakdown.
-
-## Deploy Commands
-
-```bash
-make deploy                              # Deploy all to production
-make deploy SERVICE=api                  # Deploy one service
-make deploy-with-migrate SERVICE=api     # Migrate DB first, then deploy
-make deploy-gcp                          # Build + push to GCP Artifact Registry + deploy to Cloud Run
-```
-
-Always use `deploy-with-migrate` when `schemas/v0.1.sql` has been updated.
+- Prefer the smallest change that preserves the existing deterministic design.
+- Fix problems at the ownership boundary where they originate instead of adding compensating logic in another layer.
+- If a change touches compatibility behavior, first decide whether it is a real runtime gap, a harness gap, or an unsupported-by-design case.
+- When in doubt, preserve Flux identity over expanding surface area.

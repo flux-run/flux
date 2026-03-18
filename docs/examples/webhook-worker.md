@@ -1,22 +1,31 @@
-# Example: Webhook Worker
+# Example: Webhook Replay
 
-A compact async example that crosses an intake/replay boundary.
+An example that walks through receiving a request, finding a failing execution, and using replay to verify a fix.
 
 ## Goal
 
-- accept a webhook-style payload
-- inspect the failed execution
-- replay with field-level diff
+- serve a webhook-style handler
+- find a failing execution
+- replay with field-level diff to confirm the fix
 
 ## Steps
 
 ```bash
-flux server start --database-url postgres://localhost:5432/postgres
+# 1. Start the server
+flux server start --database-url postgres://postgres:postgres@localhost:5432/flux
+
+# 2. One-time auth setup
 flux init
-flux serve webhook.ts
+
+# 3. Run the handler as a listener
+flux run webhook.js --listen
+
+# 4. Send a request
 curl -sS -X POST http://127.0.0.1:3000/webhook \
   -H 'content-type: application/json' \
   -d '{"provider":"stripe","event":"invoice.paid"}'
+
+# 5. Inspect and replay
 flux logs --path /webhook --limit 20
 flux trace <execution_id> --verbose
 flux replay <execution_id> --diff
@@ -26,5 +35,5 @@ flux resume <execution_id>
 ## What to Look For
 
 - trace shows full request payload and response/error
-- replay output highlights changed JSON fields
-- resume continues from checkpointed call boundaries when supported
+- replay output highlights changed JSON fields between original and replay
+- resume continues from checkpointed call boundaries

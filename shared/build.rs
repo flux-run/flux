@@ -1,6 +1,6 @@
 fn main() {
-    let protoc_path = protoc_bin_vendored::protoc_bin_path()
-        .expect("failed to fetch vendored protoc binary");
+    let protoc_path =
+        protoc_bin_vendored::protoc_bin_path().expect("failed to fetch vendored protoc binary");
     unsafe {
         std::env::set_var("PROTOC", protoc_path);
     }

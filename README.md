@@ -1,8 +1,10 @@
 # Flux
 
-Flux is an open-source backend runtime where every execution is a record.
+Flux guarantees safe, replayable execution of distributed systems.
 
-It combines functions, HTTP routing, database access, queues, schedules, secrets, and a debugging CLI into one system. The product goal is not "more backend features." The product goal is to make production debugging deterministic because Flux owns the execution path.
+Concurrent, retried, or failed executions over shared state converge to one durable outcome, while recorded history remains honest. Every boundary crossing that Flux actually records stays observable and replayable because Flux owns the execution path.
+
+Flux is an open-source backend runtime where every execution is a record. It runs your JS/TS functions, records full input/output and checkpoint traces, and gives you a CLI to debug production incidents deterministically.
 
 Flux is open source under Apache 2.0. You can use, modify, self-host, and
 redistribute the software. The Flux brand, name, and logos are not part of the
@@ -11,30 +13,123 @@ code license. See [LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).
 Website: [fluxbase.co](https://fluxbase.co)  
 Docs: [fluxbase.co/docs](https://fluxbase.co/docs)
 
+## The Pattern
+
+Flux makes distributed systems behave like deterministic programs:
+
+```text
+Request/Event
+	↓
+Redis (coordination)
+	↓
+Postgres (durable side effect)
+	↓
+Checkpoint (recorded execution)
+```
+
+The core roles stay explicit:
+
+- Redis coordinates idempotency and deduplication across isolates
+- Postgres holds durable truth
+- Replay preserves correctness by returning recorded checkpoint results
+- Trace makes the decision path visible
+
+## Proven Behavior
+
+Flux now contains two independent proofs of the same execution law.
+
+### Proof 1: Idempotent API
+
+Client retries the same request.
+
+First request:
+
+```text
+REDIS GET "idempotency:123" -> null
+POSTGRES INSERT orders -> 1 row
+REDIS SET "idempotency:123" -> "OK"
+```
+
+Second request:
+
+```text
+REDIS GET "idempotency:123" -> "{...}"
+```
+
+No duplicate order is created.
+
+See [examples/idempotency](examples/idempotency).
+
+### Proof 2: Webhook Deduplication
+
+An external system sends the same event more than once.
+
+First delivery:
+
+```text
+REDIS GET "event:abc" -> null
+POSTGRES INSERT events -> 1 row
+REDIS SET "event:abc" -> "OK"
+```
+
+Retry:
+
+```text
+REDIS GET "event:abc" -> "1"
+```
+
+The event is processed exactly once.
+
+See [examples/webhook_dedup](examples/webhook_dedup).
+
+## Replay Guarantee
+
+Flux has two replay modes.
+
+Deterministic replay reuses recorded checkpoints only:
+
+```text
+REDIS -> recorded
+POSTGRES -> recorded
+```
+
+In deterministic replay:
+
+- recorded side effects are not re-executed
+- replay remains deterministic
+- missing history is never fabricated
+
+When replay or resume continues past a live boundary, the guarantee changes:
+
+- recorded history before the live boundary stays fixed
+- live boundaries after that point may diverge
+- continuation is not the same thing as deterministic replay
+
 ## Why Flux Exists
 
-Modern backends scatter evidence across logs, traces, queues, deploy history, and database state. When something breaks, teams spend hours reconstructing what happened.
+When a production request fails, debugging usually means opening separate tools: log aggregators, trace UIs, database clients, and deploy history. Reconstructing what actually happened takes time and is error-prone.
 
-Flux is built around one idea:
+Flux records every execution as a single unit:
 
-- every request, job, and schedule trigger becomes one execution record
-- that record connects code version, spans, logs, database mutations, queued work, and outcomes
-- debugging starts from the record, not from guesswork
+- the input, output, and error
+- every outbound IO call with its request, response, and duration
+	- currently includes buffered HTTP fetches, deterministic TCP/TLS exchanges, and native Postgres queries over plain TCP or Rustls-backed TLS
+- the total duration and HTTP status
 
-That is why commands like `flux trace`, `flux why`, replay, diff, mutation history, and bisect sit at the center of the product.
+Debugging starts from one execution ID:
+
+```bash
+flux logs --status error          # find the failing run
+flux trace <id> --verbose         # see the full picture
+flux why <id>                     # get a root-cause summary
+flux replay <id> --diff           # verify a fix behaves differently
+```
 
 ## What Flux Includes
 
-Flux is a complete backend runtime:
-
-- functions for synchronous application logic
-- a runtime kernel for execution, replay, and resume
-- in-process database dispatch with mutation recording
-- queues and schedules for background work
-- secrets, deployment, and project configuration
-- a CLI built around setup, deployment, and incident debugging
-
-The completeness matters because the debugging model only works if Flux can see the whole execution path.
+- **`flux-runtime`** — executes JS/TS entry files in Deno V8 isolates, records every execution with checkpointed IO calls
+- **`flux-server`** — gRPC server backed by Postgres; stores execution records, traces, and checkpoints
+- **`flux`** — operator CLI for setup, process management, and incident debugging (`logs`, `trace`, `why`, `replay`, `resume`, `exec`, `tail`)
 
 ## Install
 
@@ -46,19 +141,9 @@ curl -fsSL https://fluxbase.co/install | bash
 irm https://fluxbase.co/install.ps1 | iex
 ```
 
-onboarding (minimal): install with `cargo install --path cli`, run `flux server start` and `flux serve your-app.js`, then debug with `flux logs`, `flux trace <id>`, and `flux replay <id>`.
-
-Local source install (current repo):
-
-```bash
-cargo install --path cli --force
-```
-
-This installs one CLI binary (`flux`) that manages the runtime binaries (`flux-server`, `flux-runtime`) for you.
-
 ## Telemetry
 
-The CLI collects anonymous usage events (`flux init`, `flux serve`, `flux logs`) to help us understand how Flux is used. **No personal data, code, or credentials are ever sent** — only CLI version, OS, and arch.
+The CLI collects anonymous usage events (`flux init`, `flux run`, `flux exec`) to help us understand how Flux is used. **No personal data, code, or credentials are ever sent** — only CLI version, OS, and arch.
 
 Opt out at any time:
 
@@ -71,20 +156,63 @@ export FLUX_NO_TELEMETRY=1   # or DO_NOT_TRACK=1
 The developer loop looks like this:
 
 ```bash
+# start the server
 flux server start --database-url postgres://localhost:5432/postgres
+
+# scaffold a project
 flux init
-flux serve index.ts
-flux logs --status error
-flux trace <execution_id> --verbose
-flux replay <execution_id> --diff
+
+# one-time auth setup
+flux init --auth
+
+# development entrypoint with reload
+flux dev
+
+# build first; Flux v1 runs bundled artifacts
+flux build index.ts
+flux run index.ts --listen
+
+# send a request
+curl -X POST http://localhost:3000/index -d '{"email":"user@example.com"}'
+
+# inspect what happened
+flux logs
+flux trace <execution_id>
+flux why <execution_id>
 ```
 
 The experience is:
 
-- one setup command (`flux init`)
-- one command to serve functions (`flux serve`)
-- one command to check health (`flux status`)
-- one place to inspect what happened (`logs`, `trace`, `why`, `replay`)
+- one project
+- one runtime
+- one place to inspect what happened
+
+## Replay Demo
+
+The shortest proof of the operator workflow is the CRUD example in [examples/crud_app](examples/crud_app):
+
+```bash
+docker compose -f examples/crud_app/docker-compose.yml up -d postgres
+flux server start --database-url postgres://postgres:postgres@localhost:5432/crud_app --service-token dev-service-token
+
+export FLUX_SERVICE_TOKEN=dev-service-token
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/crud_app
+export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+
+flux build examples/crud_app/main_flux.ts
+flux run --listen --url http://127.0.0.1:50051 --host 127.0.0.1 --port 8000 examples/crud_app/main_flux.ts
+
+curl -i -X POST http://127.0.0.1:8000/todos \
+	-H 'content-type: application/json' \
+	-d '{"title":"Ship Flux","description":"Replay demo"}'
+
+# copy x-flux-execution-id from the response headers
+flux replay <execution_id> --url http://127.0.0.1:50051 --token dev-service-token --diff
+```
+
+That flow records a real backend request, replays it with the same response, and suppresses the original Postgres write during replay.
+
+For framework apps and npm dependencies, the intended v1 path is bundled artifacts. See [docs/bundled-artifacts.md](docs/bundled-artifacts.md).
 
 ## Product Positioning
 
@@ -102,32 +230,39 @@ Flux does not feel like:
 
 The headline is debugging. The rest of the system is proof that debugging can stay coherent across the whole backend.
 
+## Why This Is Different
+
+Most systems rely on retries, locks, and best-effort idempotency.
+
+Flux guarantees:
+
+- deterministic execution
+- single durable effects under retries and contention
+- replay scoped to recorded history
+- built-in traceability
+
+Flux is not a framework. Flux is a runtime that controls side effects.
+
 ## Architecture At A Glance
 
-Flux presents one CLI surface externally and keeps clear subsystem boundaries internally.
+Flux is three cooperating binaries:
 
-External product shape:
+- `flux` — the CLI (`cli/`)
+- `flux-server` — gRPC server and Postgres-backed execution store (`server/` + `shared/`)
+- `flux-runtime` — Deno V8 isolate that executes user JS/TS and records checkpoints (`runtime/`)
 
-- three binaries (`flux`, `flux-server`, `flux-runtime`)
-- one user-facing CLI
-- one Postgres-backed execution record
-- one operator surface for CLI and dashboard
-
-Repository shape:
-
-- separate Rust crates keep boundaries clear
-- the `server` crate represents the monolithic deployment direction
-- `runtime`, `queue`, and `api` can still be developed independently
+All operator commands (`flux logs`, `flux trace`, `flux why`, `flux replay`, etc.) talk to `flux-server` over gRPC. `flux-runtime` connects to `flux-server` to validate auth and write execution records. All state is in Postgres.
 
 See [docs/single-binary-architecture.md](docs/single-binary-architecture.md) for the full architecture narrative.
 
 ## Repository Map
 
-- `cli/` - developer and operator CLI
-- `server/` - monolithic runtime entrypoint
-- `runtime/` - function execution and bundle loading
-- `queue/` - async jobs, retries, worker execution
-- `api/` - operator-facing APIs for deployments, traces, records, admin actions
+- `cli/` - developer and operator CLI (`flux` binary)
+- `server/` - gRPC server + Postgres execution store (`flux-server` binary)
+- `runtime/` - Deno V8 isolate executor (`flux-runtime` binary)
+- `shared/` - protobuf definitions shared by CLI, server, and runtime
+- `examples/` - sample JS entry files for local testing
+- `scripts/` - build, deploy, and test scripts
 - `docs/` - product, architecture, and component documentation
 
 ## Start Here

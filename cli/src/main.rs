@@ -1,16 +1,23 @@
 use clap::{Parser, Subcommand};
 
 mod auth;
+mod build;
+mod check;
 mod config;
 mod config_cmd;
+mod dev;
 mod exec;
 mod grpc;
 mod init;
 mod logs;
 mod process_state;
+mod project;
 mod ps;
 mod replay;
 mod resume;
+mod run;
+mod runtime_process;
+mod runtime_server;
 mod serve;
 mod server;
 mod status;
@@ -29,8 +36,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// First-time setup (server URL + token) saved to config.
-    Init,
+    /// Initialize a Flux project or migrate auth setup with explicit mode flags.
+    Init(init::InitArgs),
     /// Save and verify runtime auth against a Flux server.
     Auth(auth::AuthArgs),
     /// Manage local Flux CLI config values.
@@ -56,6 +63,14 @@ enum Commands {
     Why(why::WhyArgs),
     /// Stream live execution events.
     Tail(tail::TailArgs),
+    /// Analyse a JS/TS project and write flux.json for production use.
+    Build(build::BuildArgs),
+    /// Check compatibility with Flux's deterministic runtime contract.
+    Check(check::CheckArgs),
+    /// Start a development server with hot reload on file changes.
+    Dev(dev::DevArgs),
+    /// Run a JS/TS file as a plain script (no HTTP server).
+    Run(run::RunArgs),
     /// Prepare a JS/TS entry file for runtime execution.
     Serve(serve::ServeArgs),
     /// Manage the Flux server process.
@@ -70,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init => init::execute().await?,
+        Commands::Init(args) => init::execute(args).await?,
         Commands::Auth(args) => auth::execute(args).await?,
         Commands::Config { command } => config_cmd::execute(command)?,
         Commands::Logs(args) => logs::execute(args).await?,
@@ -82,6 +97,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::Resume(args) => resume::execute(args).await?,
         Commands::Why(args) => why::execute(args).await?,
         Commands::Tail(args) => tail::execute(args).await?,
+        Commands::Build(args) => build::execute(args).await?,
+        Commands::Check(args) => check::execute(args).await?,
+        Commands::Dev(args) => dev::execute(args).await?,
+        Commands::Run(args) => run::execute(args).await?,
         Commands::Serve(args) => serve::execute(args).await?,
         Commands::Server { command } => server::execute(command).await?,
     }

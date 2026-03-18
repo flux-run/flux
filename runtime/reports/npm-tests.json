@@ -1,0 +1,458 @@
+{
+  "suite": "NPM Ecosystem",
+  "timestamp": "2026-03-16T15:30:46.357Z",
+  "engine": "node v22.20.0",
+  "passed": 68,
+  "failed": 0,
+  "skipped": 0,
+  "total": 68,
+  "elapsedMs": 15,
+  "passRate": "100.0%",
+  "results": [
+    {
+      "name": "axios.create returns an instance with custom baseURL",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "axios instance has get/post/put/delete/patch methods",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "axios response wraps status, data, and headers",
+      "passed": true,
+      "skipped": false,
+      "duration": 1
+    },
+    {
+      "name": "axios throws AxiosError on 4xx status",
+      "passed": true,
+      "skipped": false,
+      "duration": 6
+    },
+    {
+      "name": "request config merges headers correctly",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "params are serialised into URL or kept in config.params",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "request interceptor can mutate config",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "response interceptor can transform data",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "AbortController cancels a pending request",
+      "passed": true,
+      "skipped": false,
+      "duration": 1
+    },
+    {
+      "name": "axios auto-parses JSON response body",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.string parses a valid string",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.string throws for non-string input",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.number parses integer and float",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.boolean parses true and false",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.object validates a nested object",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.object strips unknown keys by default",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.object reports all errors at once",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.array validates array of strings",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.union accepts either type",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.optional accepts undefined",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.nullable accepts null",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.transform converts parsed value",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.refine rejects with custom message",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "safeParse returns success=true on valid input",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "safeParse returns success=false on invalid input",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "z.enum validates known values",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "v4 generates a valid RFC 4122 UUID",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "v4 generates a different UUID each call",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "v4 version field is 4",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "v1 generates a valid time-based UUID",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "v3 is deterministic for same namespace + name",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "v5 is deterministic for same namespace + name",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "v3 and v5 differ for same input (different algorithms)",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "validate returns true for a valid UUID",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "validate returns false for garbage string",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "parse + stringify round-trips correctly",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "NIL UUID is all zeros",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "sign returns a three-part JWT string",
+      "passed": true,
+      "skipped": false,
+      "duration": 1
+    },
+    {
+      "name": "sign with HS256 algorithm produces valid header",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "sign embeds payload claims in token body",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "sign with expiresIn adds exp claim",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "verify returns payload for a valid token",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "verify throws JsonWebTokenError for wrong secret",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "verify throws TokenExpiredError for expired token",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "decode returns payload without verification",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "decode with { complete: true } returns header+payload+signature",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "sign + verify round-trip with custom claims",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.chunk splits array into groups of given size",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.uniq removes duplicate values",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.flatten one level deep",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.flattenDeep recursively flattens",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.difference returns values not in second array",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.intersection returns values present in both arrays",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.pick returns subset of object keys",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.omit returns object without specified keys",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.merge deep-merges two objects",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.cloneDeep creates a deep copy",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.get safely retrieves nested value",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.set mutates nested path",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.groupBy groups array elements by key",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.sortBy sorts objects by iteratee",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.keyBy indexes collection by key",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.camelCase converts snake_case",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.snakeCase converts camelCase",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.truncate shortens long string with ellipsis",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.debounce delays the function call",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.memoize caches function results",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    },
+    {
+      "name": "_.once wraps function to only call once",
+      "passed": true,
+      "skipped": false,
+      "duration": 0
+    }
+  ],
+  "libraries": [
+    {
+      "name": "axios",
+      "passed": 10,
+      "failed": 0,
+      "total": 10,
+      "passRate": "100.0%"
+    },
+    {
+      "name": "zod",
+      "passed": 16,
+      "failed": 0,
+      "total": 16,
+      "passRate": "100.0%"
+    },
+    {
+      "name": "uuid",
+      "passed": 11,
+      "failed": 0,
+      "total": 11,
+      "passRate": "100.0%"
+    },
+    {
+      "name": "jsonwebtoken",
+      "passed": 10,
+      "failed": 0,
+      "total": 10,
+      "passRate": "100.0%"
+    },
+    {
+      "name": "lodash",
+      "passed": 21,
+      "failed": 0,
+      "total": 21,
+      "passRate": "100.0%"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 [package]
 name = "runtime"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [lib]
@@ -13,19 +13,51 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-axum = "0.7"
-clap = { version = "4", features = ["derive", "env"] }
-deno_core = "0.290"
-hex = "0.4"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+async-trait = "0.1"
+axum = { version = "0.8.8", features = ["macros"] }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+deno_ast = { version = "0.53.1", features = ["transpiling"] }
+dotenvy = "0.15.7"
+jsonschema = { version = "0.29", default-features = false }
+lru = "0.16.3"
+postgres = { version = "0.19.10", features = ["with-serde_json-1", "with-chrono-0_4", "with-uuid-1"] }
+postgres_rustls = "0.1.4"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
+serde_json = "1.0.149"
+subtle = "2"
 shared = { path = "../shared" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
-tonic = { version = "0.12", features = ["transport"] }
-prost = "0.13"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.50.0", features = ["full"] }
+tokio-rustls = "0.26.2"
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.6.8", features = ["trace", "cors"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 url = "2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1.22.0", features = ["v4", "serde"] }
+wasmtime = { version = "28", default-features = false, features = ["cranelift", "runtime", "async", "component-model"] }
+wasmtime-wasi = { version = "28", default-features = false }
+
+# Deno 2 runtime crates
+# Web platform / JS runtime
+
+deno_core = "0.391.0"
+deno_error = "=0.7.1"
+hex = "0.4"
+keccak = "=0.2.0-rc.2"
+sha2 = "0.10"
+tonic = "0.12"
+ureq = "2.12"
+
+rand = "0.8"
+rsa = { version = "0.9.8", features = ["sha2"] }
+rustls = "0.23.28"
+rustls-pemfile = "2.2.0"
+webpki-roots = "0.26.11"
+
+[dev-dependencies]
+futures = "0.3"
+rcgen = "0.13.2"
+wat = "1"

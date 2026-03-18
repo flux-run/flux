@@ -15,8 +15,10 @@ target/debug/flux
 ## 2) Start Flux Server
 
 ```bash
-target/debug/flux server start --database-url postgres://localhost:5432/postgres
+target/debug/flux server start --database-url postgres://localhost:5432/flux
 ```
+
+The `--service-token` flag (or `INTERNAL_SERVICE_TOKEN` env var) sets the shared secret between server and runtime. Defaults to `dev-service-token` for local development.
 
 ## 3) Initialize Auth Once
 
@@ -29,7 +31,7 @@ After this, commands work without repeating `--url` and `--token`.
 ## 4) Start Runtime
 
 ```bash
-target/debug/flux serve index.ts
+target/debug/flux run index.ts --listen
 ```
 
 Runtime endpoint:
@@ -41,7 +43,7 @@ POST http://127.0.0.1:3000/index
 ## 5) Run One-Off Execution
 
 ```bash
-target/debug/flux exec index.ts --payload '{"email":"user@example.com"}'
+target/debug/flux exec index.ts --input '{"email":"user@example.com"}'
 ```
 
 For a focused smoke-test flow, see [examples/exec-smoke.md](examples/exec-smoke.md).

@@ -54,8 +54,14 @@ async fn execute_start(args: ServerStartArgs) -> Result<()> {
     let binary = find_server_binary(&workspace_root, args.release);
     if let Some(bin) = binary {
         println!("starting server binary {}", bin.display());
-        return start_server_binary(&workspace_root, &bin, args.port, &database_url, &service_token)
-            .await;
+        return start_server_binary(
+            &workspace_root,
+            &bin,
+            args.port,
+            &database_url,
+            &service_token,
+        )
+        .await;
     }
 
     println!("server binary not found, starting via cargo run");
@@ -86,7 +92,10 @@ async fn start_server_binary(
         .env("GRPC_PORT", port.to_string())
         .env("DATABASE_URL", database_url)
         .env("INTERNAL_SERVICE_TOKEN", service_token)
-        .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
+        .env(
+            "RUST_LOG",
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
+        )
         .exec();
 
     Err(anyhow::anyhow!("failed to exec server binary: {}", err))
@@ -105,7 +114,10 @@ async fn start_server_binary(
         .env("GRPC_PORT", port.to_string())
         .env("DATABASE_URL", database_url)
         .env("INTERNAL_SERVICE_TOKEN", service_token)
-        .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
+        .env(
+            "RUST_LOG",
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
+        )
         .status()
         .await
         .context("failed to start server binary")?;
@@ -138,10 +150,16 @@ async fn start_server_cargo(
     command.env("GRPC_PORT", port.to_string());
     command.env("DATABASE_URL", database_url);
     command.env("INTERNAL_SERVICE_TOKEN", service_token);
-    command.env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()));
+    command.env(
+        "RUST_LOG",
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
+    );
 
     let err = command.exec();
-    Err(anyhow::anyhow!("failed to exec `cargo run -p server --bin flux-server`: {}", err))
+    Err(anyhow::anyhow!(
+        "failed to exec `cargo run -p server --bin flux-server`: {}",
+        err
+    ))
 }
 
 #[cfg(not(unix))]
@@ -161,9 +179,15 @@ async fn start_server_cargo(
     command.env("GRPC_PORT", port.to_string());
     command.env("DATABASE_URL", database_url);
     command.env("INTERNAL_SERVICE_TOKEN", service_token);
-    command.env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()));
+    command.env(
+        "RUST_LOG",
+        std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
+    );
 
-    let status = command.status().await.context("failed to start `cargo run -p server --bin flux-server`")?;
+    let status = command
+        .status()
+        .await
+        .context("failed to start `cargo run -p server --bin flux-server`")?;
     if !status.success() {
         bail!("server exited with {}", status);
     }
@@ -189,7 +213,11 @@ fn find_workspace_root() -> Option<PathBuf> {
 }
 
 fn find_server_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "flux-server.exe" } else { "flux-server" };
+    let name = if cfg!(windows) {
+        "flux-server.exe"
+    } else {
+        "flux-server"
+    };
     let primary = if release { "release" } else { "debug" };
     let secondary = if release { "debug" } else { "release" };
 
@@ -215,15 +243,13 @@ fn server_port_path() -> PathBuf {
 
 fn write_server_pid(pid: u32) -> Result<()> {
     let dir = flux_dir();
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     std::fs::write(server_pid_path(), pid.to_string()).context("failed to write ~/.flux/server.pid")
 }
 
 fn write_server_port(port: u16) -> Result<()> {
     let dir = flux_dir();
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     std::fs::write(server_port_path(), port.to_string())
         .context("failed to write ~/.flux/server.port")
 }
