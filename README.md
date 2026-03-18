@@ -2,7 +2,7 @@
 
 Flux guarantees safe, replayable execution of distributed systems.
 
-The same request or event will not produce duplicate side effects, even across retries, crashes, or concurrent execution. Every boundary crossing is recorded, replayable, and observable because Flux owns the execution path.
+Concurrent, retried, or failed executions over shared state converge to one durable outcome, while recorded history remains honest. Every boundary crossing that Flux actually records stays observable and replayable because Flux owns the execution path.
 
 Flux is an open-source backend runtime where every execution is a record. It runs your JS/TS functions, records full input/output and checkpoint traces, and gives you a CLI to debug production incidents deterministically.
 
@@ -84,18 +84,26 @@ See [examples/webhook_dedup](examples/webhook_dedup).
 
 ## Replay Guarantee
 
-If execution crashes mid-way, Flux replays from recorded checkpoints.
+Flux has two replay modes.
+
+Deterministic replay reuses recorded checkpoints only:
 
 ```text
 REDIS -> recorded
 POSTGRES -> recorded
 ```
 
-That means:
+In deterministic replay:
 
-- no side effects run twice
+- recorded side effects are not re-executed
 - replay remains deterministic
-- the system stays correct after failure
+- missing history is never fabricated
+
+When replay or resume continues past a live boundary, the guarantee changes:
+
+- recorded history before the live boundary stays fixed
+- live boundaries after that point may diverge
+- continuation is not the same thing as deterministic replay
 
 ## Why Flux Exists
 
@@ -229,8 +237,8 @@ Most systems rely on retries, locks, and best-effort idempotency.
 Flux guarantees:
 
 - deterministic execution
-- no duplicate side effects
-- full replayability
+- single durable effects under retries and contention
+- replay scoped to recorded history
 - built-in traceability
 
 Flux is not a framework. Flux is a runtime that controls side effects.

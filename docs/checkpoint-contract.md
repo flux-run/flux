@@ -140,7 +140,7 @@ For non-commit replay, Flux re-simulates execution history from stored checkpoin
 
 That means current replay is best understood as:
 
-- deterministic reconstruction of stored boundary outcomes
+- deterministic re-simulation from recorded boundary outcomes
 - not yet full in-isolate deterministic re-execution of user JavaScript
 
 ### Commit Replay and Resume Guarantee Today

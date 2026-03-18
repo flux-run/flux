@@ -1,6 +1,6 @@
 # Idempotency Demo
 
-Flux guarantees idempotent execution across distributed requests. The same request will not produce duplicate side effects, even across retries and replay, while staying fully observable through checkpoints and trace.
+Flux guarantees idempotent outcomes across distributed requests. The same logical request converges to one durable order, even across retries, crashes, and replay, while staying fully observable through checkpoints and trace.
 
 Minimal Flux demo that shows idempotent request handling with:
 
@@ -174,7 +174,7 @@ In that case, correctness comes from retry convergence rather than replay comple
 - Postgres unique enforcement prevents a second durable order
 - the retry reconstructs the canonical response from durable truth and then writes Redis
 
-The example also uses a Postgres unique constraint as a durable fallback. Redis prevents duplicate execution quickly; Postgres prevents duplicate data even if two requests race.
+The example also uses a Postgres unique constraint as a durable fallback. Redis coordinates the fast path; if requests race past coordination, Postgres still prevents duplicate durable data.
 
 ## TTL
 
@@ -191,6 +191,6 @@ This demo is not just "Redis support".
 It demonstrates that Flux can guarantee idempotent execution with:
 
 - shared state across isolates
-- durable side-effect suppression
+- durable convergence to one logical effect
 - replay-safe request handling
 - traceable boundary behavior
