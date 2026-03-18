@@ -1,127 +1,109 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-18T04:51:10.389Z",
+  "timestamp": "2026-03-18T06:18:29.620Z",
   "engine": "node v22.20.0",
-  "passed": 19,
+  "passed": 16,
   "failed": 0,
   "skipped": 0,
-  "total": 19,
+  "total": 16,
   "elapsedMs": 5,
   "passRate": "100.0%",
   "results": [
     {
-      "name": "GET /public without auth → 200",
+      "name": "GET /orders before create → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.010084000000006199
+      "duration": 0.00708299999951123
     },
     {
-      "name": "GET /public without auth → unprotected route",
+      "name": "GET /orders before create → empty",
       "passed": true,
       "skipped": false,
-      "duration": 0.004666000000042914
+      "duration": 0.005500000000211003
     },
     {
-      "name": "GET /protected without bearer token → 401",
+      "name": "POST /orders first request → 201",
       "passed": true,
       "skipped": false,
-      "duration": 0.024249999999938154
+      "duration": 0.009583000000020547
     },
     {
-      "name": "GET /protected without bearer token → error message",
+      "name": "POST /orders first request → execution id header",
       "passed": true,
       "skipped": false,
-      "duration": 0.0048749999998563
+      "duration": 0.004500000000007276
     },
     {
-      "name": "GET /protected with valid RS256 JWT → 200",
+      "name": "POST /orders first request → created status header",
       "passed": true,
       "skipped": false,
-      "duration": 0.009000000000014552
+      "duration": 0.007041999999273685
     },
     {
-      "name": "GET /protected with valid RS256 JWT → execution id header",
+      "name": "POST /orders first request → order payload",
       "passed": true,
       "skipped": false,
-      "duration": 0.004333999999971638
+      "duration": 0.0075839999999516294
     },
     {
-      "name": "GET /protected with valid RS256 JWT → payload surfaced",
+      "name": "POST /orders second request → same status",
       "passed": true,
       "skipped": false,
-      "duration": 0.005208000000038737
+      "duration": 0.025249999999687134
     },
     {
-      "name": "GET /protected with wrong audience → 401",
+      "name": "POST /orders second request → replayed status header",
       "passed": true,
       "skipped": false,
-      "duration": 0.02995799999985138
+      "duration": 0.01358299999992596
     },
     {
-      "name": "GET /protected with wrong audience → claim validation error",
+      "name": "POST /orders second request → same JSON response",
       "passed": true,
       "skipped": false,
-      "duration": 0.005417000000079497
+      "duration": 5.179207999999562
     },
     {
-      "name": "GET /protected after JWKS origin shutdown → 200",
+      "name": "GET /orders after duplicate request → one row",
       "passed": true,
       "skipped": false,
-      "duration": 0.025208999999904336
+      "duration": 0.03466599999956088
     },
     {
-      "name": "GET /protected after JWKS origin shutdown → cached key still verifies",
+      "name": "flux replay idempotent order → ok",
       "passed": true,
       "skipped": false,
-      "duration": 0.007958000000144239
+      "duration": 0.011792000000241387
     },
     {
-      "name": "GET /protected with wrong signature → 401",
+      "name": "flux replay idempotent order → same JSON response",
       "passed": true,
       "skipped": false,
-      "duration": 0.02616600000010294
+      "duration": 0.03495900000052643
     },
     {
-      "name": "GET /protected with wrong signature → signature failure",
+      "name": "flux replay idempotent order → 201 status preserved",
       "passed": true,
       "skipped": false,
-      "duration": 0.005084000000124433
+      "duration": 0.005165999999917403
     },
     {
-      "name": "GET /protected-bypass after JWKS origin shutdown → 503",
+      "name": "flux replay idempotent order → Redis recorded",
       "passed": true,
       "skipped": false,
-      "duration": 0.023750000000063665
+      "duration": 0.005042000000685221
     },
     {
-      "name": "GET /protected-bypass after JWKS origin shutdown → bypass flag true",
+      "name": "flux replay idempotent order → Postgres recorded",
       "passed": true,
       "skipped": false,
-      "duration": 0.003375000000005457
+      "duration": 0.003040999999939231
     },
     {
-      "name": "flux replay protected JWT request → ok",
+      "name": "GET /orders after replay → count unchanged",
       "passed": true,
       "skipped": false,
-      "duration": 0.006916000000046552
-    },
-    {
-      "name": "flux replay protected JWT request → 200 status preserved",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.004375000000209184
-    },
-    {
-      "name": "flux replay protected JWT request → same JSON response",
-      "passed": true,
-      "skipped": false,
-      "duration": 5.169375000000173
-    },
-    {
-      "name": "flux replay protected JWT request → HTTP step recorded",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.008000000000038199
+      "duration": 0.03099999999994907
     }
   ]
 }

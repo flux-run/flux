@@ -48,6 +48,8 @@ const CRUD_INIT_SQL = resolve(CRUD_APP_DIR, "init.sql");
 const DB_THEN_REMOTE_DIR = resolve(EXAMPLES_DIR, "db_then_remote");
 const DB_THEN_REMOTE_INIT_SQL = resolve(DB_THEN_REMOTE_DIR, "init.sql");
 const DRIZZLE_DIR = resolve(EXAMPLES_DIR, "drizzle");
+const IDEMPOTENCY_DIR = resolve(EXAMPLES_DIR, "idempotency");
+const IDEMPOTENCY_INIT_SQL = resolve(IDEMPOTENCY_DIR, "init.sql");
 const JWKS_SERVER_ENTRY = resolve(HANDLERS_DIR, "jwks_server.js");
 
 // Each suite gets its own port in the 3100-3199 range so suites can run
@@ -63,6 +65,9 @@ function allocateServerPort() { return nextServerPort++; }
 
 let nextRemotePort = 39010;
 function allocateRemotePort() { return nextRemotePort++; }
+
+let nextRedisPort = 56379;
+function allocateRedisPort() { return nextRedisPort++; }
 
 // ---------------------------------------------------------------------------
 // Assertion helper
@@ -85,12 +90,23 @@ interface PostgresConfig {
   initSql?: string;
 }
 
+interface RedisHandle {
+  containerName: string;
+  redisUrl: string;
+  stop(): void;
+}
+
 interface RemoteHandle {
   baseUrl: string;
   stop(): Promise<void>;
 }
 
 const crudReplayState = {
+  serverUrl: "",
+  serviceToken: "",
+};
+
+const idempotencyState = {
   serverUrl: "",
   serviceToken: "",
 };
@@ -168,10 +184,15 @@ function runCheckedCommand(
   return result.stdout ?? "";
 }
 
-async function waitForPostgres(containerName: string, timeoutMs = 15_000): Promise<void> {
+async function waitForPostgres(
+  containerName: string,
+  username: string,
+  databaseName: string,
+  timeoutMs = 15_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = spawnSync("docker", ["exec", containerName, "pg_isready", "-U", "postgres", "-d", "postgres"], {
+    const result = spawnSync("docker", ["exec", containerName, "pg_isready", "-U", username, "-d", databaseName], {
       cwd: WORKSPACE_ROOT,
       encoding: "utf8",
     });
@@ -208,7 +229,7 @@ async function startPostgres(hostPort: number, config: PostgresConfig): Promise<
   ]);
 
   try {
-    await waitForPostgres(containerName);
+    await waitForPostgres(containerName, config.username, config.databaseName);
     if (config.initSql) {
       runCheckedCommand(
         "docker",
@@ -224,6 +245,55 @@ async function startPostgres(hostPort: number, config: PostgresConfig): Promise<
   return {
     containerName,
     databaseUrl,
+    stop() {
+      runCheckedCommand("docker", ["rm", "-f", containerName]);
+    },
+  };
+}
+
+async function waitForRedis(containerName: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = spawnSync("docker", ["exec", containerName, "redis-cli", "ping"], {
+      cwd: WORKSPACE_ROOT,
+      encoding: "utf8",
+    });
+
+    if (result.status === 0 && (result.stdout ?? "").includes("PONG")) {
+      return;
+    }
+
+    await sleep(250);
+  }
+
+  throw new Error(`redis container ${containerName} did not become ready within ${timeoutMs}ms`);
+}
+
+async function startRedis(hostPort: number): Promise<RedisHandle> {
+  const containerName = `flux-int-redis-${hostPort}`;
+  const redisUrl = `redis://127.0.0.1:${hostPort}/0`;
+
+  runCheckedCommand("docker", [
+    "run",
+    "--rm",
+    "-d",
+    "--name",
+    containerName,
+    "-p",
+    `${hostPort}:6379`,
+    "redis:7-alpine",
+  ]);
+
+  try {
+    await waitForRedis(containerName);
+  } catch (error) {
+    runCheckedCommand("docker", ["rm", "-f", containerName]);
+    throw error;
+  }
+
+  return {
+    containerName,
+    redisUrl,
     stop() {
       runCheckedCommand("docker", ["rm", "-f", containerName]);
     },
@@ -844,6 +914,146 @@ const SUITES: Suite[] = [
       const listAfterReplay = await get(baseUrl, "/todos");
       const todosAfterReplay = listAfterReplay.body as any[];
       assert(ctx, "GET /todos after replay → count unchanged", () => Array.isArray(todosAfterReplay) && todosAfterReplay.length === 1);
+    },
+  },
+
+  {
+    name: "idempotency-redis",
+    handler: "idempotency/main_flux.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const redisPort = allocateRedisPort();
+      const serverPort = allocateServerPort();
+      const serviceToken = "dev-service-token";
+      const postgres = await startPostgres(databasePort, {
+        databaseName: "idempotency_demo",
+        username: "admin",
+        password: "password123",
+        initSql: readFileSync(IDEMPOTENCY_INIT_SQL, "utf8"),
+      });
+      const redis = await startRedis(redisPort);
+      const server = await startServer(serverPort, {
+        databaseUrl: postgres.databaseUrl,
+        serviceToken,
+      });
+
+      try {
+        idempotencyState.serverUrl = server.url;
+        idempotencyState.serviceToken = serviceToken;
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          serverUrl: server.url,
+          token: serviceToken,
+          env: {
+            DATABASE_URL: postgres.databaseUrl,
+            REDIS_URL: redis.redisUrl,
+            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+          },
+        });
+
+        return {
+          ...runtime,
+          async stop() {
+            try {
+              await runtime.stop();
+            } finally {
+              try {
+                await server.stop();
+              } finally {
+                try {
+                  redis.stop();
+                } finally {
+                  postgres.stop();
+                  idempotencyState.serverUrl = "";
+                  idempotencyState.serviceToken = "";
+                }
+              }
+            }
+          },
+        };
+      } catch (error) {
+        idempotencyState.serverUrl = "";
+        idempotencyState.serviceToken = "";
+        await server.stop();
+        redis.stop();
+        postgres.stop();
+        throw error;
+      }
+    },
+    async run(baseUrl, ctx) {
+      const initialList = await get(baseUrl, "/orders");
+      const initialOrders = (initialList.body as Record<string, unknown>)?.orders as unknown[] | undefined;
+      assert(ctx, "GET /orders before create → 200", () => initialList.status === 200);
+      assert(ctx, "GET /orders before create → empty", () => Array.isArray(initialOrders) && initialOrders.length === 0);
+
+      const requestBody = {
+        sku: "flux-shirt",
+        quantity: 1,
+      };
+      const idempotencyKey = "order-123";
+
+      const firstCreate = await fetch(`${baseUrl}/orders`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+        },
+        body: JSON.stringify(requestBody),
+      });
+      const firstBody = await firstCreate.json() as Record<string, unknown>;
+      const executionId = firstCreate.headers.get("x-flux-execution-id") ?? "";
+
+      assert(ctx, "POST /orders first request → 201", () => firstCreate.status === 201);
+      assert(ctx, "POST /orders first request → execution id header", () => executionId.length > 0);
+      assert(ctx, "POST /orders first request → created status header", () => firstCreate.headers.get("x-idempotency-status") === "created");
+      assert(ctx, "POST /orders first request → order payload", () => {
+        const order = firstBody.order as Record<string, unknown> | undefined;
+        return order?.sku === "flux-shirt" && order?.quantity === 1;
+      });
+
+      const secondCreate = await fetch(`${baseUrl}/orders`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+        },
+        body: JSON.stringify(requestBody),
+      });
+      const secondBody = await secondCreate.json() as Record<string, unknown>;
+
+      assert(ctx, "POST /orders second request → same status", () => secondCreate.status === 201);
+      assert(ctx, "POST /orders second request → replayed status header", () => secondCreate.headers.get("x-idempotency-status") === "replayed");
+      assert(ctx, "POST /orders second request → same JSON response", () => stableJson(secondBody) === stableJson(firstBody));
+
+      const afterSecondList = await get(baseUrl, "/orders");
+      const afterSecondOrders = (afterSecondList.body as Record<string, unknown>)?.orders as Array<Record<string, unknown>> | undefined;
+      assert(ctx, "GET /orders after duplicate request → one row", () => Array.isArray(afterSecondOrders) && afterSecondOrders.length === 1);
+
+      const replayStdout = stripAnsi(runCheckedCommand(FLUX_CLI_BIN, [
+        "replay",
+        executionId,
+        "--url",
+        idempotencyState.serverUrl,
+        "--token",
+        idempotencyState.serviceToken,
+        "--diff",
+      ]));
+      const replayEnvelope = JSON.parse(extractReplayOutput(replayStdout)) as {
+        net_response?: { body?: string; status?: number };
+      };
+      const replayBody = JSON.parse(replayEnvelope.net_response?.body ?? "null") as Record<string, unknown>;
+
+      assert(ctx, "flux replay idempotent order → ok", () => replayStdout.includes("ok"));
+      assert(ctx, "flux replay idempotent order → same JSON response", () => stableJson(replayBody) === stableJson(firstBody));
+      assert(ctx, "flux replay idempotent order → 201 status preserved", () => replayEnvelope.net_response?.status === 201);
+      assert(ctx, "flux replay idempotent order → Redis recorded", () => replayStdout.includes("REDIS") && replayStdout.includes("(recorded)"));
+      assert(ctx, "flux replay idempotent order → Postgres recorded", () => replayStdout.includes("POSTGRES") && replayStdout.includes("(recorded)"));
+
+      const afterReplayList = await get(baseUrl, "/orders");
+      const afterReplayOrders = (afterReplayList.body as Record<string, unknown>)?.orders as Array<Record<string, unknown>> | undefined;
+      assert(ctx, "GET /orders after replay → count unchanged", () => Array.isArray(afterReplayOrders) && afterReplayOrders.length === 1);
     },
   },
 
