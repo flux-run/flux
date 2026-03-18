@@ -1021,7 +1021,7 @@ export default async function handler({ input }) {
         serde_json::json!({
             "rows": [{
                 "created_on": "date:2026-03-17",
-                "starts_at": { "time": "12:34:56" },
+                "starts_at": { "time": "20:58:07.97471" },
                 "starts_at_tz": "12:34:56Z",
                 "created_at": "2026-03-17T12:34:56",
                 "created_at_utc": { "utc": true },
