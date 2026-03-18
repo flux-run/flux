@@ -17,6 +17,7 @@ This documentation set is rebuilt for the current Flux CLI and runtime architect
 - [module-responsibility-map.md](module-responsibility-map.md) — file-level ownership for CLI handoff, runtime bootstrapping, and deterministic execution
 - [execution-lifecycle.md](execution-lifecycle.md) — end-to-end flow for run, exec, serve, trace, replay, and resume
 - [checkpoint-contract.md](checkpoint-contract.md) — checkpoint schema, replay guarantees, and resume semantics
+- [failure-spec-concurrent-duplicate-requests.md](failure-spec-concurrent-duplicate-requests.md) — Case 1 failure contract for two recorded executions racing past coordination into one durable outcome
 - [failure-spec-durable-write-before-checkpoint.md](failure-spec-durable-write-before-checkpoint.md) — Case 4 failure contract for durable write success before checkpoint capture
 - [runtime/redis.md](runtime/redis.md) — Redis boundary contract, supported surface, and replay rules
 - [api.md](api.md) — operator API role
