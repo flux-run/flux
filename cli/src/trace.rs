@@ -65,6 +65,7 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
             .get("status")
             .and_then(|value| value.as_u64())
             .unwrap_or(0);
+        let annotation = checkpoint_annotation(&cp.boundary, &res);
 
         if cp.boundary == "timer" {
             let requested_delay_ms = req
@@ -185,12 +186,13 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
         }
 
         println!(
-            "  [{}] {}  {}  {}ms  → {}",
+            "  [{}] {}  {}  {}ms  → {}{}",
             cp.call_index,
             cp.boundary.to_uppercase(),
             url,
             cp.duration_ms,
-            status
+            status,
+            annotation
         );
 
         if args.verbose {
@@ -208,6 +210,31 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
     Ok(())
 }
 
+fn checkpoint_annotation(boundary: &str, response: &serde_json::Value) -> String {
+    if boundary != "http" {
+        return String::new();
+    }
+
+    let Some(cache) = response.get("cache") else {
+        return String::new();
+    };
+
+    let hit = cache
+        .get("hit")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if !hit {
+        return String::new();
+    }
+
+    let source = cache
+        .get("source")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+
+    format!("  cache hit ({source})")
+}
+
 fn print_json_block(raw: &str, expanded: bool) {
     if !expanded {
         println!("    (hidden, use --verbose)");
@@ -219,5 +246,50 @@ fn print_json_block(raw: &str, expanded: bool) {
     let formatted = serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw.to_string());
     for line in formatted.lines() {
         println!("    {}", line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checkpoint_annotation;
+
+    #[test]
+    fn shows_memory_cache_hit_for_http_checkpoint() {
+        let response = serde_json::json!({
+            "status": 200,
+            "cache": {
+                "hit": true,
+                "source": "memory"
+            }
+        });
+
+        assert_eq!(
+            checkpoint_annotation("http", &response),
+            "  cache hit (memory)"
+        );
+    }
+
+    #[test]
+    fn hides_annotation_for_non_http_checkpoint() {
+        let response = serde_json::json!({
+            "cache": {
+                "hit": true,
+                "source": "memory"
+            }
+        });
+
+        assert_eq!(checkpoint_annotation("postgres", &response), "");
+    }
+
+    #[test]
+    fn hides_annotation_for_cache_miss() {
+        let response = serde_json::json!({
+            "cache": {
+                "hit": false,
+                "source": "memory"
+            }
+        });
+
+        assert_eq!(checkpoint_annotation("http", &response), "");
     }
 }
