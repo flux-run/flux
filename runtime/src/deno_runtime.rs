@@ -51,6 +51,7 @@ use crate::artifact::RuntimeArtifact;
 use crate::isolate_pool::{ExecutionContext, ExecutionResult};
 
 const FLUX_PG_SPECIFIER: &str = "flux:pg";
+const FLUX_REDIS_SPECIFIER: &str = "flux:redis";
 const MODULE_FILE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "json"];
 
 #[derive(Debug, Default, Deserialize)]
@@ -740,6 +741,15 @@ struct PostgresSessionCloseRequestPayload {
     session_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct RedisCommandRequestPayload {
+    execution_id: String,
+    connection_string: String,
+    command: String,
+    #[serde(default)]
+    args: Vec<serde_json::Value>,
+}
+
 #[derive(Debug, Clone)]
 struct PostgresTlsOptions {
     enabled: bool,
@@ -751,6 +761,16 @@ struct PostgresConnectionTarget {
     url: String,
     host: String,
     port: u16,
+}
+
+#[derive(Debug, Clone)]
+struct RedisConnectionTarget {
+    url: String,
+    host: String,
+    port: u16,
+    db: i64,
+    username: Option<String>,
+    password: Option<String>,
 }
 
 enum PostgresSessionCommand {
@@ -771,6 +791,19 @@ struct PostgresDriverError {
     schema: Option<String>,
     table: Option<String>,
     column: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RedisDriverError {
+    message: String,
+}
+
+impl RedisDriverError {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "message": self.message,
+        })
+    }
 }
 
 impl PostgresDriverError {
@@ -815,6 +848,12 @@ impl PostgresDriverError {
 enum PostgresQueryOutcome {
     Success(PostgresSimpleQueryResponse),
     Error(PostgresDriverError),
+}
+
+#[derive(Debug)]
+enum RedisCommandOutcome {
+    Success(serde_json::Value),
+    Error(RedisDriverError),
 }
 
 struct PostgresSessionHandle {
@@ -1007,6 +1046,7 @@ deno_core::extension!(
         op_crypto_verify_rs256,
         op_flux_fetch,
         op_flux_tcp_exchange,
+        op_flux_redis_command,
         op_flux_postgres_connect,
         op_flux_postgres_close_session,
         op_flux_postgres_simple_query,
@@ -1840,6 +1880,104 @@ fn op_flux_postgres_query(
 
 #[op2]
 #[serde]
+fn op_flux_redis_command(
+    state: &mut OpState,
+    #[serde] request: serde_json::Value,
+) -> Result<serde_json::Value, JsErrorBox> {
+    let RedisCommandRequestPayload {
+        execution_id,
+        connection_string,
+        command,
+        args,
+    } = serde_json::from_value(request)
+        .map_err(|err| JsErrorBox::type_error(format!("invalid redis command request: {err}")))?;
+
+    let target = parse_redis_target(&connection_string)?;
+    validate_outbound_host(
+        &target.host,
+        target.port,
+        "redis connect",
+        "FLOWBASE_ALLOW_LOOPBACK_REDIS",
+    )?;
+
+    let (request_id, call_index, mode, recorded_checkpoint) = {
+        let map = state.borrow_mut::<RuntimeStateMap>();
+        let execution = map.get_mut(&execution_id).ok_or_else(|| {
+            JsErrorBox::new(
+                "InternalError",
+                format!("op_flux_redis_command: execution_id '{execution_id}' not found"),
+            )
+        })?;
+        let idx = execution.call_index;
+        execution.call_index = execution.call_index.saturating_add(1);
+        let recorded = execution.recorded.remove(&idx);
+        (
+            execution.context.request_id.clone(),
+            idx,
+            execution.context.mode.clone(),
+            recorded,
+        )
+    };
+
+    if matches!(mode, ExecutionMode::Replay) {
+        if let Some(checkpoint) = recorded_checkpoint {
+            let response = checkpoint.response.clone();
+            {
+                let map = state.borrow_mut::<RuntimeStateMap>();
+                if let Some(execution) = map.get_mut(&execution_id) {
+                    execution.checkpoints.push(FetchCheckpoint {
+                        call_index,
+                        boundary: checkpoint.boundary,
+                        url: checkpoint.url,
+                        method: checkpoint.method,
+                        request: checkpoint.request,
+                        response: response.clone(),
+                        duration_ms: checkpoint.duration_ms,
+                    });
+                }
+            }
+            tracing::debug!(%request_id, %call_index, command = %command, host = %target.host, port = %target.port, "replay: returned recorded redis command");
+            return Ok(redis_checkpoint_response_json(&response, true));
+        }
+        tracing::warn!(%request_id, %call_index, command = %command, host = %target.host, port = %target.port, "replay: no recorded redis checkpoint, making live command");
+    }
+
+    let started = Instant::now();
+    let outcome = perform_redis_command(&target, &command, &args)?;
+    let duration_ms = started.elapsed().as_millis() as i32;
+
+    let request_json = serde_json::json!({
+        "url": target.url,
+        "host": target.host,
+        "port": target.port,
+        "db": target.db,
+        "command": command,
+        "args": args,
+    });
+    let response_json = redis_outcome_json(outcome, false);
+
+    {
+        let map = state.borrow_mut::<RuntimeStateMap>();
+        if let Some(execution) = map.get_mut(&execution_id) {
+            execution.checkpoints.push(FetchCheckpoint {
+                call_index,
+                boundary: "redis".to_string(),
+                url: target.url.clone(),
+                method: command.to_ascii_uppercase(),
+                request: request_json,
+                response: response_json.clone(),
+                duration_ms,
+            });
+        }
+    }
+
+    tracing::debug!(%request_id, %call_index, command = %command, host = %target.host, port = %target.port, "intercepted redis command");
+
+    Ok(redis_checkpoint_response_json(&response_json, false))
+}
+
+#[op2]
+#[serde]
 fn op_flux_postgres_close_session(
     state: &mut OpState,
     #[serde] request: serde_json::Value,
@@ -2309,6 +2447,300 @@ fn parse_postgres_target(connection_string: &str) -> Result<PostgresConnectionTa
         host,
         port,
     })
+}
+
+fn redis_success_json(value: serde_json::Value, replay: bool) -> serde_json::Value {
+    serde_json::json!({
+        "value": value,
+        "error": serde_json::Value::Null,
+        "replay": replay,
+    })
+}
+
+fn redis_error_json(error: RedisDriverError, replay: bool) -> serde_json::Value {
+    serde_json::json!({
+        "value": serde_json::Value::Null,
+        "error": error.to_json(),
+        "replay": replay,
+    })
+}
+
+fn redis_outcome_json(outcome: RedisCommandOutcome, replay: bool) -> serde_json::Value {
+    match outcome {
+        RedisCommandOutcome::Success(value) => redis_success_json(value, replay),
+        RedisCommandOutcome::Error(error) => redis_error_json(error, replay),
+    }
+}
+
+fn redis_checkpoint_response_json(response: &serde_json::Value, replay: bool) -> serde_json::Value {
+    serde_json::json!({
+        "value": response.get("value").cloned().unwrap_or(serde_json::Value::Null),
+        "error": response.get("error").cloned().unwrap_or(serde_json::Value::Null),
+        "replay": replay,
+    })
+}
+
+fn parse_redis_target(connection_string: &str) -> Result<RedisConnectionTarget, JsErrorBox> {
+    let parsed_url = Url::parse(connection_string)
+        .map_err(|err| JsErrorBox::type_error(format!("invalid redis connection string: {err}")))?;
+    if parsed_url.scheme() != "redis" {
+        return Err(JsErrorBox::type_error(
+            "redis connection string must use redis://",
+        ));
+    }
+
+    let host = parsed_url
+        .host_str()
+        .ok_or_else(|| JsErrorBox::type_error("redis connection string missing host"))?
+        .to_string();
+    let port = parsed_url.port().unwrap_or(6379);
+    let db = match parsed_url.path().trim_start_matches('/') {
+        "" => 0,
+        raw_db => raw_db.parse::<i64>().map_err(|_| {
+            JsErrorBox::type_error("redis connection string path must be a numeric database index")
+        })?,
+    };
+    let username = if parsed_url.username().is_empty() {
+        None
+    } else {
+        Some(parsed_url.username().to_string())
+    };
+    let password = parsed_url.password().map(str::to_string);
+
+    Ok(RedisConnectionTarget {
+        url: format!("redis://{}:{}/{}", host, port, db),
+        host,
+        port,
+        db,
+        username,
+        password,
+    })
+}
+
+fn perform_redis_command(
+    target: &RedisConnectionTarget,
+    command: &str,
+    args: &[serde_json::Value],
+) -> Result<RedisCommandOutcome, JsErrorBox> {
+    let target = target.clone();
+    let command = command.to_string();
+    let args = args.to_vec();
+    std::thread::spawn(move || {
+        let mut stream = connect_redis_stream(&target)?;
+
+        if let Some(password) = target.password.as_deref() {
+            let auth_args = if let Some(username) = target.username.as_deref() {
+                vec![username.as_bytes().to_vec(), password.as_bytes().to_vec()]
+            } else {
+                vec![password.as_bytes().to_vec()]
+            };
+            if let Err(error) =
+                ensure_redis_ok(send_redis_command(&mut stream, "AUTH", &auth_args)?)
+            {
+                return Ok(RedisCommandOutcome::Error(error));
+            }
+        }
+
+        if target.db != 0 {
+            if let Err(error) = ensure_redis_ok(send_redis_command(
+                &mut stream,
+                "SELECT",
+                &[target.db.to_string().into_bytes()],
+            )?) {
+                return Ok(RedisCommandOutcome::Error(error));
+            }
+        }
+
+        let encoded_args = args
+            .iter()
+            .map(redis_argument_bytes)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        match send_redis_command(&mut stream, &command, &encoded_args)? {
+            RedisRespValue::Error(error) => Ok(RedisCommandOutcome::Error(RedisDriverError {
+                message: error,
+            })),
+            response => Ok(RedisCommandOutcome::Success(redis_resp_to_json(response))),
+        }
+    })
+    .join()
+    .map_err(|_| JsErrorBox::generic("redis command thread panicked"))?
+}
+
+fn connect_redis_stream(target: &RedisConnectionTarget) -> Result<TcpStream, JsErrorBox> {
+    let address = (target.host.as_str(), target.port)
+        .to_socket_addrs()
+        .map_err(|err| JsErrorBox::type_error(format!("redis connect failed: {err}")))?
+        .next()
+        .ok_or_else(|| {
+            JsErrorBox::type_error("redis connect failed: no socket addresses resolved")
+        })?;
+
+    let stream =
+        TcpStream::connect_timeout(&address, Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS))
+            .map_err(|err| JsErrorBox::type_error(format!("redis connect failed: {err}")))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(DEFAULT_READ_TIMEOUT_MS)))
+        .map_err(|err| JsErrorBox::type_error(format!("redis read timeout failed: {err}")))?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(DEFAULT_READ_TIMEOUT_MS)))
+        .map_err(|err| JsErrorBox::type_error(format!("redis write timeout failed: {err}")))?;
+
+    Ok(stream)
+}
+
+fn redis_argument_bytes(value: &serde_json::Value) -> Result<Vec<u8>, JsErrorBox> {
+    match value {
+        serde_json::Value::Null => Ok(Vec::new()),
+        serde_json::Value::String(value) => Ok(value.as_bytes().to_vec()),
+        serde_json::Value::Bool(value) => Ok(if *value {
+            b"true".to_vec()
+        } else {
+            b"false".to_vec()
+        }),
+        serde_json::Value::Number(value) => Ok(value.to_string().into_bytes()),
+        other => Err(JsErrorBox::type_error(format!(
+            "unsupported redis argument type: {other}"
+        ))),
+    }
+}
+
+#[derive(Debug, Clone)]
+enum RedisRespValue {
+    SimpleString(String),
+    BulkString(Option<Vec<u8>>),
+    Integer(i64),
+    Array(Option<Vec<RedisRespValue>>),
+    Error(String),
+}
+
+fn send_redis_command(
+    stream: &mut TcpStream,
+    command: &str,
+    args: &[Vec<u8>],
+) -> Result<RedisRespValue, JsErrorBox> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(format!("*{}\r\n", args.len() + 1).as_bytes());
+    payload.extend_from_slice(format!("${}\r\n", command.len()).as_bytes());
+    payload.extend_from_slice(command.as_bytes());
+    payload.extend_from_slice(b"\r\n");
+    for arg in args {
+        payload.extend_from_slice(format!("${}\r\n", arg.len()).as_bytes());
+        payload.extend_from_slice(arg);
+        payload.extend_from_slice(b"\r\n");
+    }
+    stream
+        .write_all(&payload)
+        .map_err(|err| JsErrorBox::type_error(format!("redis write failed: {err}")))?;
+    stream
+        .flush()
+        .map_err(|err| JsErrorBox::type_error(format!("redis flush failed: {err}")))?;
+
+    read_redis_response(stream)
+        .map_err(|err| JsErrorBox::type_error(format!("redis read failed: {err}")))
+}
+
+fn ensure_redis_ok(response: RedisRespValue) -> Result<(), RedisDriverError> {
+    match response {
+        RedisRespValue::SimpleString(value) if value.eq_ignore_ascii_case("OK") => Ok(()),
+        RedisRespValue::Error(message) => Err(RedisDriverError { message }),
+        other => Err(RedisDriverError {
+            message: format!("unexpected redis response: {:?}", other),
+        }),
+    }
+}
+
+fn read_redis_response(stream: &mut TcpStream) -> Result<RedisRespValue, String> {
+    let mut prefix = [0u8; 1];
+    stream
+        .read_exact(&mut prefix)
+        .map_err(|err| err.to_string())?;
+    match prefix[0] {
+        b'+' => Ok(RedisRespValue::SimpleString(read_redis_line(stream)?)),
+        b'-' => Ok(RedisRespValue::Error(read_redis_line(stream)?)),
+        b':' => read_redis_line(stream)?
+            .parse::<i64>()
+            .map(RedisRespValue::Integer)
+            .map_err(|err| err.to_string()),
+        b'$' => {
+            let len = read_redis_line(stream)?
+                .parse::<isize>()
+                .map_err(|err| err.to_string())?;
+            if len < 0 {
+                return Ok(RedisRespValue::BulkString(None));
+            }
+            let mut bytes = vec![0u8; len as usize];
+            stream
+                .read_exact(&mut bytes)
+                .map_err(|err| err.to_string())?;
+            consume_redis_crlf(stream)?;
+            Ok(RedisRespValue::BulkString(Some(bytes)))
+        }
+        b'*' => {
+            let count = read_redis_line(stream)?
+                .parse::<isize>()
+                .map_err(|err| err.to_string())?;
+            if count < 0 {
+                return Ok(RedisRespValue::Array(None));
+            }
+            let mut items = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                items.push(read_redis_response(stream)?);
+            }
+            Ok(RedisRespValue::Array(Some(items)))
+        }
+        other => Err(format!(
+            "unsupported redis response prefix: {}",
+            other as char
+        )),
+    }
+}
+
+fn read_redis_line(stream: &mut TcpStream) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    loop {
+        let mut next = [0u8; 1];
+        stream
+            .read_exact(&mut next)
+            .map_err(|err| err.to_string())?;
+        if next[0] == b'\r' {
+            let mut lf = [0u8; 1];
+            stream.read_exact(&mut lf).map_err(|err| err.to_string())?;
+            if lf[0] != b'\n' {
+                return Err("invalid redis line ending".to_string());
+            }
+            break;
+        }
+        bytes.push(next[0]);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn consume_redis_crlf(stream: &mut TcpStream) -> Result<(), String> {
+    let mut suffix = [0u8; 2];
+    stream
+        .read_exact(&mut suffix)
+        .map_err(|err| err.to_string())?;
+    if suffix != [b'\r', b'\n'] {
+        return Err("invalid redis bulk-string terminator".to_string());
+    }
+    Ok(())
+}
+
+fn redis_resp_to_json(value: RedisRespValue) -> serde_json::Value {
+    match value {
+        RedisRespValue::SimpleString(value) => serde_json::Value::String(value),
+        RedisRespValue::BulkString(Some(bytes)) => {
+            serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
+        }
+        RedisRespValue::BulkString(None) => serde_json::Value::Null,
+        RedisRespValue::Integer(value) => serde_json::json!(value),
+        RedisRespValue::Array(Some(values)) => {
+            serde_json::Value::Array(values.into_iter().map(redis_resp_to_json).collect())
+        }
+        RedisRespValue::Array(None) => serde_json::Value::Null,
+        RedisRespValue::Error(message) => serde_json::json!({ "error": message }),
+    }
 }
 
 fn connect_postgres_client(
@@ -3749,6 +4181,11 @@ impl ModuleLoader for TypescriptModuleLoader {
                 .map_err(JsErrorBox::from_err)
                 .map_err(Into::into);
         }
+        if specifier == "redis" {
+            return Url::parse(FLUX_REDIS_SPECIFIER)
+                .map_err(JsErrorBox::from_err)
+                .map_err(Into::into);
+        }
 
         if let Some(local_specifier) = resolve_local_node_module_specifier(specifier, referrer)
             .map_err(|err| JsErrorBox::generic(err.to_string()))?
@@ -3777,6 +4214,14 @@ impl ModuleLoader for TypescriptModuleLoader {
                 return Ok(ModuleSource::new(
                     ModuleType::JavaScript,
                     ModuleSourceCode::String(flux_pg_module_js().to_string().into()),
+                    module_specifier,
+                    None,
+                ));
+            }
+            if module_specifier.as_str() == FLUX_REDIS_SPECIFIER {
+                return Ok(ModuleSource::new(
+                    ModuleType::JavaScript,
+                    ModuleSourceCode::String(flux_redis_module_js().to_string().into()),
                     module_specifier,
                     None,
                 ));
@@ -3844,6 +4289,16 @@ impl ModuleLoader for ArtifactModuleLoader {
         referrer: &str,
         _kind: ResolutionKind,
     ) -> std::result::Result<ModuleSpecifier, deno_core::error::ModuleLoaderError> {
+        if specifier == "pg" {
+            return Url::parse(FLUX_PG_SPECIFIER)
+                .map_err(JsErrorBox::from_err)
+                .map_err(Into::into);
+        }
+        if specifier == "redis" {
+            return Url::parse(FLUX_REDIS_SPECIFIER)
+                .map_err(JsErrorBox::from_err)
+                .map_err(Into::into);
+        }
         if let Some(module) = self.modules.get(referrer) {
             if let Some(dependency) = module
                 .dependencies
@@ -3899,6 +4354,23 @@ impl ModuleLoader for ArtifactModuleLoader {
             module_specifier: &ModuleSpecifier,
             options: &ModuleLoadOptions,
         ) -> std::result::Result<ModuleSource, deno_core::error::ModuleLoaderError> {
+            if module_specifier.as_str() == FLUX_PG_SPECIFIER {
+                return Ok(ModuleSource::new(
+                    ModuleType::JavaScript,
+                    ModuleSourceCode::String(flux_pg_module_js().to_string().into()),
+                    module_specifier,
+                    None,
+                ));
+            }
+            if module_specifier.as_str() == FLUX_REDIS_SPECIFIER {
+                return Ok(ModuleSource::new(
+                    ModuleType::JavaScript,
+                    ModuleSourceCode::String(flux_redis_module_js().to_string().into()),
+                    module_specifier,
+                    None,
+                ));
+            }
+
             let module = modules.get(module_specifier.as_str()).ok_or_else(|| {
                 JsErrorBox::generic(format!(
                     "module not found in built artifact: {}",
@@ -4076,6 +4548,23 @@ const native = null;
 
 export { Client, DatabaseError, Pool, defaults, native, types };
 export default { Client, DatabaseError, Pool, defaults, native, types };
+"#
+}
+
+fn flux_redis_module_js() -> &'static str {
+    r#"
+const __fluxRedis = globalThis.Flux?.redis;
+
+if (!__fluxRedis || typeof __fluxRedis.createClient !== "function") {
+    throw new Error("Flux redis shim is unavailable");
+}
+
+function createClient(options = {}) {
+    return __fluxRedis.createClient(options);
+}
+
+export { createClient };
+export default { createClient };
 "#
 }
 
@@ -6451,6 +6940,7 @@ Math.random = () => Deno.core.ops.op_random(__flux_eid());
 // ── Flux.net (deterministic outbound TCP) ───────────────────────────────────
 globalThis.Flux = globalThis.Flux || {};
 globalThis.Flux.postgres = globalThis.Flux.postgres || {};
+globalThis.Flux.redis = globalThis.Flux.redis || {};
 globalThis.Flux.net = globalThis.Flux.net || {};
 const __flux_pg_builtin_types = Object.freeze({
     BOOL: 16,
@@ -6719,6 +7209,99 @@ globalThis.Flux.postgres.simpleQuery = function(options = {}) {
         rowCount: Number(response.rowCount ?? response.row_count ?? 0),
         replay: !!response.replay,
     };
+};
+function __flux_redis_response_or_throw(response) {
+    if (response?.error && typeof response.error === "object") {
+        const error = new Error(String(response.error.message ?? "redis command failed"));
+        error.name = "RedisError";
+        throw error;
+    }
+    return response ?? {};
+}
+class FluxRedisClient {
+    constructor(options = {}) {
+        this.url = String(options?.url ?? options?.connectionString ?? "");
+        this.__closed = false;
+        this.__connected = false;
+    }
+
+    async connect() {
+        if (this.__closed) {
+            throw new Error("Flux.redis client has already been closed");
+        }
+        this.__connected = true;
+        return this;
+    }
+
+    async sendCommand(parts) {
+        if (this.__closed) {
+            throw new Error("Flux.redis client has already been closed");
+        }
+        if (!Array.isArray(parts) || parts.length === 0) {
+            throw new TypeError("Flux.redis sendCommand expects a non-empty command array");
+        }
+
+        const response = globalThis.Flux.redis.command({
+            connectionString: this.url,
+            command: String(parts[0] ?? ""),
+            args: parts.slice(1),
+        });
+        return response.value;
+    }
+
+    async get(key) {
+        return this.sendCommand(["GET", key]);
+    }
+
+    async set(key, value) {
+        return this.sendCommand(["SET", key, value]);
+    }
+
+    async del(...keys) {
+        return this.sendCommand(["DEL", ...keys]);
+    }
+
+    async incr(key) {
+        return this.sendCommand(["INCR", key]);
+    }
+
+    async hGet(key, field) {
+        return this.sendCommand(["HGET", key, field]);
+    }
+
+    async hSet(key, field, value) {
+        return this.sendCommand(["HSET", key, field, value]);
+    }
+
+    async expire(key, seconds) {
+        return this.sendCommand(["EXPIRE", key, seconds]);
+    }
+
+    async quit() {
+        this.__closed = true;
+        return "OK";
+    }
+
+    disconnect() {
+        this.__closed = true;
+    }
+}
+globalThis.Flux.redis.command = function(options = {}) {
+    const response = Deno.core.ops.op_flux_redis_command({
+        execution_id: __flux_eid(),
+        connection_string: String(options.connectionString ?? options.url ?? ""),
+        command: String(options.command ?? ""),
+        args: Array.isArray(options.args) ? options.args : [],
+    });
+    __flux_redis_response_or_throw(response);
+    return {
+        value: response.value ?? null,
+        replay: !!response.replay,
+    };
+};
+globalThis.Flux.redis.FluxRedisClient = FluxRedisClient;
+globalThis.Flux.redis.createClient = function(options = {}) {
+    return new FluxRedisClient(options);
 };
 globalThis.Flux.net.tcpExchange = function(options = {}) {
     const encodedText = Array.from(new TextEncoder().encode(options.text ?? ""));
