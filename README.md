@@ -1,8 +1,8 @@
 # Flux
 
-**Record every request. Replay it. Resume it.**
+> **Public Beta** — install today, replay production bugs tonight.
 
-Debug any request after it happened.
+**Record every request. Replay it. Resume it.**
 
 A request fails in production. Instead of guessing:
 - run `flux trace` to see exactly what happened
@@ -46,6 +46,8 @@ No duplicate emails. No re-running expensive operations. No guessing.
 2. You can inspect exactly what happened — every input, output, and external call
 3. You can resume from failure without restarting the whole flow
 4. The system never fabricates history
+
+These guarantees are enforced by the runtime and verified by `examples/compat/flux-contract-suite.ts` — the CI gate that must pass before every release.
 
 ---
 
@@ -130,18 +132,56 @@ All operator commands talk to `flux-server` over gRPC. All state lives in Postgr
 
 ---
 
-## Compatibility & Roadmap 🧭
+## Compatibility
 
-Flux targets the **top 20% of libraries** powering **80% of backend applications**.
+> Flux compatibility is defined by whether a library's IO passes through **Flux-controlled boundaries** — not whether it runs. A library that runs but bypasses Flux boundaries silently breaks replay guarantees.
 
-| Area | Supported | Roadmap |
-|------|-----------|---------| 
-| **Frameworks** | ✅ Hono | ⚠️ Express, Fastify, Koa |
-| **Databases** | ✅ pg (node-postgres) | ⚠️ postgres.js, ioredis |
-| **Clients** | ✅ fetch, axios, undici | ✅ Fully Supported |
-| **ORMs** | ✅ Drizzle, Kysely | ⚠️ Prisma (limited) |
+### ✅ Replay-safe (Flux guarantees fully preserved)
 
-See the full [**Compatibility Guide**](docs/compatibility.md) and [**Strategic Roadmap**](docs/roadmap.md).
+| Library | Notes |
+|---|---|
+| `fetch` (native) | The reference implementation. Zero warnings. |
+| `pg` via `flux:pg` | Native Postgres driver with full checkpoint coverage. |
+| `drizzle-orm` (over `flux:pg`) | Fully safe ORM layer. |
+| `redis` (node-redis) via `flux:redis` | Per-command checkpointing. Blocked commands enforced. |
+| `hono` | Pure router. No IO. |
+| `jose` | Uses `crypto.subtle` — Flux-controlled. |
+| `zod` | Pure computation. No IO. |
+
+### ⚠️ Works with caveats
+
+| Library | Caveat |
+|---|---|
+| `axios` | Uses `fetch` internally → replay-safe for HTTP calls. Dead browser globals in internals. |
+| `ioredis` | Safe when routed through `flux:redis`. Not safe with raw TCP connection. |
+
+### ❌ Breaks execution guarantees (runs, but replay is broken)
+
+| Library | Why | Alternative |
+|---|---|---|
+| `undici` | Manages its own TCP connection pool — invisible to Flux. Replay fires requests twice. | Use native `fetch` |
+| `postgres.js` | Own TCP client — bypasses `flux:pg` interception. | Use `flux:pg` |
+
+See the full [**Compatibility Guide**](docs/compatibility.md).
+
+---
+
+## The Golden Path (Beta)
+
+This is the fully-tested, fully-safe stack for beta users. Everything on this list is replay-safe and covered by the contract test suite.
+
+```ts
+import { Hono } from "npm:hono"          // ✅ router
+import pg from "flux:pg"                  // ✅ postgres (Flux-native driver)
+import { createClient } from "flux:redis" // ✅ redis (Flux-native driver)
+import { z } from "npm:zod"              // ✅ validation
+import * as jose from "npm:jose"          // ✅ JWT / crypto
+
+// fetch() is available globally — no import needed
+// crypto.subtle / crypto.randomUUID() are globally available and deterministic
+```
+
+Start with these. Everything else is optional and may have caveats.
 
 ---
 
