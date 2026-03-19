@@ -1,0 +1,47 @@
+# scripts/e2e/Dockerfile.e2e
+# ─────────────────────────────────────────────────────────────────────────────
+# E2E test runner image for Flux.
+# Copies the pre-built binaries from the host (via CI artifact or local build)
+# and runs the full user-flow.sh inside a clean Debian environment.
+#
+# Build:
+#   docker build -f scripts/e2e/Dockerfile.e2e \
+#     --build-arg FLUX_BIN=./target/release/flux \
+#     --build-arg FLUX_SERVER_BIN=./target/release/flux-server \
+#     --build-arg FLUX_RUNTIME_BIN=./target/release/flux-runtime \
+#     -t flux-e2e .
+#
+# Or let docker-compose handle it.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+# ── System dependencies ───────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    jq \
+    netcat-openbsd \
+    postgresql-client \
+ && rm -rf /var/lib/apt/lists/*
+
+# ── Install pre-built Flux binaries ──────────────────────────────────────────
+# Binaries are copied from the build context (CI artifact or local release build).
+# This avoids rebuilding Rust inside the E2E container.
+ARG FLUX_BIN=target/release/flux
+ARG FLUX_SERVER_BIN=target/release/flux-server
+ARG FLUX_RUNTIME_BIN=target/release/flux-runtime
+
+COPY ${FLUX_BIN}         /usr/local/bin/flux
+COPY ${FLUX_SERVER_BIN}  /usr/local/bin/flux-server
+COPY ${FLUX_RUNTIME_BIN} /usr/local/bin/flux-runtime
+
+RUN chmod +x /usr/local/bin/flux /usr/local/bin/flux-server /usr/local/bin/flux-runtime
+
+# ── Copy E2E scripts ──────────────────────────────────────────────────────────
+WORKDIR /e2e
+COPY scripts/e2e/ ./
+
+RUN chmod +x user-flow.sh assertions.sh
+
+# ── Default entrypoint ────────────────────────────────────────────────────────
+ENTRYPOINT ["bash", "user-flow.sh"]
