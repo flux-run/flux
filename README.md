@@ -1,8 +1,15 @@
 # Flux
 
-**Flux records, replays, and resumes backend requests deterministically.**
+**Record every request. Replay it. Resume it.**
 
-It lets you debug any request after it happened — with full execution history and exact, safe replay.
+Debug any request after it happened.
+
+A request fails in production. Instead of guessing:
+- run `flux trace` to see exactly what happened
+- run `flux replay` to reproduce it safely
+- fix the bug and `flux resume` from the exact failure point
+
+No logs. No guesswork. No retries in production.
 
 Website: [fluxbase.co](https://fluxbase.co)  
 Docs: [fluxbase.co/docs](https://fluxbase.co/docs)
@@ -42,22 +49,30 @@ No duplicate emails. No re-running expensive operations. No guessing.
 
 ---
 
-## What Flux Gives You
+## Four Core Abilities
 
-### 1. 📍 `flux trace` — See exactly what happened
-Full execution timeline with real data: every step, every call, every response.
+| Ability | Command | What it does |
+|---|---|---|
+| **See what happened** | `flux trace` | Full timeline — every step, every call, every response, real data |
+| **Understand why it failed** | `flux why` | Root-cause summaries. Not logs — answers |
+| **Re-run it exactly** | `flux replay` | Replays using recorded data. No live systems touched, no side effects re-triggered |
+| **Continue after fixing** | `flux resume` | Resumes from the exact step where it broke |
+| **Watch it live** | `flux tail` | Structured execution traces in real time |
 
-### 2. 🤔 `flux why` — Understand why it happened
-Root-cause summaries. Not logs — answers. Why did it hit the database? Because there was a cache miss.
+---
 
-### 3. ▶️ `flux replay` — Reproduce it safely
-Re-runs the request using recorded data. All external calls return their recorded responses. No side effects re-triggered.
+## The Model
 
-### 4. 🔁 `flux resume` — Continue after failure
-Resume from the exact step where it broke. No need to restart from the beginning and risk duplicate effects.
+Flux separates **truth** from **history**:
 
-### 5. 📡 `flux tail` — Watch it live
-Structured execution traces in real time. Like `tail -f`, but for full request workflows.
+- **Truth** (Postgres) converges to one correct, durable state
+- **History** (executions) remains complete and honest
+
+Even if:
+- a request crashes before recording — no fake history is written
+- two requests race — both executions exist, but only one durable result
+
+Correctness does not depend on timing, cache, or execution order.
 
 ---
 
@@ -91,9 +106,11 @@ Flux guarantees:
 - deterministic execution
 - single durable effects under retries and contention
 - replay scoped to recorded history only
-- built-in traceability without instrumentation
+- built-in traceability without any instrumentation
 
-Flux is not a framework. It is a system that records and controls the execution of backend requests.
+Flux is not a framework.  
+Flux is not a runtime replacement.  
+Flux is a **control layer over execution**.
 
 ---
 
