@@ -1,211 +1,85 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-19T13:13:14.842Z",
+  "timestamp": "2026-03-19T14:03:50.900Z",
   "engine": "node v22.20.0",
-  "passed": 33,
+  "passed": 12,
   "failed": 0,
   "skipped": 0,
-  "total": 33,
+  "total": 12,
   "elapsedMs": 0,
   "passRate": "100.0%",
   "results": [
     {
-      "name": "webcrypto: GET / → 200",
+      "name": "axios: GET / → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.010291999999935797
+      "duration": 0.010333000000173342
     },
     {
-      "name": "webcrypto: GET / → library=webcrypto",
+      "name": "axios: GET / → library=axios",
       "passed": true,
       "skipped": false,
-      "duration": 0.003917000000001281
+      "duration": 0.004125000000385626
     },
     {
-      "name": "webcrypto: sign → 200",
+      "name": "axios: outbound GET → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.024582999999893218
+      "duration": 0.0753340000001117
     },
     {
-      "name": "webcrypto: sign → ok:true",
+      "name": "axios: outbound GET → ok:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.0058330000001660665
+      "duration": 0.014457999999649473
     },
     {
-      "name": "webcrypto: sign → token is string",
+      "name": "axios: outbound GET → origin_present",
       "passed": true,
       "skipped": false,
-      "duration": 0.00437499999998181
+      "duration": 0.00741699999980483
     },
     {
-      "name": "webcrypto: sign → 3 parts (header.payload.sig)",
+      "name": "axios: outbound POST → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.0028750000001309672
+      "duration": 0.07258299999921292
     },
     {
-      "name": "npm:jose sign → 200",
+      "name": "axios: outbound POST → ok:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.02420899999970061
+      "duration": 0.014041000000361237
     },
     {
-      "name": "npm:jose sign → ok:true",
+      "name": "axios: outbound POST → echoed body",
       "passed": true,
       "skipped": false,
-      "duration": 0.005249999999705324
+      "duration": 0.01058299999931478
     },
     {
-      "name": "npm:jose sign → token string",
+      "name": "axios: custom headers → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.003624999999829015
+      "duration": 0.08304200000020501
     },
     {
-      "name": "npm:jose verify → 200",
+      "name": "axios: custom headers → forwarded",
       "passed": true,
       "skipped": false,
-      "duration": 0.026624999999967258
+      "duration": 0.020375000000058208
     },
     {
-      "name": "npm:jose verify → ok:true",
+      "name": "axios: non-2xx → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.0050409999998919375
+      "duration": 0.10208300000158488
     },
     {
-      "name": "npm:jose verify → payload extracted",
+      "name": "axios: non-2xx → received 404",
       "passed": true,
       "skipped": false,
-      "duration": 0.0032499999997526174
-    },
-    {
-      "name": "npm:jose verify → matching issuer",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.002124999999978172
-    },
-    {
-      "name": "webcrypto: verify → 200",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.023167000000285043
-    },
-    {
-      "name": "webcrypto: verify → ok:true",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.003832999999758613
-    },
-    {
-      "name": "webcrypto: verify → sub matches",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.002375000000029104
-    },
-    {
-      "name": "webcrypto: sign-verify cycle → 200",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.021292000000357802
-    },
-    {
-      "name": "webcrypto: sign-verify cycle → ok:true",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.004041000000142958
-    },
-    {
-      "name": "webcrypto: sign-verify cycle → sub matches",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.0017920000000231084
-    },
-    {
-      "name": "webcrypto: bad token → ok:true (caught)",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.007540999999946507
-    },
-    {
-      "name": "webcrypto: bad token → caught=true",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.0019589999992604135
-    },
-    {
-      "name": "webcrypto: expired token → ok:true (caught)",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.02050000000053842
-    },
-    {
-      "name": "webcrypto: expired token → expired=true",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.002290999999786436
-    },
-    {
-      "name": "webcrypto: JWKS → 200",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.02641700000003766
-    },
-    {
-      "name": "webcrypto: JWKS → keys array present",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.007999999999810825
-    },
-    {
-      "name": "webcrypto: JWKS → has RS256 key",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.004542000000583357
-    },
-    {
-      "name": "webcrypto: SHA-256 digest → 200",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.024292000000059488
-    },
-    {
-      "name": "webcrypto: SHA-256 digest → ok:true",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.004790999999386258
-    },
-    {
-      "name": "webcrypto: SHA-256 digest → expected hash",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.007500000000618456
-    },
-    {
-      "name": "webcrypto: PBKDF2 → 200",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.08837500000026921
-    },
-    {
-      "name": "webcrypto: PBKDF2 → ok:true",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.006083999999646039
-    },
-    {
-      "name": "webcrypto: PBKDF2 → 256 bits derived",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.0026250000000800355
-    },
-    {
-      "name": "webcrypto: PBKDF2 → hex is 64 chars",
-      "passed": true,
-      "skipped": false,
-      "duration": 0.003875000000334694
+      "duration": 0.011500000000523869
     }
   ]
 }

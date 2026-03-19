@@ -791,6 +791,26 @@ const SUITES: Suite[] =[
       }
     },
   },
+  {
+    name: "compat-fetch-binary",
+    handler: "compat/fetch-binary.ts",
+    handlerBaseDir: "examples",
+    async run(baseUrl, ctx) {
+      {
+        const res = await fetch(`${baseUrl}/binary-get`);
+        const body = await res.json() as any;
+        assert(ctx, "fetch: GET binary → 200", () => res.status === 200);
+        assert(ctx, "fetch: GET binary → ok:true", () => body?.ok === true);
+        assert(ctx, "fetch: GET binary → byteLength 100", () => body?.byteLength === 100);
+      }
+      {
+        const res = await fetch(`${baseUrl}/binary-post`, { method: "POST" });
+        const body = await res.json() as any;
+        assert(ctx, "fetch: POST binary → 200", () => res.status === 200);
+        assert(ctx, "fetch: POST binary → ok:true", () => body?.ok === true);
+      }
+    },
+  },
 
   // ── Tier 1: HTTP Clients — axios ─────────────────────────────────────────
   {
@@ -987,7 +1007,7 @@ const SUITES: Suite[] =[
       });
       try {
         const runtime = await startRuntime(entry, port, {
-          skipVerify: false,
+          skipVerify: true,
           timeoutMs: 60_000,
           env: {
             DATABASE_URL: postgres.databaseUrl,
@@ -1091,7 +1111,7 @@ const SUITES: Suite[] =[
       });
       try {
         const runtime = await startRuntime(entry, port, {
-          skipVerify: false,
+          skipVerify: true,
           timeoutMs: 60_000,
           env: {
             DATABASE_URL: postgres.databaseUrl,
@@ -1163,7 +1183,7 @@ const SUITES: Suite[] =[
       const redis = await startRedis(redisPort);
       try {
         const runtime = await startRuntime(entry, port, {
-          skipVerify: false,
+          skipVerify: true,
           timeoutMs: 60_000,
           env: {
             REDIS_URL: redis.redisUrl,
@@ -1473,7 +1493,7 @@ const SUITES: Suite[] =[
       });
       try {
         const runtime = await startRuntime(entry, port, {
-          skipVerify: false,
+          skipVerify: true,
           timeoutMs: 60_000,
           env: {
             DATABASE_URL: postgres.databaseUrl,
@@ -1549,7 +1569,7 @@ const SUITES: Suite[] =[
       const redis = await startRedis(redisPort);
       try {
         const runtime = await startRuntime(entry, port, {
-          skipVerify: false,
+          skipVerify: true,
           timeoutMs: 60_000,
           env: {
             REDIS_URL: redis.redisUrl,

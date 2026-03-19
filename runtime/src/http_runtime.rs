@@ -10,6 +10,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 
 use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, NetRequest, boot_runtime_artifact};
@@ -253,6 +255,7 @@ async fn handle_net_request(
     State(state): State<RuntimeState>,
     request: axum::extract::Request,
 ) -> impl IntoResponse {
+    println!("[http] handle_net_request: {} {}", request.method(), uri);
     let method = request.method().to_string();
 
     // Build the absolute URL the JS handler will see.
@@ -290,7 +293,11 @@ async fn handle_net_request(
             return (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response();
         }
     };
-    let body = String::from_utf8_lossy(&body_bytes).into_owned();
+    let body = if let Ok(text) = String::from_utf8(body_bytes.to_vec()) {
+        text
+    } else {
+        format!("__FLUX_B64:{}", BASE64_STANDARD.encode(&body_bytes))
+    };
 
     let request_payload = serde_json::json!({
         "method": method,
@@ -365,7 +372,14 @@ async fn handle_net_request(
             .unwrap_or_default();
 
         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        let mut response = Response::new(body_str);
+        
+        let body_bytes = if body_str.starts_with("__FLUX_B64:") {
+            BASE64_STANDARD.decode(&body_str[11..]).unwrap_or_else(|_| body_str.into_bytes())
+        } else {
+            body_str.into_bytes()
+        };
+
+        let mut response = body_bytes.into_response();
         *response.status_mut() = status;
 
         for entry in &raw_headers {

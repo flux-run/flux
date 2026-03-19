@@ -2,7 +2,13 @@ import "ext:deno_web/00_infra.js";
 import "ext:deno_web/01_mimesniff.js";
 import "ext:deno_web/02_event.js";
 import { structuredClone } from "ext:deno_web/02_structured_clone.js";
-globalThis.structuredClone = structuredClone || (v => JSON.parse(JSON.stringify(v)));
+globalThis.structuredClone = structuredClone || (v => {
+  try {
+    return Flux.deserialize(Flux.serialize(v));
+  } catch (e) {
+    return JSON.parse(JSON.stringify(v));
+  }
+});
 import "ext:deno_web/02_timers.js";
 import "ext:deno_web/03_abort_signal.js";
 import "ext:deno_web/04_global_interfaces.js";
@@ -22,27 +28,15 @@ import "ext:deno_web/01_urlpattern.js";
 import "ext:deno_web/01_broadcast_channel.js";
 
 import { crypto } from "ext:deno_crypto/00_crypto.js";
+import "ext:flux_runtime_ext/bootstrap_flux.js";
 
-function serializeArrayBuffer(buffer) {
-  const view = new Uint8Array(buffer);
-  let bytesStr = "";
-  for (let i = 0; i < view.length; i++) {
-    bytesStr += String.fromCharCode(view[i]);
-  }
-  return btoa(bytesStr);
-}
 
-function deserializeArrayBuffer(b64) {
-  const bytesStr = atob(b64);
-  const buf = new Uint8Array(bytesStr.length);
-  for (let i = 0; i < bytesStr.length; i++) {
-    buf[i] = bytesStr.charCodeAt(i);
-  }
-  return buf.buffer;
-}
 
 const originalGetRandomValues = crypto.getRandomValues.bind(crypto);
 crypto.getRandomValues = function(array) {
+  if (!globalThis.__FLUX_EXECUTION_ID__) {
+    throw new Error("Flux: IO outside execution context");
+  }
   const eid = __flux_eid();
   const replay = Deno.core.ops.op_flux_crypto_replay(eid);
   if (replay.has_recorded) {
@@ -92,6 +86,9 @@ for (const method of subtleMethods) {
     const original = crypto.subtle[method].bind(crypto.subtle);
     crypto.subtle[method] = async function(...args) {
       try {
+        if (!globalThis.__FLUX_EXECUTION_ID__) {
+          throw new Error("Flux: IO outside execution context");
+        }
         const eid = __flux_eid();
         let replay;
         try {
@@ -103,7 +100,7 @@ for (const method of subtleMethods) {
         if (replay.has_recorded) {
           const response = replay.response;
           if (response && response.type === 'ArrayBuffer') {
-            return deserializeArrayBuffer(response.bytes);
+            return Flux.deserializeArrayBuffer(response.bytes);
           } else if (response && response.type === 'CryptoKey') {
             return await original('jwk', response.jwk, deserializeAlgorithm(response.algorithm), response.extractable, response.usages);
           } else if (response && response.type === 'KeyPair') {
@@ -134,7 +131,7 @@ for (const method of subtleMethods) {
         let serializedResult;
         try {
           if (result instanceof ArrayBuffer) {
-            serializedResult = { type: 'ArrayBuffer', bytes: serializeArrayBuffer(result) };
+            serializedResult = { type: 'ArrayBuffer', bytes: Flux.serializeArrayBuffer(result) };
           } else if (result && result.constructor && result.constructor.name === "CryptoKey") {
             if (result.extractable) {
               const jwk = await crypto.subtle.exportKey('jwk', result);

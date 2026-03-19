@@ -1,0 +1,72 @@
+{
+  "id": "session-1-1773938977914",
+  "config": {
+    "provider": "groq",
+    "maxSteps": 20,
+    "autoMode": false,
+    "maxTokens": 24000
+  },
+  "memory": {
+    "goal": {
+      "task": "hi",
+      "successCriteria": [
+        "done",
+        "success",
+        "complete"
+      ],
+      "constraints": [
+        "do not ask user for input during loop",
+        "stay focused on goal"
+      ]
+    },
+    "short": {
+      "steps": [
+        {
+          "stepNum": 0,
+          "plan": "Understanding the task 'hi' and determining the minimum action to move closer to the goal of achieving 'done', 'success', or 'complete' status",
+          "action": {
+            "type": "continue",
+            "reason": "Understanding the task 'hi' and determining the minimum action to move closer to the goal of achieving 'done', 'success', or 'complete' status"
+          },
+          "timestamp": 1773939453196
+        }
+      ],
+      "maxSize": 10
+    },
+    "long": {
+      "entries": {},
+      "maxSize": 30
+    }
+  },
+  "stepCount": 1,
+  "chatHistory": [
+    {
+      "role": "user",
+      "content": "hi"
+    },
+    {
+      "role": "user",
+      "content": "hi"
+    },
+    {
+      "role": "user",
+      "content": "hi"
+    },
+    {
+      "role": "user",
+      "content": "hi"
+    },
+    {
+      "role": "user",
+      "content": "hi"
+    },
+    {
+      "role": "user",
+      "content": "hi"
+    },
+    {
+      "role": "assistant",
+      "content": "{ \"type\": \"continue\", \"reason\": \"Understanding the task 'hi' and determining the minimum action to move closer to the goal of achieving 'done', 'success', or 'complete' status\" }"
+    }
+  ]
+}

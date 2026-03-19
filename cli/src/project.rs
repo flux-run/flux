@@ -22,6 +22,7 @@ use url::Url;
 const DEFAULT_ENTRY_FILE: &str = "src/index.ts";
 const MODULE_FILE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "json"];
 const FLUX_PG_SPECIFIER: &str = "flux:pg";
+const FLUX_REDIS_SPECIFIER: &str = "flux:redis";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiagnosticSeverity {
@@ -798,6 +799,17 @@ impl GraphBuilder {
             });
         }
 
+        if specifier == FLUX_REDIS_SPECIFIER {
+            return Ok(LoadedModule {
+                specifier: FLUX_REDIS_SPECIFIER.to_string(),
+                base_specifier: FLUX_REDIS_SPECIFIER.to_string(),
+                source_kind: ArtifactSourceKind::Local,
+                media_type: ArtifactMediaType::JavaScript,
+                npm_snapshot: None,
+                source: flux_redis_module_source().to_string(),
+            });
+        }
+
         if specifier.starts_with("npm:") {
             let fetch_url = format!("https://esm.sh/{}", specifier.trim_start_matches("npm:"));
             let response = self
@@ -1131,8 +1143,11 @@ impl Visit for ImportCollector {
 }
 
 fn resolve_dependency_specifier(specifier: &str, base_specifier: &str) -> Result<String> {
-    if specifier == "pg" {
+    if specifier == "pg" || specifier == FLUX_PG_SPECIFIER {
         return Ok(FLUX_PG_SPECIFIER.to_string());
+    }
+    if specifier == "redis" || specifier == FLUX_REDIS_SPECIFIER {
+        return Ok(FLUX_REDIS_SPECIFIER.to_string());
     }
 
     if specifier.starts_with("node:") {
@@ -1141,8 +1156,14 @@ fn resolve_dependency_specifier(specifier: &str, base_specifier: &str) -> Result
     if specifier.starts_with("http://") {
         bail!("http imports are not supported; use https URLs instead");
     }
-    if specifier.starts_with("https://") || specifier.starts_with("npm:") {
+    if specifier.starts_with("https://") {
         return Ok(specifier.to_string());
+    }
+    if specifier.starts_with("npm:") {
+        return Ok(format!(
+            "https://esm.sh/{}?bundle",
+            specifier.trim_start_matches("npm:")
+        ));
     }
     if specifier.starts_with("file://") {
         let url = Url::parse(specifier).context("invalid file URL import")?;
@@ -1156,7 +1177,7 @@ fn resolve_dependency_specifier(specifier: &str, base_specifier: &str) -> Result
         if let Some(local) = resolve_local_bare_import(specifier, base_specifier)? {
             return Ok(local);
         }
-        return Ok(format!("npm:{specifier}"));
+        return Ok(format!("https://esm.sh/{specifier}?bundle"));
     }
 
     let base = Url::parse(base_specifier)
@@ -1217,6 +1238,7 @@ fn is_bare_package_import(specifier: &str) -> bool {
         && !specifier.starts_with("http://")
         && !specifier.starts_with("npm:")
         && !specifier.starts_with("node:")
+        && !specifier.starts_with("flux:")
 }
 
 fn contains_identifier(source: &str, needle: &str) -> bool {
@@ -1364,6 +1386,17 @@ const native = null;
 
 export { Client, DatabaseError, Pool, defaults, native, types };
 export default { Client, DatabaseError, Pool, defaults, native, types };
+"#
+}
+
+fn flux_redis_module_source() -> &'static str {
+    r#"
+const __fluxRedis = globalThis.Flux?.redis;
+if (!__fluxRedis || !__fluxRedis.createClient) {
+    throw new Error("Flux redis shim is unavailable");
+}
+export const createClient = __fluxRedis.createClient;
+export default __fluxRedis;
 "#
 }
 

@@ -42,13 +42,13 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use shared::project::{ArtifactMediaType, ArtifactModule, FluxBuildArtifact};
+use shared::project::{ArtifactMediaType, ArtifactModule, ArtifactSourceKind, FluxBuildArtifact};
 use tokio_rustls::TlsConnector;
 use ureq::OrAnyStatus;
 use url::Url;
 use uuid::Uuid;
 
-use crate::artifact::RuntimeArtifact;
+use crate::artifact::{sha256_hex, RuntimeArtifact};
 use crate::isolate_pool::{ExecutionContext, ExecutionResult};
 
 const FLUX_PG_SPECIFIER: &str = "flux:pg";
@@ -1116,6 +1116,7 @@ deno_core::extension!(
     esm_entry_point = "ext:flux_runtime_ext/bootstrap_crypto.js",
     esm = [
         dir "src",
+        "bootstrap_flux.js",
         "bootstrap_crypto.js"
     ],
 );
@@ -4110,8 +4111,12 @@ fn make_http_request(
                 request = request.set(key, value);
             }
 
-            let response = match current_body.as_deref() {
-                Some(body) => request.send_string(body),
+            let current_body_bytes = current_body.as_ref().map(|b| {
+                BASE64_STANDARD.decode(b).unwrap_or_else(|_| b.clone().into_bytes())
+            });
+
+            let response = match current_body_bytes.as_ref() {
+                Some(body_bytes) => request.send_bytes(body_bytes),
                 None => request.call(),
             }
             .or_any_status()
@@ -4200,16 +4205,20 @@ fn make_http_request(
         )));
     }
 
-    let text = String::from_utf8_lossy(&bytes).into_owned();
-
-    let parsed_body = serde_json::from_str::<serde_json::Value>(&text)
-        .unwrap_or_else(|_| serde_json::Value::String(text));
-
-    let response_json = serde_json::json!({
+    let mut response_json = serde_json::json!({
         "status": status,
         "headers": response_headers,
-        "body": parsed_body,
     });
+
+    if let Ok(text) = String::from_utf8(bytes.clone()) {
+        let parsed_body = serde_json::from_str::<serde_json::Value>(&text)
+            .unwrap_or_else(|_| serde_json::Value::String(text));
+        response_json["body"] = parsed_body;
+    } else {
+        let b64 = BASE64_STANDARD.encode(&bytes);
+        response_json["body"] = serde_json::Value::String(b64);
+        response_json["is_binary"] = serde_json::Value::Bool(true);
+    }
 
     store_http_response_cache(
         &method,
@@ -4493,7 +4502,7 @@ impl ModuleLoader for TypescriptModuleLoader {
         fn load_module(
             source_maps: SourceMapStore,
             module_specifier: &ModuleSpecifier,
-            options: &ModuleLoadOptions,
+            _options: &ModuleLoadOptions,
         ) -> std::result::Result<ModuleSource, deno_core::error::ModuleLoaderError> {
             if module_specifier.as_str() == FLUX_PG_SPECIFIER {
                 return Ok(ModuleSource::new(
@@ -4514,7 +4523,7 @@ impl ModuleLoader for TypescriptModuleLoader {
 
             let path = module_specifier
                 .to_file_path()
-                .map_err(|_| JsErrorBox::generic("Only file:// URLs are supported."))?;
+                .map_err(|_| JsErrorBox::generic(format!("Only file:// URLs are supported: {}", module_specifier)))?;
 
             let media_type = MediaType::from_path(&path);
             let module_type = match media_type {
@@ -4535,14 +4544,6 @@ impl ModuleLoader for TypescriptModuleLoader {
                     )));
                 }
             };
-
-            if module_type == ModuleType::Json
-                && options.requested_module_type != deno_core::RequestedModuleType::Json
-            {
-                return Err(JsErrorBox::generic(
-                    "attempted to load JSON module without `with { type: \"json\" }`",
-                ));
-            }
 
             let source = std::fs::read_to_string(&path).map_err(JsErrorBox::from_err)?;
             let source =
@@ -4907,7 +4908,9 @@ impl JsIsolate {
     pub async fn new_for_run_entry(entry: &Path) -> Result<Self> {
         let source_maps = Rc::new(RefCell::new(HashMap::new()));
         let mut runtime = JsRuntime::new(RuntimeOptions {
-            module_loader: Some(Rc::new(TypescriptModuleLoader { source_maps })),
+            module_loader: Some(Rc::new(TypescriptModuleLoader { 
+                source_maps,
+            })),
             extensions: flux_extensions(),
             create_params: Some(
                 deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
@@ -5457,7 +5460,33 @@ async fn boot_inline_runtime_artifact(
     let code_version = context.code_version.clone();
     let prepared = prepare_user_code(user_code);
 
+    let main_specifier = ModuleSpecifier::parse("file:///flux_user_code.ts").unwrap();
+    let transformed_entry = transpile_module_source(
+        &main_specifier,
+        MediaType::TypeScript,
+        prepared,
+        None,
+    ).context("failed to transpile inline entry module")?;
+
+    let mut modules = HashMap::new();
+    let entry_source = transformed_entry.clone();
+    let entry_sha256 = sha256_hex(entry_source.as_bytes());
+    modules.insert(main_specifier.to_string(), ArtifactModule {
+        specifier: main_specifier.to_string(),
+        base_specifier: main_specifier.to_string(),
+        source_kind: ArtifactSourceKind::Local,
+        media_type: ArtifactMediaType::TypeScript,
+        sha256: entry_sha256,
+        source: entry_source.clone(),
+        size_bytes: entry_source.len(),
+        dependencies: Vec::new(),
+    });
+
     let mut runtime = JsRuntime::new(RuntimeOptions {
+        module_loader: Some(Rc::new(ArtifactModuleLoader { 
+            source_maps: Rc::new(RefCell::new(HashMap::new())),
+            modules,
+        })),
         extensions: flux_extensions(),
         create_params: Some(deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT)),
         ..Default::default()
@@ -5501,12 +5530,17 @@ async fn boot_inline_runtime_artifact(
         )
         .context("failed to set boot execution_id")?;
 
-    let mut error = runtime
-        .execute_script("flux:user_code", prepared)
-        .err()
-        .map(|err| format!("{err:#}"));
+    let mut error = None;
+    let module_id = match runtime.load_main_es_module_from_code(&main_specifier, transformed_entry).await {
+        Ok(id) => Some(id),
+        Err(err) => {
+            error = Some(format!("{err:#}"));
+            None
+        }
+    };
 
-    if error.is_none() {
+    if let (None, Some(id)) = (&error, module_id) {
+        let evaluation = runtime.mod_evaluate(id);
         match tokio::time::timeout(
             EXECUTION_TIMEOUT,
             runtime.run_event_loop(Default::default()),
@@ -5521,7 +5555,11 @@ async fn boot_inline_runtime_artifact(
             Ok(Err(err)) => {
                 error = Some(format!("{err:#}"));
             }
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                if let Err(err) = evaluation.await {
+                    error = Some(format!("{err:#}"));
+                }
+            }
         }
     }
 
@@ -5906,10 +5944,30 @@ function __fluxNormalizeHeaderName(name) {
     return String(name).toLowerCase();
 }
 
+function __fluxUint8ArrayToB64(bytes) {
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return globalThis.btoa(binary);
+}
+
+function __fluxB64ToUint8Array(b64) {
+    const binaryString = globalThis.atob(b64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes;
+}
+
 function __fluxBodyToText(body) {
     if (body == null) return null;
     if (typeof body === "string") return body;
-    if (body instanceof Uint8Array) return __fluxDecoder.decode(body);
+    if (body instanceof Uint8Array || body instanceof ArrayBuffer) {
+        const bytes = body instanceof Uint8Array ? body : new Uint8Array(body);
+        return "__FLUX_B64:" + __fluxUint8ArrayToB64(bytes);
+    }
     return String(body);
 }
 
@@ -5928,6 +5986,9 @@ function __fluxConsumeBodyText(state) {
     }
     state.used = true;
     state.emitted = true;
+    if (state.bodyText?.startsWith("__FLUX_B64:")) {
+        return __fluxDecoder.decode(__fluxB64ToUint8Array(state.bodyText.slice(11)));
+    }
     return state.bodyText ?? "";
 }
 
@@ -5947,8 +6008,14 @@ function __fluxCreateBodyStream(state) {
                     }
                     state.used = true;
                     state.emitted = true;
+                    let value;
+                    if (state.bodyText?.startsWith("__FLUX_B64:")) {
+                        value = __fluxB64ToUint8Array(state.bodyText.slice(11));
+                    } else {
+                        value = __fluxEncoder.encode(state.bodyText || "");
+                    }
                     return {
-                        value: __fluxEncoder.encode(state.bodyText),
+                        value,
                         done: false,
                     };
                 },
@@ -6779,6 +6846,17 @@ class Request {
         this._bodyStream = null;
     }
 
+    async arrayBuffer() {
+        if (this._bodyState.used) throw new TypeError("Body already consumed");
+        this._bodyState.used = true;
+        this._bodyState.emitted = true;
+        const text = this._bodyState.bodyText;
+        if (text?.startsWith("__FLUX_B64:")) {
+            return __fluxB64ToUint8Array(text.slice(11)).buffer;
+        }
+        return __fluxEncoder.encode(text ?? "").buffer;
+    }
+
     get bodyUsed() {
         return this._bodyState.used;
     }
@@ -6854,6 +6932,17 @@ class Response {
         return __fluxParseFormData(await this.text());
     }
 
+    async arrayBuffer() {
+        if (this._bodyState.used) throw new TypeError("Body already consumed");
+        this._bodyState.used = true;
+        this._bodyState.emitted = true;
+        const text = this._bodyState.bodyText;
+        if (text?.startsWith("__FLUX_B64:")) {
+            return __fluxB64ToUint8Array(text.slice(11)).buffer;
+        }
+        return __fluxEncoder.encode(text ?? "").buffer;
+    }
+
     clone() {
         if (this.bodyUsed) {
             throw new TypeError("Body already consumed");
@@ -6922,6 +7011,9 @@ globalThis.Response = Response;
 
 // ── fetch ──────────────────────────────────────────────────────────────────
 globalThis.fetch = async function(input, init = undefined) {
+    if (!globalThis.__FLUX_EXECUTION_ID__) {
+        throw new Error("Flux: IO outside execution context");
+    }
     const request = input instanceof Request ? input : new Request(input, init);
     const signal = request.signal || null;
     if (signal) {
@@ -6933,7 +7025,8 @@ globalThis.fetch = async function(input, init = undefined) {
     }
     const method = request.method || "GET";
     const headers = Object.fromEntries(request.headers.entries());
-    const body = (method === "GET" || method === "HEAD") ? null : await request.text();
+    const bodyArray = (method === "GET" || method === "HEAD") ? null : await request.arrayBuffer();
+    const body = bodyArray ? Flux.serializeArrayBuffer(bodyArray) : null;
     const response = await Deno.core.ops.op_flux_fetch({
         execution_id: __flux_eid(),
         url: String(request.url),
@@ -6944,9 +7037,11 @@ globalThis.fetch = async function(input, init = undefined) {
 
     const responseBody = response.body == null
         ? null
-        : typeof response.body === "string"
-            ? response.body
-            : JSON.stringify(response.body);
+        : response.is_binary
+            ? Flux.deserializeArrayBuffer(response.body)
+            : typeof response.body === "string"
+                ? response.body
+                : JSON.stringify(response.body);
 
     return new Response(responseBody, {
         status: response.status,
@@ -6960,19 +7055,32 @@ globalThis.fetch = async function(input, init = undefined) {
   class PatchedDate extends _OrigDate {
     constructor(...args) {
       if (args.length === 0) {
+        if (!globalThis.__FLUX_EXECUTION_ID__) {
+          throw new Error("Flux: Date IO outside execution context");
+        }
         super(Deno.core.ops.op_flux_now(__flux_eid()));
       } else {
         super(...args);
       }
     }
   }
-    PatchedDate.now = function() { return Deno.core.ops.op_flux_now(__flux_eid()); };
+    PatchedDate.now = function() { 
+      if (!globalThis.__FLUX_EXECUTION_ID__) {
+        throw new Error("Flux: Date.now() outside execution context");
+      }
+      return Deno.core.ops.op_flux_now(__flux_eid()); 
+    };
   globalThis.Date = PatchedDate;
 }
 
 // ── performance.now() ──────────────────────────────────────────────────────
 if (globalThis.performance) {
-    globalThis.performance.now = function() { return Deno.core.ops.op_flux_now_high_res(__flux_eid()); };
+    globalThis.performance.now = function() { 
+      if (!globalThis.__FLUX_EXECUTION_ID__) {
+        throw new Error("Flux: performance.now() outside execution context");
+      }
+      return Deno.core.ops.op_flux_now_high_res(__flux_eid()); 
+    };
 }
 
 // ── console ────────────────────────────────────────────────────────────────
@@ -7110,6 +7218,9 @@ function __flux_invoke_timer_callback(fn, args) {
 }
 
 globalThis.setTimeout = (fn, delay, ...args) => {
+    if (!globalThis.__FLUX_EXECUTION_ID__) {
+        throw new Error("Flux: IO outside execution context");
+    }
     const timerId = __flux_timer_id++;
     __flux_active_timers.set(timerId, { interval: false, cancelled: false });
     const effectiveDelay = Deno.core.ops.op_timer_delay(__flux_eid(), delay ?? 0);
@@ -7130,6 +7241,9 @@ globalThis.clearTimeout = (timerId) => {
 };
 
 globalThis.setInterval = (fn, delay, ...args) => {
+    if (!globalThis.__FLUX_EXECUTION_ID__) {
+        throw new Error("Flux: IO outside execution context");
+    }
     const timerId = __flux_timer_id++;
     __flux_active_timers.set(timerId, { interval: true, cancelled: false });
 
@@ -7157,7 +7271,12 @@ globalThis.clearInterval = (timerId) => {
 };
 
 // ── Math.random ─────────────────────────────────────────────────────────────
-Math.random = () => Deno.core.ops.op_random(__flux_eid());
+Math.random = () => {
+    if (!globalThis.__FLUX_EXECUTION_ID__) {
+        throw new Error("Flux: IO outside execution context");
+    }
+    return Deno.core.ops.op_random(__flux_eid());
+};
 
 // ── Flux.net (deterministic outbound TCP) ───────────────────────────────────
 globalThis.Flux = globalThis.Flux || {};
@@ -7782,7 +7901,13 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
     }
 
   let responseBody;
-  try { responseBody = await response.text(); } catch { responseBody = ""; }
+  try {
+    const buffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    responseBody = "__FLUX_B64:" + __fluxUint8ArrayToB64(bytes);
+  } catch (err) {
+    responseBody = "";
+  }
 
   const responseHeaders = JSON.stringify([...response.headers.entries()]);
   Deno.core.ops.op_net_respond(__eid, reqId, response.status ?? 200, responseHeaders, responseBody);
