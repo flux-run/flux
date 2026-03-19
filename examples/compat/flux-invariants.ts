@@ -1,18 +1,20 @@
 // @ts-nocheck
 // Flux Execution Contract: Cross-library invariants
-// This file tests the 5 execution laws that Flux must uphold across ALL IO boundaries.
+// This file tests the 6 execution laws that Flux must uphold across ALL IO boundaries.
 // These are NOT library tests — they prove Flux guarantees.
 //
 // Laws:
-//   1. DETERMINISM    — same execution inputs produce the same result
-//   2. REPLAY SAFETY  — replay does not re-trigger live side effects
-//   3. ISOLATION      — no hidden shared state between executions
-//   4. ORDERED IO     — checkpoints are ordered and monotonically indexed
-//   5. BOUNDARY BLOCK — unsupported features fail with clear contract errors
+//   1. DETERMINISM          — same execution inputs produce the same result
+//   2. REPLAY SAFETY        — replay does not re-trigger live side effects
+//   3. ISOLATION            — no hidden shared state between executions
+//   4. ORDERED IO           — checkpoints are ordered and monotonically indexed
+//   5. BOUNDARY BLOCK       — unsupported features fail with clear contract errors
+//   6. NO FABRICATED HISTORY — Flux never records an execution that did not complete
 //
 // Each route is annotated with which law(s) it validates.
 import { Hono } from "npm:hono";
 import pg from "flux:pg";
+
 
 const app = new Hono();
 
@@ -27,7 +29,14 @@ function getPool() {
 app.get("/", (c) =>
   c.json({
     contract: "flux-execution-invariants",
-    laws: ["determinism", "replay-safety", "isolation", "ordered-io", "boundary-block"],
+    laws: [
+      "determinism",
+      "replay-safety",
+      "isolation",
+      "ordered-io",
+      "boundary-block",
+      "no-fabricated-history",
+    ],
     ok: true,
   }),
 );
@@ -415,10 +424,128 @@ app.post("/integration/idempotent-cleanup", async (c) => {
   try {
     await pool.query("DROP TABLE IF EXISTS flux_idempotent_test");
     await pool.query("DROP TABLE IF EXISTS flux_isolation_test");
+    await pool.query("DROP TABLE IF EXISTS flux_no_history_test");
     return c.json({ ok: true });
   } finally {
     await pool.end();
   }
 });
 
+// ═══════════════════════════════════════════════════════════════
+// LAW 6: NO FABRICATED HISTORY
+//
+// Flux NEVER records a successful execution that did not actually complete.
+// If a request throws before any IO, the execution exists but has no checkpoints.
+// If a request throws mid-IO, the recorded checkpoints reflect reality up to
+// the point of failure — they do NOT reflect a fabricated success.
+//
+// This is your Case 4 spec: "crash before checkpoint → no execution record."
+// It is the hardest invariant to violate accidentally, and the most
+// important one for replay trust.
+//
+// Proof mechanism:
+//   1. Run a route that throws before/during IO
+//   2. Note the execution-id from the response header (status 500)
+//   3. Run `flux trace <id>` — confirms: status=error, checkpoints reflect reality
+//   4. Run `flux replay <id>` — replay returns the same error, not a fabricated success
+// ═══════════════════════════════════════════════════════════════
+
+// GET /no-history/throw-before-io
+// Throws immediately, before making ANY IO call.
+// Result: Flux records the execution as failed. No checkpoints exist.
+// Replay: returns the same error. Cannot be replayed as a success.
+app.get("/no-history/throw-before-io", (_c) => {
+  // Intentional: throw before any DB/HTTP call
+  throw new Error("flux-no-history: crash before IO");
+});
+
+// POST /no-history/throw-after-insert
+// Inserts a row, THEN throws. The INSERT checkpoint is recorded.
+// Result: execution is failed. The INSERT checkpoint exists.
+// Replay: the INSERT is suppressed (checkpoint replayed), then the throw is replayed.
+// DB: only 1 row ever exists (the live run — replay suppresses it).
+app.post("/no-history/throw-after-insert", async (c) => {
+  const { label } = await c.req.json();
+  const pool = getPool();
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flux_no_history_test (
+        id SERIAL PRIMARY KEY,
+        label TEXT NOT NULL
+      )
+    `);
+    // This INSERT is checkpointed
+    await pool.query("INSERT INTO flux_no_history_test (label) VALUES ($1)", [label]);
+    // Intentional throw AFTER the checkpoint
+    throw new Error("flux-no-history: crash after insert checkpoint");
+  } finally {
+    await pool.end();
+  }
+});
+
+// GET /no-history/verify-count
+// Verifies the state after throw-after-insert + replay test.
+// After 1 run + 1 replay: exactly 1 row (replay suppresses the insert).
+// After 2 live runs: exactly 2 rows (proves this is a live run, not replay).
+app.get("/no-history/verify-count", async (c) => {
+  const pool = getPool();
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flux_no_history_test (
+        id SERIAL PRIMARY KEY, label TEXT NOT NULL
+      )
+    `);
+    const r = await pool.query("SELECT COUNT(*) AS cnt FROM flux_no_history_test");
+    return c.json({
+      law: "no-fabricated-history",
+      ok: true,
+      row_count: Number(r.rows[0]?.cnt),
+      note: "If 1 live run + N replays occurred, count should be 1 (replays suppressed). If count > 1, replays re-executed side effects — contract violation.",
+    });
+  } finally {
+    await pool.end();
+  }
+});
+
+// POST /no-history/throw-mid-io
+// Makes 2 DB queries, then throws. The 2 checkpoints exist; the 3rd does not.
+// Result: On replay, queries 1+2 are replayed from checkpoints, then exception re-thrown.
+// This proves that partial execution traces are honest — they stop exactly where reality stopped.
+app.post("/no-history/throw-mid-io", async (c) => {
+  const pool = getPool();
+  try {
+    const r1 = await pool.query("SELECT 1 AS step"); // checkpoint index 0
+    const r2 = await pool.query("SELECT 2 AS step"); // checkpoint index 1
+    // No checkpoint index 2 — we die before it
+    const step1 = Number(r1.rows[0]?.step);
+    const step2 = Number(r2.rows[0]?.step);
+    if (step1 === 1 && step2 === 2) {
+      throw new Error(`flux-no-history: crash at step 3 (after checkpoints 0+1). steps=[${step1},${step2}]`);
+    }
+    return c.json({ ok: false, error: "unexpected — should have thrown" }, 500);
+  } finally {
+    await pool.end();
+  }
+});
+
+// GET /no-history/silent-ok
+// A normal successful route — the counterpoint.
+// Confirms that a route that succeeds DOES produce a replayable execution.
+// Run with `flux replay <id>` after calling this — should return identical response.
+app.get("/no-history/silent-ok", async (c) => {
+  const pool = getPool();
+  try {
+    const r = await pool.query("SELECT 42 AS answer");
+    return c.json({
+      law: "no-fabricated-history",
+      ok: true,
+      answer: Number(r.rows[0]?.answer),
+      note: "This execution completed successfully. flux replay should return an identical response.",
+    });
+  } finally {
+    await pool.end();
+  }
+});
+
 Deno.serve(app.fetch);
+

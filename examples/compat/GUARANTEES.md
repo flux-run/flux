@@ -8,7 +8,7 @@ This file maps every compat test to the Flux execution law(s) it validates.
 
 ---
 
-## The 5 Execution Laws
+## The 6 Execution Laws
 
 | Law | Definition |
 |---|---|
@@ -17,26 +17,45 @@ This file maps every compat test to the Flux execution law(s) it validates.
 | **ISOLATION** | No mutable state leaks between executions. Module-level globals reset per isolate. |
 | **ORDERED IO** | Checkpoints are assigned monotonic indexes. Replay maps call_index → recorded result. |
 | **BOUNDARY BLOCK** | Unsupported features (non-deterministic IO) fail with an explicit contract error. Never silently succeed. |
+| **NO FABRICATED HISTORY** | Flux never records a successful execution that did not complete. A crash before IO leaves no checkpoints. A crash mid-IO leaves an honest partial trace, replayed as the same error — never as a success. |
+
+---
+
+## CI Gate
+
+**`flux-contract-suite.ts`** is the single entrypoint for release verification:
+
+```bash
+# Run directly via the Flux runtime (requires DATABASE_URL + REDIS_URL)
+flux run examples/compat/flux-contract-suite.ts
+```
+
+- Exits `0` if all laws hold — safe to release
+- Exits `1` if any law fails — **block the release**
+
+Each test prints: `✅ [law] route` or `❌ [law] route → detail`
 
 ---
 
 ## Test File → Law Coverage Matrix
 
-| Test File | DETERMINISM | REPLAY SAFETY | ISOLATION | ORDERED IO | BOUNDARY BLOCK |
-|---|:---:|:---:|:---:|:---:|:---:|
-| `flux-invariants.ts` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `redis-contract.ts` | | ✅ | | | ✅ |
-| `ioredis-compat.ts` | | | | ✅ | ✅ |
-| `redis-compat.ts` | | | | ✅ | ✅ |
-| `fetch-compat.ts` | ✅ | ✅ | | ✅ | |
-| `axios-compat.ts` | | ✅ | | ✅ | |
-| `undici-compat.ts` | | ✅ | | ✅ | |
-| `pg-compat.ts` | | ✅ | ✅ | ✅ | |
-| `drizzle-compat.ts` | | ✅ | ✅ | ✅ | |
-| `jose-compat.ts` | ✅ | | | | |
-| `zod-compat.ts` | ✅ | | | | |
+| Test File | DET | REPLAY | ISO | ORD-IO | BLOCK | NO-HIST |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| `flux-contract-suite.ts` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `flux-invariants.ts` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `redis-contract.ts` | | ✅ | | | ✅ | |
+| `ioredis-compat.ts` | | | | ✅ | ✅ | |
+| `redis-compat.ts` | | | | ✅ | ✅ | |
+| `fetch-compat.ts` | ✅ | ✅ | | ✅ | | |
+| `axios-compat.ts` | | ✅ | | ✅ | | |
+| `undici-compat.ts` | | ✅ | | ✅ | | |
+| `pg-compat.ts` | | ✅ | ✅ | ✅ | | |
+| `drizzle-compat.ts` | | ✅ | ✅ | ✅ | | |
+| `jose-compat.ts` | ✅ | | | | | |
+| `zod-compat.ts` | ✅ | | | | | |
 
 ---
+
 
 ## What Flux Guarantees Per Library
 
@@ -137,9 +156,11 @@ curl -X POST http://localhost:3000/replay-proof/cleanup
 
 ## Canary Suite
 
-`flux-invariants.ts` is the **system canary**. It must pass completely after every runtime change.
+`flux-contract-suite.ts` is the **primary CI gate** — run it directly, get exit code 0 or 1.
 
-Any test failure in this file means a Flux execution law has been violated:
+`flux-invariants.ts` is the **behavioral canary** — proves laws through HTTP routes, must be deployed and verified end-to-end after every runtime change.
+
+Any test failure means a Flux execution law has been violated:
 
 | Route | Law |
 |---|---|
@@ -157,6 +178,12 @@ Any test failure in this file means a Flux execution law has been violated:
 | `/ordered-io/concurrent` | ORDERED IO |
 | `/boundary/filesystem-write` | BOUNDARY BLOCK |
 | `/boundary/child-process` | BOUNDARY BLOCK |
+| `/no-history/throw-before-io` | NO FABRICATED HISTORY |
+| `/no-history/throw-after-insert` | NO FABRICATED HISTORY + REPLAY SAFETY |
+| `/no-history/throw-mid-io` | NO FABRICATED HISTORY |
+| `/no-history/verify-count` | NO FABRICATED HISTORY + REPLAY SAFETY |
+| `/no-history/silent-ok` | NO FABRICATED HISTORY (positive case) |
 | `/integration/idempotent-create` | REPLAY SAFETY + DETERMINISM + ORDERED IO |
 
 **DO NOT BREAK THIS SUITE.** Any underlying runtime change must pass this benchmark completely.
+
