@@ -714,7 +714,394 @@ const SUITES: Suite[] =[
   },
 
 
-  // ── 7. CRUD replay ──────────────────────────────────────────────────────
+  // ── 7. Library Compatibility Suites ─────────────────────────────────────
+
+  // ── Tier 1: HTTP Clients — fetch ─────────────────────────────────────────
+  {
+    name: "compat-fetch",
+    handler: "compat/fetch-compat.ts",
+    handlerBaseDir: "examples",
+    async run(baseUrl, ctx) {
+      // smoke test
+      {
+        const res = await fetch(`${baseUrl}/`);
+        const body = await res.json() as any;
+        assert(ctx, "fetch: GET / → 200", () => res.status === 200);
+        assert(ctx, "fetch: GET / → library=fetch", () => body?.library === "fetch");
+      }
+      // outbound GET via fetch (IO interception)
+      {
+        const res = await fetch(`${baseUrl}/fetch-external`);
+        const body = await res.json() as any;
+        assert(ctx, "fetch: outbound GET → 200", () => res.status === 200);
+        assert(ctx, "fetch: outbound GET → ok:true", () => body?.ok === true);
+        assert(ctx, "fetch: outbound GET → status 200", () => body?.status === 200);
+        assert(ctx, "fetch: outbound GET → origin_present", () => body?.origin_present === true);
+      }
+      // outbound POST via fetch
+      {
+        const res = await fetch(`${baseUrl}/fetch-post`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ flux: "test" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "fetch: outbound POST → 200", () => res.status === 200);
+        assert(ctx, "fetch: outbound POST → ok:true", () => body?.ok === true);
+        assert(ctx, "fetch: outbound POST → echoed body", () => body?.echoed?.flux === "test");
+      }
+      // custom headers
+      {
+        const res = await fetch(`${baseUrl}/fetch-headers`);
+        const body = await res.json() as any;
+        assert(ctx, "fetch: custom headers → 200", () => res.status === 200);
+        assert(ctx, "fetch: custom headers → forwarded", () => body?.has_custom_header === true);
+      }
+    },
+  },
+
+  // ── Tier 1: HTTP Clients — axios ─────────────────────────────────────────
+  {
+    name: "compat-axios",
+    handler: "compat/axios-compat.ts",
+    handlerBaseDir: "examples",
+    async run(baseUrl, ctx) {
+      // smoke test
+      {
+        const res = await fetch(`${baseUrl}/`);
+        const body = await res.json() as any;
+        assert(ctx, "axios: GET / → 200", () => res.status === 200);
+        assert(ctx, "axios: GET / → library=axios", () => body?.library === "axios");
+      }
+      // outbound GET via axios
+      {
+        const res = await fetch(`${baseUrl}/axios-get`);
+        const body = await res.json() as any;
+        assert(ctx, "axios: outbound GET → 200", () => res.status === 200);
+        assert(ctx, "axios: outbound GET → ok:true", () => body?.ok === true);
+        assert(ctx, "axios: outbound GET → origin_present", () => body?.origin_present === true);
+      }
+      // outbound POST via axios
+      {
+        const res = await fetch(`${baseUrl}/axios-post`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ flux: "axios-test" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "axios: outbound POST → 200", () => res.status === 200);
+        assert(ctx, "axios: outbound POST → ok:true", () => body?.ok === true);
+        assert(ctx, "axios: outbound POST → echoed body", () => body?.echoed?.flux === "axios-test");
+      }
+      // axios custom headers
+      {
+        const res = await fetch(`${baseUrl}/axios-headers`);
+        const body = await res.json() as any;
+        assert(ctx, "axios: custom headers → 200", () => res.status === 200);
+        assert(ctx, "axios: custom headers → forwarded", () => body?.has_custom_header === true);
+      }
+      // axios non-2xx does not throw
+      {
+        const res = await fetch(`${baseUrl}/axios-error`);
+        const body = await res.json() as any;
+        assert(ctx, "axios: non-2xx → 200", () => res.status === 200);
+        assert(ctx, "axios: non-2xx → received 404", () => body?.received_status === 404);
+      }
+    },
+  },
+
+  // ── Tier 2: Validation — Zod ─────────────────────────────────────────────
+  {
+    name: "compat-zod",
+    handler: "compat/zod-compat.ts",
+    handlerBaseDir: "examples",
+    async run(baseUrl, ctx) {
+      // smoke test
+      {
+        const res = await fetch(`${baseUrl}/`);
+        const body = await res.json() as any;
+        assert(ctx, "zod: GET / → 200", () => res.status === 200);
+        assert(ctx, "zod: GET / → library=zod", () => body?.library === "zod");
+      }
+      // valid user
+      {
+        const res = await fetch(`${baseUrl}/validate-user`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "Alice", email: "alice@example.com" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "zod: valid user → 200", () => res.status === 200);
+        assert(ctx, "zod: valid user → ok:true", () => body?.ok === true);
+        assert(ctx, "zod: valid user → name", () => body?.user?.name === "Alice");
+      }
+      // invalid user (bad email)
+      {
+        const res = await fetch(`${baseUrl}/validate-bad`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "", email: "not-an-email" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "zod: invalid user → ok:false", () => body?.ok === false);
+        assert(ctx, "zod: invalid user → errors present", () => !!body?.errors);
+      }
+      // pagination defaults
+      {
+        const res = await fetch(`${baseUrl}/paginate`);
+        const body = await res.json() as any;
+        assert(ctx, "zod: paginate defaults → 200", () => res.status === 200);
+        assert(ctx, "zod: paginate defaults → page=1", () => body?.pagination?.page === 1);
+        assert(ctx, "zod: paginate defaults → limit=20", () => body?.pagination?.limit === 20);
+      }
+      // pagination with values
+      {
+        const res = await fetch(`${baseUrl}/paginate?page=3&limit=50`);
+        const body = await res.json() as any;
+        assert(ctx, "zod: paginate with values → page=3", () => body?.pagination?.page === 3);
+        assert(ctx, "zod: paginate with values → limit=50", () => body?.pagination?.limit === 50);
+      }
+      // transform pipeline
+      {
+        const res = await fetch(`${baseUrl}/transform`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ value: "  HELLO FLUX  " }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "zod: transform → 200", () => res.status === 200);
+        assert(ctx, "zod: transform → lowercased + trimmed", () => body?.transformed?.value === "hello flux");
+      }
+    },
+  },
+
+  // ── Tier 1: Postgres — pg driver ─────────────────────────────────────────
+  {
+    name: "compat-pg",
+    handler: "compat/pg-compat.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const postgres = await startPostgres(databasePort, {
+        databaseName: "compat_pg",
+        username: "postgres",
+        password: "postgres",
+      });
+      try {
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          timeoutMs: 60_000,
+          env: {
+            DATABASE_URL: postgres.databaseUrl,
+            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+          },
+        });
+        return {
+          ...runtime,
+          async stop() {
+            try { await runtime.stop(); } finally { postgres.stop(); }
+          },
+        };
+      } catch (err) {
+        postgres.stop();
+        throw err;
+      }
+    },
+    async run(baseUrl, ctx) {
+      // smoke test (no DB)
+      {
+        const res = await fetch(`${baseUrl}/`);
+        const body = await res.json() as any;
+        assert(ctx, "pg: GET / → 200", () => res.status === 200);
+        assert(ctx, "pg: GET / → library=pg", () => body?.library === "pg");
+      }
+      // SELECT 1
+      {
+        const res = await fetch(`${baseUrl}/db-query`);
+        const body = await res.json() as any;
+        assert(ctx, "pg: SELECT 1 → 200", () => res.status === 200);
+        assert(ctx, "pg: SELECT 1 → value=1", () => Number(body?.value) === 1);
+      }
+      // INSERT + SELECT + DELETE
+      {
+        const res = await fetch(`${baseUrl}/db-insert-select`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ label: "flux-compat-test" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "pg: insert-select → 200", () => res.status === 200);
+        assert(ctx, "pg: insert-select → ok:true", () => body?.ok === true);
+        assert(ctx, "pg: insert-select → label matches", () => body?.inserted?.label === "flux-compat-test");
+        assert(ctx, "pg: insert-select → selected matches", () => body?.selected?.label === "flux-compat-test");
+      }
+      // TRANSACTION
+      {
+        const res = await fetch(`${baseUrl}/db-transaction`);
+        const body = await res.json() as any;
+        assert(ctx, "pg: transaction → 200", () => res.status === 200);
+        assert(ctx, "pg: transaction → ok:true", () => body?.ok === true);
+        assert(ctx, "pg: transaction → ts present", () => !!body?.ts);
+      }
+    },
+  },
+
+  // ── Tier 2: ORM — Drizzle ────────────────────────────────────────────────
+  {
+    name: "compat-drizzle",
+    handler: "compat/drizzle-compat.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const postgres = await startPostgres(databasePort, {
+        databaseName: "compat_drizzle",
+        username: "postgres",
+        password: "postgres",
+      });
+      try {
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          timeoutMs: 60_000,
+          env: {
+            DATABASE_URL: postgres.databaseUrl,
+            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+          },
+        });
+        return {
+          ...runtime,
+          async stop() {
+            try { await runtime.stop(); } finally { postgres.stop(); }
+          },
+        };
+      } catch (err) {
+        postgres.stop();
+        throw err;
+      }
+    },
+    async run(baseUrl, ctx) {
+      // smoke test
+      {
+        const res = await fetch(`${baseUrl}/`);
+        const body = await res.json() as any;
+        assert(ctx, "drizzle: GET / → 200", () => res.status === 200);
+        assert(ctx, "drizzle: GET / → library=drizzle", () => body?.library === "drizzle");
+      }
+      // setup table
+      {
+        const res = await fetch(`${baseUrl}/setup`, { method: "POST" });
+        const body = await res.json() as any;
+        assert(ctx, "drizzle: setup table → 200", () => res.status === 200);
+        assert(ctx, "drizzle: setup table → ok:true", () => body?.ok === true);
+      }
+      // insert via Drizzle
+      {
+        const res = await fetch(`${baseUrl}/insert`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "flux-drizzle-item" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "drizzle: insert → 200", () => res.status === 200);
+        assert(ctx, "drizzle: insert → ok:true", () => body?.ok === true);
+        assert(ctx, "drizzle: insert → item.name", () => body?.item?.name === "flux-drizzle-item");
+      }
+      // select list
+      {
+        const res = await fetch(`${baseUrl}/list`);
+        const body = await res.json() as any;
+        assert(ctx, "drizzle: list → 200", () => res.status === 200);
+        assert(ctx, "drizzle: list → ok:true", () => body?.ok === true);
+        assert(ctx, "drizzle: list → count >= 1", () => body?.count >= 1);
+      }
+      // cleanup
+      {
+        const res = await fetch(`${baseUrl}/cleanup`, { method: "DELETE" });
+        const body = await res.json() as any;
+        assert(ctx, "drizzle: cleanup → ok:true", () => body?.ok === true);
+      }
+    },
+  },
+
+  // ── Tier 3: Redis — node-redis ───────────────────────────────────────────
+  {
+    name: "compat-redis",
+    handler: "compat/redis-compat.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const redisPort = allocateRedisPort();
+      const redis = await startRedis(redisPort);
+      try {
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          timeoutMs: 60_000,
+          env: {
+            REDIS_URL: redis.redisUrl,
+            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+          },
+        });
+        return {
+          ...runtime,
+          async stop() {
+            try { await runtime.stop(); } finally { redis.stop(); }
+          },
+        };
+      } catch (err) {
+        redis.stop();
+        throw err;
+      }
+    },
+    async run(baseUrl, ctx) {
+      // smoke test (no Redis)
+      {
+        const res = await fetch(`${baseUrl}/`);
+        const body = await res.json() as any;
+        assert(ctx, "redis: GET / → 200", () => res.status === 200);
+        assert(ctx, "redis: GET / → library=node-redis", () => body?.library === "node-redis");
+      }
+      // PING
+      {
+        const res = await fetch(`${baseUrl}/ping`);
+        const body = await res.json() as any;
+        assert(ctx, "redis: PING → 200", () => res.status === 200);
+        assert(ctx, "redis: PING → pong=PONG", () => body?.pong === "PONG");
+      }
+      // SET / GET / DEL
+      {
+        const res = await fetch(`${baseUrl}/set-get`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ key: "greeting", value: "hello-flux" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "redis: SET-GET → 200", () => res.status === 200);
+        assert(ctx, "redis: SET-GET → stored matches", () => body?.stored === "hello-flux");
+        assert(ctx, "redis: SET-GET → retrieved matches", () => body?.retrieved === "hello-flux");
+      }
+      // INCR / INCRBY
+      {
+        const res = await fetch(`${baseUrl}/incr`, { method: "POST" });
+        const body = await res.json() as any;
+        assert(ctx, "redis: INCR → 200", () => res.status === 200);
+        assert(ctx, "redis: INCR → v1=1", () => body?.v1 === 1);
+        assert(ctx, "redis: INCR → v2=2", () => body?.v2 === 2);
+        assert(ctx, "redis: INCRBY 10 → v3=12", () => body?.v3 === 12);
+      }
+      // HSET / HGETALL
+      {
+        const res = await fetch(`${baseUrl}/hash`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ field: "env", value: "flux" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "redis: HSET-HGETALL → 200", () => res.status === 200);
+        assert(ctx, "redis: HSET-HGETALL → field value matches", () => body?.all?.env === "flux");
+      }
+    },
+  },
+
+
+  // ── 8. CRUD replay ──────────────────────────────────────────────────────
   {
     name: "crud-replay",
     handler: "crud_app/main_flux.ts",
