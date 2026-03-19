@@ -44,7 +44,7 @@ test_functions/
 
 # ── Docker (not used — flux dev uses embedded Postgres, no Docker needed) ────
 Dockerfile
-docker-compose*.yml
+#docker-compose*.yml
 .dockerignore
 
 projects/
