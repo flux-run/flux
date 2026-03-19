@@ -56,4 +56,63 @@ app.post("/transform", async (c) => {
   return c.json({ ok: true, transformed: result.data });
 });
 
+// ── Failure cases ──────────────────────────────────────────────────────────
+
+// POST /validate-strict — strict mode rejects unknown keys
+app.post("/validate-strict", async (c) => {
+  const body = await c.req.json();
+  const StrictUser = UserSchema.strict();
+  const result = StrictUser.safeParse(body);
+  return c.json({
+    ok: result.success,
+    errors: result.success ? null : result.error.flatten(),
+  });
+});
+
+// POST /validate-nested — nested object schema
+app.post("/validate-nested", async (c) => {
+  const body = await c.req.json();
+  const AddressSchema = z.object({
+    street: z.string().min(1),
+    city: z.string().min(1),
+    zip: z.string().regex(/^\d{5}$/),
+  });
+  const schema = z.object({
+    user: UserSchema,
+    address: AddressSchema,
+  });
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    return c.json({ ok: false, errors: result.error.flatten() }, 422);
+  }
+  return c.json({ ok: true, data: result.data });
+});
+
+// POST /validate-union — union type schema
+app.post("/validate-union", async (c) => {
+  const body = await c.req.json();
+  const schema = z.union([
+    z.object({ type: z.literal("email"), value: z.string().email() }),
+    z.object({ type: z.literal("phone"), value: z.string().regex(/^\+?[\d\s-]{7,}$/) }),
+  ]);
+  const result = schema.safeParse(body);
+  return c.json({ ok: result.success, data: result.success ? result.data : null });
+});
+
+// POST /validate-custom — custom refinement
+app.post("/validate-custom", async (c) => {
+  const body = await c.req.json();
+  const schema = z
+    .object({ password: z.string(), confirm: z.string() })
+    .refine((d) => d.password === d.confirm, {
+      message: "Passwords do not match",
+      path: ["confirm"],
+    });
+  const result = schema.safeParse(body);
+  return c.json({
+    ok: result.success,
+    errors: result.success ? null : result.error.flatten(),
+  });
+});
+
 Deno.serve(app.fetch);

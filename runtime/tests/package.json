@@ -14,7 +14,7 @@
     "test:ecmascript": "node --loader tsx dist/cli.js ecmascript",
     "test:node": "node --loader tsx dist/cli.js node",
     "test:web": "node --loader tsx dist/cli.js web",
-    "test:frameworks": "node --loader tsx dist/cli.js frameworks",
+    "test:framework-unit": "node --loader tsx dist/cli.js frameworks",
     "test:runtime": "node --loader tsx dist/cli.js runtime",
     "test:determinism": "node --loader tsx dist/cli.js determinism",
     "test:errors": "node --loader tsx dist/cli.js error-handling",
@@ -42,7 +42,8 @@
     "test:compat-drizzle": "cd ../runners && npm run test:integration -- compat-drizzle --skip-build",
     "test:compat-redis": "cd ../runners && npm run test:integration -- compat-redis --skip-build",
     "test:compat-ioredis": "cd ../runners && npm run test:integration -- compat-ioredis --skip-build",
-    "test:compat-libs": "cd ../runners && npm run test:integration -- compat-fetch compat-axios compat-undici compat-zod compat-pg compat-postgresjs compat-drizzle compat-redis compat-ioredis --skip-build",
+    "test:compat-jose": "cd ../runners && npm run test:integration -- compat-jose --skip-build",
+    "test:compat-libs": "cd ../runners && npm run test:integration -- compat-fetch compat-axios compat-undici compat-zod compat-pg compat-postgresjs compat-drizzle compat-redis compat-ioredis compat-jose --skip-build",
     "test:frameworks": "cd ../runners && npm run test:integration -- bundled-hono bundled-express bundled-fastify bundled-koa --skip-build",
     "setup:external": "bash ../scripts/setup-external-tests.sh all",
     "clean": "rm -rf dist"

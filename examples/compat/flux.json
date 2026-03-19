@@ -1,5 +1,5 @@
 {
   "flux_version": "0.2",
-  "entry": "./zod-compat.ts",
+  "entry": "./jose-compat.ts",
   "artifact": "./.flux/artifact.json"
 }
