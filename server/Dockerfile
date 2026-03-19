@@ -1,4 +1,4 @@
-FROM rust:1.85-slim-bookworm AS builder
+FROM rustlang/rust:nightly-bookworm AS builder
 WORKDIR /app
 
 # Install required build dependencies
