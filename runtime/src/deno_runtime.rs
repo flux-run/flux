@@ -1101,6 +1101,7 @@ deno_core::extension!(
         op_flux_postgres_session_query,
         op_flux_env_get,
         op_flux_now,
+        op_flux_now_high_res,
         op_flux_parse_url,
         op_console,
         op_timer_delay,
@@ -1297,7 +1298,7 @@ fn op_flux_fetch(
             let map = state.borrow_mut::<RuntimeStateMap>();
             let execution = map.get_mut(&execution_id).ok_or_else(|| {
                 JsErrorBox::new(
-                    "InternalError",
+                    "Error",
                     format!("op_flux_fetch: execution_id '{execution_id}' not found"),
                 )
             })?;
@@ -1401,7 +1402,7 @@ fn op_flux_tcp_exchange(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_tcp_exchange: execution_id '{execution_id}' not found"),
             )
         })?;
@@ -1529,7 +1530,7 @@ fn op_flux_postgres_connect(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_postgres_connect: execution_id '{execution_id}' not found"),
             )
         })?;
@@ -1563,7 +1564,7 @@ fn op_flux_postgres_connect(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_postgres_connect: execution_id '{execution_id}' disappeared during connect"),
             )
         })?;
@@ -1619,7 +1620,7 @@ fn op_flux_postgres_simple_query(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_postgres_simple_query: execution_id '{execution_id}' not found"),
             )
         })?;
@@ -1722,7 +1723,7 @@ fn op_flux_postgres_session_query(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_postgres_session_query: execution_id '{execution_id}' not found"),
             )
         })?;
@@ -1765,7 +1766,7 @@ fn op_flux_postgres_session_query(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_postgres_session_query: execution_id '{execution_id}' disappeared before query"),
             )
         })?;
@@ -1864,7 +1865,7 @@ fn op_flux_postgres_query(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_postgres_query: execution_id '{execution_id}' not found"),
             )
         })?;
@@ -1978,7 +1979,7 @@ fn op_flux_redis_command(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_redis_command: execution_id '{execution_id}' not found"),
             )
         })?;
@@ -2067,7 +2068,7 @@ fn op_flux_postgres_close_session(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_postgres_close_session: execution_id '{execution_id}' not found"),
             )
         })?;
@@ -2086,7 +2087,7 @@ fn op_flux_postgres_close_session(
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.get_mut(&execution_id).ok_or_else(|| {
             JsErrorBox::new(
-                "InternalError",
+                "Error",
                 format!("op_flux_postgres_close_session: execution_id '{execution_id}' disappeared during close"),
             )
         })?;
@@ -3691,6 +3692,58 @@ fn op_flux_now(state: &mut OpState, #[string] execution_id: String) -> f64 {
     }
 }
 
+/// Returns deterministic monotonic high-resolution time since execution start.
+/// This acts as an IO boundary so repeated calls advance the timer predictably.
+#[op2(fast)]
+fn op_flux_now_high_res(state: &mut OpState, #[string] execution_id: String) -> f64 {
+    let now_hr = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as f64 / 1000.0;
+        
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    let exec = match map.get_mut(&execution_id) {
+        Some(e) => e,
+        None => return now_hr,
+    };
+    
+    let call_index = exec.call_index;
+    exec.call_index = exec.call_index.saturating_add(1);
+
+    match exec.context.mode {
+        ExecutionMode::Live => {
+            // Rebase relative to the execution start time if possible
+            let start = exec.recorded_now_ms.unwrap_or(0) as f64;
+            let elapsed = if start > 0.0 { (now_hr - start).max(0.0) } else { 0.0 };
+            
+            exec.checkpoints.push(FetchCheckpoint {
+                call_index,
+                boundary: "performance.now".to_string(),
+                url: "".to_string(),
+                method: "".to_string(),
+                request: serde_json::json!({}),
+                response: serde_json::json!(elapsed),
+                duration_ms: 0,
+            });
+            elapsed
+        }
+        ExecutionMode::Replay => {
+            let checkpoint = exec.recorded.remove(&call_index).unwrap_or_else(|| {
+                FetchCheckpoint {
+                    call_index,
+                    boundary: "performance.now".to_string(),
+                    url: "".to_string(),
+                    method: "".to_string(),
+                    request: serde_json::json!({}),
+                    response: serde_json::json!(0.0),
+                    duration_ms: 0,
+                }
+            });
+            checkpoint.response.as_f64().unwrap_or(0.0)
+        }
+    }
+}
+
 #[op2]
 #[serde]
 fn op_flux_parse_url(
@@ -3855,7 +3908,7 @@ fn op_flux_crypto_replay(
     let map = state.borrow_mut::<RuntimeStateMap>();
     let execution = map.get_mut(&execution_id).ok_or_else(|| {
         JsErrorBox::new(
-            "InternalError",
+            "Error",
             format!("op_flux_crypto_replay: execution_id '{execution_id}' not found"),
         )
     })?;
@@ -3910,7 +3963,7 @@ fn op_random_bytes(state: &mut OpState, #[string] execution_id: String, #[smi] l
     let map = state.borrow_mut::<RuntimeStateMap>();
     let exec = map.get_mut(&execution_id).ok_or_else(|| {
         JsErrorBox::new(
-            "InternalError",
+            "Error",
             format!("op_random_bytes: execution_id '{execution_id}' not found"),
         )
     })?;
@@ -6919,7 +6972,7 @@ globalThis.fetch = async function(input, init = undefined) {
 
 // ── performance.now() ──────────────────────────────────────────────────────
 if (globalThis.performance) {
-    globalThis.performance.now = function() { return Deno.core.ops.op_flux_now(__flux_eid()); };
+    globalThis.performance.now = function() { return Deno.core.ops.op_flux_now_high_res(__flux_eid()); };
 }
 
 // ── console ────────────────────────────────────────────────────────────────
