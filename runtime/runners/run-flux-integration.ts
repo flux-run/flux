@@ -52,7 +52,7 @@ const IDEMPOTENCY_DIR = resolve(EXAMPLES_DIR, "idempotency");
 const IDEMPOTENCY_INIT_SQL = resolve(IDEMPOTENCY_DIR, "init.sql");
 const WEBHOOK_DEDUP_DIR = resolve(EXAMPLES_DIR, "webhook_dedup");
 const WEBHOOK_DEDUP_INIT_SQL = resolve(WEBHOOK_DEDUP_DIR, "init.sql");
-// jwks entry removed
+const JWKS_SERVER_ENTRY = resolve(__dirname, "../external-tests/flux-handlers/jwks-server.js");
 
 // Each suite gets its own port in the 3100-3199 range so suites can run
 // sequentially without port conflicts when multiple are enabled.
@@ -609,7 +609,7 @@ async function runSuite(suite: Suite): Promise<{ passed: number; failed: number;
       const entry = resolve(entryBaseDir, suite.handler);
 
       buildArtifact(entry, { quiet: true });
-      runtime = suite.start ? await suite.start(entry, port) : await startRuntime(entry, port);
+      runtime = suite.start ? await suite.start(entry, port) : await startRuntime(entry, port, { timeoutMs: 60_000 });
       await suite.run(runtime.baseUrl, ctx);
     }
   } catch (err) {
@@ -635,7 +635,7 @@ async function runSuite(suite: Suite): Promise<{ passed: number; failed: number;
 
 const SUITES: Suite[] =[
 
-  // ── 6. Bundled framework app ───────────────────────────────────────────
+  // ── 6. Bundled framework apps ───────────────────────────────────────────
   {
     name: "bundled-hono",
     handler: "hono-hello.ts",
@@ -656,6 +656,59 @@ const SUITES: Suite[] =[
         const body = await res.json() as any;
         assert(ctx, "GET /app-health → 200", () => res.status === 200);
         assert(ctx, "GET /app-health → json ok:true", () => body?.ok === true);
+      }
+    },
+  },
+  {
+    name: "bundled-express",
+    handler: "express-hello.ts",
+    handlerBaseDir: "examples",
+    async run(baseUrl, ctx) {
+      {
+        const res = await fetch(`${baseUrl}/`, {
+          headers: { host: "localhost" },
+        });
+        const text = await res.text();
+        assert(ctx, "GET / → 200", () => res.status === 200);
+        assert(ctx, "GET / → express text body", () => text === "hello from express on flux");
+      }
+      {
+        const res = await fetch(`${baseUrl}/app-health`, {
+          headers: { host: "localhost" },
+        });
+        const body = await res.json() as any;
+        assert(ctx, "GET /app-health → 200", () => res.status === 200);
+        assert(ctx, "GET /app-health → json ok:true", () => body?.ok === true);
+      }
+    },
+  },
+  {
+    name: "bundled-fastify",
+    handler: "fastify-hello.ts",
+    handlerBaseDir: "examples",
+    async run(baseUrl, ctx) {
+      {
+        const res = await fetch(`${baseUrl}/`, {
+          headers: { host: "localhost" },
+        });
+        const text = await res.text();
+        assert(ctx, "GET / → 200", () => res.status === 200);
+        assert(ctx, "GET / → fastify text body", () => text === "hello from fastify on flux");
+      }
+    },
+  },
+  {
+    name: "bundled-koa",
+    handler: "koa-hello.ts",
+    handlerBaseDir: "examples",
+    async run(baseUrl, ctx) {
+      {
+        const res = await fetch(`${baseUrl}/`, {
+          headers: { host: "localhost" },
+        });
+        const text = await res.text();
+        assert(ctx, "GET / → 200", () => res.status === 200);
+        assert(ctx, "GET / → koa text body", () => text === "hello from koa on flux (mocked handler)");
       }
     },
   },
@@ -1429,11 +1482,10 @@ const SUITES: Suite[] =[
 // Main
 // ---------------------------------------------------------------------------
 
-const suiteArg     = process.argv.indexOf("--suite");
-const SUITE_FILTER = suiteArg !== -1 ? process.argv[suiteArg + 1] : undefined;
+const SUITE_FILTER = process.argv.slice(2).filter(arg => !arg.startsWith("--"));
 
-const activeSuites = SUITE_FILTER
-  ? SUITES.filter((s) => s.name.includes(SUITE_FILTER))
+const activeSuites = SUITE_FILTER.length > 0
+  ? SUITES.filter((s) => SUITE_FILTER.some(f => s.name.includes(f)))
   : SUITES;
 
 async function main() {

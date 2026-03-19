@@ -53,6 +53,7 @@ use crate::isolate_pool::{ExecutionContext, ExecutionResult};
 
 const FLUX_PG_SPECIFIER: &str = "flux:pg";
 const FLUX_REDIS_SPECIFIER: &str = "flux:redis";
+const FLUX_HTTP_SPECIFIER: &str = "flux:http";
 const MODULE_FILE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "json"];
 
 #[derive(Debug, Default, Deserialize)]
@@ -4390,6 +4391,11 @@ impl ModuleLoader for ArtifactModuleLoader {
                 .map_err(JsErrorBox::from_err)
                 .map_err(Into::into);
         }
+        if specifier == "node:http" || specifier == "http" || specifier.contains("/node/http.mjs") {
+            return Url::parse(FLUX_HTTP_SPECIFIER)
+                .map_err(JsErrorBox::from_err)
+                .map_err(Into::into);
+        }
         if let Some(module) = self.modules.get(referrer) {
             if let Some(dependency) = module
                 .dependencies
@@ -4461,6 +4467,14 @@ impl ModuleLoader for ArtifactModuleLoader {
                     None,
                 ));
             }
+            if module_specifier.as_str() == FLUX_HTTP_SPECIFIER {
+                return Ok(ModuleSource::new(
+                    ModuleType::JavaScript,
+                    ModuleSourceCode::String(flux_http_module_js().to_string().into()),
+                    module_specifier,
+                    None,
+                ));
+            }
 
             let module = modules.get(module_specifier.as_str()).ok_or_else(|| {
                 JsErrorBox::generic(format!(
@@ -4513,6 +4527,23 @@ impl ModuleLoader for ArtifactModuleLoader {
             .get(specifier)
             .map(|value| value.clone().into())
     }
+}
+
+fn flux_http_module_js() -> &'static str {
+    r#"
+export class Server {
+  listen() { return this; }
+  on() { return this; }
+  once() { return this; }
+  emit() { return true; }
+  close() { return this; }
+  address() { return { port: 0, family: 'IPv4', address: '127.0.0.1' }; }
+  ref() { return this; }
+  unref() { return this; }
+}
+export function createServer() { return new Server(); }
+export default { Server, createServer };
+"#
 }
 
 fn flux_pg_module_js() -> &'static str {
@@ -6641,6 +6672,48 @@ class Response {
         });
     }
 }
+
+class Blob {
+    constructor(parts = [], options = {}) {
+        this._parts = Array.isArray(parts) ? parts : [parts];
+        this.type = options.type || "";
+        this.size = this._parts.reduce((acc, part) => {
+            if (typeof part === "string") return acc + part.length;
+            if (part instanceof ArrayBuffer) return acc + part.byteLength;
+            if (ArrayBuffer.isView(part)) return acc + part.byteLength;
+            if (part instanceof Blob) return acc + part.size;
+            return acc + (part.length || 0);
+        }, 0);
+    }
+    async arrayBuffer() {
+        const total = new Uint8Array(this.size);
+        let offset = 0;
+        for (const part of this._parts) {
+            let u8;
+            if (typeof part === "string") {
+                u8 = new TextEncoder().encode(part);
+            } else if (part instanceof ArrayBuffer) {
+                u8 = new Uint8Array(part);
+            } else if (ArrayBuffer.isView(part)) {
+                u8 = new Uint8Array(part.buffer, part.byteOffset, part.byteLength);
+            } else if (part instanceof Blob) {
+                u8 = new Uint8Array(await part.arrayBuffer());
+            } else {
+                u8 = new Uint8Array(part);
+            }
+            total.set(u8, offset);
+            offset += u8.length;
+        }
+        return total.buffer;
+    }
+    async text() {
+        return new TextDecoder().decode(await this.arrayBuffer());
+    }
+    slice(start, end, type) {
+        return new Blob([], { type: type || this.type });
+    }
+}
+globalThis.Blob = Blob;
 
 globalThis.URLSearchParams = globalThis.URLSearchParams || URLSearchParams;
 globalThis.URL = globalThis.URL || URL;
