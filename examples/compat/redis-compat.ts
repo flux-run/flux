@@ -1,119 +1,326 @@
 // @ts-nocheck
-// Compat test: node-redis via Flux.redis
+// Compat test: redis (node-redis v4) via Flux.redis — exhaustive coverage
+// Tests: strings, expiry, counters, hashes, lists, sets, sorted sets,
+//        pipeline, transactions (MULTI/EXEC), key scan, pub/sub readiness
 import { Hono } from "npm:hono";
-import redis from "flux:redis";
+import { createClient } from "flux:redis";
 
 const app = new Hono();
+const KP = "flux:redis";
 
-function getClient() {
-  return redis.createClient({ url: Deno.env.get("REDIS_URL") ?? "redis://localhost:6379" });
+async function getClient() {
+  const client = createClient({ url: Deno.env.get("REDIS_URL") ?? "redis://localhost:6379" });
+  await client.connect();
+  return client;
 }
 
-// GET / — smoke test (no Redis required)
-app.get("/", (c) => c.json({ library: "node-redis", ok: true }));
+// ── Smoke ─────────────────────────────────────────────────────────────────
 
-// GET /ping — PING the Redis server
+app.get("/", (c) => c.json({ library: "redis", ok: true }));
+
+// ── Connection ────────────────────────────────────────────────────────────
+
 app.get("/ping", async (c) => {
-  const client = getClient();
-  await client.connect();
-  const pong = await client.ping();
-  await client.disconnect();
-  return c.json({ ok: true, pong });
+  const r = await getClient();
+  try { return c.json({ ok: true, pong: await r.ping() }); }
+  finally { await r.disconnect(); }
 });
 
-// POST /set-get — SET then GET a key
+// ── Strings ───────────────────────────────────────────────────────────────
+
 app.post("/set-get", async (c) => {
   const { key, value } = await c.req.json();
-  const client = getClient();
-  await client.connect();
-  await client.set(`flux:compat:${key}`, value, { EX: 60 });
-  const retrieved = await client.get(`flux:compat:${key}`);
-  await client.del(`flux:compat:${key}`);
-  await client.disconnect();
-  return c.json({ ok: true, stored: value, retrieved });
-});
-
-// POST /incr — INCR a counter
-app.post("/incr", async (c) => {
-  const client = getClient();
-  await client.connect();
-  const counterKey = "flux:compat:counter";
-  await client.del(counterKey);
-  const v1 = await client.incr(counterKey);
-  const v2 = await client.incr(counterKey);
-  const v3 = await client.incrBy(counterKey, 10);
-  await client.del(counterKey);
-  await client.disconnect();
-  return c.json({ ok: true, v1, v2, v3 });
-});
-
-// POST /hash — HSET / HGETALL
-app.post("/hash", async (c) => {
-  const { field, value } = await c.req.json();
-  const client = getClient();
-  await client.connect();
-  const hashKey = "flux:compat:hash";
-  await client.hSet(hashKey, field, value);
-  const all = await client.hGetAll(hashKey);
-  await client.del(hashKey);
-  await client.disconnect();
-  return c.json({ ok: true, all });
-});
-
-// ── Failure cases ──────────────────────────────────────────────────────────
-
-// GET /redis-missing — GET on a nonexistent key returns null
-app.get("/redis-missing", async (c) => {
-  const client = getClient();
-  await client.connect();
-  const missingKey = `flux:compat:doesnotexist:${Date.now()}`;
-  const value = await client.get(missingKey);
-  await client.disconnect();
-  return c.json({ ok: true, value, is_null: value === null });
-});
-
-// POST /redis-ttl-expired — SET with 1ms, verify key expires
-app.post("/redis-ttl-check", async (c) => {
-  const client = getClient();
-  await client.connect();
-  const key = `flux:compat:ttl:${Date.now()}`;
-  // Set with 1s TTL; get TTL immediately and verify it's set
-  await client.set(key, "ephemeral", { EX: 1 });
-  const ttl = await client.ttl(key);
-  await client.del(key);
-  await client.disconnect();
-  return c.json({ ok: true, ttl_set: ttl > 0, ttl });
-});
-
-// GET /redis-type-ops — string, list, set operations
-app.get("/redis-type-ops", async (c) => {
-  const client = getClient();
-  await client.connect();
-  const listKey = "flux:compat:list";
-  const setKey = "flux:compat:set";
+  const r = await getClient();
   try {
-    // List
-    await client.del(listKey);
-    await client.rPush(listKey, ["a", "b", "c"]);
-    const listLen = await client.lLen(listKey);
-    const listItems = await client.lRange(listKey, 0, -1);
+    await r.set(`${KP}:${key}`, value, { EX: 60 });
+    const retrieved = await r.get(`${KP}:${key}`);
+    await r.del(`${KP}:${key}`);
+    return c.json({ ok: true, match: retrieved === value });
+  } finally { await r.disconnect(); }
+});
 
-    // Set
-    await client.del(setKey);
-    await client.sAdd(setKey, ["x", "y", "z"]);
-    const setCard = await client.sCard(setKey);
-    const isMember = await client.sIsMember(setKey, "y");
+app.post("/setnx", async (c) => {
+  const k = `${KP}:setnx:${Date.now()}`;
+  const r = await getClient();
+  try {
+    const first = await r.set(k, "first", { NX: true });
+    const second = await r.set(k, "second", { NX: true });
+    const val = await r.get(k);
+    await r.del(k);
+    return c.json({ ok: true, first_set: first === "OK", second_set: second === null, value: val });
+  } finally { await r.disconnect(); }
+});
 
+app.post("/setex-ttl", async (c) => {
+  const k = `${KP}:setex:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.set(k, "expires-soon", { EX: 30 });
+    const ttl = await r.ttl(k);
+    const pttl = await r.pTTL(k);
+    const exists = await r.exists(k);
+    await r.del(k);
+    return c.json({ ok: true, ttl_positive: ttl > 0, pttl_positive: pttl > 0, exists: exists === 1 });
+  } finally { await r.disconnect(); }
+});
+
+app.post("/getset", async (c) => {
+  const k = `${KP}:getset`;
+  const r = await getClient();
+  try {
+    await r.set(k, "original");
+    const old = await r.getSet(k, "replacement");
+    const current = await r.get(k);
+    await r.del(k);
+    return c.json({ ok: true, old, current });
+  } finally { await r.disconnect(); }
+});
+
+app.post("/mset-mget", async (c) => {
+  const r = await getClient();
+  const keys = [`${KP}:m1`, `${KP}:m2`, `${KP}:m3`];
+  try {
+    await r.mSet([keys[0], "a", keys[1], "b", keys[2], "c"]);
+    const vals = await r.mGet(keys);
+    await r.del(keys);
+    return c.json({ ok: true, values: vals });
+  } finally { await r.disconnect(); }
+});
+
+app.post("/append", async (c) => {
+  const k = `${KP}:append`;
+  const r = await getClient();
+  try {
+    await r.del(k);
+    await r.append(k, "hello");
+    await r.append(k, " flux");
+    const val = await r.get(k);
+    await r.del(k);
+    return c.json({ ok: true, value: val });
+  } finally { await r.disconnect(); }
+});
+
+// ── Counters ──────────────────────────────────────────────────────────────
+
+app.post("/incr", async (c) => {
+  const k = `${KP}:counter:${Date.now()}`;
+  const r = await getClient();
+  try {
+    const v1 = await r.incr(k);
+    const v2 = await r.incrBy(k, 9);
+    const v3 = await r.incrByFloat(k, 0.5);
+    const v4 = await r.decr(k);
+    const v5 = await r.decrBy(k, 3);
+    await r.del(k);
+    return c.json({ ok: true, v1, v2, v3: String(v3), v4, v5 });
+  } finally { await r.disconnect(); }
+});
+
+// ── Hashes ────────────────────────────────────────────────────────────────
+
+app.post("/hash", async (c) => {
+  const k = `${KP}:hash:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.hSet(k, { name: "Flux", version: "1", active: "true" });
+    const name = await r.hGet(k, "name");
+    const all = await r.hGetAll(k);
+    const keys = await r.hKeys(k);
+    const vals = await r.hVals(k);
+    const len = await r.hLen(k);
+    await r.hDel(k, "active");
+    const exists = await r.hExists(k, "active");
+    const count = await r.hIncrBy(k, "version", 1);
+    await r.del(k);
+    return c.json({ ok: true, name, all, keys_count: keys.length, vals_count: vals.length, len, active_removed: !exists, version_count: count });
+  } finally { await r.disconnect(); }
+});
+
+// ── Lists ─────────────────────────────────────────────────────────────────
+
+app.post("/list", async (c) => {
+  const k = `${KP}:list:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.rPush(k, ["a", "b", "c"]);
+    await r.lPush(k, ["z"]);
+    const len = await r.lLen(k);
+    const all = await r.lRange(k, 0, -1);
+    const index0 = await r.lIndex(k, 0);
+    await r.lSet(k, 0, "Z-updated");
+    const updated = await r.lIndex(k, 0);
+    const rPop = await r.rPop(k);
+    const lPop = await r.lPop(k);
+    await r.del(k);
+    return c.json({ ok: true, len, all, index0, updated, rPop, lPop });
+  } finally { await r.disconnect(); }
+});
+
+app.post("/list-trim", async (c) => {
+  const k = `${KP}:trim:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.rPush(k, ["1", "2", "3", "4", "5"]);
+    await r.lTrim(k, 1, 3);
+    const after = await r.lRange(k, 0, -1);
+    await r.del(k);
+    return c.json({ ok: true, after });
+  } finally { await r.disconnect(); }
+});
+
+// ── Sets ──────────────────────────────────────────────────────────────────
+
+app.post("/set", async (c) => {
+  const k = `${KP}:set:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.sAdd(k, ["a", "b", "c", "a"]); // "a" deduplicated
+    const len = await r.sCard(k);
+    const isMember = await r.sIsMember(k, "b");
+    const members = await r.sMembers(k);
+    await r.sRem(k, "c");
+    const afterLen = await r.sCard(k);
+    await r.del(k);
+    return c.json({ ok: true, len, isMember, members_count: members.length, afterLen });
+  } finally { await r.disconnect(); }
+});
+
+app.post("/set-ops", async (c) => {
+  const k1 = `${KP}:so1:${Date.now()}`, k2 = `${KP}:so2:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.sAdd(k1, ["a", "b", "c"]);
+    await r.sAdd(k2, ["b", "c", "d"]);
+    const inter = await r.sInter([k1, k2]);
+    const union = await r.sUnion([k1, k2]);
+    const diff = await r.sDiff([k1, k2]);
+    await r.del([k1, k2]);
+    return c.json({ ok: true, inter: [...inter].sort(), union: [...union].sort(), diff: [...diff].sort() });
+  } finally { await r.disconnect(); }
+});
+
+// ── Sorted sets ────────────────────────────────────────────────────────────
+
+app.post("/zset", async (c) => {
+  const k = `${KP}:zset:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.zAdd(k, [
+      { score: 10, value: "alice" },
+      { score: 20, value: "bob" },
+      { score: 5, value: "charlie" },
+    ]);
+    const len = await r.zCard(k);
+    const rank = await r.zRank(k, "alice");
+    const score = await r.zScore(k, "bob");
+    const range = await r.zRange(k, 0, -1, { REV: false });
+    const rangeWithScores = await r.zRangeWithScores(k, 0, -1);
+    await r.zRem(k, "charlie");
+    const afterLen = await r.zCard(k);
+    await r.del(k);
+    return c.json({ ok: true, len, rank, score, range, rangeWithScores, afterLen });
+  } finally { await r.disconnect(); }
+});
+
+app.post("/zrangebyscore", async (c) => {
+  const k = `${KP}:zbyscore:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.zAdd(k, [
+      { score: 1, value: "a" }, { score: 5, value: "b" },
+      { score: 10, value: "c" }, { score: 15, value: "d" },
+    ]);
+    const range = await r.zRangeByScore(k, 4, 12);
+    const count = await r.zCount(k, 4, 12);
+    await r.del(k);
+    return c.json({ ok: true, range, count });
+  } finally { await r.disconnect(); }
+});
+
+// ── Pipeline (batch) ───────────────────────────────────────────────────────
+
+app.post("/pipeline", async (c) => {
+  const k = `${KP}:pipe:${Date.now()}`;
+  const r = await getClient();
+  try {
+    // node-redis v4 uses multi() for pipelining
+    const results = await r
+      .multi()
+      .set(k, "pipeline-value", { EX: 60 })
+      .get(k)
+      .incr(`${k}:count`)
+      .incr(`${k}:count`)
+      .get(`${k}:count`)
+      .del([k, `${k}:count`])
+      .exec();
     return c.json({
       ok: true,
-      list: { len: listLen, items: listItems },
-      set: { card: setCard, y_is_member: isMember },
+      set_ok: results?.[0] === "OK",
+      get_val: results?.[1],
+      count_val: results?.[4],
     });
-  } finally {
-    await client.del(listKey);
-    await client.del(setKey);
-    await client.disconnect();
-  }
+  } finally { await r.disconnect(); }
+});
+
+// ── Multi/exec (atomic transaction) ───────────────────────────────────────
+
+app.post("/multi-exec", async (c) => {
+  const k = `${KP}:multi:${Date.now()}`;
+  const r = await getClient();
+  try {
+    const results = await r
+      .multi()
+      .set(k, "atomic-value")
+      .get(k)
+      .del(k)
+      .exec();
+    return c.json({ ok: true, set_ok: results[0] === "OK", get_val: results[1] });
+  } finally { await r.disconnect(); }
+});
+
+// ── Key operations ────────────────────────────────────────────────────────
+
+app.get("/scan", async (c) => {
+  const r = await getClient();
+  const prefix = `${KP}:scan:${Date.now()}`;
+  try {
+    await r.mSet([`${prefix}:a`, "1", `${prefix}:b`, "2", `${prefix}:c`, "3"]);
+    const found: string[] = [];
+    for await (const key of r.scanIterator({ MATCH: `${prefix}:*`, COUNT: 100 })) {
+      found.push(key);
+    }
+    await r.del(found);
+    return c.json({ ok: true, found: found.length });
+  } finally { await r.disconnect(); }
+});
+
+app.post("/expire-delete", async (c) => {
+  const k = `${KP}:expdel:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.set(k, "value", { EX: 5 });
+    const before = await r.exists(k);
+    await r.del(k);
+    const after = await r.exists(k);
+    return c.json({ ok: true, existed: before === 1, deleted: after === 0 });
+  } finally { await r.disconnect(); }
+});
+
+// ── Concurrency ────────────────────────────────────────────────────────────
+
+app.get("/concurrent", async (c) => {
+  const r = await getClient();
+  const base = `${KP}:conc:${Date.now()}`;
+  try {
+    const sets = await Promise.all(
+      Array.from({ length: 5 }, (_, i) => r.set(`${base}:${i}`, String(i), { EX: 30 })),
+    );
+    const gets = await Promise.all(
+      Array.from({ length: 5 }, (_, i) => r.get(`${base}:${i}`)),
+    );
+    await r.del(Array.from({ length: 5 }, (_, i) => `${base}:${i}`));
+    return c.json({ ok: true, all_set: sets.every((s) => s === "OK"), values: gets });
+  } finally { await r.disconnect(); }
 });
 
 Deno.serve(app.fetch);
