@@ -19,4 +19,112 @@ import "ext:deno_web/01_urlpattern.js";
 import "ext:deno_web/01_broadcast_channel.js";
 
 import { crypto } from "ext:deno_crypto/00_crypto.js";
+
+function serializeArrayBuffer(buffer) {
+  const view = new Uint8Array(buffer);
+  let bytesStr = "";
+  for (let i = 0; i < view.length; i++) {
+    bytesStr += String.fromCharCode(view[i]);
+  }
+  return btoa(bytesStr);
+}
+
+function deserializeArrayBuffer(b64) {
+  const bytesStr = atob(b64);
+  const buf = new Uint8Array(bytesStr.length);
+  for (let i = 0; i < bytesStr.length; i++) {
+    buf[i] = bytesStr.charCodeAt(i);
+  }
+  return buf.buffer;
+}
+
+const originalGetRandomValues = crypto.getRandomValues.bind(crypto);
+crypto.getRandomValues = function(array) {
+  const eid = __flux_eid();
+  const replay = Deno.core.ops.op_flux_crypto_replay(eid);
+  if (replay.has_recorded) {
+    if (replay.response && replay.response.bytes) {
+      const bytesStr = atob(replay.response.bytes);
+      const view = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+      for (let i = 0; i < bytesStr.length; i++) {
+        view[i] = bytesStr.charCodeAt(i);
+      }
+    }
+    return array;
+  }
+
+  // Live Mode
+  const result = Deno.core.ops.op_random_bytes(eid, array.byteLength);
+  const bytesStr = atob(result.bytes);
+  const view = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+  for (let i = 0; i < bytesStr.length; i++) {
+    view[i] = bytesStr.charCodeAt(i);
+  }
+  return array;
+};
+
+// Intercept all subtle crypto methods for telemetry!
+const subtleMethods = ['digest', 'generateKey', 'sign', 'verify', 'deriveBits', 'deriveKey', 'encrypt', 'decrypt', 'wrapKey', 'unwrapKey', 'exportKey', 'importKey'];
+for (const method of subtleMethods) {
+  if (typeof crypto.subtle[method] === 'function') {
+    const original = crypto.subtle[method].bind(crypto.subtle);
+    crypto.subtle[method] = async function(...args) {
+      const eid = __flux_eid();
+      const replay = Deno.core.ops.op_flux_crypto_replay(eid);
+      if (replay.has_recorded) {
+        const response = replay.response;
+        if (response && response.type === 'ArrayBuffer') {
+          return deserializeArrayBuffer(response.bytes);
+        } else if (response && response.type === 'CryptoKey') {
+          // Re-import the key natively using standard WebCrypto!
+          return await original('jwk', response.jwk, response.algorithm, response.extractable, response.usages);
+        } else if (response && response.type === 'KeyPair') {
+          const publicKey = await original('jwk', response.publicKey.jwk, response.publicKey.algorithm, response.publicKey.extractable, response.publicKey.usages);
+          const privateKey = await original('jwk', response.privateKey.jwk, response.privateKey.algorithm, response.privateKey.extractable, response.privateKey.usages);
+          return { publicKey, privateKey };
+        }
+        return response;
+      }
+
+      // Execute exactly like spec
+      const result = await original(...args);
+      
+      let serializedResult;
+      // Depending on the return type, serialize into something that op_flux_crypto_record can safely store as JSON.
+      if (result instanceof ArrayBuffer) {
+        serializedResult = { type: 'ArrayBuffer', bytes: serializeArrayBuffer(result) };
+      } else if (result && result.constructor && result.constructor.name === "CryptoKey") {
+        if (result.extractable) {
+          const jwk = await crypto.subtle.exportKey('jwk', result);
+          serializedResult = { type: 'CryptoKey', jwk, algorithm: result.algorithm, extractable: result.extractable, usages: result.usages };
+        } else {
+          serializedResult = { type: 'CryptoKey_unextractable' };
+        }
+      } else if (result && result.publicKey && result.privateKey) {
+        let pubJwk = null;
+        let privJwk = null;
+        if (result.publicKey.extractable) {
+            pubJwk = { jwk: await crypto.subtle.exportKey('jwk', result.publicKey), algorithm: result.publicKey.algorithm, extractable: result.publicKey.extractable, usages: result.publicKey.usages };
+        }
+        if (result.privateKey.extractable) {
+            privJwk = { jwk: await crypto.subtle.exportKey('jwk', result.privateKey), algorithm: result.privateKey.algorithm, extractable: result.privateKey.extractable, usages: result.privateKey.usages };
+        }
+        serializedResult = { type: 'KeyPair', publicKey: pubJwk, privateKey: privJwk };
+      } else {
+        serializedResult = result;
+      }
+
+      Deno.core.ops.op_flux_crypto_record(
+        eid, 
+        replay.call_index, 
+        `crypto.subtle.${method}`, 
+        {}, // Serialize args if necessary later
+        serializedResult
+      );
+
+      return result;
+    };
+  }
+}
+
 globalThis.crypto = crypto;

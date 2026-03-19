@@ -1106,6 +1106,9 @@ deno_core::extension!(
         op_timer_delay,
         op_random,
         op_random_uuid,
+        op_random_bytes,
+        op_flux_crypto_replay,
+        op_flux_crypto_record,
         op_net_listen,
         op_net_respond,
     ],
@@ -3839,6 +3842,115 @@ fn op_random(state: &mut OpState, #[string] execution_id: String) -> f64 {
             let idx = exec.random_index;
             exec.random_index += 1;
             exec.recorded_random.get(idx).copied().unwrap_or(0.5)
+        }
+    }
+}
+
+#[op2]
+#[serde]
+fn op_flux_crypto_replay(
+    state: &mut OpState,
+    #[string] execution_id: String,
+) -> Result<serde_json::Value, JsErrorBox> {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    let execution = map.get_mut(&execution_id).ok_or_else(|| {
+        JsErrorBox::new(
+            "InternalError",
+            format!("op_flux_crypto_replay: execution_id '{execution_id}' not found"),
+        )
+    })?;
+
+    let call_index = execution.call_index;
+    execution.call_index = execution.call_index.saturating_add(1);
+
+    if matches!(execution.context.mode, ExecutionMode::Replay) {
+        if let Some(checkpoint) = execution.recorded.remove(&call_index) {
+            return Ok(serde_json::json!({
+                "call_index": call_index,
+                "has_recorded": true,
+                "response": checkpoint.response
+            }));
+        }
+    }
+
+    Ok(serde_json::json!({
+        "call_index": call_index,
+        "has_recorded": false,
+        "response": serde_json::Value::Null
+    }))
+}
+
+#[op2]
+fn op_flux_crypto_record(
+    state: &mut OpState,
+    #[string] execution_id: String,
+    call_index: u32,
+    #[string] boundary: String,
+    #[serde] request: serde_json::Value,
+    #[serde] response: serde_json::Value,
+) -> Result<(), JsErrorBox> {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    if let Some(execution) = map.get_mut(&execution_id) {
+        execution.checkpoints.push(FetchCheckpoint {
+            call_index,
+            boundary,
+            url: "".to_string(),
+            method: "".to_string(),
+            request,
+            response,
+            duration_ms: 0,
+        });
+    }
+    Ok(())
+}
+
+#[op2]
+#[serde]
+fn op_random_bytes(state: &mut OpState, #[string] execution_id: String, #[smi] len: u32) -> Result<serde_json::Value, JsErrorBox> {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    let exec = map.get_mut(&execution_id).ok_or_else(|| {
+        JsErrorBox::new(
+            "InternalError",
+            format!("op_random_bytes: execution_id '{execution_id}' not found"),
+        )
+    })?;
+    
+    let call_index = exec.call_index;
+    exec.call_index = exec.call_index.saturating_add(1);
+
+    match exec.context.mode {
+        ExecutionMode::Live => {
+            let mut bytes = vec![0u8; len as usize];
+            rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bytes);
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            
+            exec.checkpoints.push(FetchCheckpoint {
+                call_index,
+                boundary: "crypto.getRandomValues".to_string(),
+                url: "".to_string(),
+                method: "".to_string(),
+                request: serde_json::json!({ "length": len }),
+                response: serde_json::json!({ "bytes": b64 }),
+                duration_ms: 0,
+            });
+            
+            Ok(serde_json::json!({
+                "bytes": b64
+            }))
+        }
+        ExecutionMode::Replay => {
+            let checkpoint = exec.recorded.remove(&call_index).unwrap_or_else(|| {
+                FetchCheckpoint {
+                    call_index,
+                    boundary: "crypto.getRandomValues".to_string(),
+                    url: "".to_string(),
+                    method: "".to_string(),
+                    request: serde_json::json!({}),
+                    response: serde_json::json!({ "bytes": "" }),
+                    duration_ms: 0,
+                }
+            });
+            Ok(checkpoint.response)
         }
     }
 }
