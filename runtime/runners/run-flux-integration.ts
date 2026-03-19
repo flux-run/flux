@@ -1101,6 +1101,223 @@ const SUITES: Suite[] =[
   },
 
 
+  // ── Tier 1: HTTP Clients — undici ────────────────────────────────────────
+  {
+    name: "compat-undici",
+    handler: "compat/undici-compat.ts",
+    handlerBaseDir: "examples",
+    async run(baseUrl, ctx) {
+      // smoke
+      {
+        const res = await fetch(`${baseUrl}/`);
+        const body = await res.json() as any;
+        assert(ctx, "undici: GET / → 200", () => res.status === 200);
+        assert(ctx, "undici: GET / → library=undici", () => body?.library === "undici");
+      }
+      // low-level request() API
+      {
+        const res = await fetch(`${baseUrl}/undici-request`);
+        const body = await res.json() as any;
+        assert(ctx, "undici: request() → 200", () => res.status === 200);
+        assert(ctx, "undici: request() → ok:true", () => body?.ok === true);
+        assert(ctx, "undici: request() → origin_present", () => body?.origin_present === true);
+      }
+      // POST via request()
+      {
+        const res = await fetch(`${baseUrl}/undici-post`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ flux: "undici-test" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "undici: POST → 200", () => res.status === 200);
+        assert(ctx, "undici: POST → ok:true", () => body?.ok === true);
+        assert(ctx, "undici: POST → echoed body", () => body?.echoed?.flux === "undici-test");
+      }
+      // undici's own fetch()
+      {
+        const res = await fetch(`${baseUrl}/undici-fetch`);
+        const body = await res.json() as any;
+        assert(ctx, "undici: fetch() → 200", () => res.status === 200);
+        assert(ctx, "undici: fetch() → ok:true", () => body?.ok === true);
+        assert(ctx, "undici: fetch() → origin_present", () => body?.origin_present === true);
+      }
+      // custom headers
+      {
+        const res = await fetch(`${baseUrl}/undici-headers`);
+        const body = await res.json() as any;
+        assert(ctx, "undici: custom headers → 200", () => res.status === 200);
+        assert(ctx, "undici: custom headers → forwarded", () => body?.has_custom_header === true);
+      }
+    },
+  },
+
+  // ── Tier 2: Database — postgres.js ───────────────────────────────────────
+  {
+    name: "compat-postgresjs",
+    handler: "compat/postgresjs-compat.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const databasePort = allocateDatabasePort();
+      const postgres = await startPostgres(databasePort, {
+        databaseName: "compat_postgresjs",
+        username: "postgres",
+        password: "postgres",
+      });
+      try {
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          timeoutMs: 60_000,
+          env: {
+            DATABASE_URL: postgres.databaseUrl,
+            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+          },
+        });
+        return {
+          ...runtime,
+          async stop() {
+            try { await runtime.stop(); } finally { postgres.stop(); }
+          },
+        };
+      } catch (err) {
+        postgres.stop();
+        throw err;
+      }
+    },
+    async run(baseUrl, ctx) {
+      // smoke
+      {
+        const res = await fetch(`${baseUrl}/`);
+        const body = await res.json() as any;
+        assert(ctx, "postgresjs: GET / → 200", () => res.status === 200);
+        assert(ctx, "postgresjs: GET / → library=postgres.js", () => body?.library === "postgres.js");
+      }
+      // SELECT 1
+      {
+        const res = await fetch(`${baseUrl}/db-query`);
+        const body = await res.json() as any;
+        assert(ctx, "postgresjs: SELECT 1 → 200", () => res.status === 200);
+        assert(ctx, "postgresjs: SELECT 1 → value=1", () => Number(body?.value) === 1);
+      }
+      // type decoding
+      {
+        const res = await fetch(`${baseUrl}/db-types`);
+        const body = await res.json() as any;
+        assert(ctx, "postgresjs: types → 200", () => res.status === 200);
+        assert(ctx, "postgresjs: types → int decoded", () => body?.int_is_number === true);
+        assert(ctx, "postgresjs: types → text decoded", () => body?.text_is_string === true);
+        assert(ctx, "postgresjs: types → bool decoded", () => body?.bool_is_bool === true);
+      }
+      // INSERT + SELECT + DELETE
+      {
+        const res = await fetch(`${baseUrl}/db-insert-select`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ label: "flux-pgjs-test" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "postgresjs: insert-select → 200", () => res.status === 200);
+        assert(ctx, "postgresjs: insert-select → ok:true", () => body?.ok === true);
+        assert(ctx, "postgresjs: insert-select → label matches", () => body?.inserted?.label === "flux-pgjs-test");
+        assert(ctx, "postgresjs: insert-select → selected matches", () => body?.selected?.label === "flux-pgjs-test");
+      }
+      // TRANSACTION
+      {
+        const res = await fetch(`${baseUrl}/db-transaction`);
+        const body = await res.json() as any;
+        assert(ctx, "postgresjs: transaction → 200", () => res.status === 200);
+        assert(ctx, "postgresjs: transaction → ok:true", () => body?.ok === true);
+        assert(ctx, "postgresjs: transaction → ts present", () => !!body?.ts);
+      }
+    },
+  },
+
+  // ── Tier 3: Redis — ioredis ───────────────────────────────────────────────
+  {
+    name: "compat-ioredis",
+    handler: "compat/ioredis-compat.ts",
+    handlerBaseDir: "examples",
+    async start(entry, port) {
+      const redisPort = allocateRedisPort();
+      const redis = await startRedis(redisPort);
+      try {
+        const runtime = await startRuntime(entry, port, {
+          skipVerify: false,
+          timeoutMs: 60_000,
+          env: {
+            REDIS_URL: redis.redisUrl,
+            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+          },
+        });
+        return {
+          ...runtime,
+          async stop() {
+            try { await runtime.stop(); } finally { redis.stop(); }
+          },
+        };
+      } catch (err) {
+        redis.stop();
+        throw err;
+      }
+    },
+    async run(baseUrl, ctx) {
+      // smoke
+      {
+        const res = await fetch(`${baseUrl}/`);
+        const body = await res.json() as any;
+        assert(ctx, "ioredis: GET / → 200", () => res.status === 200);
+        assert(ctx, "ioredis: GET / → library=ioredis", () => body?.library === "ioredis");
+      }
+      // PING
+      {
+        const res = await fetch(`${baseUrl}/ping`);
+        const body = await res.json() as any;
+        assert(ctx, "ioredis: PING → 200", () => res.status === 200);
+        assert(ctx, "ioredis: PING → pong=PONG", () => body?.pong === "PONG");
+      }
+      // SET / GET / DEL
+      {
+        const res = await fetch(`${baseUrl}/set-get`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ key: "greeting", value: "hello-ioredis" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "ioredis: SET-GET → 200", () => res.status === 200);
+        assert(ctx, "ioredis: SET-GET → stored matches", () => body?.stored === "hello-ioredis");
+        assert(ctx, "ioredis: SET-GET → retrieved matches", () => body?.retrieved === "hello-ioredis");
+      }
+      // INCR / INCRBY
+      {
+        const res = await fetch(`${baseUrl}/incr`, { method: "POST" });
+        const body = await res.json() as any;
+        assert(ctx, "ioredis: INCR → 200", () => res.status === 200);
+        assert(ctx, "ioredis: INCR → v1=1", () => body?.v1 === 1);
+        assert(ctx, "ioredis: INCR → v2=2", () => body?.v2 === 2);
+        assert(ctx, "ioredis: INCRBY 10 → v3=12", () => body?.v3 === 12);
+      }
+      // HSET / HGETALL
+      {
+        const res = await fetch(`${baseUrl}/hash`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ field: "runtime", value: "flux" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "ioredis: HSET-HGETALL → 200", () => res.status === 200);
+        assert(ctx, "ioredis: HSET-HGETALL → field value matches", () => body?.all?.runtime === "flux");
+      }
+      // pipeline
+      {
+        const res = await fetch(`${baseUrl}/pipeline`, { method: "POST" });
+        const body = await res.json() as any;
+        assert(ctx, "ioredis: pipeline → 200", () => res.status === 200);
+        assert(ctx, "ioredis: pipeline → value correct", () => body?.pipeline_value === "flux-pipeline");
+      }
+    },
+  },
+
+
   // ── 8. CRUD replay ──────────────────────────────────────────────────────
   {
     name: "crud-replay",

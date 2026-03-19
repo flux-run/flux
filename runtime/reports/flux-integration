@@ -1,6 +1,6 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-19T07:20:56.684Z",
+  "timestamp": "2026-03-19T07:30:10.558Z",
   "engine": "node v22.20.0",
   "passed": 14,
   "failed": 0,
@@ -13,85 +13,85 @@
       "name": "zod: GET / → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.010374999999839929
+      "duration": 0.010667000000012195
     },
     {
       "name": "zod: GET / → library=zod",
       "passed": true,
       "skipped": false,
-      "duration": 0.003958000000011452
+      "duration": 0.004124999999930878
     },
     {
       "name": "zod: valid user → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.015832999999929598
+      "duration": 0.017624999999952706
     },
     {
       "name": "zod: valid user → ok:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.0047080000001642475
+      "duration": 0.004708999999820662
     },
     {
       "name": "zod: valid user → name",
       "passed": true,
       "skipped": false,
-      "duration": 0.003749999999854481
+      "duration": 0.0038749999998799467
     },
     {
       "name": "zod: invalid user → ok:false",
       "passed": true,
       "skipped": false,
-      "duration": 0.015958000000182437
+      "duration": 0.026292000000012195
     },
     {
       "name": "zod: invalid user → errors present",
       "passed": true,
       "skipped": false,
-      "duration": 0.004916000000093845
+      "duration": 0.009292000000186817
     },
     {
       "name": "zod: paginate defaults → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.02641700000003766
+      "duration": 0.030416000000059285
     },
     {
       "name": "zod: paginate defaults → page=1",
       "passed": true,
       "skipped": false,
-      "duration": 0.005457999999862295
+      "duration": 0.006041999999979453
     },
     {
       "name": "zod: paginate defaults → limit=20",
       "passed": true,
       "skipped": false,
-      "duration": 0.00437499999998181
+      "duration": 0.004834000000300875
     },
     {
       "name": "zod: paginate with values → page=3",
       "passed": true,
       "skipped": false,
-      "duration": 0.02508399999987887
+      "duration": 0.022916000000350323
     },
     {
       "name": "zod: paginate with values → limit=50",
       "passed": true,
       "skipped": false,
-      "duration": 0.0038329999999859865
+      "duration": 0.0032919999998739513
     },
     {
       "name": "zod: transform → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.01612499999987449
+      "duration": 0.017208000000209722
     },
     {
       "name": "zod: transform → lowercased + trimmed",
       "passed": true,
       "skipped": false,
-      "duration": 0.004333999999971638
+      "duration": 0.0037919999999758147
     }
   ]
 }
