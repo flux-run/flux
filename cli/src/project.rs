@@ -19,7 +19,7 @@ use shared::project::{
 };
 use url::Url;
 
-const DEFAULT_ENTRY_FILE: &str = "index.ts";
+const DEFAULT_ENTRY_FILE: &str = "src/index.ts";
 const MODULE_FILE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "json"];
 const FLUX_PG_SPECIFIER: &str = "flux:pg";
 
@@ -137,31 +137,149 @@ pub fn default_project_config(entry_name: &str) -> FluxProjectConfig {
 pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
     let config_path = project_config_path(project_dir);
     let entry_path = project_dir.join(DEFAULT_ENTRY_FILE);
+    let db_path = project_dir.join("src/db.ts");
+    let schema_path = project_dir.join("src/schema.ts");
+    let deno_config_path = project_dir.join("deno.json");
 
-    if !force && (config_path.exists() || entry_path.exists()) {
+    if !force
+        && (config_path.exists()
+            || entry_path.exists()
+            || db_path.exists()
+            || schema_path.exists()
+            || deno_config_path.exists())
+    {
         bail!(
             "refusing to overwrite existing project files in {} (use --force)",
             project_dir.display()
         );
     }
 
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
+    // Ensure all necessary directories exist
+    for path in &[
+        &config_path,
+        &entry_path,
+        &db_path,
+        &schema_path,
+        &deno_config_path,
+    ] {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
     }
 
     let config = default_project_config(DEFAULT_ENTRY_FILE);
     write_project_config(project_dir, &config)?;
+
+    // 1. Write deno.json (Project Metadata & Imports)
+    fs::write(
+        &deno_config_path,
+        concat!(
+            "{\n",
+            "  \"imports\": {\n",
+            "    \"hono\": \"jsr:@hono/hono@^4\",\n",
+            "    \"zod\": \"npm:zod@^3\",\n",
+            "    \"@hono/zod-validator\": \"npm:@hono/zod-validator@^0.4\",\n",
+            "    \"drizzle-orm\": \"npm:drizzle-orm@^0.45\",\n",
+            "    \"drizzle-zod\": \"npm:drizzle-zod@^0.8\"\n",
+            "  }\n",
+            "}\n"
+        ),
+    )
+    .with_context(|| format!("failed to write {}", deno_config_path.display()))?;
+
+    // 2. Write src/db.ts (Infrastructure Example)
+    fs::write(
+        &db_path,
+        concat!(
+            "import { drizzle } from \"drizzle-orm/node-postgres\";\n",
+            "import pg from \"flux:pg\";\n",
+            "import redis from \"flux:redis\";\n",
+            "\n",
+            "/**\n",
+            " * Example: Deterministic database and cache clients.\n",
+            " * \n",
+            " * To use:\n",
+            " * 1. Set DATABASE_URL in your environment.\n",
+            " * 2. Uncomment the code below.\n",
+            " */\n",
+            "/*\n",
+            "const databaseUrl = Deno.env.get(\"DATABASE_URL\");\n",
+            "const pool = new pg.Pool({ connectionString: databaseUrl });\n",
+            "\n",
+            "export const db = drizzle(pool);\n",
+            "export const cache = redis.createClient();\n",
+            "*/\n"
+        ),
+    )
+    .with_context(|| format!("failed to write {}", db_path.display()))?;
+
+    // 3. Write src/schema.ts (Data Model Example)
+    fs::write(
+        &schema_path,
+        concat!(
+            "import { pgTable, text, serial, boolean, timestamp } from \"drizzle-orm/pg-core\";\n",
+            "import { createInsertSchema, createSelectSchema } from \"drizzle-zod\";\n",
+            "import { z } from \"zod\";\n",
+            "\n",
+            "/**\n",
+            " * Example: Drizzle Schema\n",
+            " */\n",
+            "/*\n",
+            "export const todos = pgTable(\"todos\", {\n",
+            "  id: serial(\"id\").primaryKey(),\n",
+            "  title: text(\"title\").notNull(),\n",
+            "  completed: boolean(\"completed\").default(false),\n",
+            "  createdAt: timestamp(\"created_at\").defaultNow(),\n",
+            "});\n",
+            "\n",
+            "export const insertTodoSchema = createInsertSchema(todos);\n",
+            "export const selectTodoSchema = createSelectSchema(todos);\n",
+            "export type Todo = z.infer<typeof selectTodoSchema>;\n",
+            "*/\n"
+        ),
+    )
+    .with_context(|| format!("failed to write {}", schema_path.display()))?;
+
+    // 4. Write src/index.ts (Application Logic)
     fs::write(
         &entry_path,
         concat!(
-            "export default async function handler({ input }: { input: unknown }) {\n",
-            "  return {\n",
-            "    ok: true,\n",
-            "    message: \"hello from Flux\",\n",
-            "    input,\n",
-            "  };\n",
-            "}\n"
+            "import { Hono } from \"hono\";\n",
+            "import { z } from \"zod\";\n",
+            "import { zValidator } from \"@hono/zod-validator\";\n",
+            "\n",
+            "// import { db } from \"./db.ts\";\n",
+            "// import { todos } from \"./schema.ts\";\n",
+            "\n",
+            "/**\n",
+            " * Flux Hello World\n",
+            " * Every request is recorded and can be replayed for instant debugging.\n",
+            " */\n",
+            "const app = new Hono();\n",
+            "\n",
+            "app.get(\"/\", (c) => {\n",
+            "  return c.json({\n",
+            "    message: \"Welcome to Flux!\",\n",
+            "    timestamp: new Date().toISOString()\n",
+            "  });\n",
+            "});\n",
+            "\n",
+            "/**\n",
+            " * Example: POST with Zod validation\n",
+            " */\n",
+            "const helloSchema = z.object({\n",
+            "  name: z.string().min(1)\n",
+            "});\n",
+            "\n",
+            "app.post(\"/hello\", zValidator(\"json\", helloSchema), (c) => {\n",
+            "  const { name } = c.req.valid(\"json\");\n",
+            "  return c.json({\n",
+            "    message: `Hello, ${name}!`\n",
+            "  });\n",
+            "});\n",
+            "\n",
+            "Deno.serve(app.fetch);\n"
         ),
     )
     .with_context(|| format!("failed to write {}", entry_path.display()))?;
