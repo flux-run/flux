@@ -65,6 +65,31 @@ function assertBlocked(law: string, route: string, error: string, expectedFragme
   }
 }
 
+// assertImpossible: semantic impossible-state detection.
+// Call this when a code path should be UNREACHABLE in a correct Flux system.
+// If it is reached, it is NOT a test failure — it is a CONTRACT VIOLATION.
+// The message is designed to be immediately actionable in CI logs.
+function assertImpossible(law: string, description: string, detail?: unknown): never {
+  const msg = [
+    ``,
+    `╔═══════════════════════════════════════════════════════════╗`,
+    `║  🚨 IMPOSSIBLE STATE DETECTED — FLUX CONTRACT VIOLATION  ║`,
+    `╚═══════════════════════════════════════════════════════════╝`,
+    `  Law:    ${law}`,
+    `  What:   ${description}`,
+    `  Detail: ${JSON.stringify(detail ?? null)}`,
+    ``,
+    `  This code path is unreachable in a correct Flux system.`,
+    `  A runtime change has broken a fundamental execution law.`,
+    `  DO NOT RELEASE. Investigate immediately.`,
+    ``,
+  ].join("\n");
+  console.error(msg);
+  failed++;
+  results.push({ law, route: description, ok: false, error: "IMPOSSIBLE STATE" });
+  Deno.exit(2); // exit(2) = impossible state, distinct from exit(1) = failed assertion
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // LAW 1: DETERMINISM
 // ─────────────────────────────────────────────────────────────────────────────
@@ -201,10 +226,14 @@ try {
   await r.connect();
   await r.multi().set("flux:ci:blocked", "1").exec();
   await r.disconnect();
-  // If we got here, MULTI/EXEC was NOT blocked — contract violation
-  results.push({ law: "boundary-block", route: "Redis MULTI/EXEC", ok: false, error: "Not blocked — CONTRACT VIOLATION" });
-  failed++;
-  console.error("  ❌ [boundary-block] Redis MULTI/EXEC → NOT BLOCKED — CONTRACT VIOLATION");
+  // Reached this point → MULTI/EXEC was not blocked.
+  // This is not a test failure — it is an impossible state. The validate_redis_command()
+  // guard in deno_runtime.rs has been removed or bypassed. Scream loudly.
+  assertImpossible(
+    "boundary-block",
+    "Redis MULTI/EXEC executed without being blocked — validate_redis_command() guard is missing",
+    { command: "MULTI", expected: "blocked before network call" },
+  );
 } catch (e: any) {
   await (e as any)?.client?.disconnect?.().catch(() => {});
   const msg = e?.message ?? String(e);
@@ -217,9 +246,11 @@ try {
   await r.connect();
   await r.blPop("flux:ci:blpop", 0);
   await r.disconnect();
-  results.push({ law: "boundary-block", route: "Redis BLPOP", ok: false, error: "Not blocked" });
-  failed++;
-  console.error("  ❌ [boundary-block] Redis BLPOP → NOT BLOCKED");
+  assertImpossible(
+    "boundary-block",
+    "Redis BLPOP executed without being blocked — blocking command guard is missing",
+    { command: "BLPOP", expected: "blocked before network call" },
+  );
 } catch (e: any) {
   const msg = e?.message ?? String(e);
   assertBlocked("boundary-block", "Redis BLPOP", msg, "not supported");
@@ -268,9 +299,19 @@ console.log("\n─── LAW 6: NO FABRICATED HISTORY ───");
 }
 
 {
-  // Outbound fetch that returns an error: the error is recorded, not silenced
+  // Outbound fetch that returns an error: the error is recorded, not silenced.
+  // assertImpossible fires if Flux fabricates a 200 from a real 500.
   try {
     const res = await fetch("https://httpbin.org/status/500");
+    if (res.status === 200) {
+      // A 500 became a 200 → Flux fabricated a successful response from a failed one.
+      // This is the deepest form of history fabrication possible.
+      assertImpossible(
+        "no-fabricated-history",
+        "HTTP 500 response was fabricated as 200 — Flux is lying about execution history",
+        { actual_status: res.status, expected: 500 },
+      );
+    }
     assert(
       "no-fabricated-history",
       "HTTP 500 response recorded faithfully (not fabricated as 200)",
@@ -282,19 +323,91 @@ console.log("\n─── LAW 6: NO FABRICATED HISTORY ───");
   }
 }
 
+{
+  // Checkpoint count integrity: 3 sequential DB queries must produce exactly 3 results.
+  // If Flux checkpoints fewer (lossy) or more (fabricated), the count is wrong.
+  const pool = new pg.Pool({ connectionString: Deno.env.get("DATABASE_URL") });
+  try {
+    const queries = await Promise.all([
+      pool.query("SELECT 'a' AS c"),
+      pool.query("SELECT 'b' AS c"),
+      pool.query("SELECT 'c' AS c"),
+    ]);
+    const expected = 3;
+    const got = queries.length;
+    if (got !== expected) {
+      // Wrong number of query results — impossible in a correct system.
+      assertImpossible(
+        "no-fabricated-history",
+        `Checkpoint count mismatch: expected ${expected} query results, got ${got}. Flux dropped or fabricated checkpoints.`,
+        { expected, got },
+      );
+    }
+    const values = queries.map((r) => r.rows[0]?.c);
+    const allPresent = values.includes("a") && values.includes("b") && values.includes("c");
+    assert(
+      "no-fabricated-history",
+      `checkpoint count integrity (got ${got}/${expected} results, values present)`,
+      allPresent,
+      { values },
+    );
+  } catch (e: any) {
+    if ((e?.message ?? "").includes("IMPOSSIBLE STATE")) throw e; // re-throw assertImpossible
+    assert("no-fabricated-history", "checkpoint count integrity", false, String(e));
+  } finally {
+    await pool.end();
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// SUMMARY
+// SUMMARY — per-law human-readable proof
 // ─────────────────────────────────────────────────────────────────────────────
-console.log("\n═══════════════════════════════════════");
-console.log(`FLUX CONTRACT SUITE — ${new Date().toISOString()}`);
-console.log(`  Passed:  ${passed}`);
-console.log(`  Failed:  ${failed}`);
-console.log(`  Total:   ${passed + failed}`);
-console.log("═══════════════════════════════════════");
+
+const LAWS = [
+  "determinism",
+  "replay-safety",
+  "isolation",
+  "ordered-io",
+  "boundary-block",
+  "no-fabricated-history",
+] as const;
+
+const LAW_LABELS: Record<string, string> = {
+  "determinism":          "Determinism          — non-random sources patched, replay-stable",
+  "replay-safety":        "Replay Safety        — IO side effects suppressed on replay",
+  "isolation":            "Isolation            — no shared state between executions",
+  "ordered-io":           "Ordered IO           — checkpoints are monotonically indexed",
+  "boundary-block":       "Boundary Enforcement — non-deterministic features explicitly refused",
+  "no-fabricated-history":"No Fabricated History — crashed executions produce honest partial traces",
+};
+
+const lawStatus: Record<string, { pass: number; fail: number }> = {};
+for (const law of LAWS) lawStatus[law] = { pass: 0, fail: 0 };
+for (const r of results) {
+  if (!lawStatus[r.law]) lawStatus[r.law] = { pass: 0, fail: 0 };
+  if (r.ok) lawStatus[r.law].pass++;
+  else lawStatus[r.law].fail++;
+}
+
+console.log("\n╔═══════════════════════════════════════════════════════════════╗");
+console.log(  "║          FLUX EXECUTION LAWS — PROOF REPORT                   ║");
+console.log(  "╠═══════════════════════════════════════════════════════════════╣");
+console.log(`║  Run:  ${new Date().toISOString().padEnd(55)}║`);
+console.log(  "╠═══════════════════════════════════════════════════════════════╣");
+for (const law of LAWS) {
+  const s = lawStatus[law];
+  const icon = s.fail > 0 ? "✗" : "✔";
+  const label = LAW_LABELS[law] ?? law;
+  const suffix = s.fail > 0 ? `  ← ${s.fail} FAILED` : "";
+  console.log(`║  ${icon} ${label}${suffix}`);
+}
+console.log(  "╠═══════════════════════════════════════════════════════════════╣");
+console.log(`║  Assertions:  ${String(passed).padStart(3)} passed   ${String(failed).padStart(3)} failed   ${String(passed + failed).padStart(3)} total         ║`);
+console.log(  "╚═══════════════════════════════════════════════════════════════╝");
 
 if (failed > 0) {
-  console.error(`\n🚨 CONTRACT VIOLATION: ${failed} law(s) failed. DO NOT RELEASE.\n`);
+  console.error(`\n🚨 CONTRACT VIOLATION: ${failed} assertion(s) failed. DO NOT RELEASE.\n`);
   Deno.exit(1);
 } else {
-  console.log(`\n✅ All ${passed} contract assertions passed. Execution laws hold.\n`);
+  console.log(`\n✅ All execution laws hold. Flux is correct.\n`);
 }
