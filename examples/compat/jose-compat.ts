@@ -1,147 +1,149 @@
-// @ts-nocheck
-// Compat test: Web Crypto API (crypto.subtle) — JWT-like sign/verify
-// Note: npm:jose fails in Flux due to ESM URL re-exports — we test the same
-// underlying Web Crypto API that jose wraps, which is a *better* determinism test.
+// Compat test: Web Crypto API — JWT sign/verify + crypto primitives
+// Uses crypto.subtle which is natively available in Flux + Web Standard APIs
 import { Hono } from "npm:hono";
 
 const app = new Hono();
+const SECRET = "flux-webcrypto-compat-test-secret-key";
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────
 
-function base64url(bytes: ArrayBuffer): string {
-  return btoa(String.fromCharCode(...new Uint8Array(bytes)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+function toBase64url(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function base64urlDecode(str: string): Uint8Array {
+function fromBase64url(str: string): Uint8Array {
   const b64 = str.replace(/-/g, "+").replace(/_/g, "/");
-  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
 }
 
-async function importHmacKey(secret: string, usage: "sign" | "verify") {
+async function getHmacKey(secret: string, usage: KeyUsage): Promise<CryptoKey> {
   const raw = new TextEncoder().encode(secret);
   return crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, [usage]);
 }
 
-async function signJwt(payload: object, secret: string): Promise<string> {
-  const header = base64url(new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
-  const body = base64url(new TextEncoder().encode(JSON.stringify({
-    ...payload,
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  })));
-  const key = await importHmacKey(secret, "sign");
-  const sigBytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${header}.${body}`));
-  const sig = base64url(sigBytes);
-  return `${header}.${body}.${sig}`;
+async function makeToken(payload: Record<string, unknown>, secret: string): Promise<string> {
+  const header = toBase64url(new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
+  const now = Math.floor(Date.now() / 1000);
+  const body = toBase64url(new TextEncoder().encode(JSON.stringify({ ...payload, iat: now, exp: now + 3600 })));
+  const signingInput = new TextEncoder().encode(header + "." + body);
+  const key = await getHmacKey(secret, "sign");
+  const sigBuf = await crypto.subtle.sign("HMAC", key, signingInput);
+  return header + "." + body + "." + toBase64url(sigBuf);
 }
 
-async function verifyJwt(token: string, secret: string): Promise<object> {
-  const [header, body, sig] = token.split(".");
-  const key = await importHmacKey(secret, "verify");
-  const valid = await crypto.subtle.verify(
-    "HMAC",
-    key,
-    base64urlDecode(sig),
-    new TextEncoder().encode(`${header}.${body}`),
-  );
-  if (!valid) throw new Error("JWSSignatureVerificationFailed");
-  const payload = JSON.parse(new TextDecoder().decode(base64urlDecode(body)));
-  if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-    throw new Object({ code: "ERR_JWT_EXPIRED", name: "JWTExpired" });
+async function checkToken(token: string, secret: string): Promise<Record<string, unknown>> {
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new Error("Invalid token format");
+  const [header, body, sig] = parts;
+  const key = await getHmacKey(secret, "verify");
+  const input = new TextEncoder().encode(header + "." + body);
+  const sigBytes = fromBase64url(sig);
+  const ok = await crypto.subtle.verify("HMAC", key, sigBytes, input);
+  if (!ok) throw new Error("JWSSignatureVerificationFailed");
+  const payload = JSON.parse(new TextDecoder().decode(fromBase64url(body))) as Record<string, unknown>;
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof payload.exp === "number" && payload.exp < now) {
+    throw new Error("JWTExpired");
   }
   return payload;
 }
 
-const SHARED_SECRET = "flux-webcrypto-compat-test-secret-key";
+// ── Routes ────────────────────────────────────────────────────────────────
 
-// GET / — smoke test
 app.get("/", (c) => c.json({ library: "webcrypto", ok: true }));
 
-// POST /sign — HMAC-SHA256 JWT sign
 app.post("/sign", async (c) => {
-  const body = await c.req.json();
-  const { sub = "user-123", role = "user" } = body;
-  const token = await signJwt({ sub, role, iss: "flux-compat" }, SHARED_SECRET);
+  const input = await c.req.json() as Record<string, unknown>;
+  const sub = typeof input.sub === "string" ? input.sub : "user-123";
+  const role = typeof input.role === "string" ? input.role : "user";
+  const token = await makeToken({ sub, role, iss: "flux-compat" }, SECRET);
   return c.json({ ok: true, token, parts: token.split(".").length });
 });
 
-// POST /verify — verify + decode
 app.post("/verify", async (c) => {
-  const { token } = await c.req.json();
+  const input = await c.req.json() as Record<string, unknown>;
+  const token = typeof input.token === "string" ? input.token : "";
   try {
-    const payload = await verifyJwt(token, SHARED_SECRET) as any;
+    const payload = await checkToken(token, SECRET);
     return c.json({ ok: true, payload, sub: payload.sub });
-  } catch (e: any) {
-    return c.json({ ok: false, error: e?.message ?? String(e) }, 401);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ ok: false, error: msg }, 401);
   }
 });
 
-// POST /sign-verify-cycle — end-to-end in one request
 app.post("/sign-verify-cycle", async (c) => {
-  const { sub = "cycle-user" } = await c.req.json();
-  const token = await signJwt({ sub, iss: "flux-compat" }, SHARED_SECRET);
-  const payload = await verifyJwt(token, SHARED_SECRET) as any;
+  const input = await c.req.json() as Record<string, unknown>;
+  const sub = typeof input.sub === "string" ? input.sub : "cycle-user";
+  const token = await makeToken({ sub, iss: "flux-compat" }, SECRET);
+  const payload = await checkToken(token, SECRET);
   return c.json({ ok: true, sub_matches: payload.sub === sub, token_length: token.length });
 });
 
-// POST /verify-bad — bad/tampered token → error caught
 app.post("/verify-bad", async (_c) => {
-  const tampered = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJoYWNrZXIifQ.BADSIGNATURE";
+  // Construct a token with a clearly wrong signature
+  const header = toBase64url(new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
+  const body = toBase64url(new TextEncoder().encode(JSON.stringify({ sub: "attacker" })));
+  const badToken = header + "." + body + ".INVALIDSIGNATURE";
   try {
-    await verifyJwt(tampered, SHARED_SECRET);
-    return _c.json({ ok: false, error: "expected error" }, 500);
-  } catch (e: any) {
-    return _c.json({ ok: true, caught: true, error: e?.message ?? String(e) });
+    await checkToken(badToken, SECRET);
+    return _c.json({ ok: false, error: "expected verification failure" }, 500);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return _c.json({ ok: true, caught: true, error: msg });
   }
 });
 
-// POST /verify-expired — expired token → caught
 app.post("/verify-expired", async (c) => {
-  // Build a token with an already-expired exp
-  const header = base64url(new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
-  const body = base64url(new TextEncoder().encode(JSON.stringify({
-    sub: "expired-user",
-    iat: 1000000,
-    exp: 1000001, // long in the past
-  })));
-  const key = await importHmacKey(SHARED_SECRET, "sign");
-  const sigBytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${header}.${body}`));
-  const token = `${header}.${body}.${base64url(sigBytes)}`;
+  // Build a token with exp in the past
+  const header = toBase64url(new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
+  const pastPayload = { sub: "expired", iat: 1000000, exp: 1000001 };
+  const body = toBase64url(new TextEncoder().encode(JSON.stringify(pastPayload)));
+  const signingInput = new TextEncoder().encode(header + "." + body);
+  const key = await getHmacKey(SECRET, "sign");
+  const sigBuf = await crypto.subtle.sign("HMAC", key, signingInput);
+  const expiredToken = header + "." + body + "." + toBase64url(sigBuf);
   try {
-    await verifyJwt(token, SHARED_SECRET);
+    await checkToken(expiredToken, SECRET);
     return c.json({ ok: false, error: "expected expiry error" }, 500);
-  } catch {
+  } catch (_e) {
     return c.json({ ok: true, caught: true, expired: true });
   }
 });
 
-// GET /jwks — RWSA key pair + JWKS (asymmetric via WebCrypto)
 app.get("/jwks", async (c) => {
-  const { publicKey } = await crypto.subtle.generateKey(
-    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+  const keyPair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
     true,
     ["sign", "verify"],
   );
-  const jwk = await crypto.subtle.exportKey("jwk", publicKey);
-  return c.json({
-    keys: [{ ...jwk, kid: "flux-rs256-key", use: "sig", alg: "RS256" }],
-  });
+  const jwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+  return c.json({ keys: [{ ...jwk, kid: "flux-rs256-key", use: "sig", alg: "RS256" }] });
 });
 
-// GET /digest — SHA-256 hash of known input (determinism check)
 app.get("/digest", async (c) => {
   const input = "flux-determinism-test";
-  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-  const hex = Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const hashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  const hashArr = Array.from(new Uint8Array(hashBuf));
+  const hex = hashArr.map((b) => b.toString(16).padStart(2, "0")).join("");
   return c.json({ ok: true, input, hex });
 });
 
-// POST /derive-key — PBKDF2 key derivation
 app.post("/derive-key", async (c) => {
-  const { password, salt } = await c.req.json();
+  const body = await c.req.json() as Record<string, unknown>;
+  const password = typeof body.password === "string" ? body.password : "default";
+  const salt = typeof body.salt === "string" ? body.salt : "default-salt";
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(password),
@@ -159,7 +161,8 @@ app.post("/derive-key", async (c) => {
     keyMaterial,
     256,
   );
-  const hex = Array.from(new Uint8Array(bits)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const hexArr = Array.from(new Uint8Array(bits));
+  const hex = hexArr.map((b) => b.toString(16).padStart(2, "0")).join("");
   return c.json({ ok: true, derived_bits_length: bits.byteLength * 8, hex });
 });
 

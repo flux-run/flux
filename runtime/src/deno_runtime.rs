@@ -1077,7 +1077,16 @@ struct RuntimeExecutionState {
 }
 
 deno_core::extension!(
+    deno_node,
+    esm = [
+        dir "src",
+        "internal/crypto/constants.ts"
+    ],
+);
+
+deno_core::extension!(
     flux_runtime_ext,
+    deps = [deno_webidl, deno_web, deno_node, deno_crypto],
     ops = [
         op_begin_execution,
         op_end_execution,
@@ -1099,8 +1108,27 @@ deno_core::extension!(
         op_random_uuid,
         op_net_listen,
         op_net_respond,
-    ]
+    ],
+    esm_entry_point = "ext:flux_runtime_ext/bootstrap_crypto.js",
+    esm = [
+        dir "src",
+        "bootstrap_crypto.js"
+    ],
 );
+
+fn flux_extensions() -> Vec<deno_core::Extension> {
+    vec![
+        deno_webidl::deno_webidl::init(),
+        deno_web::deno_web::init(
+            std::sync::Arc::new(deno_web::BlobStore::default()),
+            None,
+            deno_web::InMemoryBroadcastChannel::default(),
+        ),
+        deno_crypto::deno_crypto::init(None),
+        deno_node::init(),
+        flux_runtime_ext::init(),
+    ]
+}
 
 fn decode_base64_field(value: &str, field: &str) -> Result<Vec<u8>, JsErrorBox> {
     BASE64_STANDARD
@@ -4715,7 +4743,7 @@ impl JsIsolate {
         let source_maps = Rc::new(RefCell::new(HashMap::new()));
         let mut runtime = JsRuntime::new(RuntimeOptions {
             module_loader: Some(Rc::new(TypescriptModuleLoader { source_maps })),
-            extensions: vec![flux_runtime_ext::init()],
+            extensions: flux_extensions(),
             create_params: Some(
                 deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
             ),
@@ -4790,7 +4818,7 @@ impl JsIsolate {
                 source_maps,
                 modules,
             })),
-            extensions: vec![flux_runtime_ext::init()],
+            extensions: flux_extensions(),
             create_params: Some(
                 deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
             ),
@@ -4857,7 +4885,7 @@ impl JsIsolate {
 
     fn new_internal(_user_code: &str, prepared: String) -> Result<Self> {
         let mut runtime = JsRuntime::new(RuntimeOptions {
-            extensions: vec![flux_runtime_ext::init()],
+            extensions: flux_extensions(),
             create_params: Some(
                 deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
             ),
@@ -5265,7 +5293,7 @@ async fn boot_inline_runtime_artifact(
     let prepared = prepare_user_code(user_code);
 
     let mut runtime = JsRuntime::new(RuntimeOptions {
-        extensions: vec![flux_runtime_ext::init()],
+        extensions: flux_extensions(),
         create_params: Some(deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT)),
         ..Default::default()
     });
@@ -5380,7 +5408,7 @@ async fn boot_built_runtime_artifact(
             source_maps,
             modules,
         })),
-        extensions: vec![flux_runtime_ext::init()],
+        extensions: flux_extensions(),
         create_params: Some(deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT)),
         ..Default::default()
     });
@@ -6725,142 +6753,7 @@ globalThis.FormData = globalThis.FormData || FormData;
 globalThis.Request = Request;
 globalThis.Response = Response;
 
-// ── crypto ──────────────────────────────────────────────────────────────────
-if (!globalThis.crypto) globalThis.crypto = {};
-globalThis.crypto.getRandomValues = (typedArray) => {
-    if (!typedArray || typeof typedArray.length !== "number") {
-        throw new TypeError("crypto.getRandomValues expected a typed array");
-    }
-    for (let i = 0; i < typedArray.length; i++) {
-        typedArray[i] = Math.floor(Deno.core.ops.op_random(__flux_eid()) * 256);
-    }
-    return typedArray;
-};
-globalThis.crypto.randomUUID = () => Deno.core.ops.op_random_uuid(__flux_eid());
 
-class FluxCryptoKey {
-    constructor({ type, algorithm, extractable, usages, material }) {
-        this.type = type;
-        this.algorithm = algorithm;
-        this.extractable = Boolean(extractable);
-        this.usages = Array.isArray(usages) ? [...usages] : [];
-        Object.defineProperty(this, "__fluxKeyMaterial", {
-            value: material,
-            enumerable: false,
-            configurable: false,
-            writable: false,
-        });
-    }
-}
-
-function __fluxNormalizeSubtleAlgorithmName(algorithm) {
-    if (typeof algorithm === "string") return algorithm.toUpperCase();
-    if (algorithm && typeof algorithm.name === "string") return algorithm.name.toUpperCase();
-    return "";
-}
-
-function __fluxNormalizeHashName(hash) {
-    if (typeof hash === "string") return hash.toUpperCase();
-    if (hash && typeof hash.name === "string") return hash.name.toUpperCase();
-    return "";
-}
-
-function __fluxToUint8Array(value, label) {
-    if (value instanceof Uint8Array) return value;
-    if (value instanceof ArrayBuffer) return new Uint8Array(value);
-    if (ArrayBuffer.isView(value)) {
-        return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-    }
-    throw new TypeError(`${label} must be an ArrayBuffer or typed array`);
-}
-
-function __fluxBytesToLatin1(bytes) {
-    let output = "";
-    for (const byte of bytes) {
-        output += String.fromCharCode(byte);
-    }
-    return output;
-}
-
-function __fluxBytesToBase64(bytes) {
-    return __fluxBase64Encode(__fluxBytesToLatin1(bytes));
-}
-
-if (typeof globalThis.CryptoKey !== "function") {
-    globalThis.CryptoKey = FluxCryptoKey;
-}
-
-if (!globalThis.crypto.subtle) {
-    globalThis.crypto.subtle = {
-        async importKey(format, keyData, algorithm, extractable, keyUsages) {
-            if (String(format).toLowerCase() !== "jwk") {
-                throw new DOMException("Only JWK key import is supported", "NotSupportedError");
-            }
-
-            const algorithmName = __fluxNormalizeSubtleAlgorithmName(algorithm);
-            const hashName = __fluxNormalizeHashName(algorithm && typeof algorithm === "object" ? algorithm.hash : undefined);
-            if (algorithmName !== "RSASSA-PKCS1-V1_5" || hashName !== "SHA-256") {
-                throw new DOMException("Only RSASSA-PKCS1-v1_5 with SHA-256 is supported", "NotSupportedError");
-            }
-
-            if (!keyData || typeof keyData !== "object") {
-                throw new DOMException("JWK must be an object", "DataError");
-            }
-            if (keyData.kty !== "RSA") {
-                throw new DOMException("Only RSA JWKs are supported", "DataError");
-            }
-            if (typeof keyData.n !== "string" || typeof keyData.e !== "string") {
-                throw new DOMException("RSA JWK must include 'n' and 'e'", "DataError");
-            }
-            if (typeof keyData.d === "string") {
-                throw new DOMException("Private RSA JWK import is not supported", "NotSupportedError");
-            }
-
-            const usages = Array.isArray(keyUsages) ? [...new Set(keyUsages.map((value) => String(value)))] : [];
-            if (usages.length === 0 || usages.some((value) => value !== "verify")) {
-                throw new DOMException("Only 'verify' key usage is supported", "SyntaxError");
-            }
-
-            return new globalThis.CryptoKey({
-                type: "public",
-                algorithm: {
-                    name: "RSASSA-PKCS1-v1_5",
-                    hash: { name: "SHA-256" },
-                },
-                extractable,
-                usages,
-                material: {
-                    format: "jwk",
-                    jwk: { ...keyData },
-                },
-            });
-        },
-
-        async verify(algorithm, key, signature, data) {
-            const algorithmName = __fluxNormalizeSubtleAlgorithmName(algorithm);
-            if (algorithmName !== "RSASSA-PKCS1-V1_5") {
-                throw new DOMException("Only RSASSA-PKCS1-v1_5 verification is supported", "NotSupportedError");
-            }
-            if (!(key instanceof globalThis.CryptoKey) || !key.__fluxKeyMaterial || key.type !== "public") {
-                throw new DOMException("A public CryptoKey is required for verification", "InvalidAccessError");
-            }
-            if (__fluxNormalizeHashName(key.algorithm && key.algorithm.hash) !== "SHA-256") {
-                throw new DOMException("Only SHA-256 verification is supported", "NotSupportedError");
-            }
-            if (!Array.isArray(key.usages) || !key.usages.includes("verify")) {
-                throw new DOMException("CryptoKey does not allow verify usage", "InvalidAccessError");
-            }
-
-            const signatureBytes = __fluxToUint8Array(signature, "signature");
-            const dataBytes = __fluxToUint8Array(data, "data");
-            return Deno.core.ops.op_crypto_verify_rs256({
-                jwk: key.__fluxKeyMaterial.jwk,
-                signature_base64: __fluxBytesToBase64(signatureBytes),
-                data_base64: __fluxBytesToBase64(dataBytes),
-            });
-        },
-    };
-}
 
 // ── fetch ──────────────────────────────────────────────────────────────────
 globalThis.fetch = async function(input, init = undefined) {

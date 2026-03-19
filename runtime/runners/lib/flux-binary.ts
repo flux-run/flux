@@ -178,6 +178,10 @@ export async function startRuntime(
     stdio: ["ignore", "pipe", "pipe"],
   });
 
+  if (process.env.VERBOSE && proc.stderr) {
+    proc.stderr.on("data", (chunk) => process.stderr.write(chunk));
+  }
+
   proc.on("error", (err) => {
     throw new Error(`flux run --listen failed to start: ${err.message}`);
   });
