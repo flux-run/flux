@@ -18,12 +18,12 @@ services:
       retries: 5
 
   flux:
-    # Build locally from the repo if the image isn't published yet
-    build:
-      context: .
-      dockerfile: ./server/Dockerfile
-    # Or pull from GHCR if available:
-    # image: ghcr.io/flux-run/flux-server:latest
+    # Pull from GHCR (pre-built image)
+    image: ghcr.io/flux-run/flux-server:latest
+    # Or build locally from the repo if you have the source code:
+    # build:
+    #   context: .
+    #   dockerfile: ./server/Dockerfile
     ports:
       - "4000:4000"
     environment:
