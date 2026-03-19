@@ -4,37 +4,78 @@ Flux operates by executing your code in a Deno V8 isolate. It allows standard we
 
 As Flux is a runtime and not a framework, you can use standard HTTP fetch and generic TCP-based database drivers. However, side-effects that evade TCP socket interception or use non-deterministic host-level APIs will not be replayable.
 
+## Productization & Compatibility Strategy 🎯
+
+Flux is designed for a **Minimal Friction** developer experience. Our goal is to support the top 20% of libraries that power 80% of Node.js and Deno backends by providing a deterministic execution layer.
+
+### Compatibility Tiers & Adoption Readiness
+
+Use this table to determine if your current stack is ready for Flux.
+
+| Area | Status | Supported Libraries | Adoption Readiness |
+|------|--------|--------------------|-------------------|
+| **Web Frameworks** | 🟢 Ready | Hono, standard handlers | **High**: Drop-in for existing Hono apps. |
+| | 🟡 Beta | Express, Fastify, Koa | **Medium**: Works with basic middleware. |
+| **HTTP Clients** | 🟢 Ready | fetch, axios, undici | **High**: All outbound API calls intercepted. |
+| **Databases** | 🟢 Ready | pg (node-postgres), Drizzle | **High**: Robust Postgres support. |
+| | 🟡 Beta | postgres.js, ioredis | **Medium**: Basic commands supported. |
+| **ORMs** | 🟡 Beta | Kysely, TypeORM | **Medium**: Depends on driver compatibility. |
+| | 🔴 Limited | Prisma | **Low**: Technical complexity in interception. |
+| **Native Addons** | ❌ None | bcrypt, sqlite3, sharp | **Unsupported**: Escapes V8 sandbox. |
+
+---
+
 ## What is Supported? ✅
 
-### 1. HTTP and REST Services
-- **Native `fetch()`:** You can use the standard web `fetch()` API. Flux intercepts these at the V8 isolate level.
-- **HTTP Clients:** Libraries that wrap `fetch()` (such as Axios, ky, or URLFetch) are natively supported.
-- All outbound HTTP requests are buffered and checkpointed.
+### 1. Web Standard APIs
+The following APIs are natively shimmed and available in the global scope:
 
-### 2. Databases & TCP Protocols
-- **Postgres:** Native Postgres queries over plain TCP or TLS (using `rustls`). Libraries like `postgres.js` and `pg` that communicate over raw sockets are intercepted seamlessly.
-- **Redis:** Basic Redis interactions over TCP are supported and intercepted.
+- **Fetch API**: `fetch()`, `Request`, `Response`, `Headers`. Intercepted at the isolate level to ensure every outbound request is recorded and replayable.
+- **Streams**: `TextEncoder`, `TextDecoder`, `ReadableStream` (buffered).
+- **Core Globals**: `URL`, `URLSearchParams`, `FormData`, `DOMException`, `AbortController`.
+- **Async & Timers**: `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, `queueMicrotask`.
+- **Encoding**: `btoa`, `atob`.
+- **Crypto**: 
+  - `crypto.getRandomValues()`, `crypto.randomUUID()` (patched for determinism).
+  - `crypto.subtle.importKey`, `crypto.subtle.verify` (RSASSA-PKCS1-V1_5 with SHA-256).
+- **Determinism**: `Date`, `performance.now()`, and `Math.random()` are all patched to ensure re-runs are identical to the original execution.
+- **Console**: Fully supported for logging and debugging.
 
-### 3. Frameworks
-- Standard Deno web frameworks (like **Hono** or **Oak**) work perfectly as they just wrap standard HTTP request/response object lifecycles.
+### 2. Node.js Compatibility
+We provide shims for the most critical Node.js APIs to ensure popular npm packages function correctly within the Flux sandbox:
+- `process.env`: Proxy to system environment variables.
+- `process.nextTick()`: Schedules tasks on the microtask queue.
+- `process.versions`, `process.platform`, `process.cwd()`.
+
+### 3. Power User / Advanced IO API (`globalThis.Flux`)
+For complex integrations or performance-critical IO, Flux provides low-level, deterministic adapters. This is the **Power User** layer that underlies our package compatibility.
+
+- **Postgres (`Flux.postgres`)**:
+  - `query()`: Low-level SQL execution with direct checkpointing.
+  - `createNodePgPool()`: A compatibility layer for `pg` and `drizzle-orm`.
+- **Redis (`Flux.redis`)**:
+  - `createClient()`: Mimics the `redis` (node-redis) API.
+- **Generic TCP (`Flux.net`)**:
+  - `tcpExchange()`: Perform deterministic outbound TCP communication.
 
 ---
 
 ## What is NOT Supported? ❌
 
-To ensure that an execution trace is 100% deterministic and can be safely replayed, you must avoid side-effects that Flux cannot intercept:
+To maintain 100% determinism, Flux must intercept all state-changing interactions. Certain Node.js or OS-level behaviors are currently restricted:
 
-### 1. Local File System Writes
-- Writing to disk using APIs like `Deno.writeFile` or `Deno.writeFileSync` is **not checkpointed**. 
-- *Why:* If you replay an execution, the file will be written again, breaking the idempotency guarantee of Flux replays.
+### 1. Native Addons (C++/Rust)
+- **Why**: Binary addons (like `bcrypt` or `sqlite3`) execute code outside the V8 sandbox. Since Flux cannot intercept the internal I/O or system calls of these binaries, they break the execution record.
+- **Status**: ❌ Not Supported. Use Pure-JS alternatives where available.
 
-### 2. Child Processes
-- Spawning child processes using `Deno.Command` or similar `child_process` equivalents.
-- *Why:* Child process execution is non-deterministic and the internal I/O of the sub-process cannot be safely intercepted.
+### 2. Local File System Writes
+- **Why**: Writing to the host disk (e.g., via `fs.writeFile`) escapes the Flux checkpoint system. If an execution is replayed, the file would be written twice, violating the idempotency guarantee.
+- **Status**: ❌ Not Supported. Use deterministic cloud storage (S3/R2) via `fetch`.
 
-### 3. Non-TCP / Unix Sockets
-- Communicating via local named pipes or Unix domain sockets (`/var/run/...`). 
-- Flux only intercepts native TCP/TLS socket connections.
+### 3. Child Processes
+- **Why**: Spawning external processes (`Deno.Command`) introduces non-deterministic behavior. Flux cannot safely capture or replay the interactions of a sub-process.
+- **Status**: ❌ Not Supported.
 
-### 4. Native Addons (N-API / C++)
-- Custom C++ plugins or native addons break out of the Deno sandbox. Their network and system calls cannot be intercepted by the Flux runtime.
+### 4. Raw Unix Sockets
+- **Why**: Flux intercepts traffic at the TCP/TLS layer. Local named pipes or Unix domain sockets (often used for local DB connections) escape this interception.
+- **Status**: ❌ Not Supported. Use TCP connections instead.

@@ -1,13 +1,29 @@
 # Flux
 
-Flux makes every request debuggable, replayable, and resumable.
+**Flux runs your existing backend inside a deterministic runtime that records every side-effect.**
 
-At its core, Flux is an open-source backend runtime that records everything that happens during a request, so you can see exactly what happened, understand why it happened, reproduce it safely, or continue from failure. 
-
-To make this reliable, Flux controls all side effects (like database queries or external API calls) and stores their results. 
+At its core, Flux is a deterministic execution layer for backend systems. It intercepts and records all I/O (like database queries or external API calls), storing them as a chronological timeline of events. This makes every request 100% debuggable, replayable, and resumable.
 
 Website: [fluxbase.co](https://fluxbase.co)  
 Docs: [fluxbase.co/docs](https://fluxbase.co/docs)
+
+## How Flux Works with Your App
+
+Flux sits between your code and the outside world, controlling every interaction with external systems.
+
+```text
+Your Code (JS/TS)
+      ↓
+Flux Runtime (V8 Isolate)
+      ↓
+[ DETERMINISTIC IO INTERCEPTION ]
+      ↓
+  ┌───────────┬───────────┬───────────┐
+  ↓           ↓           ↓           ↓
+fetch()     Postgres    Redis      TCP/TLS
+  ↓           ↓           ↓           ↓
+[  RECORDED AS EXECUTION TRACE  ]
+```
 
 ## The Core Mental Model
 
@@ -23,8 +39,27 @@ Step 2 → postgres.query()
 Step 3 → redis.get()
 Step 4 → ...
   ↓
+```text
 Execution Trace (stored)
 ```
+
+## Compatibility & Roadmap 🧭
+
+Flux aims to support the **top 20% of libraries** that power **80% of backend applications**.
+
+| Area | Supported | Roadmap |
+|------|-----------|---------|
+| **Frameworks** | ✅ Hono | ⚠️ Express, Fastify, Koa |
+| **Databases** | ✅ pg (node-postgres) | ⚠️ postgres.js, ioredis |
+| **Clients** | ✅ fetch, axios, undici | ✅ Fully Supported |
+| **ORMs** | ✅ Drizzle, Kysely | ⚠️ Prisma (limited) |
+
+### 🚀 Roadmap Highlights
+- **Phase 1 (MVP)**: Current focus on Hono + Postgres + Zod.
+- **Phase 2 (Ecosystem)**: Full I/O support for `ioredis` and `postgres.js`.
+- **Phase 3 (High-Level)**: Background jobs (BullMQ) and deterministic replay of complex state.
+
+See the full [**Compatibility Guide**](docs/compatibility.md) and [**Strategic Roadmap**](docs/roadmap.md) for details.
 
 ## What Flux Gives You
 
@@ -221,6 +256,8 @@ See [docs/single-binary-architecture.md](docs/single-binary-architecture.md) for
 
 - [docs/README.md](docs/README.md) - documentation map
 - [docs/quickstart.md](docs/quickstart.md) - first-run flow
+- [docs/compatibility.md](docs/compatibility.md) - supported libraries & tiers
+- [docs/roadmap.md](docs/roadmap.md) - strategic engineering roadmap
 - [docs/concepts.md](docs/concepts.md) - core product model
 - [docs/cli.md](docs/cli.md) - command-line workflows
 - [docs/production-debugging.md](docs/production-debugging.md) - incident workflow
