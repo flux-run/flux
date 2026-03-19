@@ -68,6 +68,25 @@ crypto.getRandomValues = function(array) {
 
 // Intercept all subtle crypto methods for telemetry!
 const subtleMethods = ['digest', 'generateKey', 'sign', 'verify', 'deriveBits', 'deriveKey', 'encrypt', 'decrypt', 'wrapKey', 'unwrapKey', 'exportKey', 'importKey'];
+
+function sanitizeAlgorithm(alg) {
+  if (!alg) return alg;
+  const clone = Object.assign({}, alg);
+  if (clone.publicExponent && clone.publicExponent instanceof Uint8Array) {
+    clone.publicExponent = Array.from(clone.publicExponent);
+  }
+  return clone;
+}
+
+function deserializeAlgorithm(alg) {
+  if (!alg) return alg;
+  const clone = Object.assign({}, alg);
+  if (clone.publicExponent && Array.isArray(clone.publicExponent)) {
+    clone.publicExponent = new Uint8Array(clone.publicExponent);
+  }
+  return clone;
+}
+
 for (const method of subtleMethods) {
   if (typeof crypto.subtle[method] === 'function') {
     const original = crypto.subtle[method].bind(crypto.subtle);
@@ -86,10 +105,10 @@ for (const method of subtleMethods) {
           if (response && response.type === 'ArrayBuffer') {
             return deserializeArrayBuffer(response.bytes);
           } else if (response && response.type === 'CryptoKey') {
-            return await original('jwk', response.jwk, response.algorithm, response.extractable, response.usages);
+            return await original('jwk', response.jwk, deserializeAlgorithm(response.algorithm), response.extractable, response.usages);
           } else if (response && response.type === 'KeyPair') {
-            const publicKey = await original('jwk', response.publicKey.jwk, response.publicKey.algorithm, response.publicKey.extractable, response.publicKey.usages);
-            const privateKey = await original('jwk', response.privateKey.jwk, response.privateKey.algorithm, response.privateKey.extractable, response.privateKey.usages);
+            const publicKey = await original('jwk', response.publicKey.jwk, deserializeAlgorithm(response.publicKey.algorithm), response.publicKey.extractable, response.publicKey.usages);
+            const privateKey = await original('jwk', response.privateKey.jwk, deserializeAlgorithm(response.privateKey.algorithm), response.privateKey.extractable, response.privateKey.usages);
             return { publicKey, privateKey };
           }
           return response;
@@ -97,7 +116,11 @@ for (const method of subtleMethods) {
 
         let callArgs = [...args];
         if (method === 'generateKey' && callArgs.length >= 2) callArgs[1] = true;
-        if (method === 'importKey' && callArgs.length >= 4) callArgs[3] = true;
+        if (method === 'importKey' && callArgs.length >= 4) {
+          const alg = callArgs[2];
+          const algName = typeof alg === 'string' ? alg : (alg && alg.name);
+          if (algName !== "PBKDF2") callArgs[3] = true;
+        }
         if (method === 'deriveKey' && callArgs.length >= 4) callArgs[3] = true;
         if (method === 'unwrapKey' && callArgs.length >= 6) callArgs[5] = true;
 
@@ -115,7 +138,7 @@ for (const method of subtleMethods) {
           } else if (result && result.constructor && result.constructor.name === "CryptoKey") {
             if (result.extractable) {
               const jwk = await crypto.subtle.exportKey('jwk', result);
-              serializedResult = { type: 'CryptoKey', jwk, algorithm: result.algorithm, extractable: result.extractable, usages: result.usages };
+              serializedResult = { type: 'CryptoKey', jwk, algorithm: sanitizeAlgorithm(result.algorithm), extractable: result.extractable, usages: result.usages };
             } else {
               serializedResult = { type: 'CryptoKey_unextractable' };
             }
@@ -123,10 +146,10 @@ for (const method of subtleMethods) {
             let pubJwk = null;
             let privJwk = null;
             if (result.publicKey.extractable) {
-                pubJwk = { jwk: await crypto.subtle.exportKey('jwk', result.publicKey), algorithm: result.publicKey.algorithm, extractable: result.publicKey.extractable, usages: result.publicKey.usages };
+                pubJwk = { jwk: await crypto.subtle.exportKey('jwk', result.publicKey), algorithm: sanitizeAlgorithm(result.publicKey.algorithm), extractable: result.publicKey.extractable, usages: result.publicKey.usages };
             }
             if (result.privateKey.extractable) {
-                privJwk = { jwk: await crypto.subtle.exportKey('jwk', result.privateKey), algorithm: result.privateKey.algorithm, extractable: result.privateKey.extractable, usages: result.privateKey.usages };
+                privJwk = { jwk: await crypto.subtle.exportKey('jwk', result.privateKey), algorithm: sanitizeAlgorithm(result.privateKey.algorithm), extractable: result.privateKey.extractable, usages: result.privateKey.usages };
             }
             serializedResult = { type: 'KeyPair', publicKey: pubJwk, privateKey: privJwk };
           } else {

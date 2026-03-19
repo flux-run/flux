@@ -16,7 +16,9 @@ function toBase64url(buf: ArrayBuffer): string {
 
 function fromBase64url(str: string): Uint8Array {
   const b64 = str.replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(b64);
+  const pad = b64.length % 4;
+  const padded = pad ? b64 + "=".repeat(4 - pad) : b64;
+  const raw = atob(padded);
   const out = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
   return out;
@@ -73,7 +75,8 @@ app.post("/verify", async (c) => {
     const payload = await checkToken(token, SECRET);
     return c.json({ ok: true, payload, sub: payload.sub });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = e instanceof Error ? `${e.message} - ${e.stack}` : String(e);
+    console.error("verify endpoint caught exception! MSG:", msg);
     return c.json({ ok: false, error: msg }, 401);
   }
 });
@@ -118,18 +121,23 @@ app.post("/verify-expired", async (c) => {
 });
 
 app.get("/jwks", async (c) => {
-  const keyPair = await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"],
-  );
-  const jwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
-  return c.json({ keys: [{ ...jwk, kid: "flux-rs256-key", use: "sig", alg: "RS256" }] });
+  try {
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["sign", "verify"],
+    );
+    const jwk = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+    return c.json({ keys: [{ ...jwk, kid: "flux-rs256-key", use: "sig", alg: "RS256" }] });
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.message} - ${e.stack}` : String(e);
+    return c.json({ ok: false, error: msg }, 500);
+  }
 });
 
 app.get("/digest", async (c) => {
@@ -141,29 +149,70 @@ app.get("/digest", async (c) => {
 });
 
 app.post("/derive-key", async (c) => {
-  const body = await c.req.json() as Record<string, unknown>;
-  const password = typeof body.password === "string" ? body.password : "default";
-  const salt = typeof body.salt === "string" ? body.salt : "default-salt";
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(password),
-    "PBKDF2",
-    false,
-    ["deriveBits"],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      hash: "SHA-256",
-      salt: new TextEncoder().encode(salt),
-      iterations: 1000,
-    },
-    keyMaterial,
-    256,
-  );
-  const hexArr = Array.from(new Uint8Array(bits));
-  const hex = hexArr.map((b) => b.toString(16).padStart(2, "0")).join("");
-  return c.json({ ok: true, derived_bits_length: bits.byteLength * 8, hex });
+  try {
+    const body = await c.req.json() as Record<string, unknown>;
+    const password = typeof body.password === "string" ? body.password : "default";
+    const salt = typeof body.salt === "string" ? body.salt : "default-salt";
+    const keyMaterial = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(password),
+      "PBKDF2",
+      false,
+      ["deriveBits"],
+    );
+    const bits = await crypto.subtle.deriveBits(
+      {
+        name: "PBKDF2",
+        hash: "SHA-256",
+        salt: new TextEncoder().encode(salt),
+        iterations: 1000,
+      },
+      keyMaterial,
+      256,
+    );
+    const hexArr = Array.from(new Uint8Array(bits));
+    const hex = hexArr.map((b) => b.toString(16).padStart(2, "0")).join("");
+    return c.json({ ok: true, derived_bits_length: bits.byteLength * 8, hex });
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.message} - ${e.stack}` : String(e);
+    return c.json({ ok: false, error: msg }, 500);
+  }
 });
+
+import { SignJWT, jwtVerify } from "npm:jose";
+const JOSE_SECRET = new TextEncoder().encode("cc7e0d44fd473002f1c42167459001140ec6389b7353f8088f4d9a95f2f596f2");
+
+app.post("/jose-sign", async (c) => {
+  const input = await c.req.json() as Record<string, unknown>;
+  const sub = typeof input.sub === "string" ? input.sub : "user-123";
+  const alg = 'HS256';
+
+  const jwt = await new SignJWT({ sub })
+    .setProtectedHeader({ alg })
+    .setIssuedAt()
+    .setIssuer('urn:flux:issuer')
+    .setAudience('urn:flux:audience')
+    .setExpirationTime('2h')
+    .sign(JOSE_SECRET);
+    
+  return c.json({ ok: true, token: jwt });
+});
+
+app.post("/jose-verify", async (c) => {
+  const input = await c.req.json() as Record<string, unknown>;
+  const token = typeof input.token === "string" ? input.token : "";
+  
+  try {
+    const { payload, protectedHeader } = await jwtVerify(token, JOSE_SECRET, {
+      issuer: 'urn:flux:issuer',
+      audience: 'urn:flux:audience',
+    });
+    return c.json({ ok: true, payload, header: protectedHeader });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ ok: false, error: msg }, 401);
+  }
+});
+
 
 Deno.serve(app.fetch);

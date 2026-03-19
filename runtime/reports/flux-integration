@@ -1,145 +1,211 @@
 {
   "suite": "flux-integration",
-  "timestamp": "2026-03-19T07:42:42.472Z",
+  "timestamp": "2026-03-19T13:13:14.842Z",
   "engine": "node v22.20.0",
-  "passed": 22,
+  "passed": 33,
   "failed": 0,
   "skipped": 0,
-  "total": 22,
+  "total": 33,
   "elapsedMs": 0,
   "passRate": "100.0%",
   "results": [
     {
-      "name": "zod: GET / → 200",
+      "name": "webcrypto: GET / → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.010874999999941792
+      "duration": 0.010291999999935797
     },
     {
-      "name": "zod: GET / → library=zod",
+      "name": "webcrypto: GET / → library=webcrypto",
       "passed": true,
       "skipped": false,
-      "duration": 0.00416599999994105
+      "duration": 0.003917000000001281
     },
     {
-      "name": "zod: valid user → 200",
+      "name": "webcrypto: sign → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.013666000000057466
+      "duration": 0.024582999999893218
     },
     {
-      "name": "zod: valid user → ok:true",
+      "name": "webcrypto: sign → ok:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.004332999999860476
+      "duration": 0.0058330000001660665
     },
     {
-      "name": "zod: valid user → name",
+      "name": "webcrypto: sign → token is string",
       "passed": true,
       "skipped": false,
-      "duration": 0.003541999999924883
+      "duration": 0.00437499999998181
     },
     {
-      "name": "zod: invalid user → ok:false",
+      "name": "webcrypto: sign → 3 parts (header.payload.sig)",
       "passed": true,
       "skipped": false,
-      "duration": 0.02108300000008967
+      "duration": 0.0028750000001309672
     },
     {
-      "name": "zod: invalid user → errors present",
+      "name": "npm:jose sign → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.005458000000089669
+      "duration": 0.02420899999970061
     },
     {
-      "name": "zod: paginate defaults → 200",
+      "name": "npm:jose sign → ok:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.02275000000008731
+      "duration": 0.005249999999705324
     },
     {
-      "name": "zod: paginate defaults → page=1",
+      "name": "npm:jose sign → token string",
       "passed": true,
       "skipped": false,
-      "duration": 0.0050420000000030996
+      "duration": 0.003624999999829015
     },
     {
-      "name": "zod: paginate defaults → limit=20",
+      "name": "npm:jose verify → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.004625000000032742
+      "duration": 0.026624999999967258
     },
     {
-      "name": "zod: paginate with values → page=3",
+      "name": "npm:jose verify → ok:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.025208000000020547
+      "duration": 0.0050409999998919375
     },
     {
-      "name": "zod: paginate with values → limit=50",
+      "name": "npm:jose verify → payload extracted",
       "passed": true,
       "skipped": false,
       "duration": 0.0032499999997526174
     },
     {
-      "name": "zod: transform → 200",
+      "name": "npm:jose verify → matching issuer",
       "passed": true,
       "skipped": false,
-      "duration": 0.024249999999938154
+      "duration": 0.002124999999978172
     },
     {
-      "name": "zod: transform → lowercased + trimmed",
+      "name": "webcrypto: verify → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.004500000000007276
+      "duration": 0.023167000000285043
     },
     {
-      "name": "zod: strict mode → ok:false on unknown keys",
+      "name": "webcrypto: verify → ok:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.015333000000282482
+      "duration": 0.003832999999758613
     },
     {
-      "name": "zod: strict mode → errors present",
+      "name": "webcrypto: verify → sub matches",
       "passed": true,
       "skipped": false,
-      "duration": 0.003416999999899417
+      "duration": 0.002375000000029104
     },
     {
-      "name": "zod: strict mode → ok:true on exact keys",
+      "name": "webcrypto: sign-verify cycle → 200",
       "passed": true,
       "skipped": false,
-      "duration": 0.013083999999707885
+      "duration": 0.021292000000357802
     },
     {
-      "name": "zod: nested schema → 200",
+      "name": "webcrypto: sign-verify cycle → ok:true",
       "passed": true,
       "skipped": false,
-      "duration": 0.01749999999992724
+      "duration": 0.004041000000142958
     },
     {
-      "name": "zod: nested schema → ok:true",
+      "name": "webcrypto: sign-verify cycle → sub matches",
       "passed": true,
       "skipped": false,
-      "duration": 0.0033749999997780833
+      "duration": 0.0017920000000231084
     },
     {
-      "name": "zod: union schema (email) → ok:true",
+      "name": "webcrypto: bad token → ok:true (caught)",
       "passed": true,
       "skipped": false,
-      "duration": 0.01920800000016243
+      "duration": 0.007540999999946507
     },
     {
-      "name": "zod: custom refinement (match) → ok:true",
+      "name": "webcrypto: bad token → caught=true",
       "passed": true,
       "skipped": false,
-      "duration": 0.022375000000010914
+      "duration": 0.0019589999992604135
     },
     {
-      "name": "zod: custom refinement (mismatch) → ok:false",
+      "name": "webcrypto: expired token → ok:true (caught)",
       "passed": true,
       "skipped": false,
-      "duration": 0.027167000000190455
+      "duration": 0.02050000000053842
+    },
+    {
+      "name": "webcrypto: expired token → expired=true",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.002290999999786436
+    },
+    {
+      "name": "webcrypto: JWKS → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.02641700000003766
+    },
+    {
+      "name": "webcrypto: JWKS → keys array present",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.007999999999810825
+    },
+    {
+      "name": "webcrypto: JWKS → has RS256 key",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004542000000583357
+    },
+    {
+      "name": "webcrypto: SHA-256 digest → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.024292000000059488
+    },
+    {
+      "name": "webcrypto: SHA-256 digest → ok:true",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.004790999999386258
+    },
+    {
+      "name": "webcrypto: SHA-256 digest → expected hash",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.007500000000618456
+    },
+    {
+      "name": "webcrypto: PBKDF2 → 200",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.08837500000026921
+    },
+    {
+      "name": "webcrypto: PBKDF2 → ok:true",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.006083999999646039
+    },
+    {
+      "name": "webcrypto: PBKDF2 → 256 bits derived",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.0026250000000800355
+    },
+    {
+      "name": "webcrypto: PBKDF2 → hex is 64 chars",
+      "passed": true,
+      "skipped": false,
+      "duration": 0.003875000000334694
     }
   ]
 }

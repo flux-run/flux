@@ -1288,6 +1288,33 @@ const SUITES: Suite[] =[
         assert(ctx, "webcrypto: sign → 3 parts (header.payload.sig)", () => body?.parts === 3);
         signedToken = body?.token ?? "";
       }
+      // npm:jose library test
+      let joseToken = "";
+      {
+        const res = await fetch(`${baseUrl}/jose-sign`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sub: "jose-user" }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "npm:jose sign → 200", () => res.status === 200);
+        assert(ctx, "npm:jose sign → ok:true", () => body?.ok === true);
+        assert(ctx, "npm:jose sign → token string", () => typeof body?.token === "string");
+        joseToken = body?.token ?? "";
+      }
+      {
+        const res = await fetch(`${baseUrl}/jose-verify`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: joseToken }),
+        });
+        const body = await res.json() as any;
+        assert(ctx, "npm:jose verify → 200", () => res.status === 200);
+        assert(ctx, "npm:jose verify → ok:true", () => body?.ok === true);
+        assert(ctx, "npm:jose verify → payload extracted", () => body?.payload?.sub === "jose-user");
+        assert(ctx, "npm:jose verify → matching issuer", () => body?.payload?.iss === "urn:flux:issuer");
+      }
+
       // verify valid token
       {
         const res = await fetch(`${baseUrl}/verify`, {
@@ -1307,7 +1334,9 @@ const SUITES: Suite[] =[
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ sub: "e2e-user" }),
         });
-        const body = await res.json() as any;
+        // Catch 500 error gracefully
+        let body;
+        try { body = await res.json(); } catch { body = {ok: false, error: "not json"}; }
         assert(ctx, "webcrypto: sign-verify cycle → 200", () => res.status === 200);
         assert(ctx, "webcrypto: sign-verify cycle → ok:true", () => body?.ok === true);
         assert(ctx, "webcrypto: sign-verify cycle → sub matches", () => body?.sub_matches === true);
@@ -1320,7 +1349,8 @@ const SUITES: Suite[] =[
           headers: { "content-type": "application/json" },
           body: JSON.stringify({}),
         });
-        const body = await res.json() as any;
+        const text = await res.text();
+        let body; try { body = JSON.parse(text); } catch { body = {ok: false, error: text}; }
         assert(ctx, "webcrypto: bad token → ok:true (caught)", () => body?.ok === true);
         assert(ctx, "webcrypto: bad token → caught=true", () => body?.caught === true);
       }
@@ -1331,14 +1361,17 @@ const SUITES: Suite[] =[
           headers: { "content-type": "application/json" },
           body: JSON.stringify({}),
         });
-        const body = await res.json() as any;
+        const text = await res.text();
+        let body; try { body = JSON.parse(text); } catch { body = {ok: false, error: text}; }
         assert(ctx, "webcrypto: expired token → ok:true (caught)", () => body?.ok === true);
         assert(ctx, "webcrypto: expired token → expired=true", () => body?.expired === true);
       }
       // RSA keygen + JWKS
       {
         const res = await fetch(`${baseUrl}/jwks`);
-        const body = await res.json() as any;
+        const text = await res.text();
+        let body; try { body = JSON.parse(text); } catch { console.error("JWKS text error:", text); body = {ok: false, error: text}; }
+        if (!body?.keys) console.error("JWKS JS Error:", body?.error);
         assert(ctx, "webcrypto: JWKS → 200", () => res.status === 200);
         assert(ctx, "webcrypto: JWKS → keys array present", () => Array.isArray(body?.keys));
         assert(ctx, "webcrypto: JWKS → has RS256 key", () => body?.keys?.[0]?.alg === "RS256");
@@ -1346,7 +1379,8 @@ const SUITES: Suite[] =[
       // SHA-256 digest (determinism check — same input must produce same hash)
       {
         const res = await fetch(`${baseUrl}/digest`);
-        const body = await res.json() as any;
+        const text = await res.text();
+        let body; try { body = JSON.parse(text); } catch { body = {ok: false, error: text}; }
         assert(ctx, "webcrypto: SHA-256 digest → 200", () => res.status === 200);
         assert(ctx, "webcrypto: SHA-256 digest → ok:true", () => body?.ok === true);
         assert(ctx, "webcrypto: SHA-256 digest → expected hash", () =>
@@ -1362,7 +1396,9 @@ const SUITES: Suite[] =[
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ password: "flux-secret", salt: "flux-salt" }),
         });
-        const body = await res.json() as any;
+        const text = await res.text();
+        let body; try { body = JSON.parse(text); } catch { console.error("PBKDF2 Error:", text); body = {ok: false, error: text}; }
+        if (!body?.ok) console.error("PBKDF2 body error:", body?.error);
         assert(ctx, "webcrypto: PBKDF2 → 200", () => res.status === 200);
         assert(ctx, "webcrypto: PBKDF2 → ok:true", () => body?.ok === true);
         assert(ctx, "webcrypto: PBKDF2 → 256 bits derived", () => body?.derived_bits_length === 256);
