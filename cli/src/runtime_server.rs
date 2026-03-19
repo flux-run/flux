@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use crate::config::resolve_optional_auth;
 use crate::grpc::validate_service_token;
 use crate::project::{resolve_built_artifact, resolve_entry_path};
-use crate::runtime_process::{exec_runtime, find_runtime_binary, find_workspace_root};
+use crate::runtime_process::exec_runtime;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeServerOptions {
@@ -28,9 +28,7 @@ pub async fn execute_server_runtime(options: RuntimeServerOptions) -> Result<()>
         validate_service_token(&auth.url, &auth.token).await?;
     }
 
-    let workspace_root = find_workspace_root()
-        .ok_or_else(|| anyhow::anyhow!("could not locate workspace root containing Cargo.toml"))?;
-    let binary = find_runtime_binary(&workspace_root, options.release);
+    let binary = crate::bin_resolution::ensure_binary("flux-runtime", options.release).await?;
 
     write_runtime_port(options.port)?;
     write_runtime_entry(&entry.to_string_lossy())?;
@@ -39,7 +37,7 @@ pub async fn execute_server_runtime(options: RuntimeServerOptions) -> Result<()>
     }
 
     let prog_args = build_runtime_args(&auth.url, &auth.token, &built_artifact, &options);
-    exec_runtime(workspace_root, binary, options.release, &prog_args).await
+    exec_runtime(binary, &prog_args).await
 }
 
 fn build_runtime_args(

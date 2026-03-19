@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use crate::runtime_process::{exec_runtime, find_runtime_binary, find_workspace_root};
+use crate::runtime_process::exec_runtime;
 use crate::runtime_server::{RuntimeServerOptions, execute_server_runtime};
 
 #[derive(Debug, Args)]
@@ -75,10 +75,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let _: serde_json::Value = serde_json::from_str(&args.input)
         .with_context(|| format!("invalid --input JSON: {}", args.input))?;
 
-    let workspace_root = find_workspace_root()
-        .ok_or_else(|| anyhow::anyhow!("could not locate workspace root containing Cargo.toml"))?;
-
-    let binary = find_runtime_binary(&workspace_root, args.release);
+    let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
     // Server URL and token are optional for script mode — default to empty
     // strings so the runtime can start without a running flux-server.
@@ -95,7 +92,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     let prog_args = build_runtime_args(&server_url, &token, &args);
 
-    exec_runtime(workspace_root, binary, args.release, &prog_args).await
+    exec_runtime(binary, &prog_args).await
 }
 
 fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<String> {

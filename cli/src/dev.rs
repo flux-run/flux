@@ -37,9 +37,7 @@ pub struct DevArgs {
 
 pub async fn execute(args: DevArgs) -> Result<()> {
     let entry = resolve_entry_path(args.entry.as_deref())?;
-    let workspace_root = find_workspace_root()
-        .ok_or_else(|| anyhow::anyhow!("could not locate workspace root containing Cargo.toml"))?;
-    let binary = ensure_runtime_binary(&workspace_root, args.release).await?;
+    let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
     let server_url = args
         .url
@@ -115,62 +113,6 @@ fn build_runtime_args(entry: &Path, server_url: &str, token: &str, args: &DevArg
         "--isolate-pool-size".to_string(),
         args.isolate_pool_size.to_string(),
     ]
-}
-
-async fn ensure_runtime_binary(workspace_root: &Path, release: bool) -> Result<PathBuf> {
-    if let Some(binary) = find_runtime_binary(workspace_root, release) {
-        return Ok(binary);
-    }
-
-    let mut command = tokio::process::Command::new("cargo");
-    command
-        .current_dir(workspace_root)
-        .args(["build", "-p", "runtime", "--bin", "flux-runtime"]);
-    if release {
-        command.arg("--release");
-    }
-
-    let status = command
-        .status()
-        .await
-        .context("failed to build flux-runtime")?;
-    if !status.success() {
-        anyhow::bail!("failed to build flux-runtime")
-    }
-
-    find_runtime_binary(workspace_root, release)
-        .ok_or_else(|| anyhow::anyhow!("flux-runtime binary not found after build"))
-}
-
-fn find_workspace_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let cargo_toml = dir.join("Cargo.toml");
-        if cargo_toml.exists() {
-            let contents = std::fs::read_to_string(&cargo_toml).ok()?;
-            if contents.contains("[workspace]") {
-                return Some(dir);
-            }
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-fn find_runtime_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) {
-        "flux-runtime.exe"
-    } else {
-        "flux-runtime"
-    };
-    let primary = if release { "release" } else { "debug" };
-    let secondary = if release { "debug" } else { "release" };
-
-    [primary, secondary]
-        .into_iter()
-        .map(|profile| workspace_root.join("target").join(profile).join(name))
-        .find(|path| path.exists())
 }
 
 fn flux_config_path() -> PathBuf {

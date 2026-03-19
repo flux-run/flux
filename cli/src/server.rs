@@ -36,8 +36,7 @@ async fn execute_restart(args: ServerStartArgs) -> Result<()> {
 }
 
 async fn execute_start(args: ServerStartArgs) -> Result<()> {
-    let workspace_root = find_workspace_root()
-        .ok_or_else(|| anyhow::anyhow!("could not locate workspace root containing Cargo.toml"))?;
+    let binary = crate::bin_resolution::ensure_binary("flux-server", args.release).await?;
 
     let database_url = args
         .database_url
@@ -51,23 +50,9 @@ async fn execute_start(args: ServerStartArgs) -> Result<()> {
 
     write_server_port(args.port)?;
 
-    let binary = find_server_binary(&workspace_root, args.release);
-    if let Some(bin) = binary {
-        println!("starting server binary {}", bin.display());
-        return start_server_binary(
-            &workspace_root,
-            &bin,
-            args.port,
-            &database_url,
-            &service_token,
-        )
-        .await;
-    }
-
-    println!("server binary not found, starting via cargo run");
-    start_server_cargo(
-        &workspace_root,
-        args.release,
+    println!("starting server binary {}", binary.display());
+    start_server_binary(
+        &binary,
         args.port,
         &database_url,
         &service_token,
@@ -77,7 +62,6 @@ async fn execute_start(args: ServerStartArgs) -> Result<()> {
 
 #[cfg(unix)]
 async fn start_server_binary(
-    workspace_root: &Path,
     bin: &Path,
     port: u16,
     database_url: &str,
@@ -88,7 +72,6 @@ async fn start_server_binary(
     write_server_pid(std::process::id())?;
 
     let err = std::process::Command::new(bin)
-        .current_dir(workspace_root)
         .env("GRPC_PORT", port.to_string())
         .env("DATABASE_URL", database_url)
         .env("INTERNAL_SERVICE_TOKEN", service_token)
@@ -103,14 +86,12 @@ async fn start_server_binary(
 
 #[cfg(not(unix))]
 async fn start_server_binary(
-    workspace_root: &Path,
     bin: &Path,
     port: u16,
     database_url: &str,
     service_token: &str,
 ) -> Result<()> {
     let status = tokio::process::Command::new(bin)
-        .current_dir(workspace_root)
         .env("GRPC_PORT", port.to_string())
         .env("DATABASE_URL", database_url)
         .env("INTERNAL_SERVICE_TOKEN", service_token)
@@ -127,104 +108,6 @@ async fn start_server_binary(
     }
 
     Ok(())
-}
-
-#[cfg(unix)]
-async fn start_server_cargo(
-    workspace_root: &Path,
-    release: bool,
-    port: u16,
-    database_url: &str,
-    service_token: &str,
-) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-
-    write_server_pid(std::process::id())?;
-
-    let mut command = std::process::Command::new("cargo");
-    command.current_dir(workspace_root);
-    command.args(["run", "-p", "server", "--bin", "flux-server"]);
-    if release {
-        command.arg("--release");
-    }
-    command.env("GRPC_PORT", port.to_string());
-    command.env("DATABASE_URL", database_url);
-    command.env("INTERNAL_SERVICE_TOKEN", service_token);
-    command.env(
-        "RUST_LOG",
-        std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
-    );
-
-    let err = command.exec();
-    Err(anyhow::anyhow!(
-        "failed to exec `cargo run -p server --bin flux-server`: {}",
-        err
-    ))
-}
-
-#[cfg(not(unix))]
-async fn start_server_cargo(
-    workspace_root: &Path,
-    release: bool,
-    port: u16,
-    database_url: &str,
-    service_token: &str,
-) -> Result<()> {
-    let mut command = tokio::process::Command::new("cargo");
-    command.current_dir(workspace_root);
-    command.args(["run", "-p", "server", "--bin", "flux-server"]);
-    if release {
-        command.arg("--release");
-    }
-    command.env("GRPC_PORT", port.to_string());
-    command.env("DATABASE_URL", database_url);
-    command.env("INTERNAL_SERVICE_TOKEN", service_token);
-    command.env(
-        "RUST_LOG",
-        std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
-    );
-
-    let status = command
-        .status()
-        .await
-        .context("failed to start `cargo run -p server --bin flux-server`")?;
-    if !status.success() {
-        bail!("server exited with {}", status);
-    }
-
-    Ok(())
-}
-
-fn find_workspace_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let cargo_toml = dir.join("Cargo.toml");
-        if cargo_toml.exists() {
-            let contents = std::fs::read_to_string(&cargo_toml).ok()?;
-            if contents.contains("[workspace]") {
-                return Some(dir);
-            }
-        }
-
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-fn find_server_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) {
-        "flux-server.exe"
-    } else {
-        "flux-server"
-    };
-    let primary = if release { "release" } else { "debug" };
-    let secondary = if release { "debug" } else { "release" };
-
-    [primary, secondary]
-        .into_iter()
-        .map(|profile| workspace_root.join("target").join(profile).join(name))
-        .find(|path| path.exists())
 }
 
 fn flux_dir() -> PathBuf {

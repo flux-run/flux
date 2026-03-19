@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod auth;
+mod bin_resolution;
 mod build;
 mod check;
 mod config;
@@ -71,7 +72,6 @@ enum Commands {
     Dev(dev::DevArgs),
     /// Run a JS/TS file as a plain script (no HTTP server).
     Run(run::RunArgs),
-    /// Prepare a JS/TS entry file for runtime execution.
     Serve(serve::ServeArgs),
     /// Manage the Flux server process.
     Server {

@@ -43,15 +43,12 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("invalid entry file stem: {}", entry.display()))?
         .to_string();
 
-    let workspace_root = find_workspace_root()
-        .ok_or_else(|| anyhow::anyhow!("could not locate workspace root containing Cargo.toml"))?;
-    let runtime_binary = find_runtime_binary(&workspace_root, args.release);
+    let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
     let runtime_port = pick_free_port()?;
 
     let mut child = spawn_runtime(
-        &workspace_root,
-        runtime_binary,
+        &binary,
         &args,
         &auth.url,
         &auth.token,
@@ -138,6 +135,29 @@ async fn run_one_off(
     Ok(())
 }
 
+async fn spawn_runtime(
+    binary: &Path,
+    args: &ExecArgs,
+    server_url: &str,
+    token: &str,
+    port: u16,
+) -> Result<tokio::process::Child> {
+    let mut command = tokio::process::Command::new(binary);
+    command
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--isolate-pool-size")
+        .arg(args.isolate_pool_size.to_string())
+        .env("FLUX_SERVER_URL", server_url)
+        .env("FLUX_SERVICE_TOKEN", token)
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+
+    command
+        .spawn()
+        .context("failed to start flux-runtime for one-off execution")
+}
+
 async fn wait_for_runtime(port: u16, timeout_secs: u64) -> Result<()> {
     let client = reqwest::Client::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
@@ -161,55 +181,6 @@ async fn wait_for_runtime(port: u16, timeout_secs: u64) -> Result<()> {
     }
 }
 
-async fn spawn_runtime(
-    workspace_root: &Path,
-    runtime_binary: Option<PathBuf>,
-    args: &ExecArgs,
-    server_url: &str,
-    token: &str,
-    port: u16,
-) -> Result<tokio::process::Child> {
-    let runtime_args = vec![
-        "--entry".to_string(),
-        args.entry.clone(),
-        "--server-url".to_string(),
-        server_url.to_string(),
-        "--host".to_string(),
-        "127.0.0.1".to_string(),
-        "--port".to_string(),
-        port.to_string(),
-        "--isolate-pool-size".to_string(),
-        args.isolate_pool_size.to_string(),
-    ];
-
-    let mut command = if let Some(bin) = runtime_binary {
-        let mut c = tokio::process::Command::new(bin);
-        c.args(&runtime_args);
-        c
-    } else {
-        let mut c = tokio::process::Command::new("cargo");
-        c.current_dir(workspace_root)
-            .args(["run", "-p", "runtime", "--bin", "flux-runtime"]);
-        if args.release {
-            c.arg("--release");
-        }
-        c.arg("--").args(&runtime_args);
-        c
-    };
-
-    // Pass token via env var instead of CLI args — prevents exposure in `ps` output.
-    command.env("FLUX_SERVICE_TOKEN", token);
-
-    command
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .stdin(Stdio::null());
-
-    command
-        .spawn()
-        .context("failed to start flux-runtime for one-off execution")
-}
-
 fn pick_free_port() -> Result<u16> {
     let listener =
         TcpListener::bind("127.0.0.1:0").context("failed to bind an ephemeral local port")?;
@@ -226,36 +197,4 @@ fn print_json(value: &serde_json::Value, indent: usize) {
     for line in formatted.lines() {
         println!("{}{}", prefix, line);
     }
-}
-
-fn find_workspace_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let cargo_toml = dir.join("Cargo.toml");
-        if cargo_toml.exists() {
-            let contents = std::fs::read_to_string(&cargo_toml).ok()?;
-            if contents.contains("[workspace]") {
-                return Some(dir);
-            }
-        }
-
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-fn find_runtime_binary(workspace_root: &Path, release: bool) -> Option<PathBuf> {
-    let name = if cfg!(windows) {
-        "flux-runtime.exe"
-    } else {
-        "flux-runtime"
-    };
-    let primary = if release { "release" } else { "debug" };
-    let secondary = if release { "debug" } else { "release" };
-
-    [primary, secondary]
-        .into_iter()
-        .map(|profile| workspace_root.join("target").join(profile).join(name))
-        .find(|path| path.exists())
 }
