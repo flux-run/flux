@@ -210,9 +210,6 @@ async fn main() -> Result<()> {
             {
                 Ok(()) => println!("execution_id: {}", context.execution_id),
                 Err(error) => eprintln!("warning: failed to record script execution: {error}"),
-            }
-        }
-
         if let Some(error) = execution.error.as_ref() {
             eprintln!("error: {error}");
         }
