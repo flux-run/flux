@@ -137,6 +137,7 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
         "CREATE TABLE IF NOT EXISTS flux.executions (
             id UUID PRIMARY KEY,
             request_id UUID NOT NULL,
+            project_id UUID,
             method TEXT NOT NULL,
             path TEXT NOT NULL,
             status TEXT NOT NULL,
@@ -150,6 +151,10 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS project_id UUID")
+        .execute(pool)
+        .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS flux.checkpoints (
@@ -186,7 +191,15 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
          RETURNS trigger AS $$
          BEGIN
              IF (TG_OP = 'UPDATE' AND NEW.status IN ('ok', 'error', 'timeout')) THEN
-                 PERFORM pg_notify('flux_executions', row_to_json(NEW)::text);
+                 PERFORM pg_notify('flux_executions', json_build_object(
+                     'id', NEW.id,
+                     'project_id', NEW.project_id,
+                     'method', NEW.method,
+                     'path', NEW.path,
+                     'status', NEW.status,
+                     'duration_ms', NEW.duration_ms,
+                     'error', NEW.error
+                 )::text);
              END IF;
              RETURN NEW;
          END;

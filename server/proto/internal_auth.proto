@@ -33,6 +33,7 @@ message LogEntry {
   string code_version = 2;
   string status = 3;
   string timestamp = 4;
+  string project_id = 5;
 }
 
 message CheckpointEntry {
@@ -63,6 +64,7 @@ message RecordExecutionRequest {
   int32 duration_ms = 10;
   repeated CheckpointEntry checkpoints = 11;
   repeated ConsoleLogEntry logs = 12;
+  string project_id = 13;
 }
 
 message RecordExecutionResponse {

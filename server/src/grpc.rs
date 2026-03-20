@@ -497,6 +497,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let rows: Vec<(
             String,
             String,
+            Option<String>,
             String,
             String,
             String,
@@ -508,6 +509,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             "SELECT \
                 id::text, \
                 request_id::text, \
+                project_id::text, \
                 method, \
                 path, \
                 status, \
@@ -530,6 +532,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 |(
                     execution_id,
                     request_id,
+                    _project_id,
                     method,
                     path,
                     status,
@@ -542,11 +545,12 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                     request_id,
                     method,
                     path,
-                    code_version: code_version.unwrap_or_default(),
                     status,
                     duration_ms,
-                    error: error.unwrap_or_default(),
                     timestamp: timestamp.unwrap_or_default(),
+                    error: error.unwrap_or_default(),
+                    code_version: code_version.unwrap_or_default(),
+                    project_id: _project_id.unwrap_or_default(),
                 },
             )
             .collect();
@@ -571,6 +575,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let response_json: serde_json::Value = serde_json::from_str(&req.response_json)
             .map_err(|e| Status::invalid_argument(format!("invalid response_json: {e}")))?;
 
+        let project_id = if !req.project_id.is_empty() {
+            Some(
+                uuid::Uuid::parse_str(&req.project_id)
+                    .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?,
+            )
+        } else {
+            None
+        };
+
         let mut tx = self
             .pool
             .begin()
@@ -579,12 +592,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "INSERT INTO flux.executions \
-             (id, request_id, method, path, status, request, response, error, code_sha, duration_ms) \
-             VALUES ($1, $2, $3, $4, 'running', $5, NULL, NULL, $6, 0) \
+             (id, request_id, project_id, method, path, status, request, response, error, code_sha, duration_ms) \
+             VALUES ($1, $2, $3, $4, $5, 'running', $6, NULL, NULL, $7, 0) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
         .bind(request_id)
+        .bind(project_id)
         .bind(req.method.clone())
         .bind(req.path.clone())
         .bind(request_json.clone())
@@ -602,7 +616,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                  response = $6, \
                  error = NULLIF($7, ''), \
                  code_sha = $8, \
-                 duration_ms = $9 \
+                 duration_ms = $9, \
+                 project_id = $10 \
              WHERE id = $1",
         )
         .bind(execution_id)
@@ -614,6 +629,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(req.error)
         .bind(req.code_version)
         .bind(req.duration_ms)
+        .bind(project_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to update execution: {e}")))?;
@@ -788,6 +804,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                     Ok(notification) => {
                         let payload = notification.payload();
                         let Ok(val) = serde_json::from_str::<serde_json::Value>(payload) else {
+                            tracing::warn!(payload = %payload, "tail: received invalid json notification");
                             continue;
                         };
 
