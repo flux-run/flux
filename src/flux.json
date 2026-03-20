@@ -1,0 +1,6 @@
+{
+  "flux_version": "0.2",
+  "entry": "./index.ts",
+  "artifact": "./.flux/artifact.json",
+  "project_id": null
+}

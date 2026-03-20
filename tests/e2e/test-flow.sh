@@ -14,6 +14,8 @@ lsof -ti :3000 | xargs kill -9 2>/dev/null || true
 echo "👉 Extracting DATABASE_URL..."
 if [ -f .env ]; then
   DB_URL=$(grep "^DATABASE_URL=" .env | cut -d'=' -f2-)
+elif [ -f /Users/shashisharma/code/my-app/.env ]; then
+  DB_URL=$(grep "^DATABASE_URL=" /Users/shashisharma/code/my-app/.env | cut -d'=' -f2-)
 elif [ -f .env.example ]; then
   DB_URL=$(grep "^DATABASE_URL=" .env.example | cut -d'=' -f2-)
 else
@@ -24,6 +26,8 @@ if [ -z "$DB_URL" ]; then
   echo -e "${RED}❌ ERROR: DATABASE_URL not found in .env, .env.example, or environment.${NC}"
   exit 1
 fi
+
+export DATABASE_URL="$DB_URL"
 
 echo "👉 Starting Flux Server in background..."
 flux server start --service-token "$FLUX_SERVICE_TOKEN" --database-url "$DB_URL" > /tmp/flux-server.log 2>&1 &
