@@ -138,17 +138,9 @@ pub fn default_project_config(entry_name: &str) -> FluxProjectConfig {
 pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
     let config_path = project_config_path(project_dir);
     let entry_path = project_dir.join(DEFAULT_ENTRY_FILE);
-    let db_path = project_dir.join("src/db.ts");
-    let schema_path = project_dir.join("src/schema.ts");
     let deno_config_path = project_dir.join("deno.json");
 
-    if !force
-        && (config_path.exists()
-            || entry_path.exists()
-            || db_path.exists()
-            || schema_path.exists()
-            || deno_config_path.exists())
-    {
+    if !force && (config_path.exists() || entry_path.exists() || deno_config_path.exists()) {
         bail!(
             "refusing to overwrite existing project files in {} (use --force)",
             project_dir.display()
@@ -156,13 +148,7 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
     }
 
     // Ensure all necessary directories exist
-    for path in &[
-        &config_path,
-        &entry_path,
-        &db_path,
-        &schema_path,
-        &deno_config_path,
-    ] {
+    for path in &[&config_path, &entry_path, &deno_config_path] {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -180,7 +166,7 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
             "  \"imports\": {\n",
             "    \"hono\": \"jsr:@hono/hono@^4\",\n",
             "    \"zod\": \"npm:zod@^3\",\n",
-            "    \"@hono/zod-validator\": \"npm:@hono/zod-validator@^0.4\",\n",
+            "    \"@hono/zod-validator\": \"jsr:@hono/zod-validator@^0.4\",\n",
             "    \"drizzle-orm\": \"npm:drizzle-orm@^0.45\",\n",
             "    \"drizzle-zod\": \"npm:drizzle-zod@^0.8\"\n",
             "  }\n",
@@ -189,60 +175,7 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
     )
     .with_context(|| format!("failed to write {}", deno_config_path.display()))?;
 
-    // 2. Write src/db.ts (Infrastructure Example)
-    fs::write(
-        &db_path,
-        concat!(
-            "import { drizzle } from \"drizzle-orm/node-postgres\";\n",
-            "import pg from \"flux:pg\";\n",
-            "import redis from \"flux:redis\";\n",
-            "\n",
-            "/**\n",
-            " * Example: Deterministic database and cache clients.\n",
-            " * \n",
-            " * To use:\n",
-            " * 1. Set DATABASE_URL in your environment.\n",
-            " * 2. Uncomment the code below.\n",
-            " */\n",
-            "/*\n",
-            "const databaseUrl = Deno.env.get(\"DATABASE_URL\");\n",
-            "const pool = new pg.Pool({ connectionString: databaseUrl });\n",
-            "\n",
-            "export const db = drizzle(pool);\n",
-            "export const cache = redis.createClient();\n",
-            "*/\n"
-        ),
-    )
-    .with_context(|| format!("failed to write {}", db_path.display()))?;
-
-    // 3. Write src/schema.ts (Data Model Example)
-    fs::write(
-        &schema_path,
-        concat!(
-            "import { pgTable, text, serial, boolean, timestamp } from \"drizzle-orm/pg-core\";\n",
-            "import { createInsertSchema, createSelectSchema } from \"drizzle-zod\";\n",
-            "import { z } from \"zod\";\n",
-            "\n",
-            "/**\n",
-            " * Example: Drizzle Schema\n",
-            " */\n",
-            "/*\n",
-            "export const todos = pgTable(\"todos\", {\n",
-            "  id: serial(\"id\").primaryKey(),\n",
-            "  title: text(\"title\").notNull(),\n",
-            "  completed: boolean(\"completed\").default(false),\n",
-            "  createdAt: timestamp(\"created_at\").defaultNow(),\n",
-            "});\n",
-            "\n",
-            "export const insertTodoSchema = createInsertSchema(todos);\n",
-            "export const selectTodoSchema = createSelectSchema(todos);\n",
-            "export type Todo = z.infer<typeof selectTodoSchema>;\n",
-            "*/\n"
-        ),
-    )
-    .with_context(|| format!("failed to write {}", schema_path.display()))?;
-
-    // 4. Write src/index.ts (Application Logic)
+    // 2. Write src/index.ts (Combined Application Logic & Infrastructure Examples)
     fs::write(
         &entry_path,
         concat!(
@@ -250,8 +183,35 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
             "import { z } from \"zod\";\n",
             "import { zValidator } from \"@hono/zod-validator\";\n",
             "\n",
-            "// import { db } from \"./db.ts\";\n",
-            "// import { todos } from \"./schema.ts\";\n",
+            "/**\n",
+            " * Example: Deterministic database and data model (Drizzle + Postgres)\n",
+            " * \n",
+            " * To use:\n",
+            " * 1. Set DATABASE_URL in your environment.\n",
+            " * 2. Uncomment the code below.\n",
+            " */\n",
+            "/*\n",
+            "import { drizzle } from \"drizzle-orm/node-postgres\";\n",
+            "import { pgTable, text, serial, boolean, timestamp } from \"drizzle-orm/pg-core\";\n",
+            "import { createInsertSchema, createSelectSchema } from \"drizzle-zod\";\n",
+            "import pg from \"flux:pg\";\n",
+            "import redis from \"flux:redis\";\n",
+            "\n",
+            "export const todos = pgTable(\"todos\", {\n",
+            "  id: serial(\"id\").primaryKey(),\n",
+            "  title: text(\"title\").notNull(),\n",
+            "  completed: boolean(\"completed\").default(false),\n",
+            "  createdAt: timestamp(\"created_at\").defaultNow(),\n",
+            "});\n",
+            "\n",
+            "const pool = new pg.Pool({ connectionString: Deno.env.get(\"DATABASE_URL\") });\n",
+            "export const db = drizzle(pool);\n",
+            "export const cache = redis.createClient();\n",
+            "\n",
+            "export const insertTodoSchema = createInsertSchema(todos);\n",
+            "export const selectTodoSchema = createSelectSchema(todos);\n",
+            "export type Todo = z.infer<typeof selectTodoSchema>;\n",
+            "*/\n",
             "\n",
             "/**\n",
             " * Flux Hello World\n",
@@ -287,6 +247,7 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
 
     Ok(())
 }
+
 
 pub fn resolve_built_artifact(entry: &Path) -> Result<(FluxProjectConfig, PathBuf)> {
     let project_dir = entry.parent().unwrap_or(Path::new("."));

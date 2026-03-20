@@ -24,7 +24,7 @@ pub async fn execute(args: InitArgs) -> Result<()> {
     scaffold_project(&cwd, args.force)?;
 
     println!("created  {}/flux.json", cwd.display());
-    println!("created  {}/index.ts", cwd.display());
+    println!("created  {}/src/index.ts", cwd.display());
     println!("next     flux dev");
     println!("auth     flux init --auth  (or flux auth --url <server>)");
 
