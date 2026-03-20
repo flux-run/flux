@@ -4,7 +4,6 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use crate::runtime_process::exec_runtime;
-use crate::runtime_server::{RuntimeServerOptions, execute_server_runtime};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -12,14 +11,15 @@ pub struct RunArgs {
     #[arg(value_name = "ENTRY", default_value = "index.js")]
     pub entry: String,
 
-    /// Keep the runtime alive as an HTTP listener instead of executing once.
-    #[arg(long)]
-    pub listen: bool,
-
     /// JSON input passed to the exported default handler, if present.
     /// Equivalent to the payload in `flux exec`. Ignored for top-level scripts.
     #[arg(long, value_name = "JSON", default_value = "{}")]
     pub input: String,
+
+    /// Keep the runtime alive as an HTTP listener if a default handler is exported.
+    /// (Automatically enabled if Deno.serve() is called).
+    #[arg(long)]
+    pub serve: bool,
 
     /// Flux server URL for recording the execution (optional).
     #[arg(long, value_name = "URL")]
@@ -50,21 +50,6 @@ pub struct RunArgs {
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
-    if args.listen {
-        return execute_server_runtime(RuntimeServerOptions {
-            entry: Some(args.entry.clone()),
-            url: args.url.clone(),
-            token: args.token.clone(),
-            skip_verify: args.skip_verify,
-            host: args.host.clone(),
-            port: args.port,
-            isolate_pool_size: args.isolate_pool_size,
-            check_only: args.check_only,
-            release: args.release,
-        })
-        .await;
-    }
-
     let entry = PathBuf::from(&args.entry);
     if !entry.exists() {
         bail!("entry file not found: {}", entry.display());
@@ -96,17 +81,35 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 }
 
 fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<String> {
-    vec![
+    let mut prog_args = vec![
         "--entry".to_string(),
         args.entry.clone(),
         "--server-url".to_string(),
         server_url.to_string(),
         "--token".to_string(),
         token.to_string(),
-        "--script-mode".to_string(),
-        "--script-input".to_string(),
-        args.input.clone(),
-    ]
+        "--host".to_string(),
+        args.host.clone(),
+        "--port".to_string(),
+        args.port.to_string(),
+        "--isolate-pool-size".to_string(),
+        args.isolate_pool_size.to_string(),
+    ];
+
+    if args.serve {
+        prog_args.push("--serve".to_string());
+    }
+
+    if !args.input.is_empty() && args.input != "{}" {
+        prog_args.push("--script-input".to_string());
+        prog_args.push(args.input.clone());
+    }
+
+    if args.check_only {
+        prog_args.push("--check-only".to_string());
+    }
+
+    prog_args
 }
 
 fn flux_config_path() -> PathBuf {

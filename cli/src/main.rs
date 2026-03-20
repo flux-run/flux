@@ -18,8 +18,6 @@ mod replay;
 mod resume;
 mod run;
 mod runtime_process;
-mod runtime_server;
-mod serve;
 mod server;
 mod status;
 mod tail;
@@ -70,9 +68,8 @@ enum Commands {
     Check(check::CheckArgs),
     /// Start a development server with hot reload on file changes.
     Dev(dev::DevArgs),
-    /// Run a JS/TS file as a plain script (no HTTP server).
+    /// Run a JS/TS file as a plain script or a long-running server.
     Run(run::RunArgs),
-    Serve(serve::ServeArgs),
     /// Manage the Flux server process.
     Server {
         #[command(subcommand)]
@@ -101,7 +98,6 @@ async fn main() -> anyhow::Result<()> {
         Commands::Check(args) => check::execute(args).await?,
         Commands::Dev(args) => dev::execute(args).await?,
         Commands::Run(args) => run::execute(args).await?,
-        Commands::Serve(args) => serve::execute(args).await?,
         Commands::Server { command } => server::execute(command).await?,
     }
 

@@ -45,19 +45,15 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     isolate_pool_size: usize,
 
-    /// Validate the entry file and print artifact info, then exit without serving.
+    /// Force the runtime to stay alive as an HTTP listener even if Deno.serve()
+    /// was not called (e.g. to serve an exported default handler).
     #[arg(long)]
-    check_only: bool,
+    serve: bool,
 
-    /// Execute the entry file as a plain script (no HTTP server).
-    /// Like `node index.js` — runs top-level code, drains the event loop, exits.
-    #[arg(long)]
-    script_mode: bool,
-
-    /// JSON input passed to the exported default handler in script mode.
-    /// Ignored when the entry file has no `export default` function.
-    #[arg(long, value_name = "JSON", default_value = "{}")]
-    script_input: String,
+    /// JSON input passed to the exported default handler for a one-off execution.
+    /// If provided, the runtime will execute the handler once and then exit.
+    #[arg(long, value_name = "JSON")]
+    script_input: Option<String>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -70,11 +66,7 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    if let Some(artifact_path) = &args.artifact {
-        if args.script_mode {
-            bail!("--script-mode does not support --artifact inputs")
-        }
-
+    let (artifact, route_name) = if let Some(artifact_path) = &args.artifact {
         let artifact = runtime::load_built_artifact_from_file(artifact_path)
             .map_err(|err| anyhow::anyhow!(err))?;
         let route_name = match &artifact {
@@ -83,107 +75,125 @@ async fn main() -> Result<()> {
                 unreachable!("built artifact loader returned inline artifact")
             }
         };
+        (artifact, route_name)
+    } else {
+        let entry = PathBuf::from(&args.entry);
+        if !entry.exists() {
+            bail!("entry file not found: {}", entry.display());
+        }
 
-        println!("server:   {}", args.server_url);
-        println!("artifact: {}", artifact_path);
-        println!("hash:     {}", artifact.code_version());
-        println!("bytes:    {}", artifact.size_bytes());
+        match extension(&entry).as_deref() {
+            Some("js") | Some("mjs") | Some("cjs") | Some("ts") | Some("tsx") => {}
+            _ => bail!("unsupported entry file extension: {}", entry.display()),
+        }
+
+        let canonical_entry = entry
+            .canonicalize()
+            .with_context(|| format!("failed to resolve entry path: {}", entry.display()))?;
+
+        // If we have a script_input, we skip the CWD check because the runner
+        // might write a temp file.
+        if args.script_input.is_none() {
+            let cwd = std::env::current_dir().context("failed to read current directory")?;
+            let canonical_cwd = cwd
+                .canonicalize()
+                .context("failed to resolve current directory")?;
+            if !canonical_entry.starts_with(&canonical_cwd) {
+                bail!(
+                    "entry file must be within the working directory: {} is outside {}",
+                    canonical_entry.display(),
+                    canonical_cwd.display()
+                );
+            }
+        }
+
+        let name = entry
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or_else(|| anyhow::anyhow!("invalid entry file name: {}", entry.display()))?;
+
+        let code = load_entry_code(&entry)?;
+        let artifact = runtime::build_artifact(name, code);
+        let route_name = entry
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .unwrap_or("index")
+            .to_string();
+
+        (artifact, route_name)
+    };
+
+    println!("server:   {}", args.server_url);
+    if let Some(path) = &args.artifact {
+        println!("artifact: {}", path);
+    } else {
+        println!("entry:    {}", args.entry);
+    }
+    println!("hash:     {}", artifact.code_version());
+    println!("bytes:    {}", artifact.size_bytes());
+
+    // Boot the project to detect if it's a server or a one-shot handler.
+    let boot_context = ExecutionContext::new(artifact.code_version().to_string());
+    let boot = runtime::boot_runtime_artifact(&artifact, boot_context.clone()).await?;
+
+    let is_server_mode = boot.is_server_mode;
+    let has_handler = boot.has_handler;
+
+    if is_server_mode {
         println!(
-            "runtime:  http://{}:{}/{}",
+            "runtime:  http://{}:{}/ (Deno.serve mode)",
+            args.host, args.port
+        );
+    } else if has_handler {
+        println!(
+            "runtime:  http://{}:{}/{} (handler mode)",
             args.host, args.port, route_name
         );
+    }
 
-        if args.check_only {
-            println!("status:   ready for runtime execution and event streaming");
+    // Capture the boot result if recording is enabled.
+    if !args.token.is_empty() {
+        let _ = runtime::server_client::record_execution(
+            &args.server_url,
+            &args.token,
+            runtime::server_client::ExecutionEnvelope {
+                method: "BOOT".to_string(),
+                path: "/__boot".to_string(),
+                request_json: serde_json::json!({ "phase": "boot" }),
+                result: boot.result.clone(),
+            },
+        )
+        .await;
+    }
+
+    if let Some(error) = boot.result.error.as_ref() {
+        eprintln!("error: boot failed: {error}");
+        if !is_server_mode && !has_handler {
+            return Ok(());
+        }
+    }
+
+    // 1. If script_input is provided, execute the handler once and exit.
+    if let Some(input_str) = &args.script_input {
+        if !has_handler {
             return Ok(());
         }
 
-        println!("status:   serving");
+        let input: serde_json::Value = serde_json::from_str(input_str)
+            .with_context(|| format!("invalid --script-input JSON: {}", input_str))?;
 
-        runtime::run_http_runtime(
-            runtime::HttpRuntimeConfig {
-                host: args.host,
-                port: args.port,
-                route_name,
-                isolate_pool_size: args.isolate_pool_size,
-                server_url: args.server_url,
-                service_token: args.token,
-            },
-            artifact,
-        )
-        .await?;
+        let mut isolate = runtime::JsIsolate::new_from_any_artifact(&artifact, 0).await?;
 
-        return Ok(());
-    }
-
-    let entry = PathBuf::from(&args.entry);
-    if !entry.exists() {
-        bail!("entry file not found: {}", entry.display());
-    }
-
-    // Validate extension whitelist before doing anything else.
-    match extension(&entry).as_deref() {
-        Some("js") | Some("mjs") | Some("cjs") | Some("ts") | Some("tsx") => {}
-        _ => bail!("unsupported entry file extension: {}", entry.display()),
-    }
-
-    // Canonicalize and verify the entry file is within the current working directory
-    // to prevent path-traversal attacks (e.g. --entry ../../etc/passwd).
-    // In --script-mode the runner writes a temp file to the system temp dir, so
-    // the CWD restriction is intentionally skipped.
-    let canonical_entry = entry
-        .canonicalize()
-        .with_context(|| format!("failed to resolve entry path: {}", entry.display()))?;
-    if !args.script_mode {
-        let cwd = std::env::current_dir().context("failed to read current directory")?;
-        let canonical_cwd = cwd
-            .canonicalize()
-            .context("failed to resolve current directory")?;
-        if !canonical_entry.starts_with(&canonical_cwd) {
-            bail!(
-                "entry file must be within the working directory: {} is outside {}",
-                canonical_entry.display(),
-                canonical_cwd.display()
-            );
-        }
-    }
-
-    let name = entry
-        .file_name()
-        .and_then(|v| v.to_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid entry file name: {}", entry.display()))?;
-
-    let effective_entry = entry.clone();
-    let code = load_entry_code(&entry)?;
-    let name = name.to_string();
-
-    let artifact = runtime::build_artifact(&name, code);
-
-    let route_name = entry
-        .file_stem()
-        .and_then(|v| v.to_str())
-        .ok_or_else(|| anyhow::anyhow!("invalid entry file stem: {}", entry.display()))?
-        .to_string();
-
-    if args.script_mode {
-        tracing::debug!(entry = %effective_entry.display(), "script mode");
-        let input: serde_json::Value = serde_json::from_str(&args.script_input)
-            .with_context(|| format!("invalid --script-input JSON: {}", args.script_input))?;
-        let context = ExecutionContext::new(artifact.code_version().to_string());
-        let mut isolate = runtime::JsIsolate::new_for_run_entry(&effective_entry)
-            .await
-            .context("failed to create JS isolate")?;
         let started = Instant::now();
         let execution = isolate
-            .run_script(input.clone(), context.clone())
-            .await
-            .context("script execution failed")?;
+            .execute_handler(input.clone(), boot_context.clone())
+            .await?;
 
         if !args.token.is_empty() {
             let result = ExecutionResult {
-                execution_id: context.execution_id.clone(),
-                request_id: context.request_id.clone(),
-                code_version: context.code_version.clone(),
+                execution_id: boot_context.execution_id.clone(),
+                request_id: boot_context.request_id.clone(),
+                code_version: boot_context.code_version.clone(),
                 status: if execution.error.is_some() {
                     "error".to_string()
                 } else {
@@ -196,27 +206,22 @@ async fn main() -> Result<()> {
                 logs: execution.logs.clone(),
             };
 
-            match runtime::server_client::record_execution(
+            let _ = runtime::server_client::record_execution(
                 &args.server_url,
                 &args.token,
                 runtime::server_client::ExecutionEnvelope {
                     method: "RUN".to_string(),
-                    path: effective_entry.display().to_string(),
-                    request_json: input.clone(),
+                    path: args.entry.clone(),
+                    request_json: input,
                     result,
                 },
             )
-            .await
-            {
-                Ok(()) => println!("execution_id: {}", context.execution_id),
-                Err(error) => eprintln!("warning: failed to record script execution: {error}"),
-            }
+            .await;
         }
 
         if let Some(error) = execution.error.as_ref() {
             eprintln!("error: {error}");
         }
-
         if !execution.output.is_null() {
             println!(
                 "{}",
@@ -226,34 +231,24 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    println!("server:   {}", args.server_url);
-    println!("entry:    {}", entry.display());
-    println!("hash:     {}", artifact.code_version());
-    println!("bytes:    {}", artifact.size_bytes());
-    println!(
-        "runtime:  http://{}:{}/{}",
-        args.host, args.port, route_name
-    );
-
-    if args.check_only {
-        println!("status:   ready for runtime execution and event streaming");
-        return Ok(());
+    // 2. Decide whether to stay alive as a server or exit.
+    if is_server_mode || has_handler || args.serve {
+        println!("status:   serving");
+        runtime::run_http_runtime(
+            runtime::HttpRuntimeConfig {
+                host: args.host,
+                port: args.port,
+                route_name,
+                isolate_pool_size: args.isolate_pool_size,
+                server_url: args.server_url,
+                service_token: args.token,
+            },
+            artifact,
+        )
+        .await?;
+    } else {
+        println!("status:   finished");
     }
-
-    println!("status:   serving");
-
-    runtime::run_http_runtime(
-        runtime::HttpRuntimeConfig {
-            host: args.host,
-            port: args.port,
-            route_name,
-            isolate_pool_size: args.isolate_pool_size,
-            server_url: args.server_url,
-            service_token: args.token,
-        },
-        artifact,
-    )
-    .await?;
 
     Ok(())
 }

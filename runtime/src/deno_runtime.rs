@@ -1045,6 +1045,7 @@ pub struct JsExecutionOutput {
 pub struct BootExecutionResult {
     pub result: ExecutionResult,
     pub is_server_mode: bool,
+    pub has_handler: bool,
 }
 
 #[derive(Debug)]
@@ -4973,6 +4974,13 @@ impl JsIsolate {
         })
     }
 
+    pub async fn new_from_any_artifact(artifact: &RuntimeArtifact, isolate_id: usize) -> Result<Self> {
+        match artifact {
+            RuntimeArtifact::Built(b) => Self::new_from_artifact(b).await,
+            RuntimeArtifact::Inline(i) => Self::new(&i.code, isolate_id),
+        }
+    }
+
     pub async fn new_from_artifact(artifact: &FluxBuildArtifact) -> Result<Self> {
         let source_maps = Rc::new(RefCell::new(HashMap::new()));
         let modules = artifact
@@ -5206,7 +5214,29 @@ impl JsIsolate {
         context: ExecutionContext,
         recorded_checkpoints: Vec<FetchCheckpoint>,
     ) -> Result<JsExecutionOutput> {
-        self.execute_handler_with_recorded(payload, context, recorded_checkpoints, true)
+        self.execute_handler_with_recorded(payload, context, recorded_checkpoints, false)
+            .await
+    }
+
+    pub fn has_handler(&mut self) -> Result<bool> {
+        let check = self
+            .runtime
+            .execute_script(
+                "flux:check_handler",
+                "typeof globalThis.__flux_user_handler === 'function'",
+            )
+            .context("failed to check for exported handler")?;
+        deno_core::scope!(scope, &mut self.runtime);
+        let local = deno_core::v8::Local::new(scope, check);
+        Ok(local.is_true())
+    }
+
+    pub async fn execute_handler(
+        &mut self,
+        input: serde_json::Value,
+        context: ExecutionContext,
+    ) -> Result<JsExecutionOutput> {
+        self.execute_handler_with_recorded(input, context, Vec::new(), false)
             .await
     }
 
@@ -5357,21 +5387,7 @@ impl JsIsolate {
         input: serde_json::Value,
         context: ExecutionContext,
     ) -> Result<JsExecutionOutput> {
-        // Check whether the module registered a handler during initialisation.
-        let has_handler = {
-            let check = self
-                .runtime
-                .execute_script(
-                    "flux:check_handler",
-                    "typeof globalThis.__flux_user_handler === 'function'",
-                )
-                .context("failed to check for exported handler")?;
-            deno_core::scope!(scope, &mut self.runtime);
-            let local = deno_core::v8::Local::new(scope, check);
-            local.is_true()
-        };
-
-        if has_handler {
+        if self.has_handler()? {
             return self
                 .execute_handler_with_recorded(input, context, Vec::new(), false)
                 .await;
@@ -5566,6 +5582,7 @@ async fn boot_inline_runtime_artifact(
     close_registration_phase(&mut runtime)?;
 
     let is_server_mode = probe_server_mode(&mut runtime).unwrap_or(false);
+    let has_handler = probe_handler(&mut runtime).unwrap_or(false);
     let (checkpoints, logs) = take_execution_artifacts(&mut runtime, &execution_id);
 
     Ok(BootExecutionResult {
@@ -5581,6 +5598,7 @@ async fn boot_inline_runtime_artifact(
             body: serde_json::json!({
                 "phase": "boot",
                 "listener_mode": is_server_mode,
+                "has_handler": has_handler,
             }),
             error,
             duration_ms: started.elapsed().as_millis() as i32,
@@ -5588,6 +5606,7 @@ async fn boot_inline_runtime_artifact(
             logs,
         },
         is_server_mode,
+        has_handler,
     })
 }
 
@@ -5713,6 +5732,7 @@ async fn boot_built_runtime_artifact(
     close_registration_phase(&mut runtime)?;
 
     let is_server_mode = probe_server_mode(&mut runtime).unwrap_or(false);
+    let has_handler = probe_handler(&mut runtime).unwrap_or(false);
     let (checkpoints, logs) = take_execution_artifacts(&mut runtime, &execution_id);
 
     Ok(BootExecutionResult {
@@ -5728,6 +5748,7 @@ async fn boot_built_runtime_artifact(
             body: serde_json::json!({
                 "phase": "boot",
                 "listener_mode": is_server_mode,
+                "has_handler": has_handler,
             }),
             error,
             duration_ms: started.elapsed().as_millis() as i32,
@@ -5735,6 +5756,7 @@ async fn boot_built_runtime_artifact(
             logs,
         },
         is_server_mode,
+        has_handler,
     })
 }
 
@@ -5745,6 +5767,18 @@ fn probe_server_mode(runtime: &mut JsRuntime) -> Result<bool> {
             "typeof globalThis.__flux_net_handler === 'function'",
         )
         .context("failed to probe server mode")?;
+    deno_core::scope!(scope, runtime);
+    let local = deno_core::v8::Local::new(scope, probe);
+    Ok(local.is_true())
+}
+
+fn probe_handler(runtime: &mut JsRuntime) -> Result<bool> {
+    let probe = runtime
+        .execute_script(
+            "flux:probe_handler",
+            "typeof globalThis.__flux_user_handler === 'function'",
+        )
+        .context("failed to probe handler")?;
     deno_core::scope!(scope, runtime);
     let local = deno_core::v8::Local::new(scope, probe);
     Ok(local.is_true())
@@ -7916,18 +7950,7 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
 }
 
 fn prepare_user_code(code: &str) -> String {
-    let transformed = rewrite_export_default(code);
-
-    // In server mode (Deno.serve was called) __flux_net_handler is set instead
-    // of __flux_user_handler — skip the export guard in that case.
-    format!(
-        "{}\n\
-         if (typeof globalThis.__flux_net_handler !== 'function' && \
-             typeof globalThis.__flux_user_handler !== 'function') {{\n\
-           throw new Error('entry module must export default function or call Deno.serve()');\n\
-         }}",
-        transformed
-    )
+    rewrite_export_default(code)
 }
 
 /// Like `prepare_user_code` but without the mandatory-export guard, so plain
