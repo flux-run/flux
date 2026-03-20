@@ -190,6 +190,7 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
         "CREATE OR REPLACE FUNCTION flux.notify_execution()
          RETURNS trigger AS $$
          BEGIN
+             RAISE NOTICE 'Trigger firing status=% id=%', NEW.status, NEW.id;
              IF (TG_OP = 'UPDATE' AND NEW.status IN ('ok', 'error', 'timeout')) THEN
                  PERFORM pg_notify('flux_executions', json_build_object(
                      'id', NEW.id,

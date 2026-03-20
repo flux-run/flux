@@ -102,6 +102,38 @@ impl InternalAuthGrpc {
 
         Err(Status::unauthenticated("invalid service token"))
     }
+
+    async fn resolve_execution_id(&self, raw: &str) -> Result<uuid::Uuid, Status> {
+        if let Ok(id) = uuid::Uuid::parse_str(raw) {
+            return Ok(id);
+        }
+
+        if raw.len() < 8 {
+            return Err(Status::invalid_argument(
+                "execution_id must be a full UUID or an 8+ character prefix",
+            ));
+        }
+
+        let matches: Vec<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT id FROM flux.executions WHERE id::text LIKE $1",
+        )
+        .bind(format!("{}%", raw))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to resolve execution_id: {e}")))?;
+
+        if matches.is_empty() {
+            return Err(Status::not_found(format!("no execution found matching '{raw}'")));
+        }
+
+        if matches.len() > 1 {
+            return Err(Status::invalid_argument(format!(
+                "multiple executions match prefix '{raw}', please provide more characters"
+            )));
+        }
+
+        Ok(matches[0])
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -562,8 +594,16 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::RecordExecutionRequest>,
     ) -> Result<Response<pb::RecordExecutionResponse>, Status> {
-        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let auth_mode = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
+        tracing::info!(
+            execution_id = %req.execution_id,
+            request_id = %req.request_id,
+            method = %req.method,
+            path = %req.path,
+            status = %req.status,
+            "record_execution called"
+        );
 
         let execution_id = uuid::Uuid::parse_str(&req.execution_id)
             .map_err(|e| Status::invalid_argument(format!("invalid execution_id: {e}")))?;
@@ -693,9 +733,9 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         request: Request<pb::GetTraceRequest>,
     ) -> Result<Response<pb::GetTraceResponse>, Status> {
         let _auth_mode = self.authenticate(request.metadata()).await?;
-        let execution_id_raw = request.into_inner().execution_id;
-        let execution_id = uuid::Uuid::parse_str(&execution_id_raw)
-            .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
+        let req = request.into_inner();
+        let execution_id_raw = req.execution_id.clone();
+        let execution_id = self.resolve_execution_id(&execution_id_raw).await?;
 
         let execution: Option<(
             String,
@@ -786,75 +826,59 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let (tx, rx) = mpsc::channel(32);
 
         tokio::spawn(async move {
-            let mut listener = match PgListener::connect_with(&pool).await {
-                Ok(listener) => listener,
-                Err(err) => {
-                    tracing::error!(error = %err, "tail listener connect failed");
-                    return;
-                }
-            };
-
-            if let Err(err) = listener.listen("flux_executions").await {
-                tracing::error!(error = %err, "tail listener subscribe failed");
-                return;
-            }
-
+            tracing::info!(project_id = %project_id, "tail: starting listener task");
+            
             loop {
-                match listener.recv().await {
-                    Ok(notification) => {
-                        let payload = notification.payload();
-                        let Ok(val) = serde_json::from_str::<serde_json::Value>(payload) else {
-                            tracing::warn!(payload = %payload, "tail: received invalid json notification");
-                            continue;
-                        };
-
-                        if !project_id.is_empty() {
-                            let pid = val.get("project_id").and_then(|v| v.as_str()).unwrap_or("");
-                            if pid != project_id {
-                                continue;
-                            }
+                let mut listener = match PgListener::connect_with(&pool).await {
+                    Ok(mut listener) => {
+                        if let Err(err) = listener.listen("flux_executions").await {
+                             tracing::error!(error = %err, "tail listener subscribe failed, retrying in 2s");
+                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                             continue;
                         }
-
-                        let event = pb::TailEvent {
-                            execution_id: val
-                                .get("id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            method: val
-                                .get("method")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            path: val
-                                .get("path")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            status: val
-                                .get("status")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            duration_ms: val
-                                .get("duration_ms")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0) as i32,
-                            error: val
-                                .get("error")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            started_at: 0,
-                        };
-
-                        if tx.send(Ok(event)).await.is_err() {
-                            break;
-                        }
+                        tracing::info!("tail: listener connected and subscribed to flux_executions");
+                        listener
                     }
                     Err(err) => {
-                        tracing::error!(error = %err, "tail listener recv failed");
-                        break;
+                        tracing::error!(error = %err, "tail listener connect failed, retrying in 2s");
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        continue;
+                    }
+                };
+
+                loop {
+                    match listener.recv().await {
+                        Ok(notification) => {
+                            let payload = notification.payload();
+                            tracing::info!(payload = %payload, "tail: received notification");
+                            let Ok(val) = serde_json::from_str::<serde_json::Value>(payload) else {
+                                tracing::warn!(payload = %payload, "tail: received invalid json notification");
+                                continue;
+                            };
+
+                            let entry_project_id = val.get("project_id").and_then(|v| v.as_str()).unwrap_or_default();
+                            if !project_id.is_empty() && entry_project_id != project_id {
+                                continue;
+                            }
+
+                            let event = pb::TailEvent {
+                                execution_id: val.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                                method: val.get("method").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                                path: val.get("path").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                                status: val.get("status").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                                duration_ms: val.get("duration_ms").and_then(|v| v.as_i64()).unwrap_or_default() as i32,
+                                error: val.get("error").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                                started_at: 0,
+                            };
+
+                            if tx.send(Ok(event)).await.is_err() {
+                                return;
+                            }
+                        }
+                        Err(err) => {
+                            tracing::error!(error = %err, "tail listener connection lost, reconnecting...");
+                            break;
+                        }
                     }
                 }
             }
@@ -868,9 +892,9 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         request: Request<pb::WhyRequest>,
     ) -> Result<Response<pb::WhyResponse>, Status> {
         let _auth_mode = self.authenticate(request.metadata()).await?;
-        let execution_id_raw = request.into_inner().execution_id;
-        let execution_id = uuid::Uuid::parse_str(&execution_id_raw)
-            .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
+        let req = request.into_inner();
+        let execution_id_raw = req.execution_id.clone();
+        let execution_id = self.resolve_execution_id(&execution_id_raw).await?;
 
         let execution: Option<(String, i32, Option<String>)> = sqlx::query_as(
             "SELECT status, duration_ms, error
@@ -932,6 +956,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
     ) -> Result<Response<pb::ReplayResponse>, Status> {
         let _auth_mode = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
+        let source_execution_id_raw = req.execution_id.clone();
+        let source_execution_id = self.resolve_execution_id(&source_execution_id_raw).await?;
         let commit = req.commit;
         let validate = req.validate;
 
@@ -941,8 +967,6 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             ));
         }
 
-        let source_execution_id = uuid::Uuid::parse_str(&req.execution_id)
-            .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
         let from_index = req.from_index.max(0);
 
         // 1. Fetch original execution
@@ -1153,13 +1177,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::ResumeRequest>,
     ) -> Result<Response<pb::ResumeResponse>, Status> {
-        let auth_token =
-            InternalAuthGrpc::read_bearer_token(request.metadata()).unwrap_or_default();
+        let auth_token = Self::read_bearer_token(request.metadata()).ok_or_else(|| {
+            Status::unauthenticated("missing authorization bearer token")
+        })?;
         let _auth_mode = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
-
-        let source_execution_id = uuid::Uuid::parse_str(&req.execution_id)
-            .map_err(|_| Status::invalid_argument("invalid execution_id"))?;
+        let source_execution_id_raw = req.execution_id.clone();
+        let source_execution_id = self.resolve_execution_id(&source_execution_id_raw).await?;
 
         let source_execution: Option<(String, String, serde_json::Value, String)> = sqlx::query_as(
             "SELECT method, path, request, code_sha
@@ -1436,6 +1460,35 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             steps,
         }))
     }
+
+    async fn ping_tail(
+        &self,
+        request: Request<pb::PingTailRequest>,
+    ) -> Result<Response<pb::PingTailResponse>, Status> {
+        let req = request.into_inner();
+        let payload = serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "project_id": req.project_id,
+            "method": "PING",
+            "path": "/ping",
+            "status": "ok",
+            "duration_ms": 0,
+            "error": null
+        })
+        .to_string();
+
+        let mut conn = self.pool.acquire().await
+            .map_err(|e| Status::internal(format!("failed to acquire connection: {e}")))?;
+
+        // Using a raw execute on a single connection to avoid pool-level 
+        // issues with immediate NotificationResponse messages.
+        let _ = sqlx::query("SELECT pg_notify('flux_executions', $1)")
+            .bind(payload)
+            .execute(&mut *conn)
+            .await;
+
+        Ok(Response::new(pb::PingTailResponse { ok: true }))
+    }
 }
 
 pub async fn serve(
@@ -1444,6 +1497,8 @@ pub async fn serve(
     mut shutdown_rx: watch::Receiver<()>,
 ) -> Result<(), tonic::transport::Error> {
     tonic::transport::Server::builder()
+        .http2_keepalive_interval(Some(std::time::Duration::from_secs(10)))
+        .http2_keepalive_timeout(Some(std::time::Duration::from_secs(20)))
         .add_service(pb::internal_auth_service_server::InternalAuthServiceServer::new(service))
         .serve_with_shutdown(addr, async move {
             let _ = shutdown_rx.changed().await;

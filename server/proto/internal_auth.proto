@@ -11,6 +11,15 @@ service InternalAuthService {
   rpc Tail(TailRequest) returns (stream TailEvent);
   rpc Replay(ReplayRequest) returns (ReplayResponse);
   rpc Resume(ResumeRequest) returns (ResumeResponse);
+  rpc PingTail(PingTailRequest) returns (PingTailResponse);
+}
+
+message PingTailRequest {
+  string project_id = 1;
+}
+
+message PingTailResponse {
+  bool ok = 1;
 }
 
 message ValidateTokenRequest {}

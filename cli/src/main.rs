@@ -62,6 +62,11 @@ enum Commands {
     Why(why::WhyArgs),
     /// Stream live execution events.
     Tail(tail::TailArgs),
+    /// Manually trigger a test notification for tail.
+    PingTail {
+        #[arg(long)]
+        project_id: Option<String>,
+    },
     /// Analyse a JS/TS project and write flux.json for production use.
     Build(build::BuildArgs),
     /// Check compatibility with Flux's deterministic runtime contract.
@@ -94,6 +99,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Resume(args) => resume::execute(args).await?,
         Commands::Why(args) => why::execute(args).await?,
         Commands::Tail(args) => tail::execute(args).await?,
+        Commands::PingTail { project_id } => {
+            let auth = config::resolve_optional_auth(None, None)?;
+            grpc::ping_tail(&auth.url, &auth.token, project_id).await?;
+            println!("ping-tail sent");
+        }
         Commands::Build(args) => build::execute(args).await?,
         Commands::Check(args) => check::execute(args).await?,
         Commands::Dev(args) => dev::execute(args).await?,

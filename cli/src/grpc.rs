@@ -420,6 +420,30 @@ pub async fn resume(
     })
 }
 
+pub async fn ping_tail(url: &str, token: &str, project_id: Option<String>) -> Result<()> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
+
+    let mut request = Request::new(pb::PingTailRequest {
+        project_id: project_id.unwrap_or_default(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    client
+        .ping_tail(request)
+        .await
+        .map_err(|e| friendly_status_error("ping-tail request", e))?;
+
+    Ok(())
+}
+
 pub fn normalize_grpc_url(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches('/');
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
