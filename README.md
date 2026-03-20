@@ -40,14 +40,16 @@ No duplicate emails. No re-running expensive operations. No guessing.
 
 ---
 
-## What Flux Guarantees
+## Reliability & Guarantees
 
-1. You can replay any recorded request without touching live systems
-2. You can inspect exactly what happened — every input, output, and external call
-3. You can resume from failure without restarting the whole flow
-4. The system never fabricates history
+Everything in Flux is built around provable execution laws. We validate these guarantees at three distinct layers before every release:
 
-These guarantees are enforced by the runtime and verified by `examples/compat/flux-contract-suite.ts` — the CI gate that must pass before every release.
+1. **Runtime Correctness** (`cargo test`): Verifies V8 isolate state, syscall interception, and platform-specific polyfills (macOS/Linux).
+2. **Execution Contracts** (`flux-contract-suite.ts`): Proves determinism, replay safety, and absence of history fabrication under real-world library usage.
+3. **End-to-End User Flow** (Docker E2E): Simulates a developer's full journey—from `flux init` to `flux replay`—in a fresh production-like environment.
+
+**Every release is gated by this full stack. If any layer fails, we do not ship.**
+
 
 ---
 
