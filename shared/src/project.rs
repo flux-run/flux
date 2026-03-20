@@ -28,6 +28,7 @@ pub struct FluxBuildArtifact {
     pub flux_version: String,
     pub entry_specifier: String,
     pub route_name: String,
+    pub project_id: Option<String>,
     pub graph_sha256: String,
     pub modules: Vec<ArtifactModule>,
     pub npm_packages: Vec<NpmPackageSnapshot>,

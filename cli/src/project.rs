@@ -317,6 +317,7 @@ pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {
         .context("failed to build HTTP client")?;
 
     let mut graph = GraphBuilder::new(client);
+    graph.project_id = config.project_id.clone();
     let artifact = graph.build(entry_specifier.clone(), route_name).await;
 
     Ok(ProjectAnalysis {
@@ -590,6 +591,7 @@ struct GraphBuilder {
     diagnostics: Vec<CompatibilityDiagnostic>,
     npm_snapshots: BTreeMap<String, NpmPackageSnapshot>,
     npm_status: BTreeMap<String, NpmCompatibility>,
+    project_id: Option<String>,
 }
 
 impl GraphBuilder {
@@ -600,6 +602,7 @@ impl GraphBuilder {
             diagnostics: Vec::new(),
             npm_snapshots: BTreeMap::new(),
             npm_status: BTreeMap::new(),
+            project_id: None,
         }
     }
 
@@ -747,6 +750,7 @@ impl GraphBuilder {
             flux_version: FLUX_PROJECT_VERSION.to_string(),
             entry_specifier,
             route_name,
+            project_id: self.project_id.clone(),
             graph_sha256,
             modules,
             npm_packages,

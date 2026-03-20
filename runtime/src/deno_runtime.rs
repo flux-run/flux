@@ -1212,7 +1212,7 @@ fn op_flux_env_get(#[string] key: String) -> Option<String> {
 /// Called by JS at the start of every execution to register a state slot.
 /// `recorded_random_json` and `recorded_uuids_json` are JSON-encoded arrays for
 /// replay mode; pass `"[]"` for live executions.
-#[op2(fast)]
+#[op2]
 fn op_begin_execution(
     state: &mut OpState,
     #[string] execution_id: String,
@@ -1233,7 +1233,6 @@ fn op_begin_execution(
         context: ExecutionContext {
             execution_id: execution_id.clone(),
             request_id,
-            project_id,
             project_id,
             code_version,
             mode: if is_replay {
@@ -5122,7 +5121,7 @@ impl JsIsolate {
         recorded_checkpoints: Vec<FetchCheckpoint>,
     ) -> Result<NetRequestExecution> {
         let execution_id = context.execution_id.clone();
-        let request_id = context.request_id.clone(); let project_id = context.project_id.clone();
+        let request_id = context.request_id.clone();
         let recorded: HashMap<u32, FetchCheckpoint> = recorded_checkpoints
             .into_iter()
             .map(|cp| (cp.call_index, cp))
@@ -5475,7 +5474,8 @@ async fn boot_inline_runtime_artifact(
 ) -> Result<BootExecutionResult> {
     let started = std::time::Instant::now();
     let execution_id = context.execution_id.clone();
-    let request_id = context.request_id.clone(); let project_id = context.project_id.clone();
+    let request_id = context.request_id.clone();
+    let project_id = context.project_id.clone();
     let code_version = context.code_version.clone();
     let prepared = prepare_user_code(user_code);
 
