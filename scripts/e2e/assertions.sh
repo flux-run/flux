@@ -22,8 +22,8 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-pass() { echo -e "  ${GREEN}✔${NC} $1"; ((PASS++)); }
-fail() { echo -e "  ${RED}✗${NC} $1"; FAILURES+=("$1"); ((FAIL++)); }
+pass() { echo -e "  ${GREEN}✔${NC} $1"; PASS=$((PASS + 1)); }
+fail() { echo -e "  ${RED}✗${NC} $1"; FAILURES+=("$1"); FAIL=$((FAIL + 1)); }
 section() { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
 
 # assert_contains <string> <substring>
@@ -120,7 +120,7 @@ wait_for_http() {
   local i=0
   while ! curl -sf "$url" >/dev/null 2>&1; do
     sleep 1
-    ((i++))
+    i=$((i + 1))
     if [[ $i -ge $max ]]; then
       fail "Timed out waiting for $url after ${max}s"
       return 1
