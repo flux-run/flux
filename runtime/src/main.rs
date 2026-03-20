@@ -4,7 +4,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use deno_ast::{EmitOptions, MediaType, ParseParams, TranspileModuleOptions, TranspileOptions};
-use runtime::isolate_pool::{ExecutionContext, ExecutionResult};
+use runtime::isolate_pool::ExecutionContext;
 
 #[derive(Parser, Debug)]
 #[command(name = "flux-runtime")]
