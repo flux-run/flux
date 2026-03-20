@@ -61,47 +61,66 @@ pub async fn execute(args: DevArgs) -> Result<()> {
     eprintln!("watching  {}", watch_dir.display());
 
     loop {
-        let mut child = tokio::process::Command::new(&binary)
-            .args(build_runtime_args(&entry, &server_url, &token, &args))
-            .spawn()
-            .context("failed to spawn flux-runtime")?;
-        eprintln!("[flux dev] started pid {:?}", child.id());
-
-        let fingerprint_before = watch_fingerprint(&watch_dir)?;
-        let should_restart = loop {
-            tokio::time::sleep(tokio::time::Duration::from_millis(args.poll_ms)).await;
-
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    eprintln!("[flux dev] runtime exited ({status}), restarting");
-                    break true;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    eprintln!("[flux dev] wait error: {err}, restarting");
-                    break true;
+        // Build internal artifact for the runtime to resolve imports
+        let analysis = crate::project::analyze_project(&entry)
+            .await
+            .context("failed to analyze project")?;
+        
+        if crate::project::has_errors(&analysis.diagnostics) {
+            eprintln!("\nCompatibility Errors:");
+            for diag in &analysis.diagnostics {
+                if diag.severity == crate::project::DiagnosticSeverity::Error {
+                    eprintln!("  ✘ [{}] {} {}", diag.code, diag.specifier, diag.message);
                 }
             }
+            eprintln!("\nFix errors to continue dev...");
+        } else {
+            let artifact_tmp = watch_dir.join(".flux_artifact_dev.json");
+            crate::project::write_artifact(&artifact_tmp, &analysis.artifact)
+                .context("failed to write dev artifact")?;
 
-            if watch_fingerprint(&watch_dir)? != fingerprint_before {
-                eprintln!("[flux dev] change detected, restarting");
-                break true;
+            let mut child = tokio::process::Command::new(&binary)
+                .args(build_runtime_args(&artifact_tmp, &server_url, &token, &args))
+                .spawn()
+                .context("failed to spawn flux-runtime")?;
+            eprintln!("[flux dev] started pid {:?}", child.id());
+
+            let fingerprint_before = watch_fingerprint(&watch_dir)?;
+            let should_restart = loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(args.poll_ms)).await;
+
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        eprintln!("[flux dev] runtime exited ({status}), restarting");
+                        break true;
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        eprintln!("[flux dev] wait error: {err}, restarting");
+                        break true;
+                    }
+                }
+
+                if watch_fingerprint(&watch_dir)? != fingerprint_before {
+                    eprintln!("[flux dev] change detected, restarting");
+                    break true;
+                }
+            };
+
+            if should_restart {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
             }
-        };
-
-        if should_restart {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
     }
 }
 
-fn build_runtime_args(entry: &Path, server_url: &str, token: &str, args: &DevArgs) -> Vec<String> {
+fn build_runtime_args(artifact_path: &Path, server_url: &str, token: &str, args: &DevArgs) -> Vec<String> {
     vec![
-        "--entry".to_string(),
-        entry.to_string_lossy().into_owned(),
+        "--artifact".to_string(),
+        artifact_path.to_string_lossy().into_owned(),
         "--server-url".to_string(),
         server_url.to_string(),
         "--token".to_string(),
