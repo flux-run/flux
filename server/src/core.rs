@@ -73,8 +73,11 @@ impl CoreService {
     }
 }
 
-async fn init_pool() -> Result<PgPool, sqlx::Error> {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+async fn init_pool() -> Result<PgPool, Box<dyn std::error::Error>> {
+    let database_url = std::env::var("DATABASE_URL").map_err(|_| {
+        "DATABASE_URL environment variable is not set. Please provide it via the --database-url flag or export it."
+    })?;
+
     let max_connections = std::env::var("SERVER_DB_POOL_SIZE")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
@@ -92,6 +95,12 @@ async fn init_pool() -> Result<PgPool, sqlx::Error> {
         })
         .connect(&database_url)
         .await
+        .map_err(|err| {
+            format!(
+                "Failed to connect to Postgres: {}. Please check your DATABASE_URL and ensure the database is running.",
+                err
+            ).into()
+        })
 }
 
 async fn ensure_service_token(pool: &PgPool) -> Result<Option<String>, sqlx::Error> {

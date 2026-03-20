@@ -2895,6 +2895,10 @@ fn connect_postgres_client(
             .map_err(|err| {
                 let msg = if let Some(db_err) = err.as_db_error() {
                     format!("postgres connect failed: {} (code: {})", db_err.message(), db_err.code().code())
+                } else if err.to_string().contains("Connection refused") {
+                    format!("postgres connect failed: Connection refused. Is Postgres running and accessible at the provided URL?")
+                } else if err.to_string().contains("timed out") {
+                    format!("postgres connect failed: Connection timed out. Check your network and DATABASE_URL.")
                 } else {
                     format!("postgres connect failed: {err}")
                 };
