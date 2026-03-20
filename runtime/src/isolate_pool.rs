@@ -322,7 +322,7 @@ fn spawn_isolate_worker(
                                     execution_id: context.execution_id, project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
-                                    status: if net_resp.status >= 400 { "error".to_string() } else { "ok".to_string() },
+                                    status: "ok".to_string(),
                                     body: serde_json::json!({
                                         "net_response": {
                                             "status": net_resp.status,
@@ -479,7 +479,7 @@ fn spawn_isolate_worker_with_mode(
                                     execution_id: context.execution_id, project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
-                                    status: if net_resp.status >= 400 { "error".to_string() } else { "ok".to_string() },
+                                    status: "ok".to_string(),
                                     body: serde_json::json!({
                                         "net_response": {
                                             "status": net_resp.status,

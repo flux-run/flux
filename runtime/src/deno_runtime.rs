@@ -2879,12 +2879,13 @@ fn connect_postgres_client(
         JsErrorBox::type_error(format!("invalid postgres connection string: {err}"))
     })?;
 
-    // Enable TLS if requested explicitly or via the connection string
-    let use_tls = tls.enabled || config.get_ssl_mode() != PostgresSslMode::Disable;
+    let use_tls = tls.enabled || matches!(config.get_ssl_mode(), PostgresSslMode::Require);
 
     if use_tls {
-        // If TLS is used, ensure we're at least in Require mode or better
-        if config.get_ssl_mode() == PostgresSslMode::Disable {
+        // Ensure we're at least in Require mode or better if using a TLS connector
+        if config.get_ssl_mode() == PostgresSslMode::Disable
+            || config.get_ssl_mode() == PostgresSslMode::Prefer
+        {
             config.ssl_mode(PostgresSslMode::Require);
         }
         
@@ -5251,7 +5252,7 @@ impl JsIsolate {
         context: ExecutionContext,
         recorded_checkpoints: Vec<FetchCheckpoint>,
     ) -> Result<JsExecutionOutput> {
-        self.execute_handler_with_recorded(payload, context, recorded_checkpoints, false)
+        self.execute_handler_with_recorded(payload, context, recorded_checkpoints, true)
             .await
     }
 
@@ -5273,7 +5274,7 @@ impl JsIsolate {
         input: serde_json::Value,
         context: ExecutionContext,
     ) -> Result<JsExecutionOutput> {
-        self.execute_handler_with_recorded(input, context, Vec::new(), false)
+        self.execute_handler_with_recorded(input, context, Vec::new(), true)
             .await
     }
 
