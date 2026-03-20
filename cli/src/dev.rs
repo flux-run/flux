@@ -70,8 +70,17 @@ pub async fn execute(args: DevArgs) -> Result<()> {
             crate::project::write_artifact(&artifact_tmp, &analysis.artifact)
                 .context("failed to write dev artifact")?;
 
+            let project_id = analysis.artifact.project_id.clone();
+            let runtime_args = build_runtime_args(
+                &artifact_tmp,
+                &auth.url,
+                &auth.token,
+                &args,
+                project_id.as_deref(),
+            );
+
             let mut child = tokio::process::Command::new(&binary)
-                .args(build_runtime_args(&artifact_tmp, &auth.url, &auth.token, &args))
+                .args(runtime_args)
                 .spawn()
                 .context("failed to spawn flux-runtime")?;
             eprintln!("[flux dev] started pid {:?}", child.id());
@@ -108,8 +117,8 @@ pub async fn execute(args: DevArgs) -> Result<()> {
     }
 }
 
-fn build_runtime_args(artifact_path: &Path, server_url: &str, token: &str, args: &DevArgs) -> Vec<String> {
-    vec![
+fn build_runtime_args(artifact_path: &Path, server_url: &str, token: &str, args: &DevArgs, project_id: Option<&str>) -> Vec<String> {
+    let mut runtime_args = vec![
         "--artifact".to_string(),
         artifact_path.to_string_lossy().into_owned(),
         "--server-url".to_string(),
@@ -122,5 +131,12 @@ fn build_runtime_args(artifact_path: &Path, server_url: &str, token: &str, args:
         args.port.to_string(),
         "--isolate-pool-size".to_string(),
         args.isolate_pool_size.to_string(),
-    ]
+    ];
+
+    if let Some(project_id) = project_id {
+        runtime_args.push("--project-id".to_string());
+        runtime_args.push(project_id.to_string());
+    }
+
+    runtime_args
 }

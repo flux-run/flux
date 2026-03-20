@@ -10,6 +10,7 @@ pub use shared::pb;
 pub struct ExecutionEnvelope {
     pub method: String,
     pub path: String,
+    pub project_id: Option<String>,
     pub request_json: serde_json::Value,
     pub result: ExecutionResult,
 }
@@ -34,6 +35,7 @@ pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelop
             .context("failed to encode response JSON")?,
         error: envelope.result.error.unwrap_or_default(),
         duration_ms: envelope.result.duration_ms,
+        project_id: envelope.project_id.unwrap_or_default(),
         checkpoints: envelope
             .result
             .checkpoints

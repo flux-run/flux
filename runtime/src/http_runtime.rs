@@ -23,6 +23,7 @@ pub struct HttpRuntimeConfig {
     pub port: u16,
     pub route_name: String,
     pub isolate_pool_size: usize,
+    pub project_id: Option<String>,
     pub server_url: String,
     pub service_token: String,
 }
@@ -34,6 +35,7 @@ impl Default for HttpRuntimeConfig {
             port: 3000,
             route_name: "hello".to_string(),
             isolate_pool_size: 16,
+            project_id: None,
             server_url: "http://127.0.0.1:50051".to_string(),
             service_token: String::new(),
         }
@@ -44,6 +46,7 @@ impl Default for HttpRuntimeConfig {
 struct RuntimeState {
     route_name: String,
     code_version: String,
+    project_id: Option<String>,
     pool: Arc<IsolatePool>,
     server_url: String,
     service_token: String,
@@ -92,7 +95,7 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
 
     let boot = boot_runtime_artifact(
         &artifact,
-        ExecutionContext::new(artifact.code_version().to_string()),
+        ExecutionContext::with_project(artifact.code_version().to_string(), config.project_id.clone()),
     )
     .await?;
 
@@ -105,6 +108,7 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
             crate::server_client::ExecutionEnvelope {
                 method: "BOOT".to_string(),
                 path: "/__boot".to_string(),
+                project_id: config.project_id.clone(),
                 request_json: serde_json::json!({
                     "phase": "boot",
                     "route": config.route_name,
@@ -128,6 +132,7 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
     let state = RuntimeState {
         route_name: config.route_name.clone(),
         code_version: artifact.code_version().to_string(),
+        project_id: config.project_id.clone(),
         pool,
         server_url: config.server_url,
         service_token: config.service_token,
@@ -190,7 +195,7 @@ async fn handle_request(
     let request_payload = payload.clone();
     let result = state
         .pool
-        .execute(payload, ExecutionContext::new(state.code_version.clone()))
+        .execute(payload, ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone()))
         .await;
 
     if !state.service_token.is_empty() {
@@ -200,6 +205,7 @@ async fn handle_request(
             crate::server_client::ExecutionEnvelope {
                 method: "POST".to_string(),
                 path: format!("/{}", route),
+                project_id: state.project_id.clone(),
                 request_json: request_payload,
                 result: result.clone(),
             },
@@ -323,7 +329,7 @@ async fn handle_net_request(
             .unwrap_or_default()
             .to_string(),
     };
-    let context = ExecutionContext::new(state.code_version.clone());
+    let context = ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone());
     let result = state.pool.execute_net_request(context, net_req).await;
 
     if !state.service_token.is_empty() {
@@ -339,6 +345,7 @@ async fn handle_net_request(
                     .path_and_query()
                     .map(|value| value.as_str().to_string())
                     .unwrap_or_else(|| uri.path().to_string()),
+                project_id: state.project_id.clone(),
                 request_json: request_payload.clone(),
                 result: result.clone(),
             },

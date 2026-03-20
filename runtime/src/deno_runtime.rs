@@ -1218,6 +1218,7 @@ fn op_begin_execution(
     #[string] execution_id: String,
     #[string] request_id: String,
     #[string] code_version: String,
+    #[string] project_id: Option<String>,
     is_replay: bool,
     #[string] recorded_random_json: String,
     #[string] recorded_uuids_json: String,
@@ -1232,6 +1233,8 @@ fn op_begin_execution(
         context: ExecutionContext {
             execution_id: execution_id.clone(),
             request_id,
+            project_id,
+            project_id,
             code_version,
             mode: if is_replay {
                 ExecutionMode::Replay
@@ -5119,7 +5122,7 @@ impl JsIsolate {
         recorded_checkpoints: Vec<FetchCheckpoint>,
     ) -> Result<NetRequestExecution> {
         let execution_id = context.execution_id.clone();
-        let request_id = context.request_id.clone();
+        let request_id = context.request_id.clone(); let project_id = context.project_id.clone();
         let recorded: HashMap<u32, FetchCheckpoint> = recorded_checkpoints
             .into_iter()
             .map(|cp| (cp.call_index, cp))
@@ -5472,7 +5475,7 @@ async fn boot_inline_runtime_artifact(
 ) -> Result<BootExecutionResult> {
     let started = std::time::Instant::now();
     let execution_id = context.execution_id.clone();
-    let request_id = context.request_id.clone();
+    let request_id = context.request_id.clone(); let project_id = context.project_id.clone();
     let code_version = context.code_version.clone();
     let prepared = prepare_user_code(user_code);
 
@@ -5589,6 +5592,7 @@ async fn boot_inline_runtime_artifact(
         result: ExecutionResult {
             execution_id,
             request_id,
+            project_id,
             code_version,
             status: if error.is_some() {
                 "error".to_string()
@@ -5616,7 +5620,7 @@ async fn boot_built_runtime_artifact(
 ) -> Result<BootExecutionResult> {
     let started = std::time::Instant::now();
     let execution_id = context.execution_id.clone();
-    let request_id = context.request_id.clone();
+    let request_id = context.request_id.clone(); let project_id = context.project_id.clone();
     let code_version = context.code_version.clone();
     let source_maps = Rc::new(RefCell::new(HashMap::new()));
     let modules = artifact
@@ -5739,6 +5743,7 @@ async fn boot_built_runtime_artifact(
         result: ExecutionResult {
             execution_id,
             request_id,
+            project_id,
             code_version,
             status: if error.is_some() {
                 "error".to_string()

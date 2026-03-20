@@ -16,6 +16,7 @@ use crate::deno_runtime::{
 pub struct ExecutionContext {
     pub execution_id: String,
     pub request_id: String,
+    pub project_id: Option<String>,
     pub code_version: String,
     pub mode: ExecutionMode,
 }
@@ -25,6 +26,17 @@ impl ExecutionContext {
         Self {
             execution_id: Uuid::new_v4().to_string(),
             request_id: Uuid::new_v4().to_string(),
+            project_id: None,
+            code_version: code_version.into(),
+            mode: ExecutionMode::Live,
+        }
+    }
+
+    pub fn with_project(code_version: impl Into<String>, project_id: Option<String>) -> Self {
+        Self {
+            execution_id: Uuid::new_v4().to_string(),
+            request_id: Uuid::new_v4().to_string(),
+            project_id,
             code_version: code_version.into(),
             mode: ExecutionMode::Live,
         }
@@ -35,6 +47,7 @@ impl ExecutionContext {
 pub struct ExecutionResult {
     pub execution_id: String,
     pub request_id: String,
+    pub project_id: Option<String>,
     pub code_version: String,
     pub status: String,
     pub body: serde_json::Value,
@@ -306,10 +319,10 @@ fn spawn_isolate_worker(
                                     checkpoints,
                                     logs,
                                 }) => ExecutionResult {
-                                    execution_id: context.execution_id,
+                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
-                                    status: "ok".to_string(),
+                                    status: if net_resp.status >= 400 { "error".to_string() } else { "ok".to_string() },
                                     body: serde_json::json!({
                                         "net_response": {
                                             "status": net_resp.status,
@@ -358,7 +371,7 @@ fn spawn_isolate_worker(
                                     ),
                                 };
                                 ExecutionResult {
-                                    execution_id: context.execution_id,
+                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
                                     status,
@@ -371,6 +384,7 @@ fn spawn_isolate_worker(
                             }
                             Err(err) => ExecutionResult {
                                 execution_id: context.execution_id,
+                                project_id: context.project_id.clone(),
                                 request_id: context.request_id,
                                 code_version: context.code_version,
                                 status: "error".to_string(),
@@ -462,10 +476,10 @@ fn spawn_isolate_worker_with_mode(
                                     checkpoints,
                                     logs,
                                 }) => ExecutionResult {
-                                    execution_id: context.execution_id,
+                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
-                                    status: "ok".to_string(),
+                                    status: if net_resp.status >= 400 { "error".to_string() } else { "ok".to_string() },
                                     body: serde_json::json!({
                                         "net_response": {
                                             "status": net_resp.status,
@@ -514,7 +528,7 @@ fn spawn_isolate_worker_with_mode(
                                     ),
                                 };
                                 ExecutionResult {
-                                    execution_id: context.execution_id,
+                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
                                     status,
@@ -528,6 +542,7 @@ fn spawn_isolate_worker_with_mode(
                             Err(err) => ExecutionResult {
                                 execution_id: context.execution_id,
                                 request_id: context.request_id,
+                                project_id: context.project_id.clone(),
                                 code_version: context.code_version,
                                 status: "error".to_string(),
                                 body: serde_json::Value::Null,
@@ -552,6 +567,7 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
     ExecutionResult {
         execution_id: context.execution_id,
         request_id: context.request_id,
+        project_id: context.project_id.clone(),
         code_version: context.code_version,
         status: "error".to_string(),
         body: serde_json::Value::Null,

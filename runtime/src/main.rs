@@ -54,6 +54,10 @@ struct Args {
     /// If provided, the runtime will execute the handler once and then exit.
     #[arg(long, value_name = "JSON")]
     script_input: Option<String>,
+
+    /// Project ID for this execution.
+    #[arg(long, env = "FLUX_PROJECT_ID", value_name = "ID")]
+    project_id: Option<String>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -133,7 +137,7 @@ async fn main() -> Result<()> {
     println!("bytes:    {}", artifact.size_bytes());
 
     // Boot the project to detect if it's a server or a one-shot handler.
-    let boot_context = ExecutionContext::new(artifact.code_version().to_string());
+    let boot_context = ExecutionContext::with_project(artifact.code_version().to_string(), args.project_id.clone());
     let boot = runtime::boot_runtime_artifact(&artifact, boot_context.clone()).await?;
 
     let is_server_mode = boot.is_server_mode;
@@ -159,6 +163,7 @@ async fn main() -> Result<()> {
             runtime::server_client::ExecutionEnvelope {
                 method: "BOOT".to_string(),
                 path: "/__boot".to_string(),
+                project_id: args.project_id.clone(),
                 request_json: serde_json::json!({ "phase": "boot" }),
                 result: boot.result.clone(),
             },
@@ -193,6 +198,7 @@ async fn main() -> Result<()> {
             let result = ExecutionResult {
                 execution_id: boot_context.execution_id.clone(),
                 request_id: boot_context.request_id.clone(),
+                project_id: args.project_id.clone(),
                 code_version: boot_context.code_version.clone(),
                 status: if execution.error.is_some() {
                     "error".to_string()
@@ -212,6 +218,7 @@ async fn main() -> Result<()> {
                 runtime::server_client::ExecutionEnvelope {
                     method: "RUN".to_string(),
                     path: args.entry.clone(),
+                    project_id: args.project_id.clone(),
                     request_json: input,
                     result,
                 },
@@ -240,6 +247,7 @@ async fn main() -> Result<()> {
                 port: args.port,
                 route_name,
                 isolate_pool_size: args.isolate_pool_size,
+                project_id: args.project_id,
                 server_url: args.server_url,
                 service_token: args.token,
             },

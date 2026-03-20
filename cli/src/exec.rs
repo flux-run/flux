@@ -25,6 +25,8 @@ pub struct ExecArgs {
     pub isolate_pool_size: usize,
     #[arg(long, default_value_t = 10)]
     pub timeout_secs: u64,
+    #[arg(long, value_name = "ID")]
+    pub project_id: Option<String>,
 }
 
 pub async fn execute(args: ExecArgs) -> Result<()> {
@@ -45,6 +47,11 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
 
     let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
+    let project_id = args.project_id.clone().or_else(|| {
+        let project_dir = entry.parent().unwrap_or(std::path::Path::new("."));
+        crate::project::load_project_config(project_dir).ok().and_then(|c| c.project_id)
+    });
+
     let runtime_port = pick_free_port()?;
 
     let mut child = spawn_runtime(
@@ -53,6 +60,7 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
         &auth.url,
         &auth.token,
         runtime_port,
+        project_id.as_deref(),
     )
     .await?;
 
@@ -141,6 +149,7 @@ async fn spawn_runtime(
     server_url: &str,
     token: &str,
     port: u16,
+    project_id: Option<&str>,
 ) -> Result<tokio::process::Child> {
     let mut command = tokio::process::Command::new(binary);
     command
@@ -149,7 +158,13 @@ async fn spawn_runtime(
         .arg("--isolate-pool-size")
         .arg(args.isolate_pool_size.to_string())
         .env("FLUX_SERVER_URL", server_url)
-        .env("FLUX_SERVICE_TOKEN", token)
+        .env("FLUX_SERVICE_TOKEN", token);
+
+    if let Some(id) = project_id {
+        command.arg("--project-id").arg(id);
+    }
+
+    command
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
 

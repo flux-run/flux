@@ -9,6 +9,7 @@ pub struct FluxProjectConfig {
     pub flux_version: String,
     pub entry: String,
     pub artifact: String,
+    pub project_id: Option<String>,
 }
 
 impl FluxProjectConfig {
@@ -17,6 +18,7 @@ impl FluxProjectConfig {
             flux_version: FLUX_PROJECT_VERSION.to_string(),
             entry: entry.into(),
             artifact: DEFAULT_ARTIFACT_PATH.to_string(),
+            project_id: None,
         }
     }
 }

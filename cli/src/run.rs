@@ -51,6 +51,10 @@ pub struct RunArgs {
 
     #[arg(long)]
     pub check_only: bool,
+
+    /// Project ID for this execution.
+    #[arg(long, value_name = "ID")]
+    pub project_id: Option<String>,
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
@@ -81,12 +85,22 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     let auth = crate::config::resolve_optional_auth(args.url.clone(), args.token.clone())?;
 
-    let prog_args = build_runtime_args(&auth.url, &auth.token, &args);
+    let project_id = args.project_id.clone().or_else(|| {
+        if let Some(ref entry_str) = args.entry {
+            let entry = std::path::PathBuf::from(entry_str);
+            let project_dir = entry.parent().unwrap_or(std::path::Path::new("."));
+            crate::project::load_project_config(project_dir).ok().and_then(|c| c.project_id)
+        } else {
+            None
+        }
+    });
+
+    let prog_args = build_runtime_args(&auth.url, &auth.token, &args, project_id.as_deref());
 
     exec_runtime(binary, &prog_args).await
 }
 
-fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<String> {
+fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs, project_id: Option<&str>) -> Vec<String> {
     let mut prog_args = Vec::new();
 
     if let Some(ref artifact) = args.artifact {
@@ -109,6 +123,11 @@ fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<Stri
         "--isolate-pool-size".to_string(),
         args.isolate_pool_size.to_string(),
     ]);
+
+    if let Some(project_id) = project_id {
+        prog_args.push("--project-id".to_string());
+        prog_args.push(project_id.to_string());
+    }
 
     if args.serve {
         prog_args.push("--serve".to_string());
