@@ -39,6 +39,20 @@ pub async fn execute(args: DevArgs) -> Result<()> {
     let entry = resolve_entry_path(args.entry.as_deref())?;
     let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
+    // Load .env from the project directory (silently ignore if missing)
+    let project_dir = entry
+        .parent()
+        .and_then(|p| p.parent()) // go up from src/ to project root
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let env_path = project_dir.join(".env");
+    if env_path.exists() {
+        let _ = dotenvy::from_path(&env_path);
+        eprintln!("env       {}", env_path.display());
+    } else {
+        // Also try current directory
+        let _ = dotenvy::dotenv();
+    }
+
     let auth = crate::config::resolve_optional_auth(args.url.clone(), args.token.clone())?;
 
     let watch_dir = args

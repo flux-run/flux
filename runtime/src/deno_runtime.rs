@@ -2879,13 +2879,27 @@ fn connect_postgres_client(
         JsErrorBox::type_error(format!("invalid postgres connection string: {err}"))
     })?;
 
-    if tls.enabled {
-        config.ssl_mode(PostgresSslMode::Require);
+    // Enable TLS if requested explicitly or via the connection string
+    let use_tls = tls.enabled || config.get_ssl_mode() != PostgresSslMode::Disable;
+
+    if use_tls {
+        // If TLS is used, ensure we're at least in Require mode or better
+        if config.get_ssl_mode() == PostgresSslMode::Disable {
+            config.ssl_mode(PostgresSslMode::Require);
+        }
+        
         let tls_config = build_tls_client_config(tls.ca_cert_pem.as_deref())?;
         let connector = PostgresMakeTlsConnector::new(TlsConnector::from(tls_config));
         config
             .connect(connector)
-            .map_err(|err| JsErrorBox::type_error(format!("postgres connect failed: {err}")))
+            .map_err(|err| {
+                let msg = if let Some(db_err) = err.as_db_error() {
+                    format!("postgres connect failed: {} (code: {})", db_err.message(), db_err.code().code())
+                } else {
+                    format!("postgres connect failed: {err}")
+                };
+                JsErrorBox::type_error(msg)
+            })
     } else {
         config.ssl_mode(PostgresSslMode::Disable);
         config
@@ -4752,10 +4766,17 @@ if (!__fluxPg || !__fluxPg.NodePgPool || !__fluxPg.nodePgTypes) {
 }
 
 function __fluxPgNormalizeConfig(config = {}) {
+    const connectionString = String(config?.connectionString ?? "");
     const ssl = config?.ssl;
+    
+    // Automatically enable TLS if requested in the connection string
+    const urlHasSsl = connectionString.includes("sslmode=require") || 
+                     connectionString.includes("sslmode=prefer") ||
+                     connectionString.includes("sslmode=allow");
+
     return {
-        connectionString: String(config?.connectionString ?? ""),
-        tls: !!ssl,
+        connectionString,
+        tls: ssl !== false && (!!ssl || urlHasSsl),
         caCertPem: ssl && typeof ssl === "object" && ssl.ca != null ? String(ssl.ca) : null,
     };
 }

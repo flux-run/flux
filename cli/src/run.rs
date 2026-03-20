@@ -83,6 +83,42 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
+    // Load .env from the project directory (silently ignore if missing).
+    // Try the artifact/entry directory first, then the current working directory.
+    let loaded_env = if let Some(ref artifact_str) = args.artifact {
+        let artifact = PathBuf::from(artifact_str);
+        // artifact is typically at <project>/<src>/.flux/artifact.json — go up 3 levels
+        let env_path = artifact
+            .parent()  // .flux/
+            .and_then(|p| p.parent())  // src/
+            .and_then(|p| p.parent())  // project root
+            .map(|p| p.join(".env"))
+            .filter(|p| p.exists());
+        if let Some(p) = env_path {
+            let _ = dotenvy::from_path(&p);
+            Some(p)
+        } else {
+            dotenvy::dotenv().ok().map(PathBuf::from)
+        }
+    } else if let Some(ref entry_str) = args.entry {
+        let entry = PathBuf::from(entry_str);
+        let env_path = entry
+            .parent()
+            .map(|p| p.join(".env"))
+            .filter(|p| p.exists());
+        if let Some(p) = env_path {
+            let _ = dotenvy::from_path(&p);
+            Some(p)
+        } else {
+            dotenvy::dotenv().ok().map(PathBuf::from)
+        }
+    } else {
+        dotenvy::dotenv().ok().map(PathBuf::from)
+    };
+    if let Some(ref p) = loaded_env {
+        eprintln!("env       {}", p.display());
+    }
+
     let auth = crate::config::resolve_optional_auth(args.url.clone(), args.token.clone())?;
 
     let project_id = args.project_id.clone().or_else(|| {
