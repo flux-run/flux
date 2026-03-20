@@ -138,6 +138,8 @@ async fn main() -> Result<()> {
 
     // Boot the project to detect if it's a server or a one-shot handler.
     let boot_context = ExecutionContext::with_project(artifact.code_version().to_string(), args.project_id.clone());
+    println!("[boot] execution_id={} request_id={}", boot_context.execution_id, boot_context.request_id);
+    
     let boot = runtime::boot_runtime_artifact(&artifact, boot_context.clone()).await?;
 
     let is_server_mode = boot.is_server_mode;

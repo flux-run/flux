@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use tokio::io::AsyncBufReadExt;
 
 use crate::config::resolve_auth;
 use crate::grpc::get_trace;
@@ -47,6 +48,19 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
 
     let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
+    // Load .env from the project directory (silently ignore if missing).
+    let entry_path = PathBuf::from(&args.entry);
+    let env_path = entry_path
+        .parent()
+        .map(|p| p.join(".env"))
+        .filter(|p| p.exists());
+    if let Some(p) = env_path {
+        let _ = dotenvy::from_path(&p);
+        eprintln!("env       {}", p.display());
+    } else if let Ok(p) = dotenvy::dotenv() {
+        eprintln!("env       {}", p.display());
+    }
+
     let project_id = args.project_id.clone().or_else(|| {
         let project_dir = entry.parent().unwrap_or(std::path::Path::new("."));
         crate::project::load_project_config(project_dir).ok().and_then(|c| c.project_id)
@@ -64,32 +78,87 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
     )
     .await?;
 
-    let result = run_one_off(
-        runtime_port,
-        &route_name,
-        payload_json,
-        args.timeout_secs,
-        &auth.url,
-        &auth.token,
-    )
-    .await;
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+    let mut execution_id = String::new();
 
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+    // 1. Capture execution ID and stream output
+    while let Ok(Some(line)) = reader.next_line().await {
+        println!("{}", line);
+        if let Some(pos) = line.find("[boot] execution_id=") {
+            let rest = &line[pos + 20..];
+            execution_id = rest.split_whitespace().next().unwrap_or_default().to_string();
+            break;
+        }
+    }
+
+    // Drain remaining stdout in background
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = reader.next_line().await {
+            println!("{}", line);
+        }
+    });
+
+    // 2. Wait for either the HTTP readiness OR for the process to exit
+    let mut wait_for_ready = Box::pin(wait_for_runtime(runtime_port, args.timeout_secs));
+    
+    let result = tokio::select! {
+        ready_res = &mut wait_for_ready => {
+            if ready_res.is_ok() {
+                // Runtime is ready as a server, call the handler
+                let res = run_one_off(
+                    runtime_port,
+                    &route_name,
+                    payload_json,
+                    &auth.url,
+                    &auth.token,
+                ).await;
+                let _ = child.kill().await;
+                res
+            } else {
+                let _ = child.kill().await;
+                ready_res
+            }
+        }
+        exit_res = child.wait() => {
+            // Runtime exited early (probably a script)
+            if let Ok(_status) = exit_res {
+                if !execution_id.is_empty() {
+                    display_trace(&auth.url, &auth.token, &execution_id).await
+                } else {
+                    bail!("runtime exited without announcing an execution ID")
+                }
+            } else {
+                bail!("runtime crashed")
+            }
+        }
+    };
 
     result
+}
+
+async fn display_trace(server_url: &str, token: &str, execution_id: &str) -> Result<()> {
+    let trace = get_trace(server_url, token, execution_id).await?;
+    println!();
+    println!("  trace  {}", execution_id);
+    println!(
+        "  {} {}  {}  {}ms",
+        trace.method, trace.path, trace.status, trace.duration_ms
+    );
+    if !trace.error.is_empty() {
+        println!("  error  {}", trace.error);
+    }
+    println!();
+    Ok(())
 }
 
 async fn run_one_off(
     runtime_port: u16,
     route_name: &str,
     payload_json: serde_json::Value,
-    timeout_secs: u64,
     server_url: &str,
     token: &str,
 ) -> Result<()> {
-    wait_for_runtime(runtime_port, timeout_secs).await?;
-
     let client = reqwest::Client::new();
     let response = client
         .post(format!("http://127.0.0.1:{}/{}", runtime_port, route_name))
@@ -121,24 +190,9 @@ async fn run_one_off(
         .unwrap_or_default()
         .to_string();
 
-    if execution_id.is_empty() {
-        println!();
-        println!("  execution id not present in runtime response");
-        println!();
-        return Ok(());
+    if !execution_id.is_empty() {
+        display_trace(server_url, token, &execution_id).await?;
     }
-
-    let trace = get_trace(server_url, token, &execution_id).await?;
-    println!();
-    println!("  trace  {}", execution_id);
-    println!(
-        "  {} {}  {}  {}ms",
-        trace.method, trace.path, trace.status, trace.duration_ms
-    );
-    if !trace.error.is_empty() {
-        println!("  error  {}", trace.error);
-    }
-    println!();
 
     Ok(())
 }
@@ -153,6 +207,8 @@ async fn spawn_runtime(
 ) -> Result<tokio::process::Child> {
     let mut command = tokio::process::Command::new(binary);
     command
+        .arg("--entry")
+        .arg(&args.entry)
         .arg("--port")
         .arg(port.to_string())
         .arg("--isolate-pool-size")
@@ -165,7 +221,7 @@ async fn spawn_runtime(
     }
 
     command
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
 
     command

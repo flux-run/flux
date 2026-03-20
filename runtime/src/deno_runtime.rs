@@ -4597,13 +4597,23 @@ impl ModuleLoader for ArtifactModuleLoader {
                 .map_err(JsErrorBox::from_err)
                 .map_err(Into::into);
         }
-        if specifier == "redis" {
+        if specifier == "redis" || specifier == FLUX_REDIS_SPECIFIER {
             return Url::parse(FLUX_REDIS_SPECIFIER)
+                .map_err(JsErrorBox::from_err)
+                .map_err(Into::into);
+        }
+        if specifier == "pg" || specifier == "postgres" || specifier == FLUX_PG_SPECIFIER {
+            return Url::parse(FLUX_PG_SPECIFIER)
                 .map_err(JsErrorBox::from_err)
                 .map_err(Into::into);
         }
         if specifier == "node:http" || specifier == "http" || specifier.contains("/node/http.mjs") {
             return Url::parse(FLUX_HTTP_SPECIFIER)
+                .map_err(JsErrorBox::from_err)
+                .map_err(Into::into);
+        }
+        if specifier.starts_with("flux:") {
+            return Url::parse(specifier)
                 .map_err(JsErrorBox::from_err)
                 .map_err(Into::into);
         }

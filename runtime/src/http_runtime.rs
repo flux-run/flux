@@ -99,8 +99,6 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
     )
     .await?;
 
-    println!("[boot] execution_id={}", boot.result.execution_id);
-
     if !config.service_token.is_empty() {
         let _ = crate::server_client::record_execution(
             &config.server_url,
