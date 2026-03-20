@@ -154,7 +154,7 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     }
 
     if !response.output.is_empty() && response.output != "null" {
-        println!("  output {}", response.output);
+        println!("  output  {}", format_replay_output(&response.output));
     }
 
     println!();
@@ -339,6 +339,66 @@ fn diff_value(
 
 fn compact_json(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+}
+
+/// Decode a `__FLUX_B64:<base64>` string to plain text.
+fn decode_flux_b64(s: &str) -> String {
+    if let Some(b64) = s.strip_prefix("__FLUX_B64:") {
+        use base64::Engine;
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+            if let Ok(text) = String::from_utf8(bytes) {
+                return text;
+            }
+        }
+    }
+    s.to_string()
+}
+
+/// Walk a JSON value and decode any `__FLUX_B64:` strings in-place.
+fn decode_b64_in_value(val: &mut serde_json::Value) {
+    match val {
+        serde_json::Value::String(s) if s.starts_with("__FLUX_B64:") => {
+            *s = decode_flux_b64(s);
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                decode_b64_in_value(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                decode_b64_in_value(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Format replay output: decode base64 bodies and show a clean summary.
+/// If the output is a net_response with a text body and status, show:
+///   `<status> "<body>"` (e.g. `500 "Internal Server Error"`)
+/// Otherwise fall back to compact decoded JSON.
+fn format_replay_output(raw: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return raw.to_string();
+    };
+    decode_b64_in_value(&mut value);
+
+    // If it's a net_response wrapper, show a concise summary
+    if let Some(net) = value.get("net_response") {
+        let status = net.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+        let body = net
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let status_color = if status >= 400 { "\x1b[31m" } else { "\x1b[32m" };
+        if !body.is_empty() {
+            return format!("{}{}\x1b[0m  \"{}\"", status_color, status, body);
+        }
+        return format!("{}{} (no body)\x1b[0m", status_color, status);
+    }
+
+    serde_json::to_string(&value).unwrap_or_else(|_| raw.to_string())
 }
 
 fn colorize_diff_line(line: &str) -> String {
@@ -647,7 +707,7 @@ fn print_explain_view(
 
     if !response.output.is_empty() && response.output != "null" {
         println!();
-        println!("  output  {}", response.output);
+        println!("  output  {}", format_replay_output(&response.output));
     }
 
     println!();

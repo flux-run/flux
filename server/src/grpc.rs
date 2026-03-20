@@ -1186,6 +1186,19 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let replay_duration_ms = replay_started.elapsed().as_millis() as i32;
 
+        // If no checkpoint-level error was recorded, check the HTTP response status
+        // to determine if the replay itself resulted in a 4xx/5xx.
+        if replay_status == "ok" {
+            let http_status = replay_output
+                .get("net_response")
+                .and_then(|v| v.get("status"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            if http_status >= 400 {
+                replay_status = "error".to_string();
+            }
+        }
+
         // Record the replay execution
         let output_json =
             serde_json::to_string(&replay_output).unwrap_or_else(|_| "null".to_string());
