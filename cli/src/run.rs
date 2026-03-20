@@ -8,8 +8,12 @@ use crate::runtime_process::exec_runtime;
 #[derive(Debug, Args)]
 pub struct RunArgs {
     /// Entry file to execute as a plain script.
-    #[arg(value_name = "ENTRY", default_value = "index.js")]
-    pub entry: String,
+    #[arg(value_name = "ENTRY")]
+    pub entry: Option<String>,
+
+    /// Path to a pre-built Flux artifact JSON.
+    #[arg(long, value_name = "FILE")]
+    pub artifact: Option<String>,
 
     /// JSON input passed to the exported default handler, if present.
     /// Equivalent to the payload in `flux exec`. Ignored for top-level scripts.
@@ -50,9 +54,22 @@ pub struct RunArgs {
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
-    let entry = PathBuf::from(&args.entry);
-    if !entry.exists() {
-        bail!("entry file not found: {}", entry.display());
+    if args.entry.is_none() && args.artifact.is_none() {
+        bail!("either ENTRY or --artifact <FILE> must be provided");
+    }
+
+    if let Some(ref entry_str) = args.entry {
+        let entry = PathBuf::from(entry_str);
+        if !entry.exists() {
+            bail!("entry file not found: {}", entry.display());
+        }
+    }
+
+    if let Some(ref artifact_str) = args.artifact {
+        let artifact = PathBuf::from(artifact_str);
+        if !artifact.exists() {
+            bail!("artifact file not found: {}", artifact.display());
+        }
     }
 
     // Validate the input JSON eagerly so we give a clear error before spawning
@@ -62,28 +79,25 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
-    // Server URL and token are optional for script mode — default to empty
-    // strings so the runtime can start without a running flux-server.
-    let server_url = args
-        .url
-        .clone()
-        .or_else(|| read_config_url())
-        .unwrap_or_else(|| "http://127.0.0.1:50051".to_string());
-    let token = args
-        .token
-        .clone()
-        .or_else(|| read_config_token())
-        .unwrap_or_default();
+    let auth = crate::config::resolve_optional_auth(args.url.clone(), args.token.clone())?;
 
-    let prog_args = build_runtime_args(&server_url, &token, &args);
+    let prog_args = build_runtime_args(&auth.url, &auth.token, &args);
 
     exec_runtime(binary, &prog_args).await
 }
 
 fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<String> {
-    let mut prog_args = vec![
-        "--entry".to_string(),
-        args.entry.clone(),
+    let mut prog_args = Vec::new();
+
+    if let Some(ref artifact) = args.artifact {
+        prog_args.push("--artifact".to_string());
+        prog_args.push(artifact.clone());
+    } else if let Some(ref entry) = args.entry {
+        prog_args.push("--entry".to_string());
+        prog_args.push(entry.clone());
+    }
+
+    prog_args.extend(vec![
         "--server-url".to_string(),
         server_url.to_string(),
         "--token".to_string(),
@@ -94,7 +108,7 @@ fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<Stri
         args.port.to_string(),
         "--isolate-pool-size".to_string(),
         args.isolate_pool_size.to_string(),
-    ];
+    ]);
 
     if args.serve {
         prog_args.push("--serve".to_string());
@@ -110,27 +124,4 @@ fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs) -> Vec<Stri
     }
 
     prog_args
-}
-
-fn flux_config_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".flux")
-        .join("config.toml")
-}
-
-fn read_config_url() -> Option<String> {
-    let raw = std::fs::read_to_string(flux_config_path()).ok()?;
-    raw.lines()
-        .find(|l| l.starts_with("url"))
-        .and_then(|l| l.splitn(2, '=').nth(1))
-        .map(|v| v.trim().trim_matches('"').to_string())
-}
-
-fn read_config_token() -> Option<String> {
-    let raw = std::fs::read_to_string(flux_config_path()).ok()?;
-    raw.lines()
-        .find(|l| l.starts_with("token"))
-        .and_then(|l| l.splitn(2, '=').nth(1))
-        .map(|v| v.trim().trim_matches('"').to_string())
 }

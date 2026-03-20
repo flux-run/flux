@@ -32,10 +32,10 @@ impl InternalAuthGrpc {
 
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(\
-               SELECT 1\
-               FROM flux.service_tokens\
-               WHERE token_hash = $1\
-                 AND revoked_at IS NULL\
+               SELECT 1 \
+               FROM flux.service_tokens \
+               WHERE token_hash = $1 \
+                 AND revoked_at IS NULL \
             )",
         )
         .bind(token_hash)
@@ -88,8 +88,8 @@ impl InternalAuthGrpc {
 
             tokio::spawn(async move {
                 let _ = sqlx::query(
-                    "UPDATE flux.service_tokens\
-                     SET last_used_at = now()\
+                    "UPDATE flux.service_tokens \
+                     SET last_used_at = now() \
                      WHERE token_hash = $1 AND revoked_at IS NULL",
                 )
                 .bind(token_hash)
@@ -505,18 +505,18 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT
-                id::text,
-                request_id::text,
-                method,
-                path,
-                status,
-                duration_ms,
-                code_sha,
-                error,
-                to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')
-             FROM flux.executions
-             ORDER BY started_at DESC
+            "SELECT \
+                id::text, \
+                request_id::text, \
+                method, \
+                path, \
+                status, \
+                duration_ms, \
+                code_sha, \
+                error, \
+                to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') \
+             FROM flux.executions \
+             ORDER BY started_at DESC \
              LIMIT $1",
         )
         .bind(limit)
@@ -578,9 +578,9 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .map_err(|e| Status::internal(format!("failed to begin transaction: {e}")))?;
 
         sqlx::query(
-            "INSERT INTO flux.executions
-             (id, request_id, method, path, status, request, response, error, code_sha, duration_ms)
-             VALUES ($1, $2, $3, $4, 'running', $5, NULL, NULL, $6, 0)
+            "INSERT INTO flux.executions \
+             (id, request_id, method, path, status, request, response, error, code_sha, duration_ms) \
+             VALUES ($1, $2, $3, $4, 'running', $5, NULL, NULL, $6, 0) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
@@ -594,15 +594,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;
 
         sqlx::query(
-            "UPDATE flux.executions
-             SET method = $2,
-                 path = $3,
-                 status = $4,
-                 request = $5,
-                 response = $6,
-                 error = NULLIF($7, ''),
-                 code_sha = $8,
-                 duration_ms = $9
+            "UPDATE flux.executions \
+             SET method = $2, \
+                 path = $3, \
+                 status = $4, \
+                 request = $5, \
+                 response = $6, \
+                 error = NULLIF($7, ''), \
+                 code_sha = $8, \
+                 duration_ms = $9 \
              WHERE id = $1",
         )
         .bind(execution_id)
@@ -625,11 +625,11 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 serde_json::from_str(&checkpoint.response_json).unwrap_or(serde_json::Value::Null);
 
             sqlx::query(
-                "INSERT INTO flux.checkpoints
-                 (execution_id, call_index, boundary, url, method, request, response, duration_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                 ON CONFLICT (execution_id, call_index) DO UPDATE SET
-                   response = EXCLUDED.response,
+                "INSERT INTO flux.checkpoints \
+                 (execution_id, call_index, boundary, url, method, request, response, duration_ms) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (execution_id, call_index) DO UPDATE SET \
+                   response = EXCLUDED.response, \
                    duration_ms = EXCLUDED.duration_ms",
             )
             .bind(execution_id)
@@ -647,11 +647,11 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         for (seq, log) in req.logs.into_iter().enumerate() {
             sqlx::query(
-                "INSERT INTO flux.execution_console_logs
-                 (execution_id, seq, level, message)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (execution_id, seq) DO UPDATE SET
-                   level = EXCLUDED.level,
+                "INSERT INTO flux.execution_console_logs \
+                 (execution_id, seq, level, message) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (execution_id, seq) DO UPDATE SET \
+                   level = EXCLUDED.level, \
                    message = EXCLUDED.message",
             )
             .bind(execution_id)

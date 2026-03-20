@@ -39,16 +39,7 @@ pub async fn execute(args: DevArgs) -> Result<()> {
     let entry = resolve_entry_path(args.entry.as_deref())?;
     let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
-    let server_url = args
-        .url
-        .clone()
-        .or_else(read_config_url)
-        .unwrap_or_else(|| "http://127.0.0.1:50051".to_string());
-    let token = args
-        .token
-        .clone()
-        .or_else(read_config_token)
-        .unwrap_or_default();
+    let auth = crate::config::resolve_optional_auth(args.url.clone(), args.token.clone())?;
 
     let watch_dir = args
         .watch_dir
@@ -80,7 +71,7 @@ pub async fn execute(args: DevArgs) -> Result<()> {
                 .context("failed to write dev artifact")?;
 
             let mut child = tokio::process::Command::new(&binary)
-                .args(build_runtime_args(&artifact_tmp, &server_url, &token, &args))
+                .args(build_runtime_args(&artifact_tmp, &auth.url, &auth.token, &args))
                 .spawn()
                 .context("failed to spawn flux-runtime")?;
             eprintln!("[flux dev] started pid {:?}", child.id());
@@ -132,27 +123,4 @@ fn build_runtime_args(artifact_path: &Path, server_url: &str, token: &str, args:
         "--isolate-pool-size".to_string(),
         args.isolate_pool_size.to_string(),
     ]
-}
-
-fn flux_config_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".flux")
-        .join("config.toml")
-}
-
-fn read_config_url() -> Option<String> {
-    let raw = std::fs::read_to_string(flux_config_path()).ok()?;
-    raw.lines()
-        .find(|line| line.starts_with("url"))
-        .and_then(|line| line.splitn(2, '=').nth(1))
-        .map(|value| value.trim().trim_matches('"').to_string())
-}
-
-fn read_config_token() -> Option<String> {
-    let raw = std::fs::read_to_string(flux_config_path()).ok()?;
-    raw.lines()
-        .find(|line| line.starts_with("token"))
-        .and_then(|line| line.splitn(2, '=').nth(1))
-        .map(|value| value.trim().trim_matches('"').to_string())
 }
