@@ -55,6 +55,10 @@ pub struct RunArgs {
     /// Project ID for this execution.
     #[arg(long, value_name = "ID")]
     pub project_id: Option<String>,
+
+    /// Execution ID to replay using local code.
+    #[arg(long, value_name = "ID")]
+    pub replay: Option<String>,
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
@@ -176,6 +180,11 @@ fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs, project_id:
 
     if args.check_only {
         prog_args.push("--check-only".to_string());
+    }
+
+    if let Some(ref replay_id) = args.replay {
+        prog_args.push("--replay".to_string());
+        prog_args.push(replay_id.clone());
     }
 
     prog_args

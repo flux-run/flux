@@ -18,8 +18,13 @@ pub struct ExecArgs {
     pub input: String,
     #[arg(long, value_name = "URL")]
     pub url: Option<String>,
+    /// Service token for the Flux server (optional).
     #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
     pub token: Option<String>,
+
+    /// Execution ID to replay using local code.
+    #[arg(long, value_name = "ID")]
+    pub replay: Option<String>,
     #[arg(long)]
     pub release: bool,
     #[arg(long, default_value_t = 1)]
@@ -68,12 +73,13 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
 
     let runtime_port = pick_free_port()?;
 
+    let runtime_args = build_runtime_args(&args, runtime_port);
+
     let mut child = spawn_runtime(
         &binary,
-        &args,
+        &runtime_args,
         &auth.url,
         &auth.token,
-        runtime_port,
         project_id.as_deref(),
     )
     .await?;
@@ -199,20 +205,15 @@ async fn run_one_off(
 
 async fn spawn_runtime(
     binary: &Path,
-    args: &ExecArgs,
+    runtime_args: &[String],
     server_url: &str,
     token: &str,
-    port: u16,
     project_id: Option<&str>,
 ) -> Result<tokio::process::Child> {
     let mut command = tokio::process::Command::new(binary);
+    command.args(runtime_args);
+    
     command
-        .arg("--entry")
-        .arg(&args.entry)
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--isolate-pool-size")
-        .arg(args.isolate_pool_size.to_string())
         .env("FLUX_SERVER_URL", server_url)
         .env("FLUX_SERVICE_TOKEN", token);
 
@@ -227,6 +228,23 @@ async fn spawn_runtime(
     command
         .spawn()
         .context("failed to start flux-runtime for one-off execution")
+}
+
+fn build_runtime_args(args: &ExecArgs, port: u16) -> Vec<String> {
+    let mut prog_args = Vec::new();
+    prog_args.push("--entry".to_string());
+    prog_args.push(args.entry.clone());
+    prog_args.push("--port".to_string());
+    prog_args.push(port.to_string());
+    prog_args.push("--isolate-pool-size".to_string());
+    prog_args.push(args.isolate_pool_size.to_string());
+
+    if let Some(ref replay_id) = args.replay {
+        prog_args.push("--replay".to_string());
+        prog_args.push(replay_id.clone());
+    }
+
+    prog_args
 }
 
 async fn wait_for_runtime(port: u16, timeout_secs: u64) -> Result<()> {

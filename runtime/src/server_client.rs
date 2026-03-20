@@ -64,6 +64,31 @@ pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelop
     Ok(())
 }
 
+pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<pb::GetTraceResponse> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+
+    let mut request = Request::new(pb::GetTraceRequest {
+        execution_id: execution_id.to_string(),
+    });
+
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .get_trace(request)
+        .await
+        .context("get trace request failed")?;
+
+    Ok(response.into_inner())
+}
+
 fn checkpoint_to_proto(checkpoint: FetchCheckpoint) -> pb::CheckpointEntry {
     pb::CheckpointEntry {
         call_index: checkpoint.call_index,

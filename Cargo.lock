@@ -841,10 +841,12 @@ name = "cli"
 version = "0.2.5"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "clap",
  "deno_ast",
  "dirs",
+ "dotenvy",
  "prost",
  "reqwest",
  "rpassword",

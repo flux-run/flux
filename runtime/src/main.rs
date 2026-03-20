@@ -58,6 +58,11 @@ struct Args {
     /// Project ID for this execution.
     #[arg(long, env = "FLUX_PROJECT_ID", value_name = "ID")]
     project_id: Option<String>,
+
+    /// Execution ID to replay. If provided, the runtime fetches recorded
+    /// checkpoints for this ID and runs the local code against them.
+    #[arg(long, value_name = "ID")]
+    replay: Option<String>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -137,7 +142,33 @@ async fn main() -> Result<()> {
     println!("bytes:    {}", artifact.size_bytes());
 
     // Boot the project to detect if it's a server or a one-shot handler.
-    let boot_context = ExecutionContext::with_project(artifact.code_version().to_string(), args.project_id.clone());
+    let mut boot_context = ExecutionContext::with_project(artifact.code_version().to_string(), args.project_id.clone());
+    
+    let mut recorded_checkpoints = Vec::new();
+    let mut replay_input = args.script_input.clone();
+
+    if let Some(ref replay_id) = args.replay {
+        println!("replay:   {}", replay_id);
+        let trace = runtime::server_client::get_trace(&args.server_url, &args.token, replay_id).await?;
+        recorded_checkpoints = trace.checkpoints.into_iter().map(|cp| {
+            runtime::deno_runtime::FetchCheckpoint {
+                call_index: cp.call_index as u32,
+                boundary: cp.boundary,
+                url: String::new(), // Not stored in proto Checkpoint but used for display
+                method: String::new(),
+                request: serde_json::from_slice(&cp.request).unwrap_or(serde_json::Value::Null),
+                response: serde_json::from_slice(&cp.response).unwrap_or(serde_json::Value::Null),
+                duration_ms: cp.duration_ms,
+            }
+        }).collect();
+        
+        boot_context.mode = runtime::deno_runtime::ExecutionMode::Replay;
+        
+        if replay_input.is_none() {
+            replay_input = Some(trace.request_json);
+        }
+    }
+
     println!("[boot] execution_id={} request_id={}", boot_context.execution_id, boot_context.request_id);
     
     let boot = runtime::boot_runtime_artifact(&artifact, boot_context.clone()).await?;
@@ -180,8 +211,8 @@ async fn main() -> Result<()> {
         }
     }
 
-    // 1. If script_input is provided, execute the handler once and exit.
-    if let Some(input_str) = &args.script_input {
+    // 1. If script_input or replay is provided, execute the handler once and exit.
+    if let Some(input_str) = &replay_input {
         if !has_handler {
             return Ok(());
         }
@@ -193,7 +224,7 @@ async fn main() -> Result<()> {
 
         let started = Instant::now();
         let execution = isolate
-            .execute_handler(input.clone(), boot_context.clone())
+            .execute_with_recorded(input.clone(), boot_context.clone(), recorded_checkpoints)
             .await?;
 
         if !args.token.is_empty() {
