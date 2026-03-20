@@ -4931,15 +4931,15 @@ pub struct JsIsolate {
 }
 
 impl JsIsolate {
-    pub fn new(user_code: &str, _isolate_id: usize) -> Result<Self> {
-        Self::new_internal(user_code, prepare_user_code(user_code))
+    pub async fn new(user_code: &str, _isolate_id: usize) -> Result<Self> {
+        Self::new_internal(user_code, prepare_user_code(user_code)).await
     }
 
     /// Variant used by `flux run` / `--script-mode`.  Accepts plain top-level
     /// scripts (no `export default` required) while still wiring up the handler
     /// global when `export default` IS present.
-    pub fn new_for_run(user_code: &str) -> Result<Self> {
-        Self::new_internal(user_code, prepare_run_code(user_code))
+    pub async fn new_for_run(user_code: &str) -> Result<Self> {
+        Self::new_internal(user_code, prepare_run_code(user_code)).await
     }
 
     /// Variant used by `flux run` when loading a real JS/TS module entry.
@@ -4966,6 +4966,10 @@ impl JsIsolate {
         runtime
             .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
             .context("failed to install fetch interceptor")?;
+
+        runtime
+            .execute_script("flux:bootstrap", bootstrap_js())
+            .context("failed to install bootstrap globals")?;
 
         let main_module = resolve_path(
             entry
@@ -5015,7 +5019,7 @@ impl JsIsolate {
     pub async fn new_from_any_artifact(artifact: &RuntimeArtifact, isolate_id: usize) -> Result<Self> {
         match artifact {
             RuntimeArtifact::Built(b) => Self::new_from_artifact(b).await,
-            RuntimeArtifact::Inline(i) => Self::new(&i.code, isolate_id),
+            RuntimeArtifact::Inline(i) => Self::new(&i.code, isolate_id).await,
         }
     }
 
@@ -5048,6 +5052,10 @@ impl JsIsolate {
         runtime
             .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
             .context("failed to install fetch interceptor")?;
+
+        runtime
+            .execute_script("flux:bootstrap", bootstrap_js())
+            .context("failed to install bootstrap globals")?;
 
         let entry_module = artifact
             .modules
@@ -5097,8 +5105,12 @@ impl JsIsolate {
         })
     }
 
-    fn new_internal(_user_code: &str, prepared: String) -> Result<Self> {
+    async fn new_internal(_user_code: &str, prepared: String) -> Result<Self> {
+        let source_maps = Rc::new(RefCell::new(HashMap::new()));
         let mut runtime = JsRuntime::new(RuntimeOptions {
+            module_loader: Some(Rc::new(TypescriptModuleLoader {
+                source_maps,
+            })),
             extensions: flux_extensions(),
             create_params: Some(
                 deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
@@ -5118,8 +5130,26 @@ impl JsIsolate {
             .context("failed to install fetch interceptor")?;
 
         runtime
-            .execute_script("flux:user_code", prepared)
-            .context("failed to load user code")?;
+            .execute_script("flux:bootstrap", bootstrap_js())
+            .context("failed to install bootstrap globals")?;
+
+        let specifier = Url::parse("file:///flux_user_code.ts").unwrap();
+        let module_id = runtime
+            .load_main_es_module_from_code(&specifier, prepared)
+            .await
+            .context("failed to load user code as module")?;
+        
+        let evaluation = runtime.mod_evaluate(module_id);
+        tokio::time::timeout(
+            EXECUTION_TIMEOUT,
+            runtime.run_event_loop(Default::default()),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("module initialization timed out after {EXECUTION_TIMEOUT:?}")
+        })?
+        .context("event loop error during module initialization")?;
+        evaluation.await.context("failed to evaluate user module")?;
 
         close_registration_phase(&mut runtime)?;
 
@@ -5576,6 +5606,10 @@ async fn boot_inline_runtime_artifact(
         .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
         .context("failed to install fetch interceptor")?;
 
+    runtime
+        .execute_script("flux:bootstrap", bootstrap_js())
+        .context("failed to install bootstrap globals")?;
+
     let eid_json =
         serde_json::to_string(&execution_id).context("failed to encode boot execution_id")?;
     runtime
@@ -5586,7 +5620,10 @@ async fn boot_inline_runtime_artifact(
         .context("failed to set boot execution_id")?;
 
     let mut error = None;
-    let module_id = match runtime.load_main_es_module_from_code(&main_specifier, transformed_entry).await {
+    let module_id = match runtime
+        .load_main_es_module_from_code(&main_specifier, transformed_entry)
+        .await
+    {
         Ok(id) => Some(id),
         Err(err) => {
             error = Some(format!("{err:#}"));
@@ -5594,7 +5631,7 @@ async fn boot_inline_runtime_artifact(
         }
     };
 
-    if let (None, Some(id)) = (&error, module_id) {
+    if let Some(id) = module_id {
         let evaluation = runtime.mod_evaluate(id);
         match tokio::time::timeout(
             EXECUTION_TIMEOUT,
@@ -5703,6 +5740,10 @@ async fn boot_built_runtime_artifact(
     runtime
         .execute_script("flux:bootstrap_fetch", bootstrap_fetch_js())
         .context("failed to install fetch interceptor")?;
+
+    runtime
+        .execute_script("flux:bootstrap", bootstrap_js())
+        .context("failed to install bootstrap globals")?;
 
     let eid_json =
         serde_json::to_string(&execution_id).context("failed to encode boot execution_id")?;
@@ -6314,7 +6355,7 @@ class AbortSignal {
                 target: this,
                 currentTarget: this,
             });
-            return;
+        this._commit();
         }
         this._listeners.add(listener);
     }
@@ -6452,91 +6493,8 @@ class URLSearchParams {
             return callback();
         } finally {
             this._suspendUpdates -= 1;
+            this._commit();
         }
-    }
-
-    _replacePairs(nextPairs) {
-        this._pairs.splice(0, this._pairs.length, ...nextPairs.map(([key, value]) => [String(key), String(value)]));
-    }
-
-    _resetFromQuery(query) {
-        this._withUpdatesSuspended(() => {
-            const nextParams = new URLSearchParams(query);
-            this._replacePairs(nextParams._pairs);
-        });
-    }
-
-    append(name, value) {
-        this._appendPair(name, value);
-        this._commit();
-    }
-
-    get(name) {
-        const key = String(name);
-        const match = this._pairs.find(([candidate]) => candidate === key);
-        return match ? match[1] : null;
-    }
-
-    getAll(name) {
-        const key = String(name);
-        return this._pairs
-            .filter(([candidate]) => candidate === key)
-            .map(([, value]) => value);
-    }
-
-    has(name, value = undefined) {
-        const key = String(name);
-        if (arguments.length > 1 && value !== undefined) {
-            const expected = String(value);
-            return this._pairs.some(([candidate, currentValue]) => candidate === key && currentValue === expected);
-        }
-        return this._pairs.some(([candidate]) => candidate === key);
-    }
-
-    set(name, value) {
-        const key = __fluxToUSVString(name);
-        const nextValue = __fluxToUSVString(value);
-        let replaced = false;
-
-        for (let index = 0; index < this._pairs.length;) {
-            const [candidate] = this._pairs[index];
-            if (candidate !== key) {
-                index += 1;
-                continue;
-            }
-
-            if (!replaced) {
-                this._pairs[index][1] = nextValue;
-                replaced = true;
-                index += 1;
-            } else {
-                this._pairs.splice(index, 1);
-            }
-        }
-
-        if (!replaced) {
-            this._appendPair(key, nextValue);
-        }
-
-        this._commit();
-    }
-
-    delete(name, value = undefined) {
-        const key = __fluxToUSVString(name);
-        const expected = arguments.length > 1 && value !== undefined ? __fluxToUSVString(value) : null;
-        for (let index = 0; index < this._pairs.length;) {
-            const [candidate, currentValue] = this._pairs[index];
-            const matches = arguments.length > 1 && value !== undefined
-                ? candidate === key && currentValue === expected
-                : candidate === key;
-
-            if (matches) {
-                this._pairs.splice(index, 1);
-            } else {
-                index += 1;
-            }
-        }
-        this._commit();
     }
 
     forEach(callback, thisArg = undefined) {
@@ -7123,6 +7081,14 @@ globalThis.fetch = async function(input, init = undefined) {
         headers: new Headers(response.headers ?? {}),
     });
 };
+    "#
+}
+
+fn bootstrap_js() -> String {
+    r#"
+      function __flux_eid() {
+        return globalThis.__FLUX_EXECUTION_ID__ || "__unknown__";
+      }
 
 // ── Date.now() + new Date() ────────────────────────────────────────────────
 {
@@ -8003,7 +7969,7 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
   const responseHeaders = JSON.stringify([...response.headers.entries()]);
   Deno.core.ops.op_net_respond(__eid, reqId, response.status ?? 200, responseHeaders, responseBody);
 };
-"#
+    "# .to_string()
 }
 
 fn prepare_user_code(code: &str) -> String {

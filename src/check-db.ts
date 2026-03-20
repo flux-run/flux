@@ -5,6 +5,13 @@ const DB_URL = Deno.env.get("DATABASE_URL");
 const pool = new pg.Pool({ connectionString: DB_URL });
 
 export default async function handler() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_demo_orders (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL,
+      amount INTEGER NOT NULL
+    )
+  `);
   const result = await pool.query("SELECT * FROM flux_demo_orders ORDER BY id DESC LIMIT 5");
   console.log("Latest Orders:", result.rows);
   return result.rows;

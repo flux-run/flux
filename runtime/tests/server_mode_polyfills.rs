@@ -286,7 +286,7 @@ export default async function handler() {
 }
 "#;
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create isolate")?;
     let output = isolate
         .execute(serde_json::json!({}), ExecutionContext::new("fetch-abort"))
         .await
@@ -321,7 +321,7 @@ export default async function handler() {
 }
 "#;
 
-    let mut live_isolate = JsIsolate::new_for_run(code).context("failed to create live isolate")?;
+    let mut live_isolate = JsIsolate::new_for_run(code).await.context("failed to create live isolate")?;
     let live_output = live_isolate
         .execute(serde_json::json!({}), ExecutionContext::new("timer-live"))
         .await
@@ -334,7 +334,7 @@ export default async function handler() {
     assert_eq!(live_output.checkpoints[0].method, "delay");
 
     let mut replay_isolate =
-        JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
+        JsIsolate::new_for_run(code).await.context("failed to create replay isolate")?;
     let mut replay_context = ExecutionContext::new("timer-replay");
     replay_context.mode = runtime::deno_runtime::ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -372,7 +372,7 @@ export default async function handler() {
 }
 "#;
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create isolate")?;
     let output = isolate
         .execute(
             serde_json::json!({}),
@@ -458,7 +458,7 @@ export default async function handler() {{
                 message = "flux-rs256-fixture",
         );
 
-    let mut isolate = JsIsolate::new_for_run(&code).context("failed to create isolate")?;
+    let mut isolate = JsIsolate::new_for_run(&code).await.context("failed to create isolate")?;
     let output = isolate
         .execute(
             serde_json::json!({}),
@@ -498,7 +498,7 @@ export default async function handler() {
 }
 "#;
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create isolate")?;
     let output = isolate
         .execute(serde_json::json!({}), ExecutionContext::new("deno-env-get"))
         .await

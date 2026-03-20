@@ -45,7 +45,7 @@ export default function handler({ input }) {
         "connectionString": format!("redis://127.0.0.1:{port}/0"),
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create redis isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create redis isolate")?;
     let live_output = isolate
         .execute(payload.clone(), ExecutionContext::new("redis-live"))
         .await
@@ -70,7 +70,7 @@ export default function handler({ input }) {
 
     let recorded = live_output.checkpoints.clone();
     let mut replay_isolate =
-        JsIsolate::new_for_run(code).context("failed to create redis replay isolate")?;
+        JsIsolate::new_for_run(code).await.context("failed to create redis replay isolate")?;
     let mut replay_context = ExecutionContext::new("redis-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -120,7 +120,7 @@ export default function handler({ input }) {
     });
 
     let mut live_isolate =
-        JsIsolate::new_for_run(code).context("failed to create blocked redis isolate")?;
+        JsIsolate::new_for_run(code).await.context("failed to create blocked redis isolate")?;
     let live_output = live_isolate
         .execute(payload.clone(), ExecutionContext::new("redis-blocked-live"))
         .await
@@ -171,7 +171,7 @@ export default function handler({ input }) {
     }];
 
     let mut replay_isolate =
-        JsIsolate::new_for_run(code).context("failed to create blocked redis replay isolate")?;
+        JsIsolate::new_for_run(code).await.context("failed to create blocked redis replay isolate")?;
     let mut replay_context = ExecutionContext::new("redis-blocked-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -315,7 +315,7 @@ export default function handler({ input }) {
     });
 
     let mut isolate =
-        JsIsolate::new_for_run(code).context("failed to create blocked-command isolate")?;
+        JsIsolate::new_for_run(code).await.context("failed to create blocked-command isolate")?;
     let output = isolate
         .execute(payload, ExecutionContext::new("redis-blocked-command"))
         .await

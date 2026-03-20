@@ -41,7 +41,7 @@ export default function handler({ input }) {
         "message": "ping",
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create live isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create live isolate")?;
     let live_output = isolate
         .execute(payload.clone(), ExecutionContext::new("tcp-live"))
         .await
@@ -65,7 +65,7 @@ export default function handler({ input }) {
 
     let recorded = live_output.checkpoints.clone();
     let mut replay_isolate =
-        JsIsolate::new_for_run(code).context("failed to create replay isolate")?;
+        JsIsolate::new_for_run(code).await.context("failed to create replay isolate")?;
     let mut replay_context = ExecutionContext::new("tcp-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -112,7 +112,7 @@ export default function handler({ input }) {
 "#;
 
     let mut isolate =
-        JsIsolate::new_for_run(code).context("failed to create fixed-read isolate")?;
+        JsIsolate::new_for_run(code).await.context("failed to create fixed-read isolate")?;
     let output = isolate
         .execute(
             serde_json::json!({ "host": "127.0.0.1", "port": port }),
@@ -186,7 +186,7 @@ export default function handler({ input }) {
         "caCertPem": cert_pem,
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).context("failed to create tls isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create tls isolate")?;
     let output = isolate
         .execute(payload, ExecutionContext::new("tcp-tls-live"))
         .await
@@ -238,7 +238,7 @@ export default function handler({ input }) {
     });
 
     let mut live_isolate =
-        JsIsolate::new_for_run(code).context("failed to create blocked isolate")?;
+        JsIsolate::new_for_run(code).await.context("failed to create blocked isolate")?;
     let live_output = live_isolate
         .execute(payload.clone(), ExecutionContext::new("tcp-blocked-live"))
         .await
@@ -290,7 +290,7 @@ export default function handler({ input }) {
     }];
 
     let mut replay_isolate =
-        JsIsolate::new_for_run(code).context("failed to create blocked replay isolate")?;
+        JsIsolate::new_for_run(code).await.context("failed to create blocked replay isolate")?;
     let mut replay_context = ExecutionContext::new("tcp-blocked-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate

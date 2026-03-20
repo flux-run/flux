@@ -259,7 +259,7 @@ fn spawn_isolate_worker(
 
             local_set.block_on(&runtime, async move {
                 let isolate_result = match &artifact {
-                    RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, isolate_id),
+                    RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, isolate_id).await,
                     RuntimeArtifact::Built(artifact) => {
                         JsIsolate::new_from_artifact(artifact).await
                     }
@@ -286,7 +286,7 @@ fn spawn_isolate_worker(
 
                     let isolate_result = match &artifact {
                         RuntimeArtifact::Inline(artifact) => {
-                            JsIsolate::new(&artifact.code, isolate_id)
+                            JsIsolate::new(&artifact.code, isolate_id).await
                         }
                         RuntimeArtifact::Built(artifact) => {
                             JsIsolate::new_from_artifact(artifact).await
@@ -443,7 +443,7 @@ fn spawn_isolate_worker_with_mode(
 
                     let isolate_result = match &artifact {
                         RuntimeArtifact::Inline(artifact) => {
-                            JsIsolate::new(&artifact.code, isolate_id)
+                            JsIsolate::new(&artifact.code, isolate_id).await
                         }
                         RuntimeArtifact::Built(artifact) => {
                             JsIsolate::new_from_artifact(artifact).await
