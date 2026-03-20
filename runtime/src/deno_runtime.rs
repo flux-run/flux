@@ -7124,7 +7124,23 @@ if (globalThis.performance) {
 
 // ── console ────────────────────────────────────────────────────────────────
 function _flux_fmt(...args) {
-  return args.map(v => (typeof v === "string" ? v : JSON.stringify(v))).join(" ");
+  return args.map(v => {
+    if (typeof v === "string") return v;
+    if (v instanceof Error) return v.stack || v.message || String(v);
+    if (v === null) return "null";
+    if (v === undefined) return "undefined";
+    try {
+      const s = JSON.stringify(v);
+      // JSON.stringify returns "{}" for Error-like objects — fall back to String()
+      if (s === "{}" && v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) {
+        const str = String(v);
+        return str === "[object Object]" ? s : str;
+      }
+      return s;
+    } catch (_) {
+      return String(v);
+    }
+  }).join(" ");
 }
 console.log   = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), false);
 console.info  = (...a) => Deno.core.ops.op_console(__flux_eid(), _flux_fmt(...a), false);

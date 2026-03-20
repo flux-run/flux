@@ -21,13 +21,19 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
     let trace = get_trace(&auth.url, &auth.token, &args.execution_id).await?;
 
     println!();
+    let status_display = match trace.status.as_str() {
+        "ok" => format!("\x1b[32m{}\x1b[0m", trace.status),
+        "error" => format!("\x1b[31m{}\x1b[0m", trace.status),
+        _ => trace.status.clone(),
+    };
+    let short_id = &args.execution_id[..args.execution_id.len().min(8)];
     println!(
-        "  {} {}  {}  {}ms",
-        trace.method, trace.path, trace.status, trace.duration_ms
+        "  \x1b[1m{} {}\x1b[0m  {}  {}ms  \x1b[2m{}\x1b[0m",
+        trace.method, trace.path, status_display, trace.duration_ms, short_id
     );
 
     if !trace.error.is_empty() {
-        println!("  error  {}", trace.error);
+        println!("  \x1b[31merror  {}\x1b[0m", trace.error);
     }
 
     println!();
@@ -40,9 +46,14 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
 
     if !trace.logs.is_empty() {
         println!();
-        println!("  console logs");
+        println!("  \x1b[2mconsole\x1b[0m");
         for log in &trace.logs {
-            println!("  [{}] {}", log.level, log.message);
+            let (color, icon) = match log.level.as_str() {
+                "error" => ("\x1b[31m", "✗"),
+                "warn"  => ("\x1b[33m", "⚠"),
+                _       => ("\x1b[0m",  "›"),
+            };
+            println!("  {}{}  {}\x1b[0m", color, icon, log.message);
         }
     }
 
@@ -341,14 +352,47 @@ fn compact_trace_value(value: &serde_json::Value) -> String {
     format!("{}...", &rendered[..77])
 }
 
+fn decode_flux_b64(s: &str) -> String {
+    if let Some(b64) = s.strip_prefix("__FLUX_B64:") {
+        use base64::Engine;
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+            if let Ok(text) = String::from_utf8(bytes) {
+                return text;
+            }
+        }
+    }
+    s.to_string()
+}
+
+/// Walk a JSON value and decode any string fields that are `__FLUX_B64:...`.
+fn decode_b64_in_value(val: &mut serde_json::Value) {
+    match val {
+        serde_json::Value::String(s) if s.starts_with("__FLUX_B64:") => {
+            *s = decode_flux_b64(s);
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                decode_b64_in_value(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                decode_b64_in_value(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn print_json_block(raw: &str, expanded: bool) {
     if !expanded {
         println!("    (hidden, use --verbose)");
         return;
     }
 
-    let value = serde_json::from_str::<serde_json::Value>(raw)
+    let mut value = serde_json::from_str::<serde_json::Value>(raw)
         .unwrap_or(serde_json::Value::String(raw.to_string()));
+    decode_b64_in_value(&mut value);
     let formatted = serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw.to_string());
     for line in formatted.lines() {
         println!("    {}", line);
