@@ -896,8 +896,9 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let execution_id_raw = req.execution_id.clone();
         let execution_id = self.resolve_execution_id(&execution_id_raw).await?;
 
-        let execution: Option<(String, i32, Option<String>)> = sqlx::query_as(
-            "SELECT status, duration_ms, error
+        let execution: Option<(String, String, String, i32, Option<String>, serde_json::Value)> = sqlx::query_as(
+            "SELECT status, method, path, duration_ms, error,
+                    COALESCE(response, '{}'::jsonb) as response
              FROM flux.executions
              WHERE id = $1",
         )
@@ -906,8 +907,31 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .await
         .map_err(|e| Status::internal(format!("failed to fetch execution: {e}")))?;
 
-        let (status, duration_ms, error) =
+        let (status, method, path, duration_ms, db_error, response_json) =
             execution.ok_or_else(|| Status::not_found("execution not found"))?;
+
+        // Extract the real error body from the response JSONB.
+        // The runtime encodes opaque bodies as "__FLUX_B64:<base64>".
+        let error_body: String = {
+            let raw_body = response_json
+                .get("net_response")
+                .and_then(|v| v.get("body"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            if let Some(b64) = raw_body.strip_prefix("__FLUX_B64:") {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .unwrap_or_else(|| raw_body.to_string())
+            } else if !raw_body.is_empty() {
+                raw_body.to_string()
+            } else {
+                db_error.clone().unwrap_or_default()
+            }
+        };
 
         let checkpoint_rows: Vec<(i32, String, serde_json::Value, serde_json::Value, i32)> =
             sqlx::query_as(
@@ -923,22 +947,43 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let checkpoints: Vec<WhyCheckpoint> = checkpoint_rows
             .into_iter()
-            .map(
-                |(call_index, boundary, request, response, duration_ms)| WhyCheckpoint {
-                    call_index,
-                    boundary,
-                    request,
-                    response,
-                    duration_ms,
-                },
-            )
+            .map(|(call_index, boundary, request, response, duration_ms)| WhyCheckpoint {
+                call_index,
+                boundary,
+                request,
+                response,
+                duration_ms,
+            })
             .collect();
+
+        // Fetch console logs for this execution
+        let console_log_rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT level, message
+             FROM flux.execution_console_logs
+             WHERE execution_id = $1
+             ORDER BY seq ASC",
+        )
+        .bind(execution_id)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+
+        let logs = console_log_rows
+            .into_iter()
+            .map(|(level, message)| pb::ConsoleLogEntry { level, message })
+            .collect::<Vec<_>>();
+
+        let effective_error = if error_body.is_empty() {
+            db_error.clone()
+        } else {
+            Some(error_body.clone())
+        };
 
         let (reason, suggestion) = analyze_execution(
             &WhyExecution {
-                status,
+                status: status.clone(),
                 duration_ms,
-                error,
+                error: effective_error,
             },
             &checkpoints,
         );
@@ -947,6 +992,12 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             execution_id: execution_id_raw,
             reason,
             suggestion,
+            error_body,
+            logs,
+            method,
+            path,
+            status,
+            duration_ms,
         }))
     }
 

@@ -24,26 +24,29 @@ pub async fn execute(args: TailArgs) -> Result<()> {
     let mut stream = tail(&auth.url, &auth.token, args.project_id).await?;
 
     while let Some(event) = stream.message().await? {
-        let status_symbol = match event.status.as_str() {
-            "ok" => "✓",
-            "error" => "✗",
-            "running" => "…",
+        let status_display = match event.status.as_str() {
+            "ok" => "\x1b[32m✓  ok\x1b[0m",
+            "error" => "\x1b[31m✗  error\x1b[0m",
+            "running" => "\x1b[33m…  running\x1b[0m",
             _ => "?",
         };
 
+        // Show only first 8 chars of execution_id like `flux logs` does
+        let short_id = &event.execution_id[..event.execution_id.len().min(8)];
+
         if event.error.is_empty() {
             println!(
-                "  {}  {} {}  {}ms  {}",
-                status_symbol, event.method, event.path, event.duration_ms, event.execution_id
+                "  {}  \x1b[1m{}\x1b[0m {}  {}ms  \x1b[2m{}\x1b[0m",
+                status_display, event.method, event.path, event.duration_ms, short_id
             );
         } else {
             println!(
-                "  {}  {} {}  {}ms  {}\n     └─ {}",
-                status_symbol,
+                "  {}  \x1b[1m{}\x1b[0m {}  {}ms  \x1b[2m{}\x1b[0m\n     \x1b[31m└─ {}\x1b[0m",
+                status_display,
                 event.method,
                 event.path,
                 event.duration_ms,
-                event.execution_id,
+                short_id,
                 event.error
             );
         }

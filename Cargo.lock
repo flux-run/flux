@@ -4597,6 +4597,7 @@ dependencies = [
 name = "server"
 version = "0.2.5"
 dependencies = [
+ "base64",
  "dotenvy",
  "hex",
  "prost",

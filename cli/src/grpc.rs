@@ -68,8 +68,14 @@ fn friendly_status_error(action: &str, err: tonic::Status) -> anyhow::Error {
 #[derive(Debug, Clone)]
 pub struct WhyView {
     pub execution_id: String,
+    pub method: String,
+    pub path: String,
+    pub status: String,
+    pub duration_ms: i32,
     pub reason: String,
     pub suggestion: String,
+    pub error_body: String,
+    pub logs: Vec<(String, String)>, // (level, message)
 }
 
 #[derive(Debug, Clone)]
@@ -293,8 +299,14 @@ pub async fn why(url: &str, token: &str, execution_id: &str) -> Result<WhyView> 
 
     Ok(WhyView {
         execution_id: response.execution_id,
+        method: response.method,
+        path: response.path,
+        status: response.status,
+        duration_ms: response.duration_ms,
         reason: response.reason,
         suggestion: response.suggestion,
+        error_body: response.error_body,
+        logs: response.logs.into_iter().map(|l| (l.level, l.message)).collect(),
     })
 }
 

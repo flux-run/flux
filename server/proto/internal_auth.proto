@@ -110,6 +110,12 @@ message WhyResponse {
   string execution_id = 1;
   string reason = 2;
   string suggestion = 3;
+  string error_body = 4;
+  repeated ConsoleLogEntry logs = 5;
+  string method = 6;
+  string path = 7;
+  string status = 8;
+  int32 duration_ms = 9;
 }
 
 message TailRequest {
@@ -148,7 +154,6 @@ message ReplayResponse {
   int32 duration_ms = 5;
   repeated ReplayStep steps = 6;
 }
-  repeated ConsoleLogEntry logs = 10;
 
 message ResumeRequest {
   string execution_id = 1;
