@@ -70,29 +70,49 @@ done
 flux auth --url "http://localhost:$GRPC_PORT" --token "$SERVICE_TOKEN" --skip-verify
 
 # 6. Inject Modern Application Code
-echo "👉 Injecting Modern Stack code (Hono + Zod + PG + Redis)..."
+echo "👉 Injecting Modern Stack code (Hono + Zod + Drizzle + Redis)..."
 mkdir -p src
 cat > src/index.ts <<EOF
 // @ts-nocheck
 import { Hono } from "https://esm.sh/hono@3.11.7";
 import { z } from "https://esm.sh/zod@3.22.4";
+import { drizzle } from "https://esm.sh/drizzle-orm@0.31.0/pg-proxy";
+import { pgTable, serial, text, integer } from "https://esm.sh/drizzle-orm@0.31.0/pg-core";
 import pg from "flux:pg";
 import { createClient } from "flux:redis";
 
 const app = new Hono();
 
-// 1. Client Setup
+// 1. Drizzle Schema
+const products = pgTable("products", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  price: integer("price").notNull(),
+});
+
+// 2. Client Setup
 const DB_URL = Deno.env.get("DATABASE_URL") || "$DB_URL";
 const pool = new pg.Pool({ connectionString: DB_URL });
 const redis = createClient({ url: "$REDIS_URL" });
 
-// 2. Zod Validation
-const CreateProductSchema = z.object({
-  name: z.string().min(1),
-  price: z.number().positive(),
+// 3. Drizzle Proxy Adapter
+const db = drizzle(async (sql, params, method) => {
+  try {
+    const res = await pool.query(sql, params);
+    return { rows: res.rows };
+  } catch (e) {
+    console.error("❌ Drizzle Proxy Error:", e);
+    throw e;
+  }
 });
 
-// 3. Routes
+// 4. Zod Validation
+const CreateProductSchema = z.object({
+  name: z.string().min(1),
+  price: z.number().positive().int(),
+});
+
+// 5. Routes
 app.post("/products", async (c) => {
   const body = await c.req.json();
   const result = CreateProductSchema.safeParse(body);
@@ -103,12 +123,9 @@ app.post("/products", async (c) => {
   
   const { name, price } = result.data;
   
-  // RAW SQL (bypass drizzle ESM issues)
-  const res = await pool.query(
-    "INSERT INTO flux_e2e_products (name, price) VALUES (\$1, \$2) RETURNING *",
-    [name, price]
-  );
-  const newProduct = res.rows[0];
+  // Drizzle Insert
+  const res = await db.insert(products).values({ name, price }).returning();
+  const newProduct = res[0];
   
   // Clear redis cache
   await redis.del("flux:e2e:all_products");
@@ -123,9 +140,8 @@ app.get("/products", async (c) => {
     return c.json({ data: JSON.parse(cached), source: "cache" });
   }
   
-  // DB check
-  const res = await pool.query("SELECT * FROM flux_e2e_products ORDER BY id ASC");
-  const allProducts = res.rows;
+  // Drizzle Select
+  const allProducts = await db.select().from(products).orderBy(products.id);
   
   // Update cache
   await redis.set("flux:e2e:all_products", JSON.stringify(allProducts), { EX: 60 });
@@ -135,7 +151,7 @@ app.get("/products", async (c) => {
 
 // Init Table
 app.get("/init", async (c) => {
-  await pool.query(\`CREATE TABLE IF NOT EXISTS flux_e2e_products (
+  await pool.query(\`CREATE TABLE IF NOT EXISTS products (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
     price INTEGER NOT NULL
@@ -170,7 +186,7 @@ curl -s "http://localhost:$APP_PORT/init" | jq
 echo "👉 Testing Zod Validation (Failure Case)..."
 curl -s -X POST "http://localhost:$APP_PORT/products" -H "Content-Type: application/json" -d '{"name": "", "price": -10}' | jq
 
-echo "👉 Creating Product (PG + Zod)..."
+echo "👉 Creating Product (Hono + Drizzle + Zod)..."
 PRODUCT=$(curl -s -X POST "http://localhost:$APP_PORT/products" -H "Content-Type: application/json" -d '{"name": "Flux Core", "price": 999}')
 echo "$PRODUCT" | jq
 
@@ -201,5 +217,4 @@ docker stop flux-e2e-redis > /dev/null 2>&1 || true
 
 echo "========================================"
 echo -e "${GREEN}✅ Modern Stack E2E Complete${NC}"
-echo "   (Note: Drizzle omitted due to engine ESM regression)${NC}"
 echo "========================================"

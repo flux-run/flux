@@ -1131,7 +1131,7 @@ fn resolve_dependency_specifier(specifier: &str, base_specifier: &str) -> Result
     }
     if specifier.starts_with("npm:") {
         return Ok(format!(
-            "https://esm.sh/{}?bundle",
+            "https://esm.sh/{}",
             specifier.trim_start_matches("npm:")
         ));
     }
@@ -1147,7 +1147,7 @@ fn resolve_dependency_specifier(specifier: &str, base_specifier: &str) -> Result
         if let Some(local) = resolve_local_bare_import(specifier, base_specifier)? {
             return Ok(local);
         }
-        return Ok(format!("https://esm.sh/{specifier}?bundle"));
+        return Ok(format!("https://esm.sh/{specifier}"));
     }
 
     let base = Url::parse(base_specifier)

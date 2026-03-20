@@ -1,0 +1,6 @@
+{
+  "flux_version": "0.2",
+  "entry": "./repro-drizzle.ts",
+  "artifact": "./.flux/artifact.json",
+  "project_id": null
+}
