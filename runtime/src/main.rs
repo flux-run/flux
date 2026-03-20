@@ -147,14 +147,16 @@ async fn main() -> Result<()> {
     let mut recorded_checkpoints = Vec::new();
     let mut replay_input = args.script_input.clone();
 
+    let mut replay_trace = None;
+
     if let Some(ref replay_id) = args.replay {
         println!("replay:   {}", replay_id);
         let trace = runtime::server_client::get_trace(&args.server_url, &args.token, replay_id).await?;
-        recorded_checkpoints = trace.checkpoints.into_iter().map(|cp| {
+        recorded_checkpoints = trace.checkpoints.iter().map(|cp| {
             runtime::deno_runtime::FetchCheckpoint {
                 call_index: cp.call_index as u32,
-                boundary: cp.boundary,
-                url: String::new(), // Not stored in proto Checkpoint but used for display
+                boundary: cp.boundary.clone(),
+                url: String::new(),
                 method: String::new(),
                 request: serde_json::from_slice(&cp.request).unwrap_or(serde_json::Value::Null),
                 response: serde_json::from_slice(&cp.response).unwrap_or(serde_json::Value::Null),
@@ -165,8 +167,9 @@ async fn main() -> Result<()> {
         boot_context.mode = runtime::deno_runtime::ExecutionMode::Replay;
         
         if replay_input.is_none() {
-            replay_input = Some(trace.request_json);
+            replay_input = Some(trace.request_json.clone());
         }
+        replay_trace = Some(trace);
     }
 
     println!("[boot] execution_id={} request_id={}", boot_context.execution_id, boot_context.request_id);
@@ -209,51 +212,93 @@ async fn main() -> Result<()> {
         if !is_server_mode && !has_handler {
             return Ok(());
         }
-    }
-
-    // 1. If script_input or replay is provided, execute the handler once and exit.
+    }    // 1. If script_input or replay is provided, execute the handler once and exit.
     if let Some(input_str) = &replay_input {
-        if !has_handler {
+        if !has_handler && !is_server_mode {
             return Ok(());
         }
 
-        let input: serde_json::Value = serde_json::from_str(input_str)
-            .with_context(|| format!("invalid --script-input JSON: {}", input_str))?;
-
         let mut isolate = runtime::JsIsolate::new_from_any_artifact(&artifact, 0).await?;
-
         let started = Instant::now();
-        let execution = isolate
-            .execute_with_recorded(input.clone(), boot_context.clone(), recorded_checkpoints)
-            .await?;
 
-        if !args.token.is_empty() {
-            let result = ExecutionResult {
+        let execution = if is_server_mode {
+            let trace = replay_trace.as_ref().ok_or_else(|| anyhow::anyhow!("replay trace missing for server-mode replay"))?;
+
+            // Intelligent unpacking: Flux HTTP executions record an envelope.
+            // If the request_json looks like an envelope, extract the real body and headers.
+            let (body, headers_json) = if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&trace.request_json) {
+                if envelope.get("method").is_some() && envelope.get("url").is_some() && envelope.get("body").is_some() {
+                    let b = envelope.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let h = serde_json::to_string(envelope.get("headers").unwrap_or(&serde_json::json!([]))).unwrap_or_else(|_| "[]".to_string());
+                    (b, h)
+                } else {
+                    (trace.request_json.clone(), "[[\"content-type\", \"application/json\"]]".to_string())
+                }
+            } else {
+                (trace.request_json.clone(), "[[\"content-type\", \"application/json\"]]".to_string())
+            };
+
+            println!("replay:   {} {} body_len={}", trace.method, trace.path, body.len());
+
+            let net_req = runtime::deno_runtime::NetRequest {
+                req_id: boot_context.request_id.clone(),
+                method: trace.method.clone(),
+                url: format!("http://localhost{}", trace.path),
+                headers_json,
+                body,
+            };
+
+            let res = isolate.dispatch_request_with_recorded(boot_context.clone(), net_req, recorded_checkpoints).await?;
+            runtime::isolate_pool::ExecutionResult {
                 execution_id: boot_context.execution_id.clone(),
                 request_id: boot_context.request_id.clone(),
                 project_id: args.project_id.clone(),
                 code_version: boot_context.code_version.clone(),
-                status: if execution.error.is_some() {
-                    "error".to_string()
-                } else {
-                    "ok".to_string()
-                },
-                body: execution.output.clone(),
-                error: execution.error.clone(),
+                status: if res.response.status >= 400 { "error".to_string() } else { "ok".to_string() },
+                body: serde_json::json!({
+                    "net_response": {
+                        "status": res.response.status,
+                        "headers": res.response.headers,
+                        "body": res.response.body,
+                    }
+                }),
+                error: None,
                 duration_ms: started.elapsed().as_millis() as i32,
-                checkpoints: execution.checkpoints.clone(),
-                logs: execution.logs.clone(),
-            };
+                checkpoints: res.checkpoints,
+                logs: res.logs,
+            }
+        } else {
+            let input: serde_json::Value = serde_json::from_str(input_str)
+                .with_context(|| format!("invalid input JSON: {}", input_str))?;
 
+            let res = isolate
+                .execute_with_recorded(input.clone(), boot_context.clone(), recorded_checkpoints)
+                .await?;
+            
+            runtime::isolate_pool::ExecutionResult {
+                execution_id: boot_context.execution_id.clone(),
+                request_id: boot_context.request_id.clone(),
+                project_id: args.project_id.clone(),
+                code_version: boot_context.code_version.clone(),
+                status: if res.error.is_some() { "error".to_string() } else { "ok".to_string() },
+                body: res.output,
+                error: res.error,
+                duration_ms: started.elapsed().as_millis() as i32,
+                checkpoints: res.checkpoints,
+                logs: res.logs,
+            }
+        };
+
+        if !args.token.is_empty() {
             let _ = runtime::server_client::record_execution(
                 &args.server_url,
                 &args.token,
                 runtime::server_client::ExecutionEnvelope {
-                    method: "RUN".to_string(),
+                    method: if is_server_mode { "REPLAY_HTTP".to_string() } else { "REPLAY_RUN".to_string() },
                     path: args.entry.clone(),
                     project_id: args.project_id.clone(),
-                    request_json: input,
-                    result,
+                    request_json: serde_json::Value::String(input_str.clone()),
+                    result: execution.clone(),
                 },
             )
             .await;
@@ -262,10 +307,21 @@ async fn main() -> Result<()> {
         if let Some(error) = execution.error.as_ref() {
             eprintln!("error: {error}");
         }
-        if !execution.output.is_null() {
+
+        // Print output summary like in the CLI
+        let status_symbol = if execution.status == "ok" { "\x1b[32m✓\x1b[0m" } else { "\x1b[31m✗\x1b[0m" };
+        println!("  {}  {}  {}ms", status_symbol, execution.status, execution.duration_ms);
+        
+        if is_server_mode {
+             if let Some(net) = execution.body.get("net_response") {
+                 let status = net.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+                 let body = net.get("body").and_then(|v| v.as_str()).unwrap_or("");
+                 println!("  output  {}  \"{}\"", status, body);
+             }
+        } else if !execution.body.is_null() {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&execution.output).unwrap_or_default()
+                serde_json::to_string_pretty(&execution.body).unwrap_or_default()
             );
         }
         return Ok(());
