@@ -72,12 +72,11 @@ fi
 # ── PHASE 2: Project Init ─────────────────────────────────────────────────────
 section "2. PROJECT INIT"
 
-cd "$E2E_DIR"
-flux init e2e-app > "$E2E_DIR/init.log" 2>&1
-assert_exit_zero "flux init creates project directory" test -d "$E2E_DIR/e2e-app"
-assert_exit_zero "flux.json exists" test -f "$E2E_DIR/e2e-app/flux.json"
-assert_exit_zero "entry file exists" test -f "$E2E_DIR/e2e-app/index.ts"
+mkdir -p "$E2E_DIR/e2e-app"
 cd "$E2E_DIR/e2e-app"
+flux init
+assert_exit_zero "flux init creates project files" test -f "flux.json"
+assert_exit_zero "entry file exists" test -f "src/index.ts"
 
 # Write a test handler with both success and failure routes
 cat > index.ts << 'HANDLER'
