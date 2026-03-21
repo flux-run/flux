@@ -477,11 +477,9 @@ export default async function handler() {{
                 "verified": true,
         })
     );
-    dbg!(&output.checkpoints);
-    assert!(
-        output.checkpoints.is_empty(),
-        "crypto.subtle verification should not create checkpoints"
-    );
+    assert_eq!(output.checkpoints.len(), 2, "crypto.subtle operations must be recorded");
+    assert_eq!(output.checkpoints[0].boundary, "crypto.subtle.importKey");
+    assert_eq!(output.checkpoints[1].boundary, "crypto.subtle.verify");
 
     Ok(())
 }

@@ -81,9 +81,15 @@ function deserializeAlgorithm(alg) {
   return clone;
 }
 
+const originals = {};
 for (const method of subtleMethods) {
   if (typeof crypto.subtle[method] === 'function') {
-    const original = crypto.subtle[method].bind(crypto.subtle);
+    originals[method] = crypto.subtle[method].bind(crypto.subtle);
+  }
+}
+
+for (const method of subtleMethods) {
+  if (originals[method]) {
     crypto.subtle[method] = async function(...args) {
       try {
         if (!globalThis.__FLUX_EXECUTION_ID__) {
@@ -102,10 +108,10 @@ for (const method of subtleMethods) {
           if (response && response.type === 'ArrayBuffer') {
             return Flux.deserializeArrayBuffer(response.bytes);
           } else if (response && response.type === 'CryptoKey') {
-            return await original('jwk', response.jwk, deserializeAlgorithm(response.algorithm), response.extractable, response.usages);
+            return await originals.importKey('jwk', response.jwk, deserializeAlgorithm(response.algorithm), response.extractable, response.usages);
           } else if (response && response.type === 'KeyPair') {
-            const publicKey = await original('jwk', response.publicKey.jwk, deserializeAlgorithm(response.publicKey.algorithm), response.publicKey.extractable, response.publicKey.usages);
-            const privateKey = await original('jwk', response.privateKey.jwk, deserializeAlgorithm(response.privateKey.algorithm), response.privateKey.extractable, response.privateKey.usages);
+            const publicKey = await originals.importKey('jwk', response.publicKey.jwk, deserializeAlgorithm(response.publicKey.algorithm), response.publicKey.extractable, response.publicKey.usages);
+            const privateKey = await originals.importKey('jwk', response.privateKey.jwk, deserializeAlgorithm(response.privateKey.algorithm), response.privateKey.extractable, response.privateKey.usages);
             return { publicKey, privateKey };
           }
           return response;
@@ -123,7 +129,7 @@ for (const method of subtleMethods) {
 
         let result;
         try {
-          result = await original(...callArgs);
+          result = await originals[method](...callArgs);
         } catch (err) {
           throw err;
         }
@@ -134,7 +140,7 @@ for (const method of subtleMethods) {
             serializedResult = { type: 'ArrayBuffer', bytes: Flux.serializeArrayBuffer(result) };
           } else if (result && result.constructor && result.constructor.name === "CryptoKey") {
             if (result.extractable) {
-              const jwk = await crypto.subtle.exportKey('jwk', result);
+              const jwk = await originals.exportKey('jwk', result);
               serializedResult = { type: 'CryptoKey', jwk, algorithm: sanitizeAlgorithm(result.algorithm), extractable: result.extractable, usages: result.usages };
             } else {
               serializedResult = { type: 'CryptoKey_unextractable' };
@@ -143,10 +149,10 @@ for (const method of subtleMethods) {
             let pubJwk = null;
             let privJwk = null;
             if (result.publicKey.extractable) {
-                pubJwk = { jwk: await crypto.subtle.exportKey('jwk', result.publicKey), algorithm: sanitizeAlgorithm(result.publicKey.algorithm), extractable: result.publicKey.extractable, usages: result.publicKey.usages };
+                pubJwk = { jwk: await originals.exportKey('jwk', result.publicKey), algorithm: sanitizeAlgorithm(result.publicKey.algorithm), extractable: result.publicKey.extractable, usages: result.publicKey.usages };
             }
             if (result.privateKey.extractable) {
-                privJwk = { jwk: await crypto.subtle.exportKey('jwk', result.privateKey), algorithm: sanitizeAlgorithm(result.privateKey.algorithm), extractable: result.privateKey.extractable, usages: result.privateKey.usages };
+                privJwk = { jwk: await originals.exportKey('jwk', result.privateKey), algorithm: sanitizeAlgorithm(result.privateKey.algorithm), extractable: result.privateKey.extractable, usages: result.privateKey.usages };
             }
             serializedResult = { type: 'KeyPair', publicKey: pubJwk, privateKey: privJwk };
           } else {
