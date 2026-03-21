@@ -40,7 +40,22 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
     let payload_json: serde_json::Value =
         serde_json::from_str(&args.input).context("invalid --input JSON")?;
 
-    let entry = PathBuf::from(&args.entry);
+    let mut temp_entry = None;
+    let entry_str = if args.entry == "-" {
+        use std::io::Read;
+        let mut buffer = String::new();
+        std::io::stdin().read_to_string(&mut buffer).context("failed to read from stdin")?;
+        
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!("flux-exec-stdin-{}.ts", uuid::Uuid::new_v4()));
+        std::fs::write(&file_path, buffer).context("failed to write temp stdin file")?;
+        temp_entry = Some(file_path.to_string_lossy().to_string());
+        temp_entry.as_ref().unwrap()
+    } else {
+        &args.entry
+    };
+
+    let entry = PathBuf::from(entry_str);
     if !entry.exists() {
         bail!("entry file not found: {}", entry.display());
     }
@@ -54,7 +69,7 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
     let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
 
     // Load .env from the project directory (silently ignore if missing).
-    let entry_path = PathBuf::from(&args.entry);
+    let entry_path = PathBuf::from(entry_str);
     let env_path = entry_path
         .parent()
         .map(|p| p.join(".env"))
@@ -73,7 +88,7 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
 
     let runtime_port = pick_free_port()?;
 
-    let runtime_args = build_runtime_args(&args, runtime_port);
+    let runtime_args = build_runtime_args(&args, entry_str, runtime_port);
 
     let mut child = spawn_runtime(
         &binary,
@@ -139,7 +154,8 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
             }
         }
     };
-
+ 
+    let _keep_alive = temp_entry;
     result
 }
 
@@ -230,10 +246,10 @@ async fn spawn_runtime(
         .context("failed to start flux-runtime for one-off execution")
 }
 
-fn build_runtime_args(args: &ExecArgs, port: u16) -> Vec<String> {
+fn build_runtime_args(args: &ExecArgs, entry: &str, port: u16) -> Vec<String> {
     let mut prog_args = Vec::new();
     prog_args.push("--entry".to_string());
-    prog_args.push(args.entry.clone());
+    prog_args.push(entry.to_string());
     prog_args.push("--port".to_string());
     prog_args.push(port.to_string());
     prog_args.push("--isolate-pool-size".to_string());

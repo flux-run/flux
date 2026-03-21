@@ -66,12 +66,25 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         bail!("either ENTRY or --artifact <FILE> must be provided");
     }
 
+    let mut temp_entry = None;
     if let Some(ref entry_str) = args.entry {
-        let entry = PathBuf::from(entry_str);
-        if !entry.exists() {
-            bail!("entry file not found: {}", entry.display());
+        if entry_str == "-" {
+            use std::io::Read;
+            let mut buffer = String::new();
+            std::io::stdin().read_to_string(&mut buffer).context("failed to read from stdin")?;
+            
+            let temp_dir = std::env::temp_dir();
+            let file_path = temp_dir.join(format!("flux-stdin-{}.ts", uuid::Uuid::new_v4()));
+            std::fs::write(&file_path, buffer).context("failed to write temp stdin file")?;
+            temp_entry = Some(file_path.to_string_lossy().to_string());
+        } else {
+            let entry = PathBuf::from(entry_str);
+            if !entry.exists() {
+                bail!("entry file not found: {}", entry.display());
+            }
         }
     }
+    let entry_str = temp_entry.as_ref().or(args.entry.as_ref());
 
     if let Some(ref artifact_str) = args.artifact {
         let artifact = PathBuf::from(artifact_str);
@@ -104,7 +117,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         } else {
             dotenvy::dotenv().ok().map(PathBuf::from)
         }
-    } else if let Some(ref entry_str) = args.entry {
+    } else if let Some(ref entry_str) = entry_str {
         let entry = PathBuf::from(entry_str);
         let env_path = entry
             .parent()
@@ -126,7 +139,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let auth = crate::config::resolve_optional_auth(args.url.clone(), args.token.clone())?;
 
     let project_id = args.project_id.clone().or_else(|| {
-        if let Some(ref entry_str) = args.entry {
+        if let Some(ref entry_str) = entry_str {
             let entry = std::path::PathBuf::from(entry_str);
             let project_dir = entry.parent().unwrap_or(std::path::Path::new("."));
             crate::project::load_project_config(project_dir).ok().and_then(|c| c.project_id)
@@ -135,20 +148,20 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         }
     });
 
-    let prog_args = build_runtime_args(&auth.url, &auth.token, &args, project_id.as_deref());
+    let prog_args = build_runtime_args(&auth.url, &auth.token, &args, entry_str.map(|s| s.as_str()), project_id.as_deref());
 
     exec_runtime(binary, &prog_args).await
 }
 
-fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs, project_id: Option<&str>) -> Vec<String> {
+fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs, entry_str: Option<&str>, project_id: Option<&str>) -> Vec<String> {
     let mut prog_args = Vec::new();
 
     if let Some(ref artifact) = args.artifact {
         prog_args.push("--artifact".to_string());
         prog_args.push(artifact.clone());
-    } else if let Some(ref entry) = args.entry {
+    } else if let Some(entry_str) = entry_str {
         prog_args.push("--entry".to_string());
-        prog_args.push(entry.clone());
+        prog_args.push(entry_str.to_string());
     }
 
     prog_args.extend(vec![

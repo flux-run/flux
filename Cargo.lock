@@ -859,6 +859,7 @@ dependencies = [
  "toml",
  "tonic",
  "url",
+ "uuid",
  "which 7.0.3",
 ]
 

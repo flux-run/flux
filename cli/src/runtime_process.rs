@@ -1,6 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Result, bail, Context};
+use anyhow::{Result, bail};
+#[cfg(not(unix))]
+use anyhow::Context;
 
 #[cfg(unix)]
 pub async fn exec_runtime(
