@@ -73,8 +73,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
             let mut buffer = String::new();
             std::io::stdin().read_to_string(&mut buffer).context("failed to read from stdin")?;
             
-            let temp_dir = std::env::temp_dir();
-            let file_path = temp_dir.join(format!("flux-stdin-{}.ts", uuid::Uuid::new_v4()));
+            let cwd = std::env::current_dir().context("failed to get current directory")?;
+            let file_path = cwd.join(format!(".flux-stdin-{}.ts", uuid::Uuid::new_v4()));
             std::fs::write(&file_path, buffer).context("failed to write temp stdin file")?;
             temp_entry = Some(file_path.to_string_lossy().to_string());
         } else {
@@ -150,7 +150,13 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     let prog_args = build_runtime_args(&auth.url, &auth.token, &args, entry_str.map(|s| s.as_str()), project_id.as_deref());
 
-    exec_runtime(binary, &prog_args).await
+    let res = exec_runtime(binary, &prog_args).await;
+    
+    if let Some(path_str) = temp_entry {
+        let _ = std::fs::remove_file(path_str);
+    }
+
+    res
 }
 
 fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs, entry_str: Option<&str>, project_id: Option<&str>) -> Vec<String> {

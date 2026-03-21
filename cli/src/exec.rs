@@ -46,8 +46,8 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
         let mut buffer = String::new();
         std::io::stdin().read_to_string(&mut buffer).context("failed to read from stdin")?;
         
-        let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join(format!("flux-exec-stdin-{}.ts", uuid::Uuid::new_v4()));
+        let cwd = std::env::current_dir().context("failed to get current directory")?;
+        let file_path = cwd.join(format!(".flux-exec-stdin-{}.ts", uuid::Uuid::new_v4()));
         std::fs::write(&file_path, buffer).context("failed to write temp stdin file")?;
         temp_entry = Some(file_path.to_string_lossy().to_string());
         temp_entry.as_ref().unwrap()
@@ -155,7 +155,10 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
         }
     };
  
-    let _keep_alive = temp_entry;
+    if let Some(path_str) = temp_entry {
+        let _ = std::fs::remove_file(path_str);
+    }
+
     result
 }
 

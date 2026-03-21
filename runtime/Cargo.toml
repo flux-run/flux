@@ -37,8 +37,6 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1.22.0", features = ["v4", "serde"] }
-wasmtime = { version = "28", default-features = false, features = ["cranelift", "runtime", "async", "component-model"] }
-wasmtime-wasi = { version = "28", default-features = false }
 
 # Deno 2 runtime crates
 # Web platform / JS runtime
@@ -63,4 +61,3 @@ deno_web = "0.270.0"
 [dev-dependencies]
 futures = "0.3"
 rcgen = "0.13.2"
-wat = "1"

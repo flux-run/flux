@@ -1,34 +1,41 @@
-# scripts/e2e/docker-compose.local.yml
-# ─────────────────────────────────────────────────────────────────────────────
-# Local E2E verification for macOS/Windows.
-# Builds binaries from source inside the container to ensure arch compatibility.
-# ─────────────────────────────────────────────────────────────────────────────
-version: "3.9"
+# version: "3.9"
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: flux_e2e_local
+      POSTGRES_USER: flux
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: flux
+    ports:
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 2s
+      test: ["CMD-SHELL", "pg_isready -U flux"]
+      interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 5
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   e2e:
     build:
       context: ../..
-      dockerfile: scripts/e2e/Dockerfile.e2e.local
+      dockerfile: scripts/e2e/Dockerfile.local
+    environment:
+      DATABASE_URL: "postgres://flux:password@postgres:5432/flux?sslmode=disable"
+      REDIS_URL: "redis://redis:6379"
+      FLUX_SERVER_URL: "http://localhost:50051"
+      SERVICE_TOKEN: "flux-e2e-token"
     depends_on:
       postgres:
         condition: service_healthy
-    environment:
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/flux_e2e_local
-      REDIS_URL: ""
-      FLUX_PORT: "3000"
-      FLUX_SERVER_URL: http://127.0.0.1:50051
-      SERVICE_TOKEN: e2e-local-token
-    network_mode: host
+      redis:
+        condition: service_healthy

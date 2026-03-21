@@ -45,9 +45,24 @@ echo "╚═══════════════════════�
 # ── Prerequisite: flux is in PATH ─────────────────────────────────────────────
 section "0. PREREQUISITES"
 assert_exit_zero "flux is in PATH" which flux
-FLUX_VERSION=$(flux --version 2>&1)
-assert_nonempty "$FLUX_VERSION" "flux --version returns a string"
-pass "flux version: $FLUX_VERSION"
+echo "DEBUG: flux path: $(which flux)"
+ls -l $(which flux)
+ldd $(which flux) || echo "ldd not available"
+
+# Run with || true to avoid set -e exit, capture output and code
+FLUX_OUT=$(flux --version 2>&1) || FLUX_CODE=$?
+FLUX_CODE=${FLUX_CODE:-0}
+
+if [ "$FLUX_CODE" -ne 0 ]; then
+  fail "flux --version failed with exit code $FLUX_CODE"
+  echo "--- OUTPUT BEG ---"
+  echo "$FLUX_OUT"
+  echo "--- OUTPUT END ---"
+  exit 1
+fi
+
+assert_nonempty "$FLUX_OUT" "flux --version returns a string"
+pass "flux version: $FLUX_OUT"
 
 # ── PHASE 1: Server ───────────────────────────────────────────────────────────
 section "1. FLUX SERVER"
