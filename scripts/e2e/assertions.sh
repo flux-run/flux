@@ -109,7 +109,7 @@ assert_nonempty() {
   if [[ -n "$val" && "$val" != "null" && "$val" != "none" ]]; then
     pass "$label"
   else
-    fail "$label — got empty/null value"
+    fail "$label — got value: '$val'"
   fi
 }
 
@@ -123,6 +123,13 @@ wait_for_http() {
     i=$((i + 1))
     if [[ $i -ge $max ]]; then
       fail "Timed out waiting for $url after ${max}s"
+      if [[ -n "${E2E_DIR:-}" ]]; then
+        echo -e "\n${YELLOW}───── RUNTIME LOG ──────────────────────────────────────────────────${NC}"
+        cat "$E2E_DIR/runtime.log" 2>/dev/null || echo "(no runtime.log)"
+        echo -e "${YELLOW}───── SERVER LOG ───────────────────────────────────────────────────${NC}"
+        cat "$E2E_DIR/server.log" 2>/dev/null || echo "(no server.log)"
+        echo -e "${YELLOW}────────────────────────────────────────────────────────────────────${NC}\n"
+      fi
       return 1
     fi
   done

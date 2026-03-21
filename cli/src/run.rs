@@ -22,7 +22,7 @@ pub struct RunArgs {
 
     /// Keep the runtime alive as an HTTP listener if a default handler is exported.
     /// (Automatically enabled if Deno.serve() is called).
-    #[arg(long)]
+    #[arg(long, alias = "listen")]
     pub serve: bool,
 
     /// Flux server URL for recording the execution (optional).

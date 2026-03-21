@@ -33,6 +33,10 @@ pub struct DevArgs {
 
     #[arg(long)]
     pub watch_dir: Option<String>,
+
+    /// Keep the runtime alive as an HTTP listener if a default handler is exported.
+    #[arg(long, alias = "listen")]
+    pub serve: bool,
 }
 
 pub async fn execute(args: DevArgs) -> Result<()> {
@@ -150,6 +154,10 @@ fn build_runtime_args(artifact_path: &Path, server_url: &str, token: &str, args:
     if let Some(project_id) = project_id {
         runtime_args.push("--project-id".to_string());
         runtime_args.push(project_id.to_string());
+    }
+
+    if args.serve {
+        runtime_args.push("--serve".to_string());
     }
 
     runtime_args

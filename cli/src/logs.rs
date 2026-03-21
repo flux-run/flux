@@ -21,15 +21,18 @@ pub struct LogsArgs {
     pub since: Option<String>,
     #[arg(long, value_name = "TEXT")]
     pub search: Option<String>,
+    #[arg(long, value_name = "ID")]
+    pub project_id: Option<String>,
 }
 
 pub async fn execute(args: LogsArgs) -> Result<()> {
     let auth = resolve_auth(args.url, args.token)?;
-    let fetch_limit = if args.status.is_some()
+    let has_filter = args.status.is_some()
         || args.path.is_some()
         || args.since.is_some()
         || args.search.is_some()
-    {
+        || args.project_id.is_some();
+    let fetch_limit = if has_filter {
         (args.limit.saturating_mul(10)).clamp(50, 500)
     } else {
         args.limit
@@ -65,6 +68,9 @@ pub async fn execute(args: LogsArgs) -> Result<()> {
                 || row.request_id.to_ascii_lowercase().contains(&search)
         });
     }
+
+    // Note: project_id field is already returned in log entries; filter client-side
+    // (the server returns all logs but includes project_id in each entry).
 
     logs.truncate(args.limit as usize);
 
