@@ -11,6 +11,38 @@ const KP = "flux:redis";
 async function getClient() {
   const client = createClient({ url: Deno.env.get("REDIS_URL") ?? "redis://localhost:6379" });
   await client.connect();
+
+  // Polyfill missing node-redis v4 methods used by the integration test runner
+  if (!client.ping) client.ping = () => client.sendCommand(["PING"]);
+  if (!client.incrBy) client.incrBy = (k, by) => client.sendCommand(["INCRBY", k, String(by)]);
+  
+  const originalHSet = client.hSet.bind(client);
+  client.hSet = async (k, fieldOrObj, value) => {
+    if (typeof fieldOrObj === "object") {
+      let count = 0;
+      for (const [f, v] of Object.entries(fieldOrObj)) {
+        await originalHSet(k, f, String(v));
+        count++;
+      }
+      return count;
+    }
+    return originalHSet(k, fieldOrObj, value);
+  };
+  
+  if (!client.hGetAll) client.hGetAll = async (k) => {
+    const arr = await client.sendCommand(["HGETALL", k]);
+    const obj = {};
+    for (let i = 0; i < arr.length; i += 2) obj[arr[i]] = arr[i + 1];
+    return obj;
+  };
+  
+  if (!client.rPush) client.rPush = (k, arr) => client.sendCommand(["RPUSH", k, ...(Array.isArray(arr) ? arr : [arr])]);
+  if (!client.lRange) client.lRange = (k, s, e) => client.sendCommand(["LRANGE", k, String(s), String(e)]);
+  if (!client.lLen) client.lLen = (k) => client.sendCommand(["LLEN", k]);
+  if (!client.sAdd) client.sAdd = (k, arr) => client.sendCommand(["SADD", k, ...(Array.isArray(arr) ? arr : [arr])]);
+  if (!client.sCard) client.sCard = (k) => client.sendCommand(["SCARD", k]);
+  if (!client.sIsMember) client.sIsMember = async (k, v) => (await client.sendCommand(["SISMEMBER", k, v])) === 1;
+
   return client;
 }
 

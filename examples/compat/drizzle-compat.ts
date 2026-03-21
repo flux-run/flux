@@ -16,8 +16,8 @@ import { Hono } from "npm:hono";
 import pg from "flux:pg";
 import {
   pgTable, serial, text, integer,
-} from "npm:drizzle-orm/pg-core";
-import { sql as drizzleSql } from "npm:drizzle-orm";
+} from "npm:drizzle-orm@^0.30.9/pg-core";
+import { sql as drizzleSql } from "npm:drizzle-orm@^0.30.9";
 
 const app = new Hono();
 

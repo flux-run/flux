@@ -35,7 +35,7 @@ class Redis {
 
   async ping(): Promise<string> {
     const c = await this._client();
-    try { return await c.ping(); }
+    try { return await c.sendCommand(["PING"]); }
     finally { await c.disconnect(); }
   }
 
@@ -53,7 +53,7 @@ class Redis {
 
   async del(...keys: string[]): Promise<number> {
     const c = await this._client();
-    try { return await c.del(keys); }
+    try { return await c.del(...keys); }
     finally { await c.disconnect(); }
   }
 
@@ -65,7 +65,7 @@ class Redis {
 
   async incrBy(key: string, by: number): Promise<number> {
     const c = await this._client();
-    try { return await c.incrBy(key, by); }
+    try { return await c.sendCommand(["INCRBY", key, String(by)]); }
     finally { await c.disconnect(); }
   }
 
@@ -83,7 +83,7 @@ class Redis {
 
   async hset(key: string, field: string, value: string): Promise<number> {
     const c = await this._client();
-    try { return await c.hSet(key, { [field]: value }); }
+    try { return await c.hSet(key, field, value); }
     finally { await c.disconnect(); }
   }
 
@@ -95,7 +95,12 @@ class Redis {
 
   async hgetall(key: string): Promise<Record<string, string>> {
     const c = await this._client();
-    try { return await c.hGetAll(key); }
+    try {
+      const arr: string[] = await c.sendCommand(["HGETALL", key]);
+      const obj: Record<string, string> = {};
+      for (let i = 0; i < arr.length; i += 2) obj[arr[i]] = arr[i + 1];
+      return obj;
+    }
     finally { await c.disconnect(); }
   }
 
@@ -107,13 +112,13 @@ class Redis {
 
   async rpush(key: string, ...values: string[]): Promise<number> {
     const c = await this._client();
-    try { return await c.rPush(key, values); }
+    try { return await c.sendCommand(["RPUSH", key, ...values]); }
     finally { await c.disconnect(); }
   }
 
   async lrange(key: string, start: number, stop: number): Promise<string[]> {
     const c = await this._client();
-    try { return await c.lRange(key, start, stop); }
+    try { return await c.sendCommand(["LRANGE", key, String(start), String(stop)]); }
     finally { await c.disconnect(); }
   }
 
