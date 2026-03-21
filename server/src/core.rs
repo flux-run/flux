@@ -74,9 +74,12 @@ impl CoreService {
 }
 
 async fn init_pool() -> Result<PgPool, Box<dyn std::error::Error>> {
-    let database_url = std::env::var("DATABASE_URL").map_err(|_| {
-        "DATABASE_URL environment variable is not set. Please provide it via the --database-url flag or export it."
-    })?;
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            "DATABASE_URL environment variable is not set. Please provide it via the --database-url flag or export it."
+        })?;
 
     let max_connections = std::env::var("SERVER_DB_POOL_SIZE")
         .ok()
@@ -85,14 +88,6 @@ async fn init_pool() -> Result<PgPool, Box<dyn std::error::Error>> {
 
     PgPoolOptions::new()
         .max_connections(max_connections)
-        .after_connect(|conn, _meta| {
-            Box::pin(async move {
-                sqlx::query("SET search_path = flux, public")
-                    .execute(conn)
-                    .await?;
-                Ok(())
-            })
-        })
         .connect(&database_url)
         .await
         .map_err(|err| {

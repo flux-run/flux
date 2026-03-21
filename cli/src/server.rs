@@ -43,6 +43,7 @@ async fn execute_start(args: ServerStartArgs) -> Result<()> {
         .or_else(|| std::env::var("DATABASE_URL").ok())
         .ok_or_else(|| anyhow::anyhow!("DATABASE_URL must be set or passed with --database-url"))?;
 
+
     let service_token = args
         .service_token
         .or_else(|| std::env::var("INTERNAL_SERVICE_TOKEN").ok())

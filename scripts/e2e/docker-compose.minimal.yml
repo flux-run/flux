@@ -18,6 +18,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: flux_e2e
+    ports:
+      - "5432:5432"
     # Health check so e2e waits for postgres to be ready
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]

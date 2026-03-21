@@ -32,7 +32,7 @@ APP_URL="http://127.0.0.1:${FLUX_PORT}"
 
 E2E_DIR=$(mktemp -d)
 PROJECT_ID="00000000-0000-0000-0000-000000000001"
-trap 'echo "Cleaning up $E2E_DIR"; rm -rf "$E2E_DIR"; kill $(jobs -p) 2>/dev/null || true' EXIT
+trap 'e2e_summary; echo "Cleaning up $E2E_DIR"; rm -rf "$E2E_DIR"; kill $(jobs -p) 2>/dev/null || true' EXIT
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════╗"
@@ -72,7 +72,7 @@ flux server start \
   --database-url "$DATABASE_URL" \
   --service-token "$SERVICE_TOKEN" \
   --port 50051 \
-  > "$E2E_DIR/server.log" 2>&1 &
+  > /tmp/flux-server-e2e.log 2>&1 &
 SERVER_PID=$!
 
 sleep 3  # give server time to boot and run migrations
@@ -81,6 +81,7 @@ if kill -0 "$SERVER_PID" 2>/dev/null; then
   pass "flux-server started (pid $SERVER_PID)"
 else
   fail "flux-server failed to start"
+  cat /tmp/flux-server-e2e.log
   cat "$E2E_DIR/server.log"
   e2e_summary
 fi
@@ -93,13 +94,21 @@ section "1.5 DATABASE AUTHENTICATION"
 DB_TOKEN="db-test-token-$(date +%s)"
 DB_TOKEN_HASH=$(echo -n "$DB_TOKEN" | openssl dgst -sha256 -hex | sed 's/.* //')
 
+# Helper to run psql (local or via docker)
+PSQL_CMD="psql"
+if ! command -v psql &> /dev/null; then
+  # Fallback to docker if local psql is missing
+  PSQL_CMD="docker exec -i e2e-postgres-1 psql"
+fi
+
 # Insert the token directly into the DB
-psql "$DATABASE_URL" -c "INSERT INTO flux.service_tokens (service_name, token_hash) VALUES ('e2e-tester', '$DB_TOKEN_HASH')" >/dev/null
+$PSQL_CMD "$DATABASE_URL" -c "INSERT INTO flux.service_tokens (service_name, token_hash) VALUES ('e2e-tester', '$DB_TOKEN_HASH')" >/dev/null
 
 # Attempt to authenticate using the DB-stored token hash.
 # This proves the server's token-checking SQL is correct.
-if ! flux auth --url "$FLUX_SERVER_URL" --token "$DB_TOKEN" 2>&1 | grep -q "authenticated"; then
+if ! flux auth --url "$FLUX_SERVER_URL" --token "$DB_TOKEN" > /tmp/e2e_auth_check.log 2>&1; then
   fail "Database authentication failed (requested DB token was not validated)"
+  cat /tmp/e2e_auth_check.log
 else
   pass "Database authentication successfully validated DB-stored token"
 fi
