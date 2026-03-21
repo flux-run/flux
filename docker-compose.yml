@@ -28,6 +28,7 @@ services:
       - "4000:4000"
     environment:
       DATABASE_URL: postgres://flux:password@postgres:5432/flux
+      INTERNAL_SERVICE_TOKEN: local-development-token
     depends_on:
       postgres:
         condition: service_healthy
