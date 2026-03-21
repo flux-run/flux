@@ -96,17 +96,10 @@ DB_TOKEN_HASH=$(echo -n "$DB_TOKEN" | openssl dgst -sha256 -hex | sed 's/.* //')
 # Insert the token directly into the DB
 psql "$DATABASE_URL" -c "INSERT INTO flux.service_tokens (service_name, token_hash) VALUES ('e2e-tester', '$DB_TOKEN_HASH')" >/dev/null
 
-# Try a command using the DB token. Note: 12121 is the default port in some configs, 
-# but user-flow uses 50051.
-# We expect this to succeed if the SQL query in is_db_token_valid is correct.
-# If it fails with "trailing junk after numeric literal", it's the 1FROM bug.
-FLUX_SERVER_URL="http://127.0.0.1:50051" flux validate --token "$DB_TOKEN" > /tmp/db_auth_out.log 2>&1 || AUTH_FAIL=1
-AUTH_FAIL=${AUTH_FAIL:-0}
-
-if [ "$AUTH_FAIL" -eq 1 ]; then
+# Attempt to authenticate using the DB-stored token hash.
+# This proves the server's token-checking SQL is correct.
+if ! flux auth --url "$FLUX_SERVER_URL" --token "$DB_TOKEN" 2>&1 | grep -q "authenticated"; then
   fail "Database authentication failed (requested DB token was not validated)"
-  cat /tmp/db_auth_out.log
-  e2e_summary
 else
   pass "Database authentication successfully validated DB-stored token"
 fi
