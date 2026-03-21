@@ -25,7 +25,7 @@ services:
     #   context: .
     #   dockerfile: ./server/Dockerfile
     ports:
-      - "4000:4000"
+      - "50051:50051"
     environment:
       DATABASE_URL: postgres://flux:password@postgres:5432/flux
       INTERNAL_SERVICE_TOKEN: local-development-token
