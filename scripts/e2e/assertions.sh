@@ -118,7 +118,7 @@ wait_for_http() {
   local url="$1"
   local max="${2:-20}"
   local i=0
-  while ! curl -sf "$url" >/dev/null 2>&1; do
+  while ! curl -sf --max-time 5 "$url" >/dev/null 2>&1; do
     sleep 1
     i=$((i + 1))
     if [[ $i -ge $max ]]; then

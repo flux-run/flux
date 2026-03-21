@@ -28,7 +28,7 @@ REDIS_URL="${REDIS_URL:-}"           # empty = no Redis (tests Redis-optional pa
 FLUX_PORT="${FLUX_PORT:-3000}"
 FLUX_SERVER_URL="${FLUX_SERVER_URL:-http://127.0.0.1:50051}"
 SERVICE_TOKEN="${SERVICE_TOKEN:-e2e-test-token}"
-APP_URL="http://localhost:${FLUX_PORT}"
+APP_URL="http://127.0.0.1:${FLUX_PORT}"
 
 E2E_DIR=$(mktemp -d)
 PROJECT_ID="00000000-0000-0000-0000-000000000001"
