@@ -1,6 +1,6 @@
 {
   "flux_version": "0.2",
-  "entry": "./hono-hello.ts",
+  "entry": "./koa-hello.ts",
   "artifact": "./.flux/artifact.json",
   "project_id": null
 }

@@ -203,8 +203,8 @@ app.post("/discriminated", async (c) => {
 
 // ── Transforms ────────────────────────────────────────────────────────────
 
-// POST /transform — trim + lowercase + parse to int
-app.post("/transform", async (c) => {
+// POST /transform-complex — trim + lowercase + parse to int (original complex transform)
+app.post("/transform-complex", async (c) => {
   const body = await c.req.json();
   const schema = z.object({
     tag: z.string().trim().toLowerCase(),
@@ -314,6 +314,77 @@ app.post("/parse-throws", async (c) => {
   } catch (e: any) {
     return c.json({ ok: false, caught: true, is_zod_error: e?.name === "ZodError", issues_count: e?.errors?.length });
   }
+});
+
+// ── Aliases expected by the integration test runner ───────────────────────
+
+// /validate-user — validates a user and returns { ok, user: { name } }
+app.post("/validate-user", async (c) => {
+  const body = await c.req.json();
+  const r = UserSchema.pick({ name: true, email: true }).safeParse(body);
+  return c.json({
+    ok: r.success,
+    user: r.success ? { name: r.data.name } : null,
+    errors: r.success ? null : r.error.flatten(),
+  });
+});
+
+// /validate-bad — invalid user input (empty name, bad email)
+app.post("/validate-bad", async (c) => {
+  const body = await c.req.json();
+  const r = UserSchema.pick({ name: true, email: true }).safeParse(body);
+  return c.json({ ok: r.success, errors: r.success ? null : r.error.flatten() });
+});
+
+// /validate-strict — strict mode: unknown keys rejected
+app.post("/validate-strict", async (c) => {
+  const body = await c.req.json();
+  const r = UserSchema.pick({ name: true, email: true }).strict().safeParse(body);
+  return c.json({ ok: r.success, errors: r.success ? null : r.error.flatten() });
+});
+
+// /validate-nested — nested user + address schema
+app.post("/validate-nested", async (c) => {
+  const body = await c.req.json();
+  const schema = z.object({
+    user: UserSchema.pick({ name: true, email: true }),
+    address: z.object({
+      street: z.string().min(1),
+      city: z.string().min(1),
+      zip: z.string().min(1),
+    }),
+  });
+  const r = schema.safeParse(body);
+  return c.json({ ok: r.success, errors: r.success ? null : r.error.flatten() });
+});
+
+// /validate-union — union of email or phone identifier
+app.post("/validate-union", async (c) => {
+  const body = await c.req.json();
+  const schema = z.union([
+    z.object({ type: z.literal("email"), value: z.string().email() }),
+    z.object({ type: z.literal("phone"), value: z.string().min(7) }),
+  ]);
+  const r = schema.safeParse(body);
+  return c.json({ ok: r.success, data: r.success ? r.data : null });
+});
+
+// /validate-custom — refine: password === confirm
+app.post("/validate-custom", async (c) => {
+  const body = await c.req.json();
+  const schema = z
+    .object({ password: z.string(), confirm: z.string() })
+    .refine((d) => d.password === d.confirm, { message: "Passwords do not match" });
+  const r = schema.safeParse(body);
+  return c.json({ ok: r.success, errors: r.success ? null : r.error.flatten() });
+});
+
+// /transform — trim + lowercase a string value
+app.post("/transform", async (c) => {
+  const body = await c.req.json();
+  const schema = z.object({ value: z.string().trim().toLowerCase() });
+  const r = schema.safeParse(body);
+  return c.json({ ok: r.success, transformed: r.success ? r.data : null });
 });
 
 Deno.serve(app.fetch);

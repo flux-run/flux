@@ -225,4 +225,35 @@ app.get("/concurrent-mixed", async (c) => {
   });
 });
 
+// ── Aliases expected by the integration test runner ───────────────────────
+
+app.get("/axios-get", async (c) => {
+  const { data, status } = await axios.get("https://httpbin.org/get?from=flux-axios");
+  return c.json({ ok: status === 200, origin_present: typeof data?.origin === "string" });
+});
+
+app.post("/axios-post", async (c) => {
+  const body = await c.req.json();
+  const { data, status } = await axios.post("https://httpbin.org/post", body);
+  return c.json({ ok: status === 200, echoed: data?.json });
+});
+
+app.get("/axios-headers", async (c) => {
+  const { data } = await axios.get("https://httpbin.org/headers", {
+    headers: { "x-flux-test": "hello", "x-custom-id": "42" },
+  });
+  return c.json({
+    ok: true,
+    has_custom_header: data?.headers?.["X-Flux-Test"] === "hello",
+  });
+});
+
+// /axios-error: non-2xx should NOT throw (validateStatus allows all), returns received_status
+app.get("/axios-error", async (c) => {
+  const { status } = await axios.get("https://httpbin.org/status/404", {
+    validateStatus: () => true,
+  });
+  return c.json({ ok: true, received_status: status });
+});
+
 Deno.serve(app.fetch);

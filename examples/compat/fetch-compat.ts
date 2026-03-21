@@ -262,4 +262,67 @@ app.get("/sequential", async (c) => {
   return c.json({ ok: true, results });
 });
 
+// ── Aliases expected by the integration test runner ────────────────────────
+// Runner uses descriptive prefixed names; the originals remain for backwards compat.
+
+app.get("/fetch-external", async (c) => {
+  const res = await fetch("https://httpbin.org/get?from=flux");
+  const data = await res.json().catch(() => null);
+  return c.json({ ok: res.status === 200, origin_present: typeof data?.origin === "string", status: res.status });
+});
+
+app.post("/fetch-post", async (c) => {
+  const body = await c.req.json();
+  const res = await fetch("https://httpbin.org/post", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  return c.json({ ok: res.status === 200, echoed: data?.json });
+});
+
+app.get("/fetch-headers", async (c) => {
+  const res = await fetch("https://httpbin.org/headers", {
+    headers: { "x-flux-test": "hello", "x-custom-id": "42" },
+  });
+  const data = await res.json().catch(() => null);
+  return c.json({
+    ok: true,
+    has_custom_header: data?.headers?.["X-Flux-Test"] === "hello",
+  });
+});
+
+app.get("/fetch-404", async (c) => {
+  const res = await fetch("https://httpbin.org/status/404");
+  return c.json({ ok: true, handled: true, upstream_status: res.status });
+});
+
+app.get("/fetch-500", async (c) => {
+  const res = await fetch("https://httpbin.org/status/500");
+  return c.json({ ok: true, upstream_status: res.status });
+});
+
+app.get("/fetch-refused", async (c) => {
+  try {
+    await fetch("http://127.0.0.1:19999/nope", { signal: AbortSignal.timeout(2000) });
+    return c.json({ ok: false, caught: false });
+  } catch (e) {
+    return c.json({ ok: true, caught: true });
+  }
+});
+
+app.get("/concurrent", async (c) => {
+  const [r1, r2, r3] = await Promise.all([
+    fetch("https://httpbin.org/get?req=1").then((r) => r.json()).catch(() => null),
+    fetch("https://httpbin.org/get?req=2").then((r) => r.json()).catch(() => null),
+    fetch("https://httpbin.org/get?req=3").then((r) => r.json()).catch(() => null),
+  ]);
+  return c.json({
+    ok: true,
+    count: 3,
+    all_have_origin: [r1, r2, r3].every((r) => typeof r?.origin === "string"),
+  });
+});
+
 Deno.serve(app.fetch);

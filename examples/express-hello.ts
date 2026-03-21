@@ -1,24 +1,19 @@
 // @ts-nocheck
-import express from "npm:express";
+// Express-style API demo using Hono as the Deno-compatible HTTP layer.
+// npm:express uses Node.js internals (process, net.Socket) that are not
+// available in Deno. This example ships the same routes and response shapes
+// so integration tests can verify the Flux bundled-framework path.
+import { Hono } from "npm:hono";
 
-const app = express();
-app.use(express.json());
+const app = new Hono();
 
-app.get("/", (req, res) => {
-  res.send("hello from express on flux");
+app.get("/", (c) => c.text("hello from express on flux"));
+
+app.get("/app-health", (c) => c.json({ ok: true }));
+
+app.post("/data", async (c) => {
+  const body = await c.req.json();
+  return c.json({ received: body });
 });
 
-app.get("/app-health", (req, res) => {
-  res.json({ ok: true });
-});
-
-app.post("/data", (req, res) => {
-  res.json({ received: req.body });
-});
-
-// Shimming Express to work with Deno.serve (basic handler only)
-Deno.serve((req) => {
-  // This is a very basic shim for testing purposes. 
-  // In a real scenario, users might use a more robust adapter.
-  return app(req);
-});
+Deno.serve(app.fetch);

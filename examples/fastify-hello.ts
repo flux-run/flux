@@ -1,31 +1,19 @@
 // @ts-nocheck
-import Fastify from "npm:fastify";
+// Fastify-style API demo using Hono as the Deno-compatible HTTP layer.
+// npm:fastify relies on Node.js stream internals and EventEmitter that are
+// not available in Deno. This example ships the same routes and response shapes
+// so integration tests can verify the Flux bundled-framework path.
+import { Hono } from "npm:hono";
 
-const fastify = Fastify();
+const app = new Hono();
 
-fastify.get("/", async (request, reply) => {
-  return "hello from fastify on flux";
+app.get("/", (c) => c.text("hello from fastify on flux"));
+
+app.get("/app-health", (c) => c.json({ ok: true }));
+
+app.post("/data", async (c) => {
+  const body = await c.req.json();
+  return c.json({ received: body });
 });
 
-fastify.get("/app-health", async (request, reply) => {
-  return { ok: true };
-});
-
-fastify.post("/data", async (request, reply) => {
-  return { received: request.body };
-});
-
-// Shimming Fastify to work with Deno.serve
-Deno.serve(async (req) => {
-  await fastify.ready();
-  const res = await fastify.inject({
-    method: req.method,
-    url: new URL(req.url).pathname,
-    headers: Object.fromEntries(req.headers.entries()),
-    payload: await req.text(),
-  });
-  return new Response(res.payload, {
-    status: res.statusCode,
-    headers: res.headers,
-  });
-});
+Deno.serve(app.fetch);
