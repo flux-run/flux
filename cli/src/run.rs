@@ -166,8 +166,22 @@ fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs, entry_str: 
         prog_args.push("--artifact".to_string());
         prog_args.push(artifact.clone());
     } else if let Some(entry_str) = entry_str {
-        prog_args.push("--entry".to_string());
-        prog_args.push(entry_str.to_string());
+        // Auto-detect a pre-built artifact adjacent to the entry file.
+        // `flux build <entry>` places its output at <entry_dir>/.flux/artifact.json.
+        // If that file exists, use it so npm: imports resolve correctly via the
+        // ArtifactModuleLoader (dynamic resolution is disabled in artifact mode).
+        let auto_artifact = PathBuf::from(entry_str)
+            .parent()
+            .map(|p| p.join(".flux").join("artifact.json"))
+            .filter(|p| p.exists());
+
+        if let Some(artifact_path) = auto_artifact {
+            prog_args.push("--artifact".to_string());
+            prog_args.push(artifact_path.to_string_lossy().to_string());
+        } else {
+            prog_args.push("--entry".to_string());
+            prog_args.push(entry_str.to_string());
+        }
     }
 
     prog_args.extend(vec![

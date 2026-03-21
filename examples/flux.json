@@ -1,5 +1,6 @@
 {
   "flux_version": "0.2",
-  "entry": "./fastify-hello.ts",
-  "artifact": "./.flux/artifact.json"
+  "entry": "./hono-hello.ts",
+  "artifact": "./.flux/artifact.json",
+  "project_id": null
 }
