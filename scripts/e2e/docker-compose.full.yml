@@ -48,4 +48,3 @@ services:
       FLUX_PORT: "3000"
       FLUX_SERVER_URL: http://127.0.0.1:50051
       SERVICE_TOKEN: e2e-full-token
-    network_mode: host

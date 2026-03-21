@@ -40,4 +40,3 @@ services:
       FLUX_SERVER_URL: http://127.0.0.1:50051
       SERVICE_TOKEN: e2e-minimal-token
     # The container runs the full user-flow.sh and exits with 0 or 1
-    network_mode: host
