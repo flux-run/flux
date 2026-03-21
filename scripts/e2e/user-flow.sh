@@ -137,13 +137,15 @@ export DATABASE_URL
 export FLUX_SERVICE_TOKEN="$SERVICE_TOKEN"
 
 # Create the test table
-cat > /tmp/db-setup.ts << 'SQL'
+cat > "$E2E_DIR/db-setup.ts" << 'SQL'
 import pg from "flux:pg";
 const pool = new pg.Pool({ connectionString: Deno.env.get("DATABASE_URL") });
 await pool.query("CREATE TABLE IF NOT EXISTS e2e_users (id TEXT PRIMARY KEY, name TEXT)");
 await pool.end();
 SQL
-flux run /tmp/db-setup.ts --url "$FLUX_SERVER_URL" --token "$SERVICE_TOKEN" || true
+cd "$E2E_DIR"
+flux run db-setup.ts --url "$FLUX_SERVER_URL" --token "$SERVICE_TOKEN" || true
+cd "$E2E_DIR/e2e-app"
 
 flux run --artifact .flux/artifact.json \
   --listen \
