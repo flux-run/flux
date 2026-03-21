@@ -26,10 +26,9 @@ services:
       retries: 10
 
   e2e:
-    image: flux-e2e:ci
-    # build:
-    #   context: ../..
-    #   dockerfile: scripts/e2e/Dockerfile.e2e
+    build:
+      context: ../..
+      dockerfile: scripts/e2e/Dockerfile.local
     depends_on:
       postgres:
         condition: service_healthy
