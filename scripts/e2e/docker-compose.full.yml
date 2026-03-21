@@ -9,7 +9,7 @@
 #   docker compose -f scripts/e2e/docker-compose.full.yml run --rm e2e
 #   docker compose -f scripts/e2e/docker-compose.full.yml down -v
 # ─────────────────────────────────────────────────────────────────────────────
-version: "3.9"
+# version: "3.9"
 
 services:
   postgres:
@@ -33,9 +33,10 @@ services:
       retries: 10
 
   e2e:
-    build:
-      context: ../..
-      dockerfile: scripts/e2e/Dockerfile.e2e
+    image: flux-e2e:ci
+    # build:
+    #   context: ../..
+    #   dockerfile: scripts/e2e/Dockerfile.e2e
     depends_on:
       postgres:
         condition: service_healthy
