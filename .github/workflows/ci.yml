@@ -49,7 +49,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: test-ci
+          key: test-ci-v4
 
       - name: Run tests
         run: cargo test --workspace
@@ -191,7 +191,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}-ci-v3
+          key: ${{ matrix.target }}-ci-v4
 
       - name: Install cross (Linux ARM64 only)
         if: matrix.cross == true
@@ -225,6 +225,8 @@ jobs:
           else
             cargo build --release --target ${{ matrix.target }} -p runtime --bin flux-runtime
           fi
+        env:
+          V8_FROM_SOURCE: "0"
 
       - name: Stage artifacts
         shell: bash
