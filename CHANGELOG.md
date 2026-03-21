@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.5] - 2026-03-21
+
+### Changed
+- **CI Reliability**: Added Python setup to `Test` job in `ci.yml` to support `rusty_v8` linking.
+- **Runtime Determinism**: Fixed recursion bug in `crypto.subtle` shims that caused redundant checkpoints.
+- **Drizzle Compatibility**: Fixed ESM export handling for `drizzle-orm` (correctly handling `.default` and nested exports).
+- **Test Hardening**: Updated `server_mode_polyfills.rs` to correctly verify `crypto.subtle` checkpoints and use single-threaded Tokio flavor where required.
+- **E2E Improvements**: Hardened `test-flow.sh` with better environment variable handling and local build support.
 
 ## [0.1.0] - 2026-03-15
 
