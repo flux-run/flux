@@ -1,6 +1,15 @@
-# ── Build Stage ──────────────────────────────────────────────────────────────
-FROM rust:latest AS builder
+# ── Chef Stage ────────────────────────────────────────────────────────────────
+FROM rust:latest AS chef
+RUN cargo install cargo-chef
+WORKDIR /app
 
+# ── Planner Stage ─────────────────────────────────────────────────────────────
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ── Cacher Stage ──────────────────────────────────────────────────────────────
+FROM chef AS cacher
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -9,14 +18,15 @@ RUN apt-get update && apt-get install -y \
     cmake \
     g++ \
  && rm -rf /var/lib/apt/lists/*
+COPY --from=planner /app/recipe.json recipe.json
+# Cook dependencies
+RUN cargo chef cook --release --recipe-path recipe.json
 
-WORKDIR /app
-
-# Copy source code
+# ── Builder Stage ─────────────────────────────────────────────────────────────
+FROM cacher AS builder
+# cacher already has dependencies in /app/target and /usr/local/cargo
 COPY . .
-
 # Build release binaries
-RUN rustc --version && cargo --version
 RUN cargo build --release -p cli && \
     cargo build --release -p server && \
     cargo build --release -p runtime

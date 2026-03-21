@@ -1,17 +1,30 @@
-FROM rustlang/rust:nightly-bookworm AS builder
+# ── Chef Stage ────────────────────────────────────────────────────────────────
+FROM rustlang/rust:nightly-bookworm AS chef
+RUN cargo install cargo-chef
 WORKDIR /app
 
-# Install required build dependencies
+# ── Planner Stage ─────────────────────────────────────────────────────────────
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ── Cacher Stage ──────────────────────────────────────────────────────────────
+FROM chef AS cacher
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     cmake \
     git \
  && rm -rf /var/lib/apt/lists/*
+COPY --from=planner /app/recipe.json recipe.json
+# Cook dependencies
+RUN cargo chef cook --release --recipe-path recipe.json
 
-# Copy the entire workspace
+# ── Builder Stage ─────────────────────────────────────────────────────────────
+FROM cacher AS builder
+# cacher already has dependencies in /app/target and /usr/local/cargo
 COPY . .
-
 # Build the server binary
 RUN cargo build --release -p server
 
@@ -19,7 +32,7 @@ RUN cargo build --release -p server
 FROM debian:bookworm-slim
 WORKDIR /app
 
-# Install runtime dependencies for executing and making outbound web requests
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
