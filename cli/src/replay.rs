@@ -155,6 +155,12 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
 
     if !response.output.is_empty() && response.output != "null" {
         println!("  output  {}", format_replay_output(&response.output));
+        // Machine-readable line for tooling (e.g. integration test runner).
+        // The human-readable `output` line above may be formatted (decoded, summarised),
+        // so we emit the raw JSON separately so parsers can rely on it.
+        if args.diff {
+            println!("  output_raw  {}", response.output);
+        }
     }
 
     println!();

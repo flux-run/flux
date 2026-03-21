@@ -491,6 +491,13 @@ async function startMockJwksServer(port: number, options: { jwksJson?: string } 
 }
 
 function extractReplayOutput(stdout: string): string {
+  // Prefer the machine-readable `output_raw` line emitted when --diff is active.
+  // This contains the raw JSON, unlike the human-readable `output` line which
+  // may be reformatted by the CLI (e.g. decoded __FLUX_B64, status summarisation).
+  const rawMatch = stdout.match(/^\s*output_raw\s+(.+)$/m);
+  if (rawMatch) {
+    return rawMatch[1];
+  }
   const match = stdout.match(/^\s*output\s+(.+)$/m);
   if (!match) {
     throw new Error(`could not find replay output in CLI output\n${stdout}`);
