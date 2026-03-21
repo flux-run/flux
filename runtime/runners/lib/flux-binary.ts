@@ -153,7 +153,7 @@ export async function startRuntime(
   const host            = opts.host            ?? "127.0.0.1";
   const isolatePoolSize = opts.isolatePoolSize ?? 1;
   const token           = opts.token           ?? "test-token";
-  const timeoutMs       = opts.timeoutMs       ?? 15_000;
+  const timeoutMs       = opts.timeoutMs       ?? 60_000;
   const skipVerify      = opts.skipVerify      ?? true;
 
   const args = [

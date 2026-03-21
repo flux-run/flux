@@ -16,6 +16,21 @@ async function getClient() {
   if (!client.ping) client.ping = () => client.sendCommand(["PING"]);
   if (!client.incrBy) client.incrBy = (k, by) => client.sendCommand(["INCRBY", k, String(by)]);
   
+  const originalSet = client.set.bind(client);
+  client.set = async (k, v, opts) => {
+    if (opts && opts.NX) {
+      const args = ["SET", k, v, "NX"];
+      if (typeof opts.EX === "number") args.push("EX", String(opts.EX));
+      return client.sendCommand(args);
+    }
+    if (opts && typeof opts.EX === "number") {
+      const res = await originalSet(k, v);
+      await client.sendCommand(["EXPIRE", k, String(opts.EX)]);
+      return res;
+    }
+    return originalSet(k, v);
+  };
+  
   const originalHSet = client.hSet.bind(client);
   client.hSet = async (k, fieldOrObj, value) => {
     if (typeof fieldOrObj === "object") {
