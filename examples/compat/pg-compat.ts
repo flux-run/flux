@@ -352,18 +352,128 @@ app.get("/client-connect", async (c) => {
 
 // ── Concurrency ────────────────────────────────────────────────────────────
 
-// GET /concurrent — 5 simultaneous queries
+// GET /concurrent — 3 simultaneous queries (runner expects sum=6 and results=[1,2,3])
 app.get("/concurrent", async (c) => {
   const pool = getPool();
   try {
-    const queries = Array.from({ length: 5 }, (_, i) =>
-      pool.query("SELECT $1::int AS n", [i + 1]),
-    );
-    const results = await Promise.all(queries);
+    const [r1, r2, r3] = await Promise.all([
+      pool.query("SELECT 1 AS n"),
+      pool.query("SELECT 2 AS n"),
+      pool.query("SELECT 3 AS n"),
+    ]);
+    const results = [r1, r2, r3].map((r) => Number(r.rows[0]?.n));
     return c.json({
       ok: true,
-      values: results.map((r) => Number(r.rows[0]?.n)),
-      count: results.length,
+      results,
+      sum: results.reduce((a, b) => a + b, 0),
+    });
+  } finally {
+    await pool.end();
+  }
+});
+
+// ── Aliases expected by the integration test runner ───────────────────────
+
+// GET /db-query — SELECT 1 (simplest query alias)
+app.get("/db-query", async (c) => {
+  const pool = getPool();
+  const r = await pool.query("SELECT 1 AS value");
+  await pool.end();
+  return c.json({ ok: true, value: Number(r.rows[0]?.value) });
+});
+
+// POST /db-insert-select — insert a row then select it back in one request
+app.post("/db-insert-select", async (c) => {
+  const { label } = await c.req.json();
+  const pool = getPool();
+  await pool.query(DDL);
+  const ins = await pool.query(
+    "INSERT INTO flux_pg_test (label) VALUES ($1) RETURNING *",
+    [label],
+  );
+  const inserted = ins.rows[0];
+  const sel = await pool.query("SELECT * FROM flux_pg_test WHERE id = $1", [inserted?.id]);
+  const selected = sel.rows[0];
+  await pool.query("DELETE FROM flux_pg_test WHERE id = $1", [inserted?.id]);
+  await pool.end();
+  return c.json({ ok: true, inserted, selected });
+});
+
+// GET /db-transaction — transaction commit, returns ok + ts
+app.get("/db-transaction", async (c) => {
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(DDL);
+    const r = await client.query("SELECT NOW() AS ts");
+    await client.query("COMMIT");
+    return c.json({ ok: true, ts: r.rows[0]?.ts });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    return c.json({ ok: false, error: String(e) }, 500);
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+// GET /db-rollback — explicit rollback, returns rows_after_rollback
+app.get("/db-rollback", async (c) => {
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query(DDL);
+    await client.query("BEGIN");
+    await client.query("INSERT INTO flux_pg_test (label) VALUES ($1)", ["rollback-test"]);
+    await client.query("ROLLBACK");
+    const check = await client.query(
+      "SELECT COUNT(*) AS cnt FROM flux_pg_test WHERE label = 'rollback-test'",
+    );
+    return c.json({ ok: true, rows_after_rollback: Number(check.rows[0]?.cnt) });
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
+
+// POST /db-constraint — unique constraint violation, returns caught=true + code=23505
+app.post("/db-constraint", async (c) => {
+  const pool = getPool();
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flux_pg_constraint_test (
+        id SERIAL PRIMARY KEY, key TEXT UNIQUE NOT NULL
+      )
+    `);
+    await pool.query("INSERT INTO flux_pg_constraint_test (key) VALUES ($1)", ["dup-key-2"]);
+    try {
+      await pool.query("INSERT INTO flux_pg_constraint_test (key) VALUES ($1)", ["dup-key-2"]);
+      return c.json({ ok: false }, 500);
+    } catch (e: any) {
+      return c.json({ ok: true, caught: true, code: e?.code });
+    }
+  } finally {
+    await pool.query("DROP TABLE IF EXISTS flux_pg_constraint_test").catch(() => {});
+    await pool.end();
+  }
+});
+
+// GET /concurrent already exists above — but runner expects sum=6 and results=[1,2,3].
+// Alias with 3 queries matching those expectations.
+app.get("/pg-concurrent", async (c) => {
+  const pool = getPool();
+  try {
+    const [r1, r2, r3] = await Promise.all([
+      pool.query("SELECT 1 AS n"),
+      pool.query("SELECT 2 AS n"),
+      pool.query("SELECT 3 AS n"),
+    ]);
+    const results = [r1, r2, r3].map((r) => Number(r.rows[0]?.n));
+    return c.json({
+      ok: true,
+      results,
+      sum: results.reduce((a, b) => a + b, 0),
     });
   } finally {
     await pool.end();

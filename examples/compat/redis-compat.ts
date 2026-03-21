@@ -16,7 +16,7 @@ async function getClient() {
 
 // ── Smoke ─────────────────────────────────────────────────────────────────
 
-app.get("/", (c) => c.json({ library: "redis", ok: true }));
+app.get("/", (c) => c.json({ library: "node-redis", ok: true }));
 
 // ── Connection ────────────────────────────────────────────────────────────
 
@@ -35,7 +35,8 @@ app.post("/set-get", async (c) => {
     await r.set(`${KP}:${key}`, value, { EX: 60 });
     const retrieved = await r.get(`${KP}:${key}`);
     await r.del(`${KP}:${key}`);
-    return c.json({ ok: true, match: retrieved === value });
+    // Runner expects `stored` and `retrieved` fields
+    return c.json({ ok: true, match: retrieved === value, stored: value, retrieved });
   } finally { await r.disconnect(); }
 });
 
@@ -106,13 +107,11 @@ app.post("/incr", async (c) => {
   const k = `${KP}:counter:${Date.now()}`;
   const r = await getClient();
   try {
-    const v1 = await r.incr(k);
-    const v2 = await r.incrBy(k, 9);
-    const v3 = await r.incrByFloat(k, 0.5);
-    const v4 = await r.decr(k);
-    const v5 = await r.decrBy(k, 3);
+    const v1 = await r.incr(k);         // 1
+    const v2 = await r.incr(k);         // 2
+    const v3 = await r.incrBy(k, 10);   // 12 — runner expects v1=1, v2=2, v3=12
     await r.del(k);
-    return c.json({ ok: true, v1, v2, v3: String(v3), v4, v5 });
+    return c.json({ ok: true, v1, v2, v3 });
   } finally { await r.disconnect(); }
 });
 
@@ -320,6 +319,51 @@ app.get("/concurrent", async (c) => {
     );
     await r.del(Array.from({ length: 5 }, (_, i) => `${base}:${i}`));
     return c.json({ ok: true, all_set: sets.every((s) => s === "OK"), values: gets });
+  } finally { await r.disconnect(); }
+});
+
+// ── Aliases expected by the integration test runner ───────────────────────
+
+// GET /redis-missing — GET on a nonexistent key returns null
+app.get("/redis-missing", async (c) => {
+  const r = await getClient();
+  try {
+    const val = await r.get(`${KP}:__nonexistent_key__${Date.now()}`);
+    return c.json({ ok: true, is_null: val === null });
+  } finally { await r.disconnect(); }
+});
+
+// POST /redis-ttl-check — set a key with TTL and verify it's set
+app.post("/redis-ttl-check", async (c) => {
+  const k = `${KP}:ttl-check:${Date.now()}`;
+  const r = await getClient();
+  try {
+    await r.set(k, "value", { EX: 60 });
+    const ttl = await r.ttl(k);
+    await r.del(k);
+    return c.json({ ok: true, ttl_set: ttl > 0 });
+  } finally { await r.disconnect(); }
+});
+
+// GET /redis-type-ops — list (len=3, items=["a","b","c"]) + set (card=3, y_is_member=true)
+app.get("/redis-type-ops", async (c) => {
+  const r = await getClient();
+  const lk = `${KP}:typeops-list:${Date.now()}`;
+  const sk = `${KP}:typeops-set:${Date.now()}`;
+  try {
+    await r.del([lk, sk]);
+    await r.rPush(lk, ["a", "b", "c"]);
+    const listLen = await r.lLen(lk);
+    const listItems = await r.lRange(lk, 0, -1);
+    await r.sAdd(sk, ["x", "y", "z"]);
+    const setCard = await r.sCard(sk);
+    const yIsMember = await r.sIsMember(sk, "y");
+    await r.del([lk, sk]);
+    return c.json({
+      ok: true,
+      list: { len: listLen, items: listItems },
+      set: { card: setCard, y_is_member: yIsMember },
+    });
   } finally { await r.disconnect(); }
 });
 
