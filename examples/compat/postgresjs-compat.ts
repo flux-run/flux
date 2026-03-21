@@ -44,10 +44,9 @@ app.get("/unsupported", (c) =>
   c.json({
     ok: true,
     rejected: true,
-    reason:
-      "postgres.js uses raw TCP (Node.js net.Socket) which bypasses the Flux " +
-      "postgres interception layer. Raw TCP clients are not supported by the " +
-      "Flux deterministic sandbox. Use flux:pg (node-postgres compatible shim) instead.",
+    category: "unsupported-driver",
+    reason: "raw TCP bypasses Flux execution boundary",
+    recommendation: "use flux:pg"
   }),
 );
 

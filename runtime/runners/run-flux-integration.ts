@@ -1509,7 +1509,9 @@ const SUITES: Suite[] =[
         const res = await fetch(`${baseUrl}/unsupported`);
         const body = await res.json() as any;
         assert(ctx, "postgresjs: correctly rejected by Flux sandbox", () => body?.rejected === true);
-        assert(ctx, "postgresjs: rejection includes reason", () => typeof body?.reason === "string" && body.reason.length > 0);
+        assert(ctx, "postgresjs: rejection category", () => body?.category === "unsupported-driver");
+        assert(ctx, "postgresjs: rejection reason", () => typeof body?.reason === "string" && body.reason.includes("raw TCP"));
+        assert(ctx, "postgresjs: recommendation provided", () => body?.recommendation === "use flux:pg");
       }
     },
   },
