@@ -407,7 +407,7 @@ export default async function handler() {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "current_thread")]
 // deno_crypto::op_crypto_verify_key triggers a non-unwinding panic (SIGABRT) on
 // Apple Silicon macOS. This is a known interaction between deno_crypto-0.253.0 and
 // the underlying OpenSSL/BoringSSL build on arm64-apple-darwin.
@@ -477,6 +477,7 @@ export default async function handler() {{
                 "verified": true,
         })
     );
+    dbg!(&output.checkpoints);
     assert!(
         output.checkpoints.is_empty(),
         "crypto.subtle verification should not create checkpoints"
