@@ -86,7 +86,7 @@ jobs:
           path: target/release/
 
       - name: Mark binaries executable
-        run: chmod +x target/release/flux target/release/flux-server target/release/flux-runtime
+        run: chmod +x target/release/flux-linux-amd64 target/release/flux-server-linux-amd64 target/release/flux-runtime-linux-amd64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -95,9 +95,9 @@ jobs:
         run: |
           docker build \
             -f scripts/e2e/Dockerfile.e2e \
-            --build-arg FLUX_BIN=target/release/flux \
-            --build-arg FLUX_SERVER_BIN=target/release/flux-server \
-            --build-arg FLUX_RUNTIME_BIN=target/release/flux-runtime \
+            --build-arg FLUX_BIN=target/release/flux-linux-amd64 \
+            --build-arg FLUX_SERVER_BIN=target/release/flux-server-linux-amd64 \
+            --build-arg FLUX_RUNTIME_BIN=target/release/flux-runtime-linux-amd64 \
             -t flux-e2e:ci .
 
       - name: Run E2E flow (${{ matrix.mode }})
