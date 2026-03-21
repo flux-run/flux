@@ -32,10 +32,8 @@ impl InternalAuthGrpc {
 
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS( \
-               SELECT 1 \
-               FROM flux.service_tokens \
-               WHERE token_hash = $1 \
-                 AND revoked_at IS NULL \
+               SELECT 1 FROM flux.service_tokens \
+               WHERE token_hash = $1 AND revoked_at IS NULL \
             )",
         )
         .bind(token_hash)
@@ -649,15 +647,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "UPDATE flux.executions \
-             SET method = $2, \
-                 path = $3, \
-                 status = $4, \
-                 request = $5, \
-                 response = $6, \
-                 error = NULLIF($7, ''), \
-                 code_sha = $8, \
-                 duration_ms = $9, \
-                 project_id = $10 \
+             SET method = $2, path = $3, status = $4, request = $5, response = $6, \
+                 error = NULLIF($7, ''), code_sha = $8, duration_ms = $9, project_id = $10 \
              WHERE id = $1",
         )
         .bind(execution_id)

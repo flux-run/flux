@@ -85,7 +85,34 @@ else
   e2e_summary
 fi
 
+# ── PHASE 1.5: Database Authentication (Catch SQL Bugs) ──────────────────────
+section "1.5 DATABASE AUTHENTICATION"
+
+# We've verified environment-based auth (Fast Path). 
+# Now we verify Database-based auth (Slow Path) to ensure no SQL syntax errors exist.
+DB_TOKEN="db-test-token-$(date +%s)"
+DB_TOKEN_HASH=$(echo -n "$DB_TOKEN" | openssl dgst -sha256 -hex | sed 's/.* //')
+
+# Insert the token directly into the DB
+psql "$DATABASE_URL" -c "INSERT INTO flux.service_tokens (service_name, token_hash) VALUES ('e2e-tester', '$DB_TOKEN_HASH')" >/dev/null
+
+# Try a command using the DB token. Note: 12121 is the default port in some configs, 
+# but user-flow uses 50051.
+# We expect this to succeed if the SQL query in is_db_token_valid is correct.
+# If it fails with "trailing junk after numeric literal", it's the 1FROM bug.
+FLUX_SERVER_URL="http://127.0.0.1:50051" flux validate --token "$DB_TOKEN" > /tmp/db_auth_out.log 2>&1 || AUTH_FAIL=1
+AUTH_FAIL=${AUTH_FAIL:-0}
+
+if [ "$AUTH_FAIL" -eq 1 ]; then
+  fail "Database authentication failed (requested DB token was not validated)"
+  cat /tmp/db_auth_out.log
+  e2e_summary
+else
+  pass "Database authentication successfully validated DB-stored token"
+fi
+
 # ── PHASE 2: Project Init ─────────────────────────────────────────────────────
+
 section "2. PROJECT INIT"
 
 mkdir -p "$E2E_DIR/e2e-app"
