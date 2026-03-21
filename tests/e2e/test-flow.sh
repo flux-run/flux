@@ -6,8 +6,8 @@ set -e
 export PATH="$(pwd)/target/debug:$PATH"
 
 # Allow local connections for demo
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
-export FLOWBASE_ALLOW_LOOPBACK_FETCH=1
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
+export FLUXBASE_ALLOW_LOOPBACK_FETCH=1
 
 # Export env vars for server and CLI
 export FLUX_SERVICE_TOKEN="dev-token-123"

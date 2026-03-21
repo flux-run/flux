@@ -69,8 +69,8 @@ Run the demo app with recording enabled:
 export FLUX_SERVICE_TOKEN=dev-service-token
 export DATABASE_URL=postgres://admin:password123@127.0.0.1:55432/idempotency_demo
 export REDIS_URL=redis://127.0.0.1:56379/0
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
-export FLOWBASE_ALLOW_LOOPBACK_REDIS=1
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
+export FLUXBASE_ALLOW_LOOPBACK_REDIS=1
 
 target/debug/flux run --listen --host 127.0.0.1 --port 8020 examples/idempotency/main_flux.ts
 ```

@@ -15,9 +15,9 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 # Allow local connections for E2E
-export FLOWBASE_ALLOW_LOOPBACK_REDIS=1
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
-export FLOWBASE_ALLOW_LOOPBACK_TCP=1
+export FLUXBASE_ALLOW_LOOPBACK_REDIS=1
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
+export FLUXBASE_ALLOW_LOOPBACK_TCP=1
 
 echo "========================================"
 echo "🚀 Flux Ultimate E2E (MODERN STACK)"

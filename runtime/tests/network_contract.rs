@@ -16,7 +16,7 @@ use tokio_rustls::TlsAcceptor;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tcp_exchange_replays_buffered_response() -> Result<()> {
     let _lock = network_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_TCP", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_TCP", "1");
     let (port, shutdown_tx, server_task) = spawn_tcp_server(b"PONG:ping", None).await?;
 
     let code = r#"
@@ -91,7 +91,7 @@ export default function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tcp_exchange_supports_fixed_read_mode() -> Result<()> {
     let _lock = network_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_TCP", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_TCP", "1");
     let (port, shutdown_tx, server_task) = spawn_tcp_server(b"PONG", Some(4)).await?;
 
     let code = r#"
@@ -143,7 +143,7 @@ export default function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tcp_exchange_supports_tls_with_custom_ca() -> Result<()> {
     let _lock = network_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_TCP", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_TCP", "1");
     ensure_rustls_provider();
     let cert = generate_simple_self_signed(vec!["localhost".to_string()])
         .context("failed to generate test certificate")?;

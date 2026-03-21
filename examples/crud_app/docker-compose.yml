@@ -24,7 +24,7 @@ services:
     container_name: crud_app
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/crud_app
-      FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1"
+      FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1"
     depends_on:
       postgres:
         condition: service_healthy

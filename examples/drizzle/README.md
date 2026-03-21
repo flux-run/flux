@@ -28,8 +28,8 @@ through the Flux runtime shim.
 Run the CRUD proof against a reachable Postgres instance:
 
 ```bash
-cd /path/to/flowbase
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+cd /path/to/fluxbase
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
 
 target/debug/flux run \
   --input '{"input":{"connectionString":"postgres://user:pass@127.0.0.1:5432/app"}}' \
@@ -42,8 +42,8 @@ the table in `finally`.
 ## Transaction Flow
 
 ```bash
-cd /path/to/flowbase
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+cd /path/to/fluxbase
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
 
 target/debug/flux run \
   --input '{"input":{"connectionString":"postgres://user:pass@127.0.0.1:5432/app"}}' \

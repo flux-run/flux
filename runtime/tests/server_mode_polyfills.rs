@@ -29,7 +29,7 @@ fn decode_body(raw: &str) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_mode_captures_logs_and_fetch_checkpoints() -> Result<()> {
     let _lock = polyfill_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
     let (base_url, shutdown_tx, server_task) = spawn_test_server().await?;
 
     let code = format!(

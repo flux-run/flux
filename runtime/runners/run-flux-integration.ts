@@ -1011,7 +1011,7 @@ const SUITES: Suite[] =[
           timeoutMs: 60_000,
           env: {
             DATABASE_URL: postgres.databaseUrl,
-            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1",
           },
         });
         return {
@@ -1115,7 +1115,7 @@ const SUITES: Suite[] =[
           timeoutMs: 60_000,
           env: {
             DATABASE_URL: postgres.databaseUrl,
-            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1",
           },
         });
         return {
@@ -1187,7 +1187,7 @@ const SUITES: Suite[] =[
           timeoutMs: 60_000,
           env: {
             REDIS_URL: redis.redisUrl,
-            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+            FLUXBASE_ALLOW_LOOPBACK_REDIS: "1",
           },
         });
         return {
@@ -1497,7 +1497,7 @@ const SUITES: Suite[] =[
           timeoutMs: 60_000,
           env: {
             DATABASE_URL: postgres.databaseUrl,
-            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1",
           },
         });
         return {
@@ -1573,7 +1573,7 @@ const SUITES: Suite[] =[
           timeoutMs: 60_000,
           env: {
             REDIS_URL: redis.redisUrl,
-            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+            FLUXBASE_ALLOW_LOOPBACK_REDIS: "1",
           },
         });
         return {
@@ -1669,7 +1669,7 @@ const SUITES: Suite[] =[
           token: serviceToken,
           env: {
             DATABASE_URL: postgres.databaseUrl,
-            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1",
           },
         });
 
@@ -1782,8 +1782,8 @@ const SUITES: Suite[] =[
           env: {
             DATABASE_URL: postgres.databaseUrl,
             REDIS_URL: redis.redisUrl,
-            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
-            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+            FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLUXBASE_ALLOW_LOOPBACK_REDIS: "1",
           },
         });
 
@@ -1930,8 +1930,8 @@ const SUITES: Suite[] =[
           env: {
             DATABASE_URL: postgres.databaseUrl,
             REDIS_URL: redis.redisUrl,
-            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
-            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+            FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLUXBASE_ALLOW_LOOPBACK_REDIS: "1",
             FLUX_CRASH_AFTER_POSTGRES_COMMIT_BEFORE_CHECKPOINT: "1",
           },
         });
@@ -2049,8 +2049,8 @@ const SUITES: Suite[] =[
         env: {
           DATABASE_URL: idempotencyCrashState.databaseUrl,
           REDIS_URL: idempotencyCrashState.redisUrl,
-          FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
-          FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+          FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+          FLUXBASE_ALLOW_LOOPBACK_REDIS: "1",
         },
       });
 
@@ -2176,8 +2176,8 @@ const SUITES: Suite[] =[
           env: {
             DATABASE_URL: postgres.databaseUrl,
             REDIS_URL: redis.redisUrl,
-            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
-            FLOWBASE_ALLOW_LOOPBACK_REDIS: "1",
+            FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLUXBASE_ALLOW_LOOPBACK_REDIS: "1",
           },
         });
 
@@ -2309,8 +2309,8 @@ const SUITES: Suite[] =[
           token: serviceToken,
           env: {
             DATABASE_URL: postgres.databaseUrl,
-            FLOWBASE_ALLOW_LOOPBACK_POSTGRES: "1",
-            FLOWBASE_ALLOW_LOOPBACK_FETCH: "1",
+            FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1",
+            FLUXBASE_ALLOW_LOOPBACK_FETCH: "1",
             REMOTE_BASE_URL: `http://127.0.0.1:${remotePort}`,
           },
         });

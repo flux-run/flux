@@ -1,5 +1,5 @@
 # ── Build Stage ──────────────────────────────────────────────────────────────
-FROM rust:1.85-bookworm AS builder
+FROM rust:latest AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -22,7 +22,7 @@ RUN cargo build --release -p cli && \
     cargo build --release -p runtime
 
 # ── E2E Stage ────────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:testing-slim
 
 # Install runtime dependencies for E2E scripts
 RUN apt-get update && apt-get install -y \
@@ -48,6 +48,7 @@ RUN chmod +x /usr/local/bin/flux /usr/local/bin/flux-server /usr/local/bin/flux-
 
 WORKDIR /e2e
 COPY scripts/e2e/user-flow.sh .
+COPY scripts/e2e/assertions.sh .
 RUN chmod +x user-flow.sh
 
 ENTRYPOINT ["./user-flow.sh"]

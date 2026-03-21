@@ -17,7 +17,7 @@ use tokio::sync::{Mutex, oneshot};
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_replay_returns_buffered_body_via_reader() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
 
     let (base_url, shutdown_tx, server_task) = spawn_test_server().await?;
 
@@ -253,7 +253,7 @@ export default async function handler({ input }) {
         "blocked loopback fetch must not be recorded"
     );
 
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
     let mut allowed_isolate =
         JsIsolate::new_for_run(code).await.context("failed to create allowed isolate")?;
     let allowed_output = allowed_isolate
@@ -288,7 +288,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_redirects_are_revalidated_before_following() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
     let (base_url, shutdown_tx, server_task) = spawn_test_server().await?;
     let code = r#"
 export default async function handler({ input }) {
@@ -335,7 +335,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_reuses_standard_cache_control_across_live_executions() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
     let _cache = CacheResetGuard::new();
     let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
 
@@ -403,7 +403,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_request_no_cache_bypasses_shared_memory_cache() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
     let _cache = CacheResetGuard::new();
     let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
 
@@ -501,8 +501,8 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_cache_evicts_least_recently_used_entry_when_entry_limit_is_reached() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
-    let _max_entries = EnvVarGuard::set("FLOWBASE_HTTP_CACHE_MAX_ENTRIES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _max_entries = EnvVarGuard::set("FLUXBASE_HTTP_CACHE_MAX_ENTRIES", "1");
     let _cache = CacheResetGuard::new();
     let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
 
@@ -606,8 +606,8 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_cache_skips_entries_that_exceed_memory_budget() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
-    let _max_bytes = EnvVarGuard::set("FLOWBASE_HTTP_CACHE_MAX_BYTES", "128");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _max_bytes = EnvVarGuard::set("FLUXBASE_HTTP_CACHE_MAX_BYTES", "128");
     let _cache = CacheResetGuard::new();
     let (base_url, shutdown_tx, server_task, hit_count) = spawn_cache_test_server().await?;
 
@@ -678,7 +678,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_body_consumption_and_clone_follow_web_semantics() -> Result<()> {
     let _lock = fetch_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_FETCH", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
     let (base_url, shutdown_tx, server_task) = spawn_test_server().await?;
     let code = r#"
 export default async function handler({ input }) {

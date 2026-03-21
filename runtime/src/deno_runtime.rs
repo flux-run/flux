@@ -131,7 +131,7 @@ fn validate_fetch_url(raw_url: &str) -> std::result::Result<(), JsErrorBox> {
         }
     }
 
-    let allow_loopback = std::env::var("FLOWBASE_ALLOW_LOOPBACK_FETCH")
+    let allow_loopback = std::env::var("FLUXBASE_ALLOW_LOOPBACK_FETCH")
         .map(|value| value == "1")
         .unwrap_or(false);
 
@@ -466,11 +466,11 @@ impl HttpResponseCache {
 fn http_response_cache_limits() -> HttpCacheLimits {
     HttpCacheLimits {
         max_entries: read_cache_limit_env(
-            "FLOWBASE_HTTP_CACHE_MAX_ENTRIES",
+            "FLUXBASE_HTTP_CACHE_MAX_ENTRIES",
             DEFAULT_HTTP_CACHE_MAX_ENTRIES,
         ),
         max_bytes: read_cache_limit_env(
-            "FLOWBASE_HTTP_CACHE_MAX_BYTES",
+            "FLUXBASE_HTTP_CACHE_MAX_BYTES",
             DEFAULT_HTTP_CACHE_MAX_BYTES,
         ),
     }
@@ -1421,7 +1421,7 @@ fn op_flux_tcp_exchange(
         )
     };
 
-    validate_outbound_host(&host, port, "tcp connect", "FLOWBASE_ALLOW_LOOPBACK_TCP")?;
+    validate_outbound_host(&host, port, "tcp connect", "FLUXBASE_ALLOW_LOOPBACK_TCP")?;
 
     if matches!(mode, ExecutionMode::Replay) {
         if let Some(checkpoint) = recorded_checkpoint {
@@ -1527,7 +1527,7 @@ fn op_flux_postgres_connect(
         &target.host,
         target.port,
         "postgres connect",
-        "FLOWBASE_ALLOW_LOOPBACK_POSTGRES",
+        "FLUXBASE_ALLOW_LOOPBACK_POSTGRES",
     )?;
 
     let (request_id, mode, session_id) = {
@@ -1617,7 +1617,7 @@ fn op_flux_postgres_simple_query(
         host,
         port,
         "postgres connect",
-        "FLOWBASE_ALLOW_LOOPBACK_POSTGRES",
+        "FLUXBASE_ALLOW_LOOPBACK_POSTGRES",
     )?;
 
     let (request_id, call_index, mode, recorded_checkpoint) = {
@@ -1862,7 +1862,7 @@ fn op_flux_postgres_query(
         host,
         port,
         "postgres connect",
-        "FLOWBASE_ALLOW_LOOPBACK_POSTGRES",
+        "FLUXBASE_ALLOW_LOOPBACK_POSTGRES",
     )?;
 
     let (request_id, call_index, mode, recorded_checkpoint) = {
@@ -1976,7 +1976,7 @@ fn op_flux_redis_command(
         &target.host,
         target.port,
         "redis connect",
-        "FLOWBASE_ALLOW_LOOPBACK_REDIS",
+        "FLUXBASE_ALLOW_LOOPBACK_REDIS",
     )?;
 
     let (request_id, call_index, mode, recorded_checkpoint) = {
@@ -3465,18 +3465,18 @@ mod tests {
     #[test]
     fn postgres_allow_env_allows_private_hosts() {
         unsafe {
-            std::env::set_var("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+            std::env::set_var("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
         }
 
         let result = validate_outbound_host(
             "172.18.0.2",
             5432,
             "postgres connect",
-            "FLOWBASE_ALLOW_LOOPBACK_POSTGRES",
+            "FLUXBASE_ALLOW_LOOPBACK_POSTGRES",
         );
 
         unsafe {
-            std::env::remove_var("FLOWBASE_ALLOW_LOOPBACK_POSTGRES");
+            std::env::remove_var("FLUXBASE_ALLOW_LOOPBACK_POSTGRES");
         }
 
         assert!(result.is_ok());

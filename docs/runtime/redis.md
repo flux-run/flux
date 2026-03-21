@@ -153,7 +153,7 @@ Redis uses the same outbound safety model as other Flux boundaries:
 
 Current override:
 
-- `FLOWBASE_ALLOW_LOOPBACK_REDIS=1`
+- `FLUXBASE_ALLOW_LOOPBACK_REDIS=1`
 
 ## No Hidden JavaScript State
 

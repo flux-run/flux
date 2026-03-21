@@ -234,7 +234,7 @@ flux server start --database-url postgres://postgres:postgres@localhost:5432/cru
 
 export FLUX_SERVICE_TOKEN=dev-service-token
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/crud_app
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
 
 flux build examples/crud_app/main_flux.ts
 flux run --listen --url http://127.0.0.1:50051 --host 127.0.0.1 --port 8000 examples/crud_app/main_flux.ts

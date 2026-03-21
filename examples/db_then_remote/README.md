@@ -42,14 +42,14 @@ Start the app:
 ```sh
 export FLUX_SERVICE_TOKEN=dev-service-token
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/db_then_remote
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
-export FLOWBASE_ALLOW_LOOPBACK_FETCH=1
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
+export FLUXBASE_ALLOW_LOOPBACK_FETCH=1
 export REMOTE_BASE_URL=http://127.0.0.1:9010
 
 target/debug/flux run --listen --host 127.0.0.1 --port 8010 main_flux.ts
 ```
 
-`FLOWBASE_ALLOW_LOOPBACK_FETCH=1` is only needed for local development when the
+`FLUXBASE_ALLOW_LOOPBACK_FETCH=1` is only needed for local development when the
 mock remote system is bound to `127.0.0.1`.
 
 ## Success path
@@ -123,7 +123,7 @@ The target behavior for this example is:
 With the current runtime:
 
 - remote off: the request fails after the insert and leaves the row as `pending`
-- remote on with `FLOWBASE_ALLOW_LOOPBACK_FETCH=1`: the request succeeds and the row becomes `delivered`
+- remote on with `FLUXBASE_ALLOW_LOOPBACK_FETCH=1`: the request succeeds and the row becomes `delivered`
 - replay of the failed execution preserves the original `500` response
 - resume of the failed execution currently returns from the recorded Postgres checkpoint without completing the remote call
 

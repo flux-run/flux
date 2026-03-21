@@ -15,7 +15,7 @@ use uuid::Uuid;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn redis_command_replays_recorded_value() -> Result<()> {
     let _lock = redis_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_REDIS", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_REDIS", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_redis_server().await?;
 
     {
@@ -192,7 +192,7 @@ export default function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn redis_module_shim_supports_common_commands() -> Result<()> {
     let _lock = redis_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_REDIS", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_REDIS", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_redis_server().await?;
 
     let code = r#"
@@ -290,7 +290,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn redis_boundary_blocks_nondeterministic_commands() -> Result<()> {
     let _lock = redis_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_REDIS", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_REDIS", "1");
 
     let code = r#"
 export default function handler({ input }) {

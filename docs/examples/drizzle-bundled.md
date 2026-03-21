@@ -23,8 +23,8 @@ npm install
 Run the CRUD proof:
 
 ```bash
-cd /path/to/flowbase
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+cd /path/to/fluxbase
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
 
 flux run \
   --input '{"input":{"connectionString":"postgres://user:pass@127.0.0.1:5432/app"}}' \
@@ -34,8 +34,8 @@ flux run \
 Run the transaction proof:
 
 ```bash
-cd /path/to/flowbase
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+cd /path/to/fluxbase
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
 
 flux run \
   --input '{"input":{"connectionString":"postgres://user:pass@127.0.0.1:5432/app"}}' \

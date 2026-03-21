@@ -34,6 +34,10 @@ services:
       REDIS_URL: "redis://redis:6379"
       FLUX_SERVER_URL: "http://localhost:50051"
       SERVICE_TOKEN: "flux-e2e-token"
+      FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1"
+      FLUXBASE_ALLOW_LOOPBACK_REDIS: "1"
+      FLUXBASE_ALLOW_LOOPBACK_TCP: "1"
+      FLUXBASE_ALLOW_LOOPBACK_FETCH: "1"
     depends_on:
       postgres:
         condition: service_healthy

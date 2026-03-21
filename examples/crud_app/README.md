@@ -40,7 +40,7 @@ The Flux-specific entry uses:
 - `Deno.serve(...)` for server mode
 - `Deno.env.get("DATABASE_URL")` for container config
 - direct SQL over the Flux `pg` shim
-- `FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1` in Docker so the app can reach the local Postgres container
+- `FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1` in Docker so the app can reach the local Postgres container
 - schema creation is handled by Postgres init SQL, not by Flux module initialization
 
 You can still build it manually:
@@ -86,7 +86,7 @@ Serve the app with recording enabled:
 ```sh
 export FLUX_SERVICE_TOKEN=dev-service-token
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/crud_app
-export FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1
+export FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1
 target/debug/flux run --listen --host 127.0.0.1 --port 8000 main_flux.ts
 ```
 

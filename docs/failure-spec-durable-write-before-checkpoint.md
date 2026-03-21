@@ -63,8 +63,8 @@ Required environment:
 - `FLUX_SERVICE_TOKEN=dev-service-token`
 - `DATABASE_URL=postgres://...`
 - `REDIS_URL=redis://...`
-- `FLOWBASE_ALLOW_LOOPBACK_POSTGRES=1`
-- `FLOWBASE_ALLOW_LOOPBACK_REDIS=1`
+- `FLUXBASE_ALLOW_LOOPBACK_POSTGRES=1`
+- `FLUXBASE_ALLOW_LOOPBACK_REDIS=1`
 
 Expected precondition checks:
 

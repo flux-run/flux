@@ -15,7 +15,7 @@ use tokio_rustls::TlsAcceptor;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_simple_query_replays_recorded_rows() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_server().await?;
 
     let code = r#"
@@ -188,7 +188,7 @@ export default function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_query_supports_params_and_replay() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_param_server().await?;
 
     let code = r#"
@@ -269,7 +269,7 @@ export default function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_query_supports_int4_params() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_int4_param_server().await?;
 
     let code = r#"
@@ -318,7 +318,7 @@ export default function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_query_preserves_native_scalar_params_and_bool_null_results() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_mixed_types_server().await?;
 
     let code = r#"
@@ -394,7 +394,7 @@ export default function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_simple_query_supports_tls_with_custom_ca_and_replay() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     ensure_rustls_provider();
 
     let cert = generate_simple_self_signed(vec!["localhost".to_string()])
@@ -491,7 +491,7 @@ export default function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_node_pg_pool_supports_drizzle_query_shape() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_transaction_server().await?;
 
     let code = r#"
@@ -599,7 +599,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_node_pg_pool_applies_numeric_type_parser_with_field_oids() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_numeric_result_server().await?;
 
     let code = r#"
@@ -675,7 +675,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_pg_module_alias_supports_pool_default_and_types() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_transaction_server().await?;
 
     let code = r#"
@@ -765,7 +765,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_pg_module_alias_surfaces_unique_violation_error_shape() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_unique_violation_server().await?;
 
     let code = r#"
@@ -871,7 +871,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_node_pg_pool_applies_json_and_array_type_parsers() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_json_array_result_server().await?;
 
     let code = r#"
@@ -962,7 +962,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_node_pg_pool_applies_temporal_and_uuid_type_parsers() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_temporal_result_server().await?;
 
     let code = r#"
@@ -1065,7 +1065,7 @@ export default async function handler({ input }) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn postgres_node_pg_pool_applies_bytea_and_oid_type_parsers() -> Result<()> {
     let _lock = postgres_test_lock().lock().await;
-    let _guard = EnvVarGuard::set("FLOWBASE_ALLOW_LOOPBACK_POSTGRES", "1");
+    let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_POSTGRES", "1");
     let (port, shutdown_tx, server_task) = spawn_mock_postgres_bytea_oid_result_server().await?;
 
     let code = r#"

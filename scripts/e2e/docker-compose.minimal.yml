@@ -39,4 +39,8 @@ services:
       FLUX_PORT: "3000"
       FLUX_SERVER_URL: http://127.0.0.1:50051
       SERVICE_TOKEN: e2e-minimal-token
+      FLUXBASE_ALLOW_LOOPBACK_POSTGRES: "1"
+      FLUXBASE_ALLOW_LOOPBACK_REDIS: "1"
+      FLUXBASE_ALLOW_LOOPBACK_TCP: "1"
+      FLUXBASE_ALLOW_LOOPBACK_FETCH: "1"
     # The container runs the full user-flow.sh and exits with 0 or 1
