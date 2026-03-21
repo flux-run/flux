@@ -1,6 +1,6 @@
 {
   "flux_version": "0.2",
-  "entry": "./drizzle-compat.ts",
+  "entry": "./redis-compat.ts",
   "artifact": "./.flux/artifact.json",
   "project_id": null
 }

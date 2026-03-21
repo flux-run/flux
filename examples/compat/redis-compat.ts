@@ -150,20 +150,14 @@ app.post("/incr", async (c) => {
 // ── Hashes ────────────────────────────────────────────────────────────────
 
 app.post("/hash", async (c) => {
+  const { field, value } = await c.req.json();
   const k = `${KP}:hash:${Date.now()}`;
   const r = await getClient();
   try {
-    await r.hSet(k, { name: "Flux", version: "1", active: "true" });
-    const name = await r.hGet(k, "name");
+    await r.hSet(k, field, value);
     const all = await r.hGetAll(k);
-    const keys = await r.hKeys(k);
-    const vals = await r.hVals(k);
-    const len = await r.hLen(k);
-    await r.hDel(k, "active");
-    const exists = await r.hExists(k, "active");
-    const count = await r.hIncrBy(k, "version", 1);
     await r.del(k);
-    return c.json({ ok: true, name, all, keys_count: keys.length, vals_count: vals.length, len, active_removed: !exists, version_count: count });
+    return c.json({ ok: true, all });
   } finally { await r.disconnect(); }
 });
 
