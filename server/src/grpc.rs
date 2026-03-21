@@ -31,7 +31,7 @@ impl InternalAuthGrpc {
         let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
 
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(\
+            "SELECT EXISTS( \
                SELECT 1 \
                FROM flux.service_tokens \
                WHERE token_hash = $1 \
