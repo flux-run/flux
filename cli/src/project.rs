@@ -92,6 +92,11 @@ struct PackageManifest {
     peer_dependencies: Option<BTreeMap<String, String>>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct DenoConfig {
+    imports: Option<BTreeMap<String, String>>,
+}
+
 pub fn default_entry_path() -> PathBuf {
     PathBuf::from(DEFAULT_ENTRY_FILE)
 }
@@ -164,12 +169,12 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
         concat!(
             "{\n",
             "  \"imports\": {\n",
-            "    \"hono\": \"npm:hono@^4\",\n",
-            "    \"zod\": \"npm:zod@^3\",\n",
-            "    \"@hono/zod-validator\": \"npm:@hono/zod-validator@^0.13\",\n",
-            "    \"drizzle-orm\": \"npm:drizzle-orm@^0.45\",\n",
-            "    \"drizzle-zod\": \"npm:drizzle-zod@^0.8\",\n",
-            "    \"pg\": \"npm:pg@^8.11\"\n",
+            "    \"hono\": \"npm:hono@4.10.6\",\n",
+            "    \"zod\": \"npm:zod@3.23.8\",\n",
+            "    \"@hono/zod-validator\": \"npm:@hono/zod-validator@0.13.0\",\n",
+            "    \"drizzle-orm\": \"npm:drizzle-orm@0.31.0\",\n",
+            "    \"drizzle-zod\": \"npm:drizzle-zod@0.8.3\",\n",
+            "    \"pg\": \"npm:pg@8.12.0\"\n",
             "  }\n",
             "}\n"
         ),
@@ -222,7 +227,7 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
             "import { drizzle } from \"drizzle-orm/node-postgres\";\n",
             "import { pgTable, text, serial, boolean, timestamp } from \"drizzle-orm/pg-core\";\n",
             "import { createInsertSchema, createSelectSchema } from \"drizzle-zod\";\n",
-            "import pg from \"npm:pg\";\n",
+            "import pg from \"flux:pg\";\n",
             "\n",
             "export const todos = pgTable(\"todos\", {\n",
             "  id: serial(\"id\").primaryKey(),\n",
@@ -438,6 +443,12 @@ fn read_package_manifest(path: &Path) -> Result<PackageManifest> {
     serde_json::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
 }
 
+fn read_deno_config(path: &Path) -> Result<DenoConfig> {
+    let source =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
+}
+
 fn resolve_package_entry(package_dir: &Path) -> Result<Option<PathBuf>> {
     let manifest_path = package_dir.join("package.json");
     if !manifest_path.is_file() {
@@ -560,6 +571,16 @@ fn resolve_local_bare_import(specifier: &str, base_specifier: &str) -> Result<Op
         .map_err(|_| anyhow::anyhow!("invalid base path for bare import resolution"))?;
 
     for ancestor in base_path.ancestors().skip(1) {
+        let deno_config_path = ancestor.join("deno.json");
+        if deno_config_path.is_file() {
+            let config = read_deno_config(&deno_config_path)?;
+            if let Some(imports) = config.imports {
+                if let Some(target) = imports.get(specifier) {
+                    return resolve_dependency_specifier(target, &file_url_string(&deno_config_path)?).map(Some);
+                }
+            }
+        }
+
         let manifest_path = ancestor.join("package.json");
         if !manifest_path.is_file() {
             continue;
