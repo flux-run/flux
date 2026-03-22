@@ -1,6 +1,6 @@
-use anyhow::{Result, bail, Context};
+use anyhow::{Result, Context};
 use clap::Args;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::config::resolve_auth;
 

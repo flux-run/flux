@@ -326,13 +326,16 @@ fn spawn_isolate_worker(
                                     has_live_io,
                                     ..
                                 }) => {
-                                    let status = if net_resp.status >= 500 || js_error.is_some() {
+                                    // A JS-thrown error or a 500 Internal Server Error is a runtime
+                                    // failure. A 503 (or other 5xx) with no JS error is a clean
+                                    // server-controlled response (e.g. pre-aborted signal shutdown).
+                                    let status = if js_error.is_some() || net_resp.status == 500 {
                                         "error".to_string()
                                     } else {
                                         "ok".to_string()
                                     };
                                     let error = js_error.or_else(|| {
-                                        if net_resp.status >= 500 {
+                                        if net_resp.status == 500 {
                                             Some(format!("HTTP Internal Server Error ({})", net_resp.status))
                                         } else {
                                             None
@@ -505,13 +508,16 @@ fn spawn_isolate_worker_with_mode(
                                     has_live_io,
                                     ..
                                 }) => {
-                                    let status = if net_resp.status >= 500 || js_error.is_some() {
+                                    // A JS-thrown error or a 500 Internal Server Error is a runtime
+                                    // failure. A 503 (or other 5xx) with no JS error is a clean
+                                    // server-controlled response (e.g. pre-aborted signal shutdown).
+                                    let status = if js_error.is_some() || net_resp.status == 500 {
                                         "error".to_string()
                                     } else {
                                         "ok".to_string()
                                     };
                                     let error = js_error.or_else(|| {
-                                        if net_resp.status >= 500 {
+                                        if net_resp.status == 500 {
                                             Some(format!("HTTP Internal Server Error ({})", net_resp.status))
                                         } else {
                                             None

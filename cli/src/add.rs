@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use std::collections::BTreeMap;
 use std::env;
-use std::path::PathBuf;
+
 
 use crate::project::{read_deno_config, write_deno_config, DenoConfig};
 
