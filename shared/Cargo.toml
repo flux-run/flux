@@ -1,6 +1,6 @@
 [package]
 name          = "shared"
-version       = "0.2.5"
+version       = "0.2.6"
 edition       = "2024"
 description   = "Shared proto types for flux, flux-server, and flux-runtime."
 
