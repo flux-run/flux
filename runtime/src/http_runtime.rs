@@ -453,7 +453,7 @@ async fn handle_internal_resume(
     );
 
     let mut context = ExecutionContext::new(state.code_version.clone());
-    context.mode = ExecutionMode::Replay;
+    context.mode = ExecutionMode::Live;  // resume performs real IO — never replay
 
     let result = state
         .pool

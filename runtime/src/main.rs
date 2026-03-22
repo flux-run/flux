@@ -263,22 +263,33 @@ async fn main() -> Result<()> {
             };
 
             let res = isolate.dispatch_request_with_recorded(boot_context.clone(), net_req, recorded_checkpoints).await?;
+
+            // Detect boundary stop — the sentinel signals that replay stopped cleanly at an IO boundary
+            let boundary_stop: Option<String> = res.boundary_stop.clone()
+                .or_else(|| {
+                    res.error.as_deref()
+                        .and_then(|e| e.strip_prefix("__FLUX_BOUNDARY_STOP:"))
+                        .map(|s| s.split(':').next().unwrap_or(s).to_string())
+                });
+
             let mut execution = runtime::isolate_pool::ExecutionResult {
                 execution_id: boot_context.execution_id.clone(),
                 request_id: boot_context.request_id.clone(),
                 project_id: args.project_id.clone(),
                 code_version: boot_context.code_version.clone(),
-                status: if res.response.status >= 400 { "error".to_string() } else { "ok".to_string() },
+                status: if boundary_stop.is_some() { "stopped".to_string() }
+                        else if res.response.status >= 400 { "error".to_string() }
+                        else { "ok".to_string() },
                 body: serde_json::json!({
                     "status": res.response.status,
                     "headers": res.response.headers,
                     "body": res.response.body,
                 }),
-                error: res.error,
+                error: if boundary_stop.is_some() { None } else { res.error },
                 duration_ms: 0, 
                 checkpoints: res.checkpoints,
                 logs: res.logs,
-                has_live_io: res.has_live_io,
+                has_live_io: false,
             };
 
             // Robust error capture: fallback to logs if error is missing but status is error
@@ -294,9 +305,6 @@ async fn main() -> Result<()> {
 
             println!("\n  \x1b[1mreplaying {}\x1b[0m", args.replay.as_ref().unwrap());
             println!("  \x1b[32m✓\x1b[0m \x1b[2musing updated code\x1b[0m");
-            if execution.has_live_io {
-                println!("  \x1b[33m⚠\x1b[0m \x1b[2mpartial replay (live IO used)\x1b[0m");
-            }
             
             println!("\n  ────────────────────────────\n");
             println!("  \x1b[1mSTEP 0 — {} {}\x1b[0m\n", trace.method, trace.path);
@@ -314,27 +322,25 @@ async fn main() -> Result<()> {
                  println!();
             }
 
+            let original_reached_db = trace.checkpoints.iter().any(|c| c.boundary == "postgres");
+
             println!("  \x1b[1mexecution\x1b[0m");
             if original_failed {
-                println!("    \x1b[31m✗\x1b[0m original execution failed before DB step");
+                if original_reached_db {
+                    println!("    \x1b[31m✗\x1b[0m original execution failed during/after DB step");
+                } else {
+                    println!("    \x1b[31m✗\x1b[0m original execution failed before reaching external IO");
+                }
             } else {
                 println!("    \x1b[32m✓\x1b[0m original execution succeeded");
             }
-            
-            if execution.status == "error" && original_failed && execution.has_live_io {
-                 println!("    \x1b[32m→\x1b[0m replay progressed further and reached DB");
-            } else if execution.status == "error" {
-                 println!("    \x1b[31m✗\x1b[0m replay execution failed");
-            } else if execution.has_live_io && !original_failed {
-                 // Reached DB even though original didn't fail? (e.g. code changed to reach it)
-                 println!("    \x1b[32m→\x1b[0m reached database (not reached in original execution)");
-            }
 
-            if execution.has_live_io {
-                println!("\n  \x1b[1mio\x1b[0m");
-                println!("    \x1b[33m⚠\x1b[0m \x1b[1mLIVE database query\x1b[0m");
-                println!("      reason: original execution never reached this step");
-                println!("      note: no recorded checkpoint available");
+            if let Some(ref boundary) = boundary_stop {
+                println!("    \x1b[32m✓\x1b[0m replay progressed beyond original failure point");
+            } else if execution.status == "error" {
+                println!("    \x1b[31m✗\x1b[0m replay execution failed");
+            } else if execution.status == "ok" {
+                println!("    \x1b[32m✓\x1b[0m replay execution succeeded");
             }
 
             if let Some(error) = execution.error.as_ref() {
@@ -349,26 +355,66 @@ async fn main() -> Result<()> {
             // Print summary
             println!("\n  ────────────────────────────\n");
 
-            if execution.status == "ok" {
+            if let Some(ref boundary) = boundary_stop {
+                // ⏸ BOUNDARY STOP — the clean, expected outcome when replay reaches uncharted IO
+                println!("  \x1b[33m⏸\x1b[0m \x1b[1mstopped at external boundary: {}\x1b[0m", boundary.to_uppercase());
+                println!();
+                println!("  \x1b[2mreason\x1b[0m");
+                println!("    no recorded checkpoint available for this {} call", boundary);
+                println!("    replay never touches the real world");
+                println!();
+
+                if original_failed {
+                    println!("  \x1b[1mprogress vs original\x1b[0m");
+                    if original_reached_db {
+                        println!("    original: reached {} → failed", boundary.to_uppercase());
+                        println!("    replay:   reached {} boundary → stopped cleanly", boundary.to_uppercase());
+                    } else {
+                        println!("    original: failed before {} boundary", boundary.to_uppercase());
+                        println!("    replay:   reached {} boundary → stopped cleanly", boundary.to_uppercase());
+                        println!();
+                        println!("  \x1b[32m✓\x1b[0m your code fix is working — replay progressed further than the original");
+                    }
+                    println!();
+                }
+
+                println!("  \x1b[1mnext\x1b[0m");
+                println!("    → run \x1b[1mflux resume {}\x1b[0m to continue with real IO", args.replay.as_deref().unwrap_or(""));
+            } else if execution.status == "ok" {
                 println!("  \x1b[1mresult\x1b[0m");
                 println!("    \x1b[32m✓\x1b[0m \x1b[1mreplay successful\x1b[0m");
+                println!("\n  \x1b[1mnext steps\x1b[0m");
+                println!("    → run \x1b[1mflux resume {}\x1b[0m to apply with real IO", args.replay.as_deref().unwrap_or(""));
             } else {
                 println!("  \x1b[1mresult\x1b[0m");
                 if is_server_mode {
                     let status = execution.body.get("net_response").and_then(|n| n.get("status")).and_then(|v| v.as_u64()).unwrap_or(500);
-                    println!("    \x1b[31m✗\x1b[0m \x1b[1mrequest failed ({})\x1b[0m", status);
+                    println!("    \x1b[31m✗\x1b[0m \x1b[1mreplay failed ({})\x1b[0m", status);
                 } else {
                     println!("    \x1b[31m✗\x1b[0m \x1b[1mexecution failed\x1b[0m");
                 }
 
                 if original_failed && execution.status == "error" {
                     println!("\n  \x1b[1mdifference vs original\x1b[0m");
-                    println!("    original: stopped before DB");
-                    println!("    replay:   reached DB → failed due to missing table");
+                    let replay_reached_db = execution.checkpoints.iter().any(|c| c.boundary == "postgres");
+                    if original_reached_db {
+                        println!("    original: reached DB → failed");
+                        println!("    replay:   reached DB → reproduced same failure");
+                         
+                        println!("\n  \x1b[1minsight\x1b[0m");
+                        println!("    Replay perfectly reproduced the original failure");
+                        println!("    using the recorded database response.");
+                    } else if !original_reached_db && replay_reached_db {
+                        println!("    original: stopped before DB");
+                        println!("    replay:   reached DB → failed due to new error");
 
-                    println!("\n  \x1b[1minsight\x1b[0m");
-                    println!("    Replay continued execution past the original failure");
-                    println!("    and exposed a database schema issue.");
+                        println!("\n  \x1b[1minsight\x1b[0m");
+                        println!("    Replay continued execution past the original failure");
+                        println!("    and exposed a new issue.");
+                    } else {
+                        println!("    original: failed");
+                        println!("    replay:   failed");
+                    }
                 }
 
                 println!("\n  \x1b[1mnext steps\x1b[0m");

@@ -1033,6 +1033,9 @@ pub struct NetRequestExecution {
     pub error: Option<String>,
     pub logs: Vec<LogEntry>,
     pub has_live_io: bool,
+    /// Set when replay stops at an IO boundary with no recorded checkpoint.
+    /// Value is the boundary name (e.g. "postgres", "http", "tcp", "redis").
+    pub boundary_stop: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1042,6 +1045,8 @@ pub struct JsExecutionOutput {
     pub error: Option<String>,
     pub logs: Vec<LogEntry>,
     pub has_live_io: bool,
+    /// Set when replay stops at an IO boundary with no recorded checkpoint.
+    pub boundary_stop: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1064,6 +1069,9 @@ struct RuntimeExecutionState {
     logs: Vec<LogEntry>,
     /// True if any live IO was performed during a Replay execution.
     pub has_live_io: bool,
+    /// Set when replay stops at an IO boundary with no recorded checkpoint.
+    /// Value is the boundary name (e.g. "postgres", "http", "tcp", "redis").
+    pub boundary_stop: Option<String>,
     /// Random f64 values produced in Live mode; replayed in order in Replay mode.
     recorded_random: Vec<f64>,
     /// How many recorded_random values have been consumed so far in Replay mode.
@@ -1253,6 +1261,7 @@ fn op_begin_execution(
         recorded_now_ms,
         logs: Vec::new(),
         has_live_io: false,
+        boundary_stop: None,
         recorded_random,
         random_index: 0,
         recorded_uuids,
@@ -1363,10 +1372,11 @@ fn op_flux_fetch(
         {
             let map = state.borrow_mut::<RuntimeStateMap>();
             if let Some(execution) = map.get_mut(&execution_id) {
-                execution.has_live_io = true;
+                execution.boundary_stop = Some("http".to_string());
             }
         }
-        tracing::debug!(%request_id, %call_index, url = %original_url, method = %method, "replay: no recorded fetch checkpoint, making live request");
+        tracing::debug!(%request_id, %call_index, url = %original_url, method = %method, "replay: stopping at http boundary (no recorded checkpoint)");
+        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:http:{call_index}")));
     }
 
     let resolved_url = original_url.clone();
@@ -1481,10 +1491,11 @@ fn op_flux_tcp_exchange(
         {
             let map = state.borrow_mut::<RuntimeStateMap>();
             if let Some(execution) = map.get_mut(&execution_id) {
-                execution.has_live_io = true;
+                execution.boundary_stop = Some("tcp".to_string());
             }
         }
-        tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded tcp checkpoint, making live exchange");
+        tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: stopping at tcp boundary (no recorded checkpoint)");
+        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:tcp:{call_index}")));
     }
 
     let request_json = serde_json::json!({
@@ -1708,10 +1719,11 @@ fn op_flux_postgres_simple_query(
         {
             let map = state.borrow_mut::<RuntimeStateMap>();
             if let Some(execution) = map.get_mut(&execution_id) {
-                execution.has_live_io = true;
+                execution.boundary_stop = Some("postgres".to_string());
             }
         }
-        tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded postgres simple-query checkpoint, making live query");
+        tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: stopping at postgres boundary (no recorded checkpoint)");
+        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:postgres:{call_index}")));
     }
 
     let started = std::time::Instant::now();
@@ -1826,10 +1838,11 @@ fn op_flux_postgres_session_query(
         {
             let map = state.borrow_mut::<RuntimeStateMap>();
             if let Some(execution) = map.get_mut(&execution_id) {
-                execution.has_live_io = true;
+                execution.boundary_stop = Some("postgres".to_string());
             }
         }
-        tracing::debug!(%request_id, %call_index, session_id = %session_id, "replay: no recorded postgres session-query checkpoint, making live query");
+        tracing::debug!(%request_id, %call_index, session_id = %session_id, "replay: stopping at postgres boundary (no recorded checkpoint)");
+        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:postgres:{call_index}")));
     }
 
     let (target, tls_enabled, live_outcome, duration_ms) = {
@@ -1983,10 +1996,11 @@ fn op_flux_postgres_query(
         {
             let map = state.borrow_mut::<RuntimeStateMap>();
             if let Some(execution) = map.get_mut(&execution_id) {
-                execution.has_live_io = true;
+                execution.boundary_stop = Some("postgres".to_string());
             }
         }
-        tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded postgres prepared-query checkpoint, making live query");
+        tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: stopping at postgres boundary (no recorded checkpoint)");
+        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:postgres:{call_index}")));
     }
 
     let started = std::time::Instant::now();
@@ -2112,10 +2126,11 @@ fn op_flux_redis_command(
         {
             let map = state.borrow_mut::<RuntimeStateMap>();
             if let Some(execution) = map.get_mut(&execution_id) {
-                execution.has_live_io = true;
+                execution.boundary_stop = Some("redis".to_string());
             }
         }
-        tracing::debug!(%request_id, %call_index, command = %command, host = %target.host, port = %target.port, "replay: no recorded redis checkpoint, making live command");
+        tracing::debug!(%request_id, %call_index, command = %command, host = %target.host, port = %target.port, "replay: stopping at redis boundary (no recorded checkpoint)");
+        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:redis:{call_index}")));
     }
 
     let started = Instant::now();
@@ -5386,6 +5401,7 @@ impl JsIsolate {
                     recorded_now_ms: None,
                     logs: Vec::new(),
                     has_live_io: false,
+                    boundary_stop: None,
                     recorded_random: Vec::new(),
                     random_index: 0,
                     recorded_uuids: Vec::new(),
@@ -5450,6 +5466,26 @@ impl JsIsolate {
         let exec = map
             .remove(&execution_id)
             .ok_or_else(|| anyhow::anyhow!("state slot missing for execution {execution_id}"))?;
+
+        // If replay stopped at a boundary (no recorded checkpoint), return the
+        // boundary stop as a first-class outcome rather than an error.
+        if let Some(boundary) = exec.boundary_stop.clone() {
+            let sentinel_error = format!("__FLUX_BOUNDARY_STOP:{boundary}");
+            let dummy_response = NetResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: String::new(),
+            };
+            return Ok(NetRequestExecution {
+                response: dummy_response,
+                checkpoints: exec.checkpoints,
+                error: Some(sentinel_error),
+                logs: exec.logs,
+                has_live_io: false,
+                boundary_stop: Some(boundary),
+            });
+        }
+
         let response = exec.pending_responses.into_values().next().ok_or_else(|| {
             anyhow::anyhow!(
                 "handler did not call op_net_respond for req {} (request_id={})",
@@ -5464,6 +5500,7 @@ impl JsIsolate {
             error,
             logs: exec.logs,
             has_live_io: exec.has_live_io,
+            boundary_stop: exec.boundary_stop,
         })
     }
 
@@ -5539,6 +5576,7 @@ impl JsIsolate {
                     recorded_now_ms: None,
                     logs: Vec::new(),
                     has_live_io: false,
+                    boundary_stop: None,
                     recorded_random: Vec::new(),
                     random_index: 0,
                     recorded_uuids: Vec::new(),
@@ -5638,12 +5676,14 @@ impl JsIsolate {
         let map = state.borrow_mut::<RuntimeStateMap>();
         let execution = map.remove(&execution_id);
         let has_live_io = execution.as_ref().map(|e| e.has_live_io).unwrap_or(false);
+        let boundary_stop = execution.as_ref().and_then(|e| e.boundary_stop.clone());
         Ok(JsExecutionOutput {
             output,
             checkpoints,
             error,
             logs,
             has_live_io,
+            boundary_stop,
         })
     }
 
@@ -5690,6 +5730,7 @@ impl JsIsolate {
                     recorded_now_ms: None,
                     logs: Vec::new(),
                     has_live_io: false,
+                    boundary_stop: None,
                     recorded_random: Vec::new(),
                     random_index: 0,
                     recorded_uuids: Vec::new(),
@@ -5732,6 +5773,7 @@ impl JsIsolate {
             error: None,
             logs: execution.as_ref().map(|e| e.logs.clone()).unwrap_or_default(),
             has_live_io: execution.as_ref().map(|e| e.has_live_io).unwrap_or(false),
+            boundary_stop: None,
         })
     }
 }
@@ -5805,6 +5847,7 @@ async fn boot_inline_runtime_artifact(
                 recorded_now_ms: None,
                 logs: Vec::new(),
                 has_live_io: false,
+                boundary_stop: None,
                 recorded_random: Vec::new(),
                 random_index: 0,
                 recorded_uuids: Vec::new(),
@@ -5942,6 +5985,7 @@ async fn boot_built_runtime_artifact(
                 recorded_now_ms: None,
                 logs: Vec::new(),
                 has_live_io: false,
+                boundary_stop: None,
                 recorded_random: Vec::new(),
                 random_index: 0,
                 recorded_uuids: Vec::new(),

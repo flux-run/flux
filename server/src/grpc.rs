@@ -1273,17 +1273,21 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
 
         if checkpoint_rows.is_empty() {
-            return Err(Status::failed_precondition(
-                "resume requires at least one checkpoint",
-            ));
+            // Original execution had no checkpoints (threw before any IO).
+            // Fall through as a fully-live execution from index 0 with no
+            // recorded checkpoints — equivalent to running the request fresh.
         }
 
-        let inferred_from_index = checkpoint_rows
+        let inferred_from_index = if checkpoint_rows.is_empty() {
+            0
+        } else {
+            checkpoint_rows
             .iter()
             .map(|(call_index, _, _, _, _, _, _)| *call_index)
             .max()
             .map(|call_index| call_index + 1)
-            .unwrap_or(0);
+            .unwrap_or(0)
+        };
         let from_index = if req.from_index < 0 {
             inferred_from_index
         } else {

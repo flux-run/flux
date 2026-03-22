@@ -324,6 +324,7 @@ fn spawn_isolate_worker(
                                     error: js_error,
                                     logs,
                                     has_live_io,
+                                    ..
                                 }) => {
                                     let status = if net_resp.status >= 500 || js_error.is_some() {
                                         "error".to_string()
@@ -378,6 +379,7 @@ fn spawn_isolate_worker(
                                 error,
                                 logs,
                                 has_live_io,
+                                ..
                             }) => {
                                 let (status, body, error) = match error {
                                     Some(err) => {
@@ -501,6 +503,7 @@ fn spawn_isolate_worker_with_mode(
                                     error: js_error,
                                     logs,
                                     has_live_io,
+                                    ..
                                 }) => {
                                     let status = if net_resp.status >= 500 || js_error.is_some() {
                                         "error".to_string()
@@ -555,6 +558,7 @@ fn spawn_isolate_worker_with_mode(
                                 error,
                                 logs,
                                 has_live_io,
+                                ..
                             }) => {
                                 let (status, body, error) = match error {
                                     Some(err) => {

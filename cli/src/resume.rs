@@ -60,6 +60,12 @@ pub async fn execute(args: ResumeArgs) -> Result<()> {
 
     let response = resume(&auth.url, &auth.token, &args.execution_id, args.from).await?;
 
+    let new_short_id = if response.execution_id.len() >= 8 {
+        response.execution_id[..8].to_string()
+    } else {
+        response.execution_id.clone()
+    };
+
     println!();
     println!(
         "  resuming {}… from checkpoint {}",
@@ -83,12 +89,11 @@ pub async fn execute(args: ResumeArgs) -> Result<()> {
         );
     }
 
-    println!();
-    let status_symbol = if response.status == "ok" {
-        "✓"
-    } else {
-        "✗"
-    };
+    if !response.steps.is_empty() {
+        println!();
+    }
+
+    let status_symbol = if response.status == "ok" { "✓" } else { "✗" };
     println!(
         "  {}  {}  {}ms",
         status_symbol, response.status, response.duration_ms
@@ -113,5 +118,19 @@ pub async fn execute(args: ResumeArgs) -> Result<()> {
     }
 
     println!();
+
+    // Always show the new execution ID — useful for debugging and piping to other commands
+    if !response.execution_id.is_empty() {
+        if response.status == "ok" {
+            println!("  \x1b[32m✓\x1b[0m execution recorded as \x1b[1m{}\x1b[0m", new_short_id);
+        } else {
+            println!("  \x1b[31m✗\x1b[0m execution recorded as \x1b[1m{}\x1b[0m", new_short_id);
+            println!();
+            println!("  \x1b[2mnext\x1b[0m");
+            println!("    → run \x1b[1mflux why {}\x1b[0m to diagnose this failure", new_short_id);
+        }
+        println!();
+    }
+
     Ok(())
 }
