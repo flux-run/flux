@@ -15,7 +15,7 @@ const orders = pgTable("flux_demo_orders", {
 });
 
 // 2. Database Setup
-const DB_URL = Deno.env.get("DATABASE_URL");
+const DB_URL = Deno.env.get("DATABASE_URL") || "postgres://ep-red-water-a1cnxz0z-pooler.ap-southeast-1.aws.neon.tech/neondb";
 console.log("Flux App DB_URL:", DB_URL);
 const pool = new pg.Pool({ connectionString: DB_URL });
 
@@ -39,10 +39,14 @@ app.get("/orders", async (c) => {
 
 app.post("/orders", async (c) => {
   const body = await c.req.json();
-  const { email, amount } = z.object({
+  const schema = z.object({
     email: z.string().email(),
-    amount: z.number().int().positive(),
-  }).parse(body);
+    amount: z.number().int().positive().optional(),
+    productId: z.string().optional(),
+  });
+  const parsed = schema.parse(body);
+  const email = parsed.email;
+  const amount = parsed.amount || parseInt(parsed.productId || "0");
 
   // Ensure table exists (best effort)
   await pool.query(`

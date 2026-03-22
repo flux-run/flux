@@ -1030,7 +1030,9 @@ pub struct NetResponse {
 pub struct NetRequestExecution {
     pub response: NetResponse,
     pub checkpoints: Vec<FetchCheckpoint>,
+    pub error: Option<String>,
     pub logs: Vec<LogEntry>,
+    pub has_live_io: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1039,6 +1041,7 @@ pub struct JsExecutionOutput {
     pub checkpoints: Vec<FetchCheckpoint>,
     pub error: Option<String>,
     pub logs: Vec<LogEntry>,
+    pub has_live_io: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1059,6 +1062,8 @@ struct RuntimeExecutionState {
     recorded_now_ms: Option<u64>,
     /// Console output captured during this execution.
     logs: Vec<LogEntry>,
+    /// True if any live IO was performed during a Replay execution.
+    pub has_live_io: bool,
     /// Random f64 values produced in Live mode; replayed in order in Replay mode.
     recorded_random: Vec<f64>,
     /// How many recorded_random values have been consumed so far in Replay mode.
@@ -1240,12 +1245,14 @@ fn op_begin_execution(
             } else {
                 ExecutionMode::Live
             },
+            verbose: false,
         },
         call_index: 0,
         checkpoints: Vec::new(),
         recorded: HashMap::new(),
         recorded_now_ms,
         logs: Vec::new(),
+        has_live_io: false,
         recorded_random,
         random_index: 0,
         recorded_uuids,
@@ -1332,19 +1339,34 @@ fn op_flux_fetch(
                 if let Some(execution) = map.get_mut(&execution_id) {
                     execution.checkpoints.push(FetchCheckpoint {
                         call_index,
-                        boundary: checkpoint.boundary,
-                        url: checkpoint.url,
-                        method: checkpoint.method,
-                        request: checkpoint.request,
+                        boundary: checkpoint.boundary.clone(),
+                        url: checkpoint.url.clone(),
+                        method: checkpoint.method.clone(),
+                        request: checkpoint.request.clone(),
                         response: response.clone(),
                         duration_ms: checkpoint.duration_ms,
                     });
                 }
             }
             tracing::debug!(%request_id, %call_index, "replay: returned recorded response");
-            return Ok(response);
+            print_checkpoint_replay(&FetchCheckpoint {
+                call_index,
+                boundary: checkpoint.boundary.clone(),
+                url: checkpoint.url.clone(),
+                method: checkpoint.method.clone(),
+                request: checkpoint.request.clone(),
+                response: response.clone(),
+                duration_ms: checkpoint.duration_ms,
+            });
+            return Ok(response)
         }
-        tracing::warn!(%request_id, %call_index, "replay: no recorded checkpoint, making live call");
+        {
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            if let Some(execution) = map.get_mut(&execution_id) {
+                execution.has_live_io = true;
+            }
+        }
+        tracing::debug!(%request_id, %call_index, url = %original_url, method = %method, "replay: no recorded fetch checkpoint, making live request");
     }
 
     let resolved_url = original_url.clone();
@@ -1432,22 +1454,37 @@ fn op_flux_tcp_exchange(
                 if let Some(execution) = map.get_mut(&execution_id) {
                     execution.checkpoints.push(FetchCheckpoint {
                         call_index,
-                        boundary: checkpoint.boundary,
-                        url: checkpoint.url,
-                        method: checkpoint.method,
-                        request: checkpoint.request,
+                        boundary: checkpoint.boundary.clone(),
+                        url: checkpoint.url.clone(),
+                        method: checkpoint.method.clone(),
+                        request: checkpoint.request.clone(),
                         response: response.clone(),
                         duration_ms: checkpoint.duration_ms,
                     });
                 }
             }
             tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: returned recorded tcp exchange");
+            print_checkpoint_replay(&FetchCheckpoint {
+                call_index,
+                boundary: checkpoint.boundary.clone(),
+                url: checkpoint.url.clone(),
+                method: checkpoint.method.clone(),
+                request: checkpoint.request.clone(),
+                response: response.clone(),
+                duration_ms: checkpoint.duration_ms,
+            });
             return Ok(serde_json::json!({
                 "bytes": bytes,
                 "replay": true,
             }));
         }
-        tracing::warn!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded tcp checkpoint, making live exchange");
+        {
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            if let Some(execution) = map.get_mut(&execution_id) {
+                execution.has_live_io = true;
+            }
+        }
+        tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded tcp checkpoint, making live exchange");
     }
 
     let request_json = serde_json::json!({
@@ -1647,19 +1684,34 @@ fn op_flux_postgres_simple_query(
                 if let Some(execution) = map.get_mut(&execution_id) {
                     execution.checkpoints.push(FetchCheckpoint {
                         call_index,
-                        boundary: checkpoint.boundary,
-                        url: checkpoint.url,
-                        method: checkpoint.method,
-                        request: checkpoint.request,
+                        boundary: checkpoint.boundary.clone(),
+                        url: checkpoint.url.clone(),
+                        method: checkpoint.method.clone(),
+                        request: checkpoint.request.clone(),
                         response: response.clone(),
                         duration_ms: checkpoint.duration_ms,
                     });
                 }
             }
             tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: returned recorded postgres query");
-            return Ok(postgres_checkpoint_response_json(&response, true));
+            print_checkpoint_replay(&FetchCheckpoint {
+                call_index,
+                boundary: checkpoint.boundary.clone(),
+                url: checkpoint.url.clone(),
+                method: checkpoint.method.clone(),
+                request: checkpoint.request.clone(),
+                response: response.clone(),
+                duration_ms: checkpoint.duration_ms,
+            });
+            return Ok(postgres_checkpoint_response_json(&response, true))
         }
-        tracing::warn!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded postgres checkpoint, making live query");
+        {
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            if let Some(execution) = map.get_mut(&execution_id) {
+                execution.has_live_io = true;
+            }
+        }
+        tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded postgres simple-query checkpoint, making live query");
     }
 
     let started = std::time::Instant::now();
@@ -1750,19 +1802,34 @@ fn op_flux_postgres_session_query(
                 if let Some(execution) = map.get_mut(&execution_id) {
                     execution.checkpoints.push(FetchCheckpoint {
                         call_index,
-                        boundary: checkpoint.boundary,
-                        url: checkpoint.url,
-                        method: checkpoint.method,
-                        request: checkpoint.request,
+                        boundary: checkpoint.boundary.clone(),
+                        url: checkpoint.url.clone(),
+                        method: checkpoint.method.clone(),
+                        request: checkpoint.request.clone(),
                         response: response.clone(),
                         duration_ms: checkpoint.duration_ms,
                     });
                 }
             }
             tracing::debug!(%request_id, %call_index, session_id = %session_id, "replay: returned recorded postgres session query");
+            print_checkpoint_replay(&FetchCheckpoint {
+                call_index,
+                boundary: checkpoint.boundary.clone(),
+                url: checkpoint.url.clone(),
+                method: checkpoint.method.clone(),
+                request: checkpoint.request.clone(),
+                response: response.clone(),
+                duration_ms: checkpoint.duration_ms,
+            });
             return Ok(postgres_checkpoint_response_json(&response, true));
         }
-        tracing::warn!(%request_id, %call_index, session_id = %session_id, "replay: no recorded postgres session-query checkpoint, making live query");
+        {
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            if let Some(execution) = map.get_mut(&execution_id) {
+                execution.has_live_io = true;
+            }
+        }
+        tracing::debug!(%request_id, %call_index, session_id = %session_id, "replay: no recorded postgres session-query checkpoint, making live query");
     }
 
     let (target, tls_enabled, live_outcome, duration_ms) = {
@@ -1892,19 +1959,34 @@ fn op_flux_postgres_query(
                 if let Some(execution) = map.get_mut(&execution_id) {
                     execution.checkpoints.push(FetchCheckpoint {
                         call_index,
-                        boundary: checkpoint.boundary,
-                        url: checkpoint.url,
-                        method: checkpoint.method,
-                        request: checkpoint.request,
+                        boundary: checkpoint.boundary.clone(),
+                        url: checkpoint.url.clone(),
+                        method: checkpoint.method.clone(),
+                        request: checkpoint.request.clone(),
                         response: response.clone(),
                         duration_ms: checkpoint.duration_ms,
                     });
                 }
             }
             tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: returned recorded postgres prepared query");
+            print_checkpoint_replay(&FetchCheckpoint {
+                call_index,
+                boundary: checkpoint.boundary.clone(),
+                url: checkpoint.url.clone(),
+                method: checkpoint.method.clone(),
+                request: checkpoint.request.clone(),
+                response: response.clone(),
+                duration_ms: checkpoint.duration_ms,
+            });
             return Ok(postgres_checkpoint_response_json(&response, true));
         }
-        tracing::warn!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded postgres prepared-query checkpoint, making live query");
+        {
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            if let Some(execution) = map.get_mut(&execution_id) {
+                execution.has_live_io = true;
+            }
+        }
+        tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: no recorded postgres prepared-query checkpoint, making live query");
     }
 
     let started = std::time::Instant::now();
@@ -2006,19 +2088,34 @@ fn op_flux_redis_command(
                 if let Some(execution) = map.get_mut(&execution_id) {
                     execution.checkpoints.push(FetchCheckpoint {
                         call_index,
-                        boundary: checkpoint.boundary,
-                        url: checkpoint.url,
-                        method: checkpoint.method,
-                        request: checkpoint.request,
+                        boundary: checkpoint.boundary.clone(),
+                        url: checkpoint.url.clone(),
+                        method: checkpoint.method.clone(),
+                        request: checkpoint.request.clone(),
                         response: response.clone(),
                         duration_ms: checkpoint.duration_ms,
                     });
                 }
             }
             tracing::debug!(%request_id, %call_index, command = %command, host = %target.host, port = %target.port, "replay: returned recorded redis command");
+            print_checkpoint_replay(&FetchCheckpoint {
+                call_index,
+                boundary: checkpoint.boundary.clone(),
+                url: checkpoint.url.clone(),
+                method: checkpoint.method.clone(),
+                request: checkpoint.request.clone(),
+                response: response.clone(),
+                duration_ms: checkpoint.duration_ms,
+            });
             return Ok(redis_checkpoint_response_json(&response, true));
         }
-        tracing::warn!(%request_id, %call_index, command = %command, host = %target.host, port = %target.port, "replay: no recorded redis checkpoint, making live command");
+        {
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            if let Some(execution) = map.get_mut(&execution_id) {
+                execution.has_live_io = true;
+            }
+        }
+        tracing::debug!(%request_id, %call_index, command = %command, host = %target.host, port = %target.port, "replay: no recorded redis checkpoint, making live command");
     }
 
     let started = Instant::now();
@@ -2498,6 +2595,72 @@ fn postgres_checkpoint_response_json(
             "error": serde_json::Value::Null,
             "replay": replay,
         })
+    }
+}
+
+fn print_checkpoint_replay(checkpoint: &FetchCheckpoint) {
+    let cp = checkpoint;
+    let boundary = cp.boundary.to_ascii_uppercase();
+
+    match cp.boundary.as_str() {
+        "postgres" => {
+            let sql = cp.request.get("sql").and_then(|v| v.as_str()).unwrap_or("");
+            let host = cp.request.get("host").and_then(|v| v.as_str()).unwrap_or("");
+            let row_count = cp
+                .response
+                .get("row_count")
+                .or_else(|| cp.response.get("rowCount"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            println!(
+                "  \x1b[32m✓\x1b[0m \x1b[1mPOSTGRES\x1b[0m  {}  {}ms  → {} rows  \x1b[2m{}\x1b[0m",
+                host, cp.duration_ms, row_count, sql
+            );
+        }
+        "http" => {
+            let method = if !cp.method.is_empty() {
+                cp.method.to_ascii_uppercase()
+            } else {
+                cp.request
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("GET")
+                    .to_string()
+            };
+            let status = cp
+                .response
+                .get("status")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let status_color = if status < 400 { "\x1b[32m" } else { "\x1b[31m" };
+            println!(
+                "  \x1b[32m✓\x1b[0m \x1b[1mHTTP\x1b[0m  {} {}  {}ms  → {}{}\x1b[0m",
+                method, cp.url, cp.duration_ms, status_color, status
+            );
+        }
+        "redis" => {
+            let command = cp
+                .request
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("COMMAND");
+            println!(
+                "  \x1b[32m✓\x1b[0m \x1b[1mREDIS\x1b[0m  {}  {}ms",
+                command, cp.duration_ms
+            );
+        }
+        "timer" | "performance.now" => {
+            println!(
+                "  \x1b[2m›\x1b[0m \x1b[1m{}\x1b[0m  {}ms",
+                boundary, cp.duration_ms
+            );
+        }
+        _ => {
+            println!(
+                "  \x1b[2m›\x1b[0m \x1b[1m{}\x1b[0m  {}  {}ms",
+                boundary, cp.url, cp.duration_ms
+            );
+        }
     }
 }
 
@@ -3818,10 +3981,18 @@ fn op_console(
             message: msg.clone(),
         });
     }
-    if is_err {
-        eprintln!("{msg}");
+    let verbose = if let Some(exec) = map.get(&execution_id) {
+        exec.context.verbose
     } else {
-        println!("{msg}");
+        false
+    };
+
+    if verbose {
+        if is_err {
+            eprintln!("{msg}");
+        } else {
+            println!("{msg}");
+        }
     }
 }
 
@@ -3838,6 +4009,9 @@ fn op_timer_delay(state: &mut OpState, #[string] execution_id: String, delay_ms:
             match exec.context.mode {
                 ExecutionMode::Replay => {
                     let recorded = exec.recorded.remove(&call_index);
+                    if let Some(cp) = &recorded {
+                        print_checkpoint_replay(cp);
+                    }
                     let effective_delay_ms = recorded
                         .as_ref()
                         .and_then(|checkpoint| checkpoint.response.get("effective_delay_ms"))
@@ -4050,10 +4224,13 @@ fn op_random_uuid(state: &mut OpState, #[string] execution_id: String) -> String
         ExecutionMode::Replay => {
             let idx = exec.uuid_index;
             exec.uuid_index += 1;
-            exec.recorded_uuids
+            let val = exec
+                .recorded_uuids
                 .get(idx)
                 .cloned()
-                .unwrap_or_else(|| Uuid::new_v4().to_string())
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            println!("  \x1b[2m›\x1b[0m \x1b[1mUUID\x1b[0m  \x1b[2m→\x1b[0m {}", val);
+            val
         }
     }
 }
@@ -5186,6 +5363,7 @@ impl JsIsolate {
         req: NetRequest,
         recorded_checkpoints: Vec<FetchCheckpoint>,
     ) -> Result<NetRequestExecution> {
+        unsafe { std::env::set_var("DATABASE_URL", std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/test".to_string())); }
         let execution_id = context.execution_id.clone();
         let request_id = context.request_id.clone();
         let recorded: HashMap<u32, FetchCheckpoint> = recorded_checkpoints
@@ -5207,6 +5385,7 @@ impl JsIsolate {
                     recorded,
                     recorded_now_ms: None,
                     logs: Vec::new(),
+                    has_live_io: false,
                     recorded_random: Vec::new(),
                     random_index: 0,
                     recorded_uuids: Vec::new(),
@@ -5243,6 +5422,28 @@ impl JsIsolate {
         .map_err(|_| anyhow::anyhow!("server-mode request timed out after {EXECUTION_TIMEOUT:?}"))?
         .context("event loop failed during request dispatch")?;
 
+        let error_val = self
+            .runtime
+            .execute_script(
+                "flux:get_last_error",
+                format!("JSON.stringify(globalThis.__flux_last_error || {{}})")
+            )?;
+        
+        let error_json: String = {
+            deno_core::scope!(scope, &mut self.runtime);
+            let local = deno_core::v8::Local::new(scope, error_val);
+            if let Some(s) = local.to_string(scope) {
+                s.to_rust_string_lossy(scope)
+            } else {
+                "{}".to_string()
+            }
+        };
+        
+        let error: Option<String> = serde_json::from_str::<serde_json::Value>(&error_json)
+            .ok()
+            .and_then(|v| v.get(&execution_id).cloned())
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+
         let state = self.runtime.op_state();
         let mut state = state.borrow_mut();
         let map = state.borrow_mut::<RuntimeStateMap>();
@@ -5260,7 +5461,9 @@ impl JsIsolate {
         Ok(NetRequestExecution {
             response,
             checkpoints: exec.checkpoints,
+            error,
             logs: exec.logs,
+            has_live_io: exec.has_live_io,
         })
     }
 
@@ -5335,6 +5538,7 @@ impl JsIsolate {
                     recorded,
                     recorded_now_ms: None,
                     logs: Vec::new(),
+                    has_live_io: false,
                     recorded_random: Vec::new(),
                     random_index: 0,
                     recorded_uuids: Vec::new(),
@@ -5424,14 +5628,22 @@ impl JsIsolate {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
+        let output = envelope
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+
+        let state = self.runtime.op_state();
+        let mut state = state.borrow_mut();
+        let map = state.borrow_mut::<RuntimeStateMap>();
+        let execution = map.remove(&execution_id);
+        let has_live_io = execution.as_ref().map(|e| e.has_live_io).unwrap_or(false);
         Ok(JsExecutionOutput {
-            output: envelope
-                .get("result")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
+            output,
             checkpoints,
             error,
             logs,
+            has_live_io,
         })
     }
 
@@ -5477,6 +5689,7 @@ impl JsIsolate {
                     recorded: HashMap::new(),
                     recorded_now_ms: None,
                     logs: Vec::new(),
+                    has_live_io: false,
                     recorded_random: Vec::new(),
                     random_index: 0,
                     recorded_uuids: Vec::new(),
@@ -5517,7 +5730,8 @@ impl JsIsolate {
                 .map(|e| e.checkpoints.clone())
                 .unwrap_or_default(),
             error: None,
-            logs: execution.map(|e| e.logs).unwrap_or_default(),
+            logs: execution.as_ref().map(|e| e.logs.clone()).unwrap_or_default(),
+            has_live_io: execution.as_ref().map(|e| e.has_live_io).unwrap_or(false),
         })
     }
 }
@@ -5590,6 +5804,7 @@ async fn boot_inline_runtime_artifact(
                 recorded: HashMap::new(),
                 recorded_now_ms: None,
                 logs: Vec::new(),
+                has_live_io: false,
                 recorded_random: Vec::new(),
                 random_index: 0,
                 recorded_uuids: Vec::new(),
@@ -5681,6 +5896,7 @@ async fn boot_inline_runtime_artifact(
             duration_ms: started.elapsed().as_millis() as i32,
             checkpoints,
             logs,
+            has_live_io: false,
         },
         is_server_mode,
         has_handler,
@@ -5725,6 +5941,7 @@ async fn boot_built_runtime_artifact(
                 recorded: HashMap::new(),
                 recorded_now_ms: None,
                 logs: Vec::new(),
+                has_live_io: false,
                 recorded_random: Vec::new(),
                 random_index: 0,
                 recorded_uuids: Vec::new(),
@@ -5836,6 +6053,7 @@ async fn boot_built_runtime_artifact(
             duration_ms: started.elapsed().as_millis() as i32,
             checkpoints,
             logs,
+            has_live_io: false,
         },
         is_server_mode,
         has_handler,
@@ -7905,6 +8123,7 @@ Deno.serve = function(optionsOrHandler, maybeHandler = undefined) {
 // Called by Rust (via execute_script) for each incoming HTTP request.
 globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJson, body) {
   const __eid = globalThis.__FLUX_EXECUTION_ID__;
+  globalThis.__flux_last_error = globalThis.__flux_last_error || {};
     const serverState = globalThis.__flux_net_server;
     const handler = serverState && !serverState.closed
         ? serverState.handler
@@ -7949,6 +8168,7 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
     response = await handler(request);
   } catch (err) {
     const msg = String(err && err.stack ? err.stack : err);
+    globalThis.__flux_last_error[__eid] = msg;
     Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", msg);
     return;
   }

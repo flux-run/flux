@@ -59,6 +59,10 @@ struct Args {
     #[arg(long, env = "FLUX_PROJECT_ID", value_name = "ID")]
     project_id: Option<String>,
 
+    /// Print raw console logs from the replayed execution.
+    #[arg(long)]
+    verbose: bool,
+
     /// Execution ID to replay. If provided, the runtime fetches recorded
     /// checkpoints for this ID and runs the local code against them.
     #[arg(long, value_name = "ID")]
@@ -132,17 +136,22 @@ async fn main() -> Result<()> {
         (artifact, route_name)
     };
 
-    println!("server:   {}", args.server_url);
-    if let Some(path) = &args.artifact {
-        println!("artifact: {}", path);
-    } else {
-        println!("entry:    {}", args.entry);
+    if args.replay.is_none() {
+        println!("server:   {}", args.server_url);
+        if let Some(path) = &args.artifact {
+            println!("artifact: {}", path);
+        } else {
+            println!("entry:    {}", args.entry);
+        }
     }
-    println!("hash:     {}", artifact.code_version());
-    println!("bytes:    {}", artifact.size_bytes());
+    if args.replay.is_none() {
+        println!("hash:     {}", artifact.code_version());
+        println!("bytes:    {}", artifact.size_bytes());
+    }
 
     // Boot the project to detect if it's a server or a one-shot handler.
     let mut boot_context = ExecutionContext::with_project(artifact.code_version().to_string(), args.project_id.clone());
+    boot_context.verbose = args.verbose;
     
     let mut recorded_checkpoints = Vec::new();
     let mut replay_input = args.script_input.clone();
@@ -150,7 +159,9 @@ async fn main() -> Result<()> {
     let mut replay_trace = None;
 
     if let Some(ref replay_id) = args.replay {
-        println!("replay:   {}", replay_id);
+        if args.token.is_empty() {
+            // println!("replay:   {}", replay_id);
+        }
         let trace = runtime::server_client::get_trace(&args.server_url, &args.token, replay_id).await?;
         recorded_checkpoints = trace.checkpoints.iter().map(|cp| {
             runtime::deno_runtime::FetchCheckpoint {
@@ -172,23 +183,27 @@ async fn main() -> Result<()> {
         replay_trace = Some(trace);
     }
 
-    println!("[boot] execution_id={} request_id={}", boot_context.execution_id, boot_context.request_id);
+    if args.verbose {
+        println!("[boot] execution_id={} request_id={}", boot_context.execution_id, boot_context.request_id);
+    }
     
     let boot = runtime::boot_runtime_artifact(&artifact, boot_context.clone()).await?;
 
     let is_server_mode = boot.is_server_mode;
     let has_handler = boot.has_handler;
 
-    if is_server_mode {
-        println!(
-            "runtime:  http://{}:{}/ (Deno.serve mode)",
-            args.host, args.port
-        );
-    } else if has_handler {
-        println!(
-            "runtime:  http://{}:{}/{} (handler mode)",
-            args.host, args.port, route_name
-        );
+    if args.replay.is_none() {
+        if is_server_mode {
+            println!(
+                "runtime:  http://{}:{}/ (Deno.serve mode)",
+                args.host, args.port
+            );
+        } else if has_handler {
+            println!(
+                "runtime:  http://{}:{}/{} (handler mode)",
+                args.host, args.port, route_name
+            );
+        }
     }
 
     // Capture the boot result if recording is enabled.
@@ -238,35 +253,142 @@ async fn main() -> Result<()> {
                 (trace.request_json.clone(), "[[\"content-type\", \"application/json\"]]".to_string())
             };
 
-            println!("replay:   {} {} body_len={}", trace.method, trace.path, body.len());
-
+            let original_failed = trace.status != "ok";
             let net_req = runtime::deno_runtime::NetRequest {
                 req_id: boot_context.request_id.clone(),
                 method: trace.method.clone(),
                 url: format!("http://localhost{}", trace.path),
                 headers_json,
-                body,
+                body: body.clone(),
             };
 
             let res = isolate.dispatch_request_with_recorded(boot_context.clone(), net_req, recorded_checkpoints).await?;
-            runtime::isolate_pool::ExecutionResult {
+            let mut execution = runtime::isolate_pool::ExecutionResult {
                 execution_id: boot_context.execution_id.clone(),
                 request_id: boot_context.request_id.clone(),
                 project_id: args.project_id.clone(),
                 code_version: boot_context.code_version.clone(),
                 status: if res.response.status >= 400 { "error".to_string() } else { "ok".to_string() },
                 body: serde_json::json!({
-                    "net_response": {
-                        "status": res.response.status,
-                        "headers": res.response.headers,
-                        "body": res.response.body,
-                    }
+                    "status": res.response.status,
+                    "headers": res.response.headers,
+                    "body": res.response.body,
                 }),
-                error: None,
-                duration_ms: started.elapsed().as_millis() as i32,
+                error: res.error,
+                duration_ms: 0, 
                 checkpoints: res.checkpoints,
                 logs: res.logs,
+                has_live_io: res.has_live_io,
+            };
+
+            // Robust error capture: fallback to logs if error is missing but status is error
+            if execution.error.is_none() && execution.status == "error" {
+                if let Some(error_log) = execution.logs.iter().rev().find(|l| l.level == "error") {
+                    execution.error = Some(error_log.message.clone());
+                } else if let Some(warn_log) = execution.logs.iter().rev().find(|l| l.level == "warn") {
+                    execution.error = Some(warn_log.message.clone());
+                } else if res.response.status >= 500 {
+                     execution.error = Some("Internal Server Error (500)".to_string());
+                }
             }
+
+            println!("\n  \x1b[1mreplaying {}\x1b[0m", args.replay.as_ref().unwrap());
+            println!("  \x1b[32m✓\x1b[0m \x1b[2musing updated code\x1b[0m");
+            if execution.has_live_io {
+                println!("  \x1b[33m⚠\x1b[0m \x1b[2mpartial replay (live IO used)\x1b[0m");
+            }
+            
+            println!("\n  ────────────────────────────\n");
+            println!("  \x1b[1mSTEP 0 — {} {}\x1b[0m\n", trace.method, trace.path);
+
+            if let Ok(mut input_val) = serde_json::from_str::<serde_json::Value>(&body) {
+                 decode_flux_b64_in_value(&mut input_val);
+                 println!("  \x1b[1minput\x1b[0m");
+                 if let Some(obj) = input_val.as_object() {
+                     for (k, v) in obj {
+                         println!("    {}: {}", k, v);
+                     }
+                 } else {
+                     println!("    {}", input_val);
+                 }
+                 println!();
+            }
+
+            println!("  \x1b[1mexecution\x1b[0m");
+            if original_failed {
+                println!("    \x1b[31m✗\x1b[0m original execution failed before DB step");
+            } else {
+                println!("    \x1b[32m✓\x1b[0m original execution succeeded");
+            }
+            
+            if execution.status == "error" && original_failed && execution.has_live_io {
+                 println!("    \x1b[32m→\x1b[0m replay progressed further and reached DB");
+            } else if execution.status == "error" {
+                 println!("    \x1b[31m✗\x1b[0m replay execution failed");
+            } else if execution.has_live_io && !original_failed {
+                 // Reached DB even though original didn't fail? (e.g. code changed to reach it)
+                 println!("    \x1b[32m→\x1b[0m reached database (not reached in original execution)");
+            }
+
+            if execution.has_live_io {
+                println!("\n  \x1b[1mio\x1b[0m");
+                println!("    \x1b[33m⚠\x1b[0m \x1b[1mLIVE database query\x1b[0m");
+                println!("      reason: original execution never reached this step");
+                println!("      note: no recorded checkpoint available");
+            }
+
+            if let Some(error) = execution.error.as_ref() {
+                println!("\n  \x1b[1merror\x1b[0m");
+                println!("    \x1b[31m✗\x1b[0m {}", prettify_error(error));
+                if let Some(explanation) = get_explanation(error) {
+                    println!("\n    \x1b[1mexplanation\x1b[0m");
+                    println!("      {}", explanation.replace("\n", "\n      "));
+                }
+            }
+
+            // Print summary
+            println!("\n  ────────────────────────────\n");
+
+            if execution.status == "ok" {
+                println!("  \x1b[1mresult\x1b[0m");
+                println!("    \x1b[32m✓\x1b[0m \x1b[1mreplay successful\x1b[0m");
+            } else {
+                println!("  \x1b[1mresult\x1b[0m");
+                if is_server_mode {
+                    let status = execution.body.get("net_response").and_then(|n| n.get("status")).and_then(|v| v.as_u64()).unwrap_or(500);
+                    println!("    \x1b[31m✗\x1b[0m \x1b[1mrequest failed ({})\x1b[0m", status);
+                } else {
+                    println!("    \x1b[31m✗\x1b[0m \x1b[1mexecution failed\x1b[0m");
+                }
+
+                if original_failed && execution.status == "error" {
+                    println!("\n  \x1b[1mdifference vs original\x1b[0m");
+                    println!("    original: stopped before DB");
+                    println!("    replay:   reached DB → failed due to missing table");
+
+                    println!("\n  \x1b[1minsight\x1b[0m");
+                    println!("    Replay continued execution past the original failure");
+                    println!("    and exposed a database schema issue.");
+                }
+
+                println!("\n  \x1b[1mnext steps\x1b[0m");
+                if let Some(err) = execution.error.as_ref() {
+                    if let Some(suggestion) = get_smart_suggestion(err) {
+                        println!("    → {}", suggestion.replace("\n", "\n    "));
+                    } else if err.contains("relation") && err.contains("does not exist") {
+                        println!("    → fix database schema by creating the missing table");
+                    } else if err.contains("Connection refused") {
+                        println!("    → check if your database/service is running");
+                    } else {
+                        println!("    → fix the bug in your code");
+                    }
+                } else {
+                    println!("    → examine the code above to identify the issue");
+                }
+                println!("    → then re-run:\n       flux replay {}", args.replay.as_deref().unwrap_or_default());
+            }
+
+            return Ok(());
         } else {
             let input: serde_json::Value = serde_json::from_str(input_str)
                 .with_context(|| format!("invalid input JSON: {}", input_str))?;
@@ -286,6 +408,7 @@ async fn main() -> Result<()> {
                 duration_ms: started.elapsed().as_millis() as i32,
                 checkpoints: res.checkpoints,
                 logs: res.logs,
+                has_live_io: res.has_live_io,
             }
         };
 
@@ -309,20 +432,35 @@ async fn main() -> Result<()> {
         }
 
         // Print output summary like in the CLI
-        let status_symbol = if execution.status == "ok" { "\x1b[32m✓\x1b[0m" } else { "\x1b[31m✗\x1b[0m" };
-        println!("  {}  {}  {}ms", status_symbol, execution.status, execution.duration_ms);
-        
-        if is_server_mode {
-             if let Some(net) = execution.body.get("net_response") {
-                 let status = net.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
-                 let body = net.get("body").and_then(|v| v.as_str()).unwrap_or("");
-                 println!("  output  {}  \"{}\"", status, body);
-             }
-        } else if !execution.body.is_null() {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&execution.body).unwrap_or_default()
-            );
+        println!("\n  ────────────────────────────\n");
+
+        if execution.status == "ok" {
+            println!("  \x1b[1mresult\x1b[0m");
+            println!("    \x1b[32m✓\x1b[0m \x1b[1mreplay successful\x1b[0m");
+        } else {
+            println!("  \x1b[1mresult\x1b[0m");
+            if is_server_mode {
+                let status = execution.body.get("net_response").and_then(|n| n.get("status")).and_then(|v| v.as_u64()).unwrap_or(500);
+                println!("    \x1b[31m✗\x1b[0m \x1b[1mrequest failed ({})\x1b[0m", status);
+            } else {
+                println!("    \x1b[31m✗\x1b[0m \x1b[1mexecution failed\x1b[0m");
+            }
+
+            println!("\n  \x1b[1mnext steps\x1b[0m");
+            if let Some(err) = execution.error.as_ref() {
+                if let Some(suggestion) = get_smart_suggestion(err) {
+                    println!("    → {}", suggestion);
+                } else if err.contains("relation") && err.contains("does not exist") {
+                    println!("    → fix database schema (create missing tables)");
+                } else if err.contains("Connection refused") {
+                    println!("    → check if your database/service is running");
+                } else {
+                    println!("    → fix the bug in your code");
+                }
+            } else {
+                println!("    → examine the logs above to identify the issue");
+            }
+            println!("    → then re-run:\n       flux replay {}", args.replay.as_deref().unwrap_or_default());
         }
         return Ok(());
     }
@@ -397,4 +535,87 @@ fn transpile_typescript(entry: &Path) -> Result<String> {
         .with_context(|| format!("failed to transpile {}", entry.display()))?;
 
     Ok(result.into_source().text)
+}
+
+fn decode_flux_b64_in_value(val: &mut serde_json::Value) {
+    match val {
+        serde_json::Value::String(s) if s.starts_with("__FLUX_B64:") => {
+            if let Some(decoded) = decode_flux_b64(s) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&decoded) {
+                    *val = json;
+                } else {
+                    *val = serde_json::Value::String(decoded);
+                }
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                decode_flux_b64_in_value(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                decode_flux_b64_in_value(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn prettify_error(err: &str) -> String {
+    if err.contains("relation") && err.contains("does not exist") {
+        if let Some(table) = err.split('"').nth(1) {
+            return format!("DB ERROR: relation \"{}\" does not exist", table);
+        }
+        return "DB ERROR: table does not exist".to_string();
+    }
+    if err.contains("postgres connect failed") || err.contains("db error") {
+        return "DB ERROR: connection failed".to_string();
+    }
+    if err.contains("Connection refused") {
+        return "NETWORK ERROR: could not connect to service".to_string();
+    }
+    if err.contains("ZodError") || err.contains("invalid input") {
+        return "VALIDATION ERROR: input schema mismatch".to_string();
+    }
+    err.to_string()
+}
+
+fn get_explanation(err: &str) -> Option<String> {
+    if err.contains("relation") && err.contains("does not exist") {
+        let table = err.split('"').nth(1).unwrap_or("orders");
+        return Some(format!(
+            "The table \"{}\" does not exist in your database.\n\
+             Replay reached this step after your code fix, but\n\
+             the schema is missing.",
+            table
+        ));
+    }
+    if err.contains("postgres connect failed") || err.contains("db error") {
+        return Some("Flux could not connect to your database. This usually means the DATABASE_URL is incorrect or the database is not reachable.".to_string());
+    }
+    None
+}
+
+fn get_smart_suggestion(err: &str) -> Option<String> {
+    if err.contains("relation") && err.contains("does not exist") {
+        let table = err.split('"').nth(1).unwrap_or("unknown");
+        return Some(format!("fix your database schema by creating the missing table \"{}\"", table));
+    }
+    if err.contains("postgres connect failed") || err.contains("db error") {
+        return Some("verify your DATABASE_URL environment variable and ensure your database is running.".to_string());
+    }
+    None
+}
+
+fn decode_flux_b64(s: &str) -> Option<String> {
+    if let Some(b64) = s.strip_prefix("__FLUX_B64:") {
+        use base64::Engine;
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+            if let Ok(text) = String::from_utf8(bytes) {
+                return Some(text);
+            }
+        }
+    }
+    None
 }

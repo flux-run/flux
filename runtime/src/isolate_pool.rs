@@ -19,6 +19,7 @@ pub struct ExecutionContext {
     pub project_id: Option<String>,
     pub code_version: String,
     pub mode: ExecutionMode,
+    pub verbose: bool,
 }
 
 impl ExecutionContext {
@@ -29,6 +30,7 @@ impl ExecutionContext {
             project_id: None,
             code_version: code_version.into(),
             mode: ExecutionMode::Live,
+            verbose: false,
         }
     }
 
@@ -39,6 +41,7 @@ impl ExecutionContext {
             project_id,
             code_version: code_version.into(),
             mode: ExecutionMode::Live,
+            verbose: false,
         }
     }
 }
@@ -55,6 +58,7 @@ pub struct ExecutionResult {
     pub duration_ms: i32,
     pub checkpoints: Vec<FetchCheckpoint>,
     pub logs: Vec<LogEntry>,
+    pub has_live_io: bool,
 }
 
 #[derive(Debug)]
@@ -317,23 +321,40 @@ fn spawn_isolate_worker(
                                 Ok(NetRequestExecution {
                                     response: net_resp,
                                     checkpoints,
+                                    error: js_error,
                                     logs,
-                                }) => ExecutionResult {
-                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
-                                    request_id: context.request_id,
-                                    code_version: context.code_version,
-                                    status: "ok".to_string(),
-                                    body: serde_json::json!({
-                                        "net_response": {
-                                            "status": net_resp.status,
-                                            "headers": net_resp.headers,
-                                            "body": net_resp.body,
+                                    has_live_io,
+                                }) => {
+                                    let status = if net_resp.status >= 500 || js_error.is_some() {
+                                        "error".to_string()
+                                    } else {
+                                        "ok".to_string()
+                                    };
+                                    let error = js_error.or_else(|| {
+                                        if net_resp.status >= 500 {
+                                            Some(format!("HTTP Internal Server Error ({})", net_resp.status))
+                                        } else {
+                                            None
                                         }
-                                    }),
-                                    error: None,
-                                    duration_ms: started.elapsed().as_millis() as i32,
-                                    checkpoints,
-                                    logs,
+                                    });
+                                    ExecutionResult {
+                                        execution_id: context.execution_id, project_id: context.project_id.clone(),
+                                        request_id: context.request_id,
+                                        code_version: context.code_version,
+                                        status,
+                                        body: serde_json::json!({
+                                            "net_response": {
+                                                "status": net_resp.status,
+                                                "headers": net_resp.headers,
+                                                "body": net_resp.body,
+                                            }
+                                        }),
+                                        error,
+                                        duration_ms: started.elapsed().as_millis() as i32,
+                                        checkpoints,
+                                        logs,
+                                        has_live_io,
+                                    }
                                 },
                                 Err(err) => error_result(work.context, err.to_string()),
                             },
@@ -356,6 +377,7 @@ fn spawn_isolate_worker(
                                 checkpoints,
                                 error,
                                 logs,
+                                has_live_io,
                             }) => {
                                 let (status, body, error) = match error {
                                     Some(err) => {
@@ -380,6 +402,7 @@ fn spawn_isolate_worker(
                                     duration_ms: started.elapsed().as_millis() as i32,
                                     checkpoints,
                                     logs,
+                                    has_live_io,
                                 }
                             }
                             Err(err) => ExecutionResult {
@@ -393,6 +416,7 @@ fn spawn_isolate_worker(
                                 duration_ms: started.elapsed().as_millis() as i32,
                                 checkpoints: vec![],
                                 logs: vec![],
+                                has_live_io: false,
                             },
                         }
                     };
@@ -474,23 +498,40 @@ fn spawn_isolate_worker_with_mode(
                                 Ok(NetRequestExecution {
                                     response: net_resp,
                                     checkpoints,
+                                    error: js_error,
                                     logs,
-                                }) => ExecutionResult {
-                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
-                                    request_id: context.request_id,
-                                    code_version: context.code_version,
-                                    status: "ok".to_string(),
-                                    body: serde_json::json!({
-                                        "net_response": {
-                                            "status": net_resp.status,
-                                            "headers": net_resp.headers,
-                                            "body": net_resp.body,
+                                    has_live_io,
+                                }) => {
+                                    let status = if net_resp.status >= 500 || js_error.is_some() {
+                                        "error".to_string()
+                                    } else {
+                                        "ok".to_string()
+                                    };
+                                    let error = js_error.or_else(|| {
+                                        if net_resp.status >= 500 {
+                                            Some(format!("HTTP Internal Server Error ({})", net_resp.status))
+                                        } else {
+                                            None
                                         }
-                                    }),
-                                    error: None,
-                                    duration_ms: started.elapsed().as_millis() as i32,
-                                    checkpoints,
-                                    logs,
+                                    });
+                                    ExecutionResult {
+                                        execution_id: context.execution_id, project_id: context.project_id.clone(),
+                                        request_id: context.request_id,
+                                        code_version: context.code_version,
+                                        status,
+                                        body: serde_json::json!({
+                                            "net_response": {
+                                                "status": net_resp.status,
+                                                "headers": net_resp.headers,
+                                                "body": net_resp.body,
+                                            }
+                                        }),
+                                        error,
+                                        duration_ms: started.elapsed().as_millis() as i32,
+                                        checkpoints,
+                                        logs,
+                                        has_live_io,
+                                    }
                                 },
                                 Err(err) => error_result(work.context, err.to_string()),
                             },
@@ -513,6 +554,7 @@ fn spawn_isolate_worker_with_mode(
                                 checkpoints,
                                 error,
                                 logs,
+                                has_live_io,
                             }) => {
                                 let (status, body, error) = match error {
                                     Some(err) => {
@@ -537,6 +579,7 @@ fn spawn_isolate_worker_with_mode(
                                     duration_ms: started.elapsed().as_millis() as i32,
                                     checkpoints,
                                     logs,
+                                    has_live_io,
                                 }
                             }
                             Err(err) => ExecutionResult {
@@ -550,6 +593,7 @@ fn spawn_isolate_worker_with_mode(
                                 duration_ms: started.elapsed().as_millis() as i32,
                                 checkpoints: vec![],
                                 logs: vec![],
+                                has_live_io: false,
                             },
                         }
                     };
@@ -575,5 +619,6 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
         duration_ms: 0,
         checkpoints: vec![],
         logs: vec![],
+        has_live_io: false,
     }
 }

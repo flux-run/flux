@@ -171,7 +171,7 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
             "  \"imports\": {\n",
             "    \"hono\": \"npm:hono@4.10.6\",\n",
             "    \"zod\": \"npm:zod@3.23.8\",\n",
-            "    \"@hono/zod-validator\": \"npm:@hono/zod-validator@0.13.0\",\n",
+            "    \"@hono/zod-validator\": \"npm:@hono/zod-validator@0.7.6\",\n",
             "    \"drizzle-orm\": \"npm:drizzle-orm@0.31.0\",\n",
             "    \"drizzle-zod\": \"npm:drizzle-zod@0.8.3\",\n",
             "    \"pg\": \"npm:pg@8.12.0\"\n",
@@ -582,6 +582,15 @@ fn resolve_local_bare_import(specifier: &str, base_specifier: &str) -> Result<Op
             if let Some(imports) = config.imports {
                 if let Some(target) = imports.get(specifier) {
                     return resolve_dependency_specifier(target, &file_url_string(&deno_config_path)?).map(Some);
+                }
+
+                // Support prefix matching (e.g. "drizzle-orm/pg-core" matched by "drizzle-orm")
+                for (key, target) in &imports {
+                    if specifier.starts_with(key) && specifier.as_bytes().get(key.len()) == Some(&b'/') {
+                        let subpath = &specifier[key.len()..];
+                        let joined_target = format!("{}{}", target, subpath);
+                        return resolve_dependency_specifier(&joined_target, &file_url_string(&deno_config_path)?).map(Some);
+                    }
                 }
             }
         }
