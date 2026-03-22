@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod add;
 mod auth;
 mod bin_resolution;
 mod build;
@@ -37,6 +38,8 @@ struct Cli {
 enum Commands {
     /// Initialize a Flux project or migrate auth setup with explicit mode flags.
     Init(init::InitArgs),
+    /// Add a package to the project (npm: or https:).
+    Add(add::AddArgs),
     /// Save and verify runtime auth against a Flux server.
     Auth(auth::AuthArgs),
     /// Manage local Flux CLI config values.
@@ -88,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Init(args) => init::execute(args).await?,
+        Commands::Add(args) => add::execute(args).await?,
         Commands::Auth(args) => auth::execute(args).await?,
         Commands::Config { command } => config_cmd::execute(command)?,
         Commands::Logs(args) => logs::execute(args).await?,

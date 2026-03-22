@@ -92,9 +92,9 @@ struct PackageManifest {
     peer_dependencies: Option<BTreeMap<String, String>>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct DenoConfig {
-    imports: Option<BTreeMap<String, String>>,
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct DenoConfig {
+    pub imports: Option<BTreeMap<String, String>>,
 }
 
 pub fn default_entry_path() -> PathBuf {
@@ -443,10 +443,15 @@ fn read_package_manifest(path: &Path) -> Result<PackageManifest> {
     serde_json::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
 }
 
-fn read_deno_config(path: &Path) -> Result<DenoConfig> {
+pub fn read_deno_config(path: &Path) -> Result<DenoConfig> {
     let source =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+pub fn write_deno_config(path: &Path, config: &DenoConfig) -> Result<()> {
+    let source = serde_json::to_string_pretty(config).context("failed to serialize deno.json")?;
+    fs::write(path, source).with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn resolve_package_entry(package_dir: &Path) -> Result<Option<PathBuf>> {
