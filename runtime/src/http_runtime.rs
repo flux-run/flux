@@ -180,9 +180,11 @@ async fn health(State(state): State<RuntimeState>) -> Json<HealthResponse> {
 async fn handle_request(
     Path(route): Path<String>,
     State(state): State<RuntimeState>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     if route != state.route_name {
+        tracing::error!("Route mismatch: incoming '{}' != bound '{}'", route, state.route_name);
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "route not found" })),
@@ -191,9 +193,15 @@ async fn handle_request(
     }
 
     let request_payload = payload.clone();
+    let mut ctx = ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone());
+    
+    if let Some(exec_id) = headers.get("x-flux-execution-id").and_then(|h| h.to_str().ok()) {
+        ctx.execution_id = exec_id.to_string();
+    }
+
     let result = state
         .pool
-        .execute(payload, ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone()))
+        .execute(payload, ctx)
         .await;
 
     if !state.service_token.is_empty() {
