@@ -78,6 +78,8 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
 
     let runtime_args = build_runtime_args(&artifact_tmp, &auth.url, &auth.token, &args);
 
+    println!("Replaying execution: {}", args.execution_id);
+
     let mut child = tokio::process::Command::new(&binary)
         .args(runtime_args)
         .spawn()

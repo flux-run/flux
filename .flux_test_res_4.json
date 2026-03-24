@@ -1,0 +1,1 @@
+{"execution_id":"0178354f-c8e7-42a7-9955-0cba4c325629","request_id":"5a76d593-fe25-4a6b-8aaa-9a55e85ad849","code_version":"2b772d5c3fa6115c0c507e5a74806cc501863a6e72fac5fa12e860ad5c63c4f9","status":"error","error":"Error: payment failed\n    at globalThis.__flux_user_handler (file:///flux_user_code.ts:3:9)\n    at flux:invoke:10:33\n    at flux:invoke:15:3"}

@@ -195,9 +195,19 @@ async fn handle_request(
     let request_payload = payload.clone();
     let mut ctx = ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone());
     
-    if let Some(exec_id) = headers.get("x-flux-execution-id").and_then(|h| h.to_str().ok()) {
-        ctx.execution_id = exec_id.to_string();
-    }
+    let exec_id = match headers.get("x-flux-execution-id").and_then(|h| h.to_str().ok()) {
+        Some(id) => id.to_string(),
+        None => {
+            tracing::error!("Rejecting request: x-flux-execution-id header missing");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "x-flux-execution-id header explicitly required by executor proxy" })),
+            ).into_response();
+        }
+    };
+    
+    ctx.execution_id = exec_id;
+    tracing::info!("[RUNTIME] received execution_id={}", ctx.execution_id);
 
     let result = state
         .pool
