@@ -5,7 +5,6 @@ use reqwest::Client;
 use reqwest::Url;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgListener};
-use subtle::ConstantTimeEq;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;
@@ -13,34 +12,51 @@ use tonic::{Request, Response, Status};
 
 pub use shared::pb;
 
+#[derive(Debug, Clone)]
+pub struct TenantIdentity {
+    pub org_id: String,
+    pub project_id: String,
+}
+
 #[derive(Clone)]
 pub struct InternalAuthGrpc {
     pool: PgPool,
     expected_token: String,
+    mode: String,
+    cache: moka::future::Cache<String, TenantIdentity>,
 }
 
 impl InternalAuthGrpc {
     pub fn new(pool: PgPool, expected_token: String) -> Self {
+        let mode = std::env::var("FLUX_MODE").unwrap_or_else(|_| "standalone".to_string());
+        let cache = moka::future::Cache::builder()
+            .max_capacity(10_000)
+            .time_to_live(std::time::Duration::from_secs(60))
+            .build();
+
         Self {
             pool,
             expected_token,
+            mode,
+            cache,
         }
     }
 
-    async fn is_db_token_valid(&self, token: &str) -> Result<bool, sqlx::Error> {
+    async fn resolve_db_token(&self, token: &str) -> Result<Option<TenantIdentity>, sqlx::Error> {
         let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
 
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS( \
-               SELECT 1 FROM flux.service_tokens \
-               WHERE token_hash = $1 AND revoked_at IS NULL \
-            )",
+        let row: Option<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as(
+            "SELECT org_id, project_id FROM control.service_tokens \
+             WHERE token_hash = $1 AND revoked = false",
         )
         .bind(token_hash)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
 
-        Ok(exists)
+        Ok(row.map(|(org_id, project_id)| TenantIdentity {
+            org_id: org_id.to_string(),
+            project_id: project_id.to_string(),
+        }))
     }
 
     fn read_bearer_token(metadata: &tonic::metadata::MetadataMap) -> Option<String> {
@@ -55,50 +71,52 @@ impl InternalAuthGrpc {
     async fn authenticate(
         &self,
         metadata: &tonic::metadata::MetadataMap,
-    ) -> Result<String, Status> {
-        let provided_token = Self::read_bearer_token(metadata).unwrap_or_default();
-
-        if provided_token.is_empty() {
-            return Err(Status::unauthenticated(
-                "missing authorization bearer token",
-            ));
-        }
-
-        if !self.expected_token.is_empty() {
-            let env_match: bool = provided_token
-                .as_bytes()
-                .ct_eq(self.expected_token.as_bytes())
-                .into();
-
-            if env_match {
-                return Ok("env".to_string());
-            }
-        }
-
-        let db_match = self
-            .is_db_token_valid(&provided_token)
-            .await
-            .map_err(|e| Status::internal(format!("token lookup failed: {e}")))?;
-
-        if db_match {
-            let token_hash = hex::encode(Sha256::digest(provided_token.as_bytes()));
-            let pool = self.pool.clone();
-
-            tokio::spawn(async move {
-                let _ = sqlx::query(
-                    "UPDATE flux.service_tokens \
-                     SET last_used_at = now() \
-                     WHERE token_hash = $1 AND revoked_at IS NULL",
-                )
-                .bind(token_hash)
-                .execute(&pool)
-                .await;
+    ) -> Result<TenantIdentity, Status> {
+        if self.mode == "standalone" {
+            return Ok(TenantIdentity {
+                org_id: "default".to_string(),
+                project_id: "default".to_string(),
             });
-
-            return Ok("db".to_string());
         }
 
-        Err(Status::unauthenticated("invalid service token"))
+        let provided_token = Self::read_bearer_token(metadata).unwrap_or_default();
+        if provided_token.is_empty() {
+            return Err(Status::unauthenticated("missing authorization bearer token"));
+        }
+
+        if !provided_token.starts_with("flux_sk_") {
+            return Err(Status::unauthenticated("invalid token prefix"));
+        }
+
+        // Check cache
+        let token_hash = hex::encode(Sha256::digest(provided_token.as_bytes()));
+        if let Some(identity) = self.cache.get(&token_hash).await {
+            return Ok(identity);
+        }
+
+        // DB lookup
+        let identity = self
+            .resolve_db_token(&provided_token)
+            .await
+            .map_err(|e| Status::internal(format!("token lookup failed: {e}")))?
+            .ok_or_else(|| Status::unauthenticated("invalid service token"))?;
+
+        // Update last_used_at in background
+        let pool = self.pool.clone();
+        let hash_copy = token_hash.clone();
+        tokio::spawn(async move {
+            let _ = sqlx::query(
+                "UPDATE control.service_tokens SET last_used_at = now() WHERE token_hash = $1",
+            )
+            .bind(hash_copy)
+            .execute(&pool)
+            .await;
+        });
+
+        // Populate cache
+        self.cache.insert(token_hash, identity.clone()).await;
+
+        Ok(identity)
     }
 
     async fn resolve_execution_id(&self, raw: &str) -> Result<uuid::Uuid, Status> {
@@ -509,11 +527,11 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::ValidateTokenRequest>,
     ) -> Result<Response<pb::ValidateTokenResponse>, Status> {
-        let auth_mode = self.authenticate(request.metadata()).await?;
+        let identity = self.authenticate(request.metadata()).await?;
 
         Ok(Response::new(pb::ValidateTokenResponse {
             ok: true,
-            auth_mode,
+            auth_mode: format!("{}:{}", identity.org_id, identity.project_id),
         }))
     }
 
@@ -521,7 +539,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::ListLogsRequest>,
     ) -> Result<Response<pb::ListLogsResponse>, Status> {
-        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let identity = self.authenticate(request.metadata()).await?;
         let limit = request.into_inner().limit.max(1).min(500) as i64;
 
         let rows: Vec<(
@@ -539,7 +557,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             "SELECT \
                 id::text, \
                 request_id::text, \
-                project_id::text, \
+                project_id, \
                 method, \
                 path, \
                 status, \
@@ -548,9 +566,11 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 error, \
                 to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') \
              FROM flux.executions \
+             WHERE org_id = $1 \
              ORDER BY started_at DESC \
-             LIMIT $1",
+             LIMIT $2",
         )
+        .bind(identity.org_id)
         .bind(limit)
         .fetch_all(&self.pool)
         .await
@@ -592,11 +612,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::RecordExecutionRequest>,
     ) -> Result<Response<pb::RecordExecutionResponse>, Status> {
-        let auth_mode = self.authenticate(request.metadata()).await?;
+        let identity = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
         tracing::info!(
             execution_id = %req.execution_id,
             request_id = %req.request_id,
+            org_id = %identity.org_id,
+            project_id = %identity.project_id,
             method = %req.method,
             path = %req.path,
             status = %req.status,
@@ -613,14 +635,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let response_json: serde_json::Value = serde_json::from_str(&req.response_json)
             .map_err(|e| Status::invalid_argument(format!("invalid response_json: {e}")))?;
 
-        let project_id = if !req.project_id.is_empty() {
-            Some(
-                uuid::Uuid::parse_str(&req.project_id)
-                    .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?,
-            )
-        } else {
-            None
-        };
+        let project_id = identity.project_id;
+        let org_id = identity.org_id;
 
         let mut tx = self
             .pool
@@ -630,13 +646,14 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "INSERT INTO flux.executions \
-             (id, request_id, project_id, method, path, status, request, response, error, code_sha, duration_ms) \
-             VALUES ($1, $2, $3, $4, $5, 'running', $6, NULL, NULL, $7, 0) \
+             (id, request_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
         .bind(request_id)
-        .bind(project_id)
+        .bind(project_id.clone())
+        .bind(org_id.clone())
         .bind(req.method.clone())
         .bind(req.path.clone())
         .bind(request_json.clone())
@@ -648,7 +665,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         sqlx::query(
             "UPDATE flux.executions \
              SET method = $2, path = $3, status = $4, request = $5, response = $6, \
-                 error = NULLIF($7, ''), code_sha = $8, duration_ms = $9, project_id = $10 \
+                 error = NULLIF($7, ''), code_sha = $8, duration_ms = $9, project_id = $10, org_id = $11 \
              WHERE id = $1",
         )
         .bind(execution_id)
@@ -661,6 +678,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(req.code_version)
         .bind(req.duration_ms)
         .bind(project_id)
+        .bind(org_id.clone())
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to update execution: {e}")))?;
@@ -673,14 +691,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
             sqlx::query(
                 "INSERT INTO flux.checkpoints \
-                 (execution_id, call_index, boundary, url, method, request, response, duration_ms) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 (execution_id, call_index, org_id, boundary, url, method, request, response, duration_ms) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
                  ON CONFLICT (execution_id, call_index) DO UPDATE SET \
                    response = EXCLUDED.response, \
                    duration_ms = EXCLUDED.duration_ms",
             )
             .bind(execution_id)
             .bind(checkpoint.call_index as i32)
+            .bind(org_id.clone())
             .bind(checkpoint.boundary)
             .bind(checkpoint.url)
             .bind(checkpoint.method)
@@ -695,14 +714,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         for (seq, log) in req.logs.into_iter().enumerate() {
             sqlx::query(
                 "INSERT INTO flux.execution_console_logs \
-                 (execution_id, seq, level, message) \
-                 VALUES ($1, $2, $3, $4) \
+                 (execution_id, seq, org_id, level, message) \
+                 VALUES ($1, $2, $3, $4, $5) \
                  ON CONFLICT (execution_id, seq) DO UPDATE SET \
                    level = EXCLUDED.level, \
                    message = EXCLUDED.message",
             )
             .bind(execution_id)
             .bind(seq as i32)
+            .bind(org_id.clone())
             .bind(log.level)
             .bind(log.message)
             .execute(&mut *tx)
@@ -723,7 +743,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::GetTraceRequest>,
     ) -> Result<Response<pb::GetTraceResponse>, Status> {
-        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let identity = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
         let execution_id_raw = req.execution_id.clone();
         let execution_id = self.resolve_execution_id(&execution_id_raw).await?;
@@ -737,11 +757,12 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             serde_json::Value,
             serde_json::Value,
         )> = sqlx::query_as(
-            "SELECT method, path, status, duration_ms, error, request, response
-             FROM flux.executions
-             WHERE id = $1",
+            "SELECT method, path, status, duration_ms, error, request, response \
+             FROM flux.executions \
+             WHERE id = $1 AND org_id = $2",
         )
         .bind(execution_id)
+        .bind(identity.org_id.clone())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Status::internal(format!("failed to fetch execution: {e}")))?;
@@ -751,12 +772,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let checkpoint_rows: Vec<(i32, String, serde_json::Value, serde_json::Value, i32)> =
             sqlx::query_as(
-                "SELECT call_index, boundary, request, response, duration_ms
-                 FROM flux.checkpoints
-                 WHERE execution_id = $1
+                "SELECT call_index, boundary, request, response, duration_ms \
+                 FROM flux.checkpoints \
+                 WHERE execution_id = $1 AND org_id = $2 \
                  ORDER BY call_index ASC",
             )
             .bind(execution_id)
+            .bind(identity.org_id.clone())
             .fetch_all(&self.pool)
             .await
             .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
@@ -775,12 +797,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .collect();
 
         let console_log_rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT level, message
-             FROM flux.execution_console_logs
-             WHERE execution_id = $1
+            "SELECT level, message \
+             FROM flux.execution_console_logs \
+             WHERE execution_id = $1 AND org_id = $2 \
              ORDER BY seq ASC",
         )
         .bind(execution_id)
+        .bind(identity.org_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| Status::internal(format!("failed to fetch execution console logs: {e}")))?;
@@ -810,7 +833,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::TailRequest>,
     ) -> Result<Response<Self::TailStream>, Status> {
-        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let identity = self.authenticate(request.metadata()).await?;
         let pool = self.pool.clone();
         let project_id = request.into_inner().project_id;
 
@@ -847,6 +870,11 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                                 continue;
                             };
 
+                            let identity_org_id = val.get("org_id").and_then(|v| v.as_str()).unwrap_or_default();
+                            if identity_org_id != identity.org_id {
+                                continue;
+                            }
+
                             let entry_project_id = val.get("project_id").and_then(|v| v.as_str()).unwrap_or_default();
                             if !project_id.is_empty() && entry_project_id != project_id {
                                 continue;
@@ -882,18 +910,19 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::WhyRequest>,
     ) -> Result<Response<pb::WhyResponse>, Status> {
-        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let identity = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
         let execution_id_raw = req.execution_id.clone();
         let execution_id = self.resolve_execution_id(&execution_id_raw).await?;
 
         let execution: Option<(String, String, String, i32, Option<String>, serde_json::Value)> = sqlx::query_as(
-            "SELECT status, method, path, duration_ms, error,
-                    COALESCE(response, '{}'::jsonb) as response
-             FROM flux.executions
-             WHERE id = $1",
+            "SELECT status, method, path, duration_ms, error, \
+                    COALESCE(response, '{}'::jsonb) as response \
+             FROM flux.executions \
+             WHERE id = $1 AND org_id = $2",
         )
         .bind(execution_id)
+        .bind(identity.org_id.clone())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Status::internal(format!("failed to fetch execution: {e}")))?;
@@ -926,12 +955,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let checkpoint_rows: Vec<(i32, String, serde_json::Value, serde_json::Value, i32)> =
             sqlx::query_as(
-                "SELECT call_index, boundary, request, response, duration_ms
-                 FROM flux.checkpoints
-                 WHERE execution_id = $1
+                "SELECT call_index, boundary, request, response, duration_ms \
+                 FROM flux.checkpoints \
+                 WHERE execution_id = $1 AND org_id = $2 \
                  ORDER BY call_index ASC",
             )
             .bind(execution_id)
+            .bind(identity.org_id.clone())
             .fetch_all(&self.pool)
             .await
             .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
@@ -949,12 +979,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         // Fetch console logs for this execution
         let console_log_rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT level, message
-             FROM flux.execution_console_logs
-             WHERE execution_id = $1
+            "SELECT level, message \
+             FROM flux.execution_console_logs \
+             WHERE execution_id = $1 AND org_id = $2 \
              ORDER BY seq ASC",
         )
         .bind(execution_id)
+        .bind(identity.org_id.clone())
         .fetch_all(&self.pool)
         .await
         .unwrap_or_default();
@@ -996,7 +1027,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::ReplayRequest>,
     ) -> Result<Response<pb::ReplayResponse>, Status> {
-        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let identity = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
         let source_execution_id_raw = req.execution_id.clone();
         let source_execution_id = self.resolve_execution_id(&source_execution_id_raw).await?;
@@ -1022,11 +1053,12 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             i32,
             String,
         )> = sqlx::query_as(
-            "SELECT method, path, request, response, status, error, duration_ms, code_sha
-             FROM flux.executions
-             WHERE id = $1",
+            "SELECT method, path, request, response, status, error, duration_ms, code_sha \
+             FROM flux.executions \
+             WHERE id = $1 AND org_id = $2",
         )
         .bind(source_execution_id)
+        .bind(identity.org_id.clone())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Status::internal(format!("failed to fetch source execution: {e}")))?;
@@ -1044,13 +1076,14 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             serde_json::Value,
             i32,
         )> = sqlx::query_as(
-            "SELECT call_index, boundary, url, method, request, response, duration_ms
-             FROM flux.checkpoints
-             WHERE execution_id = $1 AND call_index >= $2
+            "SELECT call_index, boundary, url, method, request, response, duration_ms \
+             FROM flux.checkpoints \
+             WHERE execution_id = $1 AND call_index >= $2 AND org_id = $3 \
              ORDER BY call_index ASC",
         )
         .bind(source_execution_id)
         .bind(from_index)
+        .bind(identity.org_id.clone())
         .fetch_all(&self.pool)
         .await
         .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
@@ -1128,12 +1161,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 && response_to_store == *cp_response;
 
             sqlx::query(
-                "INSERT INTO flux.checkpoints
-                 (execution_id, call_index, boundary, url, method, request, response, duration_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                "INSERT INTO flux.checkpoints \
+                 (execution_id, call_index, org_id, boundary, url, method, request, response, duration_ms) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(replay_execution_id)
             .bind(*call_index)
+            .bind(identity.org_id.clone())
             .bind(boundary.clone())
             .bind(step_url.clone())
             .bind(cp_method.clone())
@@ -1195,12 +1229,14 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             serde_json::to_string(&replay_output).unwrap_or_else(|_| "null".to_string());
 
         sqlx::query(
-            "INSERT INTO flux.executions
-             (id, request_id, method, path, status, request, response, error, code_sha, duration_ms)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10)",
+            "INSERT INTO flux.executions \
+             (id, request_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12)",
         )
         .bind(replay_execution_id)
         .bind(replay_request_id)
+        .bind(identity.org_id.clone())
+        .bind(identity.project_id.clone())
         .bind(method)
         .bind(path)
         .bind(replay_status.clone())
@@ -1235,17 +1271,18 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let auth_token = Self::read_bearer_token(request.metadata()).ok_or_else(|| {
             Status::unauthenticated("missing authorization bearer token")
         })?;
-        let _auth_mode = self.authenticate(request.metadata()).await?;
+        let identity = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
         let source_execution_id_raw = req.execution_id.clone();
         let source_execution_id = self.resolve_execution_id(&source_execution_id_raw).await?;
 
         let source_execution: Option<(String, String, serde_json::Value, String)> = sqlx::query_as(
-            "SELECT method, path, request, code_sha
-             FROM flux.executions
-             WHERE id = $1",
+            "SELECT method, path, request, code_sha \
+             FROM flux.executions \
+             WHERE id = $1 AND org_id = $2",
         )
         .bind(source_execution_id)
+        .bind(identity.org_id.clone())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Status::internal(format!("failed to fetch source execution: {e}")))?;
@@ -1262,12 +1299,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             serde_json::Value,
             i32,
         )> = sqlx::query_as(
-            "SELECT call_index, boundary, url, method, request, response, duration_ms
-             FROM flux.checkpoints
-             WHERE execution_id = $1
+            "SELECT call_index, boundary, url, method, request, response, duration_ms \
+             FROM flux.checkpoints \
+             WHERE execution_id = $1 AND org_id = $2 \
              ORDER BY call_index ASC",
         )
         .bind(source_execution_id)
+        .bind(identity.org_id.clone())
         .fetch_all(&self.pool)
         .await
         .map_err(|e| Status::internal(format!("failed to fetch checkpoints: {e}")))?;
@@ -1429,12 +1467,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 .unwrap_or_default() as i32;
 
             sqlx::query(
-                "INSERT INTO flux.checkpoints
-                 (execution_id, call_index, boundary, url, method, request, response, duration_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                "INSERT INTO flux.checkpoints \
+                 (execution_id, call_index, org_id, boundary, url, method, request, response, duration_ms) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(resume_execution_id)
             .bind(call_index)
+            .bind(identity.org_id.clone())
             .bind(boundary.clone())
             .bind(url.clone())
             .bind(method)
@@ -1464,12 +1503,14 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             serde_json::to_string(&result_body).unwrap_or_else(|_| "null".to_string());
 
         sqlx::query(
-            "INSERT INTO flux.executions
-             (id, request_id, method, path, status, request, response, error, code_sha, duration_ms)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10)",
+            "INSERT INTO flux.executions \
+             (id, request_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12)",
         )
         .bind(resume_execution_id)
         .bind(request_id)
+        .bind(identity.org_id.clone())
+        .bind(identity.project_id.clone())
         .bind(method)
         .bind(path)
         .bind(result_status.clone())
@@ -1484,12 +1525,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         for (seq, log) in logs.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO flux.execution_console_logs
-                 (execution_id, seq, level, message)
-                 VALUES ($1, $2, $3, $4)",
+                "INSERT INTO flux.execution_console_logs \
+                 (execution_id, seq, org_id, level, message) \
+                 VALUES ($1, $2, $3, $4, $5)",
             )
             .bind(resume_execution_id)
             .bind(seq as i32)
+            .bind(identity.org_id.clone())
             .bind(
                 log.get("level")
                     .and_then(|value| value.as_str())
@@ -1524,9 +1566,11 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::PingTailRequest>,
     ) -> Result<Response<pb::PingTailResponse>, Status> {
+        let identity = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
         let payload = serde_json::json!({
             "id": uuid::Uuid::new_v4().to_string(),
+            "org_id": identity.org_id,
             "project_id": req.project_id,
             "method": "PING",
             "path": "/ping",

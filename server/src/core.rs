@@ -138,10 +138,11 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
 
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS flux.executions (
+        r#"CREATE TABLE IF NOT EXISTS flux.executions (
             id UUID PRIMARY KEY,
             request_id UUID NOT NULL,
-            project_id UUID,
+            project_id TEXT,
+            org_id TEXT,
             method TEXT NOT NULL,
             path TEXT NOT NULL,
             status TEXT NOT NULL,
@@ -151,19 +152,16 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             code_sha TEXT NOT NULL,
             started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             duration_ms INTEGER NOT NULL DEFAULT 0
-        )",
+        )"#,
     )
     .execute(pool)
     .await?;
 
-    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS project_id UUID")
-        .execute(pool)
-        .await?;
-
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS flux.checkpoints (
+        r#"CREATE TABLE IF NOT EXISTS flux.checkpoints (
             execution_id UUID NOT NULL,
             call_index INTEGER NOT NULL,
+            org_id TEXT,
             boundary TEXT NOT NULL,
             url TEXT,
             method TEXT,
@@ -172,32 +170,34 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             duration_ms INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (execution_id, call_index)
-        )",
+        )"#,
     )
     .execute(pool)
     .await?;
 
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS flux.execution_console_logs (
+        r#"CREATE TABLE IF NOT EXISTS flux.execution_console_logs (
             execution_id UUID NOT NULL,
             seq INTEGER NOT NULL,
+            org_id TEXT,
             level TEXT NOT NULL,
             message TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (execution_id, seq)
-        )",
+        )"#,
     )
     .execute(pool)
     .await?;
 
     sqlx::query(
-        "CREATE OR REPLACE FUNCTION flux.notify_execution()
+        r#"CREATE OR REPLACE FUNCTION flux.notify_execution()
          RETURNS trigger AS $$
          BEGIN
              RAISE NOTICE 'Trigger firing status=% id=%', NEW.status, NEW.id;
              IF (TG_OP = 'UPDATE' AND NEW.status IN ('ok', 'error', 'timeout')) THEN
                  PERFORM pg_notify('flux_executions', json_build_object(
                      'id', NEW.id,
+                     'org_id', NEW.org_id,
                      'project_id', NEW.project_id,
                      'method', NEW.method,
                      'path', NEW.path,
@@ -208,7 +208,7 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
              END IF;
              RETURN NEW;
          END;
-         $$ LANGUAGE plpgsql",
+         $$ LANGUAGE plpgsql"#,
     )
     .execute(pool)
     .await?;
