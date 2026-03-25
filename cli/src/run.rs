@@ -1,9 +1,18 @@
 use std::path::PathBuf;
-
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use crate::runtime_process::spawn_runtime;
+use crate::events::FluxEvent;
 
-use crate::runtime_process::exec_runtime;
+mod tui;
+use tui::{TuiApp, render};
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrossEvent, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{backend::CrosstermBackend, Terminal};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -150,13 +159,73 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     let prog_args = build_runtime_args(&auth.url, &auth.token, &args, entry_str.map(|s| s.as_str()), project_id.as_deref());
 
-    let res = exec_runtime(binary, &prog_args).await;
-    
+    // Setup TUI
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let project_name = "project-alpha".to_string(); // TODO: resolve from flux.json
+    let entry_file = entry_str.map(|s| s.as_str()).unwrap_or("unknown").to_string();
+    let mut app = TuiApp::new(project_name, entry_file, auth.url.clone());
+
+    let mut child = spawn_runtime(binary, &prog_args, true).await?;
+    let stdout = child.stdout.take().context("failed to take stdout")?;
+    let mut reader = BufReader::new(stdout).lines();
+
+    let mut done = false;
+    while !done {
+        tokio::select! {
+            line_res = reader.next_line() => {
+                match line_res {
+                    Ok(Some(line)) => {
+                        if line.starts_with("[flux-event] ") {
+                            if let Some(event) = FluxEvent::from_json(&line[13..]) {
+                                app.handle_event(event);
+                            }
+                        } else {
+                            app.handle_event(FluxEvent::Log {
+                                level: "info".to_string(),
+                                message: line,
+                            });
+                        }
+                        render(&mut terminal, &mut app)?;
+                    }
+                    _ => {
+                        done = true;
+                    }
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                if event::poll(std::time::Duration::from_millis(0))? {
+                    if let CrossEvent::Key(key) = event::read()? {
+                         if let KeyCode::Char('c') = key.code {
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                done = true;
+                            }
+                        }
+                    }
+                }
+                render(&mut terminal, &mut app)?;
+            }
+        }
+    }
+
+    // Cleanup TUI
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
     if let Some(path_str) = temp_entry {
         let _ = std::fs::remove_file(path_str);
     }
 
-    res
+    Ok(())
 }
 
 fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs, entry_str: Option<&str>, project_id: Option<&str>) -> Vec<String> {

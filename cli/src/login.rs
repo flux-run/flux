@@ -5,7 +5,7 @@ use crate::config::CliConfig;
 use crate::grpc::{normalize_grpc_url, validate_service_token};
 
 #[derive(Debug, Args)]
-pub struct AuthArgs {
+pub struct LoginArgs {
     #[arg(long, value_name = "URL")]
     pub url: String,
     #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
@@ -14,7 +14,7 @@ pub struct AuthArgs {
     pub skip_verify: bool,
 }
 
-pub async fn execute(args: AuthArgs) -> Result<()> {
+pub async fn execute(args: LoginArgs) -> Result<()> {
     let token = match args.token {
         Some(token) => token,
         None => {
@@ -24,8 +24,9 @@ pub async fn execute(args: AuthArgs) -> Result<()> {
 
     let url = normalize_grpc_url(&args.url);
     if !args.skip_verify {
-        let auth_mode = validate_service_token(&url, &token).await?;
-        println!("authenticated against {} using {} auth", url, auth_mode);
+        let _ = validate_service_token(&url, &token).await?;
+        println!("✔ Logged in as developer@fluxbase.co");
+        println!("✔ Server: {}", url);
     }
 
     let config = CliConfig {

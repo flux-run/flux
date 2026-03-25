@@ -21,8 +21,13 @@ pub struct LogsArgs {
     pub since: Option<String>,
     #[arg(long, value_name = "TEXT")]
     pub search: Option<String>,
+    /// Project ID for this execution.
     #[arg(long, value_name = "ID")]
     pub project_id: Option<String>,
+
+    /// Shortcut to filter for error status.
+    #[arg(long)]
+    pub error: bool,
 }
 
 pub async fn execute(args: LogsArgs) -> Result<()> {
@@ -38,6 +43,10 @@ pub async fn execute(args: LogsArgs) -> Result<()> {
         args.limit
     };
     let mut logs = list_logs(&auth.url, &auth.token, fetch_limit).await?;
+
+    if args.error {
+        logs.retain(|row| row.status.eq_ignore_ascii_case("error"));
+    }
 
     if let Some(status_filter) = args.status.as_deref() {
         let status_filter = status_filter.to_ascii_lowercase();

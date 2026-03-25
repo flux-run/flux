@@ -2613,6 +2613,10 @@ fn postgres_checkpoint_response_json(
     }
 }
 
+fn emit_flux_event(event: serde_json::Value) {
+    println!("[flux-event] {}", event.to_string());
+}
+
 fn print_checkpoint_replay(checkpoint: &FetchCheckpoint) {
     let cp = checkpoint;
     let boundary = cp.boundary.to_ascii_uppercase();
@@ -2627,6 +2631,15 @@ fn print_checkpoint_replay(checkpoint: &FetchCheckpoint) {
                 .or_else(|| cp.response.get("rowCount"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
+            
+            // Structured event for CLI
+            emit_flux_event(serde_json::json!({
+                "type": "db_query",
+                "query": sql,
+                "duration_ms": cp.duration_ms,
+            }));
+
+            // Legacy fallback for old CLI versions
             println!(
                 "  \x1b[32m✓\x1b[0m \x1b[1mPOSTGRES\x1b[0m  {}  {}ms  → {} rows  \x1b[2m{}\x1b[0m",
                 host, cp.duration_ms, row_count, sql
@@ -2647,6 +2660,15 @@ fn print_checkpoint_replay(checkpoint: &FetchCheckpoint) {
                 .get("status")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
+            
+            // Structured event for CLI
+            emit_flux_event(serde_json::json!({
+                "type": "fetch_end",
+                "method": method,
+                "status": status,
+                "duration_ms": cp.duration_ms,
+            }));
+
             let status_color = if status < 400 { "\x1b[32m" } else { "\x1b[31m" };
             println!(
                 "  \x1b[32m✓\x1b[0m \x1b[1mHTTP\x1b[0m  {} {}  {}ms  → {}{}\x1b[0m",
@@ -5707,10 +5729,31 @@ impl JsIsolate {
         input: serde_json::Value,
         context: ExecutionContext,
     ) -> Result<JsExecutionOutput> {
+        let started = std::time::Instant::now();
+        let execution_id = context.execution_id.clone();
+
+        emit_flux_event(serde_json::json!({
+            "type": "execution_start",
+            "id": execution_id,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        }));
+
         if self.has_handler()? {
-            return self
+            let res = self
                 .execute_handler_with_recorded(input, context, Vec::new(), false)
                 .await;
+            
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let status = if res.as_ref().map(|o| o.error.is_none()).unwrap_or(false) { "ok" } else { "error" };
+            
+            emit_flux_event(serde_json::json!({
+                "type": "execution_end",
+                "id": execution_id,
+                "status": status,
+                "duration_ms": duration_ms,
+            }));
+
+            return res;
         }
 
         // Top-level mode: register a transient state slot so ops don't panic,
@@ -5759,6 +5802,14 @@ impl JsIsolate {
         .await
         .map_err(|_| anyhow::anyhow!("script timed out after {EXECUTION_TIMEOUT:?}"))?
         .context("event loop error during script execution")?;
+
+        let duration_ms = started.elapsed().as_millis() as u64;
+        emit_flux_event(serde_json::json!({
+            "type": "execution_end",
+            "id": execution_id,
+            "status": "ok",
+            "duration_ms": duration_ms,
+        }));
 
         let state = self.runtime.op_state();
         let mut state = state.borrow_mut();

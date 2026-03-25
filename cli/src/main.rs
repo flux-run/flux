@@ -1,16 +1,17 @@
 use clap::{Parser, Subcommand};
 
 mod add;
-mod auth;
 mod bin_resolution;
 mod build;
 mod check;
 mod config;
 mod config_cmd;
 mod dev;
+mod events;
 mod exec;
 mod grpc;
 mod init;
+mod login;
 mod logs;
 mod process_state;
 mod project;
@@ -40,21 +41,21 @@ enum Commands {
     Init(init::InitArgs),
     /// Add a package to the project (npm: or https:).
     Add(add::AddArgs),
-    /// Save and verify runtime auth against a Flux server.
-    Auth(auth::AuthArgs),
+    /// Log in to Flux Cloud or a self-hosted Flux server.
+    Login(login::LoginArgs),
+    /// Log out and clear local credentials.
+    Logout,
     /// Manage local Flux CLI config values.
     Config {
         #[command(subcommand)]
         command: config_cmd::ConfigCommand,
     },
-    /// List recorded execution logs.
+    /// List execution logs.
     Logs(logs::LogsArgs),
     /// Show managed Flux processes.
     Ps,
     /// Show overall Flux health status.
     Status,
-    /// Run a one-off execution and record it.
-    Exec(exec::ExecArgs),
     /// Show execution trace with checkpoints.
     Trace(trace::TraceArgs),
     /// Replay an execution using recorded checkpoints.
@@ -92,12 +93,17 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Init(args) => init::execute(args).await?,
         Commands::Add(args) => add::execute(args).await?,
-        Commands::Auth(args) => auth::execute(args).await?,
+        Commands::Login(args) => login::execute(args).await?,
+        Commands::Logout => {
+            let mut config = config::CliConfig::load()?;
+            config.token = None;
+            config.save()?;
+            println!("logged out");
+        }
         Commands::Config { command } => config_cmd::execute(command)?,
         Commands::Logs(args) => logs::execute(args).await?,
         Commands::Ps => ps::execute().await?,
         Commands::Status => status::execute().await?,
-        Commands::Exec(args) => exec::execute(args).await?,
         Commands::Trace(args) => trace::execute(args).await?,
         Commands::Replay(args) => replay::execute(args).await?,
         Commands::Resume(args) => resume::execute(args).await?,
