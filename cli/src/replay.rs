@@ -93,11 +93,13 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
     // Cleanup temp artifact
     let _ = std::fs::remove_file(artifact_tmp);
 
+    println!("\n  {} Replay Finished\n", if status.success() { "✔" } else { "✘" });
+    println!("  {} View in Dashboard:  {}/project/{}/executions/{}", "→", dashboard_url, project_id, args.execution_id);
+    println!("  {} Debug root cause:   flux why {}\n", "→", args.execution_id);
+
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
-
-    println!("\n  🚀 View in Dashboard: {}/project/{}/executions/{}", dashboard_url, project_id, args.execution_id);
 
     Ok(())
 }
