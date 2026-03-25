@@ -220,6 +220,12 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
+ 
+    if let Some(exec) = app.executions.first() {
+        let dashboard_url = std::env::var("FLUX_DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+        let project_id = project_id.unwrap_or_else(|| "default".to_string());
+        println!("\n  🚀 View in Dashboard: {}/project/{}/executions/{}", dashboard_url, project_id, exec.id);
+    }
 
     if let Some(path_str) = temp_entry {
         let _ = std::fs::remove_file(path_str);
