@@ -37,6 +37,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1.22.0", features = ["v4", "serde"] }
+getrandom = "0.2"
 
 # Deno 2 runtime crates
 # Web platform / JS runtime
