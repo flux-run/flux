@@ -5,6 +5,7 @@
 **Record every request. Replay it. Resume it.**
 
 A request fails in production. Instead of guessing:
+
 - run `flux trace` to see exactly what happened
 - run `flux replay` to reproduce it safely
 - fix the bug and `flux resume` from the exact failure point
@@ -50,18 +51,17 @@ Everything in Flux is built around provable execution laws. We validate these gu
 
 **Every release is gated by this full stack. If any layer fails, we do not ship.**
 
-
 ---
 
 ## Four Core Abilities
 
-| Ability | Command | What it does |
-|---|---|---|
-| **See what happened** | `flux trace` | Full timeline — every step, every call, every response, real data |
-| **Understand why it failed** | `flux why` | Root-cause summaries. Not logs — answers |
-| **Re-run it exactly** | `flux replay` | Replays using recorded data. No live systems touched, no side effects re-triggered |
-| **Continue after fixing** | `flux resume` | Resumes from the exact step where it broke |
-| **Watch it live** | `flux tail` | Structured execution traces in real time |
+| Ability                      | Command       | What it does                                                                       |
+| ---------------------------- | ------------- | ---------------------------------------------------------------------------------- |
+| **See what happened**        | `flux trace`  | Full timeline — every step, every call, every response, real data                  |
+| **Understand why it failed** | `flux why`    | Root-cause summaries. Not logs — answers                                           |
+| **Re-run it exactly**        | `flux replay` | Replays using recorded data. No live systems touched, no side effects re-triggered |
+| **Continue after fixing**    | `flux resume` | Resumes from the exact step where it broke                                         |
+| **Watch it live**            | `flux tail`   | Structured execution traces in real time                                           |
 
 ---
 
@@ -73,6 +73,7 @@ Flux separates **truth** from **history**:
 - **History** (executions) remains complete and honest
 
 Even if:
+
 - a request crashes before recording — no fake history is written
 - two requests race — both executions exist, but only one durable result
 
@@ -107,6 +108,7 @@ The trade-off is intentional: recording adds overhead to each external call, but
 Most systems rely on retries, locks, and best-effort idempotency.
 
 Flux guarantees:
+
 - deterministic execution
 - single durable effects under retries and contention
 - replay scoped to recorded history only
@@ -122,11 +124,11 @@ Flux is a **control layer over execution**.
 
 Flux is three cooperating binaries, all written in Rust:
 
-| Component | Role |
-|---|---|
-| **`flux` (CLI)** | Developer and operator interface: `logs`, `trace`, `why`, `replay`, `resume`, `exec`, `tail` |
-| **`flux-server`** | gRPC server backed by Postgres — stores execution records, traces, and checkpoints |
-| **`flux-runtime`** | Deno V8 isolate — runs your JS/TS, records every external call |
+| Component          | Role                                                                                         |
+| ------------------ | -------------------------------------------------------------------------------------------- |
+| **`flux` (CLI)**   | Developer and operator interface: `logs`, `trace`, `why`, `replay`, `resume`, `exec`, `tail` |
+| **`flux-server`**  | gRPC server backed by Postgres — stores execution records, traces, and checkpoints           |
+| **`flux-runtime`** | Deno V8 isolate — runs your JS/TS, records every external call                               |
 
 All operator commands talk to `flux-server` over gRPC. All state lives in Postgres.
 
@@ -140,29 +142,29 @@ All operator commands talk to `flux-server` over gRPC. All state lives in Postgr
 
 ### ✅ Replay-safe (Flux guarantees fully preserved)
 
-| Library | Notes |
-|---|---|
-| `fetch` (native) | The reference implementation. Zero warnings. |
-| `pg` via `flux:pg` | Native Postgres driver with full checkpoint coverage. |
-| `drizzle-orm` (over `flux:pg`) | Fully safe ORM layer. |
+| Library                               | Notes                                                 |
+| ------------------------------------- | ----------------------------------------------------- |
+| `fetch` (native)                      | The reference implementation. Zero warnings.          |
+| `pg` via `flux:pg`                    | Native Postgres driver with full checkpoint coverage. |
+| `drizzle-orm` (over `flux:pg`)        | Fully safe ORM layer.                                 |
 | `redis` (node-redis) via `flux:redis` | Per-command checkpointing. Blocked commands enforced. |
-| `hono` | Pure router. No IO. |
-| `jose` | Uses `crypto.subtle` — Flux-controlled. |
-| `zod` | Pure computation. No IO. |
+| `hono`                                | Pure router. No IO.                                   |
+| `jose`                                | Uses `crypto.subtle` — Flux-controlled.               |
+| `zod`                                 | Pure computation. No IO.                              |
 
 ### ⚠️ Works with caveats
 
-| Library | Caveat |
-|---|---|
-| `axios` | Uses `fetch` internally → replay-safe for HTTP calls. Dead browser globals in internals. |
-| `ioredis` | Safe when routed through `flux:redis`. Not safe with raw TCP connection. |
+| Library   | Caveat                                                                                   |
+| --------- | ---------------------------------------------------------------------------------------- |
+| `axios`   | Uses `fetch` internally → replay-safe for HTTP calls. Dead browser globals in internals. |
+| `ioredis` | Safe when routed through `flux:redis`. Not safe with raw TCP connection.                 |
 
 ### ❌ Breaks execution guarantees (runs, but replay is broken)
 
-| Library | Why | Alternative |
-|---|---|---|
-| `undici` | Manages its own TCP connection pool — invisible to Flux. Replay fires requests twice. | Use native `fetch` |
-| `postgres.js` | Own TCP client — bypasses `flux:pg` interception. | Use `flux:pg` |
+| Library       | Why                                                                                   | Alternative        |
+| ------------- | ------------------------------------------------------------------------------------- | ------------------ |
+| `undici`      | Manages its own TCP connection pool — invisible to Flux. Replay fires requests twice. | Use native `fetch` |
+| `postgres.js` | Own TCP client — bypasses `flux:pg` interception.                                     | Use `flux:pg`      |
 
 See the full [**Compatibility Guide**](docs/compatibility.md).
 
@@ -173,11 +175,11 @@ See the full [**Compatibility Guide**](docs/compatibility.md).
 This is the fully-tested, fully-safe stack for beta users. Everything on this list is replay-safe and covered by the contract test suite.
 
 ```ts
-import { Hono } from "npm:hono"          // ✅ router
-import pg from "flux:pg"                  // ✅ postgres (Flux-native driver)
-import { createClient } from "flux:redis" // ✅ redis (Flux-native driver)
-import { z } from "npm:zod"              // ✅ validation
-import * as jose from "npm:jose"          // ✅ JWT / crypto
+import { Hono } from "npm:hono"; // ✅ router
+import pg from "flux:pg"; // ✅ postgres (Flux-native driver)
+import { createClient } from "flux:redis"; // ✅ redis (Flux-native driver)
+import { z } from "npm:zod"; // ✅ validation
+import * as jose from "npm:jose"; // ✅ JWT / crypto
 
 // fetch() is available globally — no import needed
 // crypto.subtle / crypto.randomUUID() are globally available and deterministic
@@ -279,6 +281,7 @@ This records a real backend request, replays it with the same responses, and sup
 The CLI collects anonymous usage events to help us understand how Flux is used. **No personal data, code, or credentials are ever sent** — only CLI version, OS, and arch.
 
 Opt out:
+
 ```bash
 export FLUX_NO_TELEMETRY=1   # or DO_NOT_TRACK=1
 ```

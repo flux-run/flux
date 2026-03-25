@@ -1,0 +1,52 @@
+services:
+  flux-control:
+    build:
+      context: ./flux-control
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+    ports:
+      - "3001:3001"
+    restart: always
+
+  flux-executor:
+    build:
+      context: .
+      dockerfile: flux-executor/Dockerfile.prod
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - FLUX_SERVER_URL=http://flux-server:3003
+      - FLUX_RUNTIME_URL=http://flux-runtime:8081
+    ports:
+      - "3002:8080"
+    restart: always
+
+  flux-runtime:
+    build:
+      context: .
+      dockerfile: runtime/Dockerfile.prod
+    environment:
+      - FLUX_SERVER_URL=http://flux-server:3003
+      - FLUX_TOKEN=${FLUX_SERVICE_TOKEN}
+    restart: always
+
+  flux-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile.prod
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+    ports:
+      - "3003:3003"
+    restart: always
+
+  flux-dashboard:
+    build:
+      context: ./fluxbase.co
+      dockerfile: Dockerfile.prod
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    ports:
+      - "3000:3000"
+    restart: always

@@ -1,0 +1,21 @@
+# Build stage
+FROM rust:1.77-slim-bookworm as builder
+
+WORKDIR /app
+COPY shared ./shared
+COPY runtime ./runtime
+
+WORKDIR /app/runtime
+RUN cargo build --release
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/flux-runtime /usr/local/bin/flux-runtime
+
+EXPOSE 8081
+# Run in listen mode for the executor to proxy to
+CMD ["flux-runtime", "--listen", "--port", "8081", "--host", "0.0.0.0"]
