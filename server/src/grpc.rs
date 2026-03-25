@@ -16,6 +16,7 @@ pub use shared::pb;
 pub struct TenantIdentity {
     pub org_id: String,
     pub project_id: String,
+    pub token_id: Option<uuid::Uuid>,
 }
 
 #[derive(Clone)]
@@ -45,17 +46,18 @@ impl InternalAuthGrpc {
     async fn resolve_db_token(&self, token: &str) -> Result<Option<TenantIdentity>, sqlx::Error> {
         let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
 
-        let row: Option<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as(
-            "SELECT org_id, project_id FROM control.service_tokens \
+        let row: Option<(uuid::Uuid, uuid::Uuid, uuid::Uuid)> = sqlx::query_as(
+            "SELECT id, org_id, project_id FROM control.service_tokens \
              WHERE token_hash = $1 AND revoked = false",
         )
         .bind(token_hash)
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(|(org_id, project_id)| TenantIdentity {
+        Ok(row.map(|(token_id, org_id, project_id)| TenantIdentity {
             org_id: org_id.to_string(),
             project_id: project_id.to_string(),
+            token_id: Some(token_id),
         }))
     }
 
@@ -76,6 +78,7 @@ impl InternalAuthGrpc {
             return Ok(TenantIdentity {
                 org_id: "default".to_string(),
                 project_id: "default".to_string(),
+                token_id: None,
             });
         }
 
@@ -646,8 +649,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "INSERT INTO flux.executions \
-             (id, request_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0) \
+             (id, request_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms, token_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
@@ -658,6 +661,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(req.path.clone())
         .bind(request_json.clone())
         .bind(req.code_version.clone())
+        .bind(identity.token_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;
@@ -1230,8 +1234,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "INSERT INTO flux.executions \
-             (id, request_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12)",
+             (id, request_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms, token_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12, $13)",
         )
         .bind(replay_execution_id)
         .bind(replay_request_id)
@@ -1245,6 +1249,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(replay_error.clone())
         .bind(code_sha)
         .bind(replay_duration_ms)
+        .bind(identity.token_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to insert replay execution: {e}")))?;
@@ -1504,8 +1509,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "INSERT INTO flux.executions \
-             (id, request_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12)",
+             (id, request_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms, token_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12, $13)",
         )
         .bind(resume_execution_id)
         .bind(request_id)
@@ -1519,6 +1524,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(result_error.clone())
         .bind(result_code_version)
         .bind(result_duration_ms)
+        .bind(identity.token_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to persist resume execution: {e}")))?;
