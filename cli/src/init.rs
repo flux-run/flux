@@ -23,10 +23,22 @@ pub async fn execute(args: InitArgs) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to read current directory")?;
     scaffold_project(&cwd, args.force)?;
 
-    println!("created  {}/flux.json", cwd.display());
-    println!("created  {}/src/index.ts", cwd.display());
-    println!("next     flux dev");
-    println!("auth     flux init --auth  (or flux auth --url <server>)");
+    println!("\n  ✔  Project initialized successfully\n");
+    println!("  Created:");
+    println!("    - ./flux.json");
+    println!("    - ./src/index.ts\n");
+
+    let config = CliConfig::load().unwrap_or_default();
+    if config.token.is_some() {
+        println!("  Authentication:");
+        println!("    ✔  Logged in to {}", config.url.unwrap_or_default());
+    } else {
+        println!("  Next steps:");
+        println!("    1. flux login  (to connect to Flux Cloud)");
+    }
+
+    println!("\n  Development:");
+    println!("    - flux dev     (start the local development server)");
 
     Ok(())
 }
