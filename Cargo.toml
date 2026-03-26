@@ -6,7 +6,4 @@ members = [
     "server",
     "shared",
 ]
-
-[patch.crates-io]
-# Force stable getrandom to avoid the unstable v0.4/edition2024 bug
-getrandom = { git = "https://github.com/rust-random/getrandom.git", tag = "v0.2.15" }
+# [patch.crates-io] removed in favor of Dockerfile runtime updates
