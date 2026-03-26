@@ -131,6 +131,19 @@ pub struct ResumeView {
 
 pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     let endpoint = normalize_grpc_url(url);
+
+    // If it's an HTTPS URL, we try the REST fallback first or as a fallback
+    // because cloud environments often have protocol issues with pure gRPC over shared infrastructure.
+    if endpoint.starts_with("https://") {
+        println!("  Attempting cloud authentication...");
+        match validate_service_token_rest(&endpoint, token).await {
+            Ok(auth_mode) => return Ok(auth_mode),
+            Err(e) => {
+                println!("  Cloud authentication failed: {}. Falling back to gRPC...", e);
+            }
+        }
+    }
+
     let mut client =
         pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
             .await
@@ -154,6 +167,31 @@ pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     }
 
     Ok(response.auth_mode)
+}
+
+async fn validate_service_token_rest(url: &str, token: &str) -> Result<String> {
+    let client = reqwest::Client::new();
+    let validate_url = format!("{}/auth/validate", url.trim_end_matches('/'));
+
+    let response = client
+        .get(&validate_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("failed to send REST validation request")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let err_body = response.text().await.unwrap_or_default();
+        bail!("REST validation failed ({}): {}", status, err_body);
+    }
+
+    let body: serde_json::Value = response.json().await.context("failed to parse REST validation response")?;
+    let auth_mode = body["auth_mode"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("REST response missing auth_mode"))?;
+
+    Ok(auth_mode.to_string())
 }
 
 pub async fn list_logs(url: &str, token: &str, limit: u32) -> Result<Vec<LogEntry>> {
