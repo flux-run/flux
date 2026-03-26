@@ -257,7 +257,7 @@ async fn main() -> Result<()> {
             let net_req = runtime::deno_runtime::NetRequest {
                 req_id: boot_context.request_id.clone(),
                 method: trace.method.clone(),
-                url: format!("http://{}{}", host, trace.path),
+                url: format!("http://{}{}", args.host, trace.path),
                 headers_json,
                 body: body.clone(),
             };

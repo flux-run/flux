@@ -5,17 +5,26 @@ pub const DEFAULT_PROJECT_CONFIG_PATH: &str = "flux.json";
 pub const DEFAULT_ARTIFACT_PATH: &str = "./.flux/artifact.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectKind {
+    Function,
+    Server,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FluxProjectConfig {
     pub flux_version: String,
+    pub kind: ProjectKind,
     pub entry: String,
     pub artifact: String,
     pub project_id: Option<String>,
 }
 
 impl FluxProjectConfig {
-    pub fn new(entry: impl Into<String>) -> Self {
+    pub fn new(kind: ProjectKind, entry: impl Into<String>) -> Self {
         Self {
             flux_version: FLUX_PROJECT_VERSION.to_string(),
+            kind,
             entry: entry.into(),
             artifact: DEFAULT_ARTIFACT_PATH.to_string(),
             project_id: None,

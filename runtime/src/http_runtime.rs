@@ -126,7 +126,6 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         artifact.clone(),
         boot.is_server_mode,
     )?);
-    let is_server_mode = boot.is_server_mode;
     let state = RuntimeState {
         route_name: config.route_name.clone(),
         code_version: artifact.code_version().to_string(),
@@ -136,22 +135,12 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         service_token: config.service_token,
     };
 
-    let app: Router = if is_server_mode {
-        // Server-mode: a fallback catches every method + path not taken by
-        // the health check, and feeds it into the Deno.serve handler.
-        tracing::info!("server mode detected — routing all traffic through Deno.serve handler");
-        Router::new()
-            .route("/health", get(health))
-            .route("/__flux_internal/resume", post(handle_internal_resume))
-            .fallback(handle_net_request)
-            .with_state(state)
-    } else {
-        Router::new()
-            .route("/health", get(health))
-            .route("/__flux_internal/resume", post(handle_internal_resume))
-            .route("/{route}", post(handle_request))
-            .with_state(state)
-    };
+    let app: Router = Router::new()
+        .route("/health", get(health))
+        .route("/__flux_internal/resume", post(handle_internal_resume))
+        .route("/{route}", post(handle_request))
+        .fallback(handle_net_request)
+        .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;

@@ -136,11 +136,95 @@ pub fn write_project_config(project_dir: &Path, config: &FluxProjectConfig) -> R
     fs::write(&path, json).with_context(|| format!("failed to write {}", path.display()))
 }
 
-pub fn default_project_config(entry_name: &str) -> FluxProjectConfig {
-    FluxProjectConfig::new(format!("./{entry_name}"))
+pub fn default_project_config(kind: shared::project::ProjectKind, entry_name: &str) -> FluxProjectConfig {
+    FluxProjectConfig::new(kind, format!("./{entry_name}"))
 }
 
-pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
+pub fn scaffold_project(project_dir: &Path, template: &str, force: bool) -> Result<()> {
+    match template {
+        "server" => scaffold_server(project_dir, force),
+        "function" | _ => scaffold_function(project_dir, force),
+    }
+}
+
+pub fn scaffold_function(project_dir: &Path, force: bool) -> Result<()> {
+    let config_path = project_config_path(project_dir);
+    let entry_path = project_dir.join(DEFAULT_ENTRY_FILE);
+    let deno_config_path = project_dir.join("deno.json");
+    let types_path = project_dir.join("src/flux.d.ts");
+
+    if !force && (config_path.exists() || entry_path.exists() || deno_config_path.exists()) {
+        bail!(
+            "refusing to overwrite existing project files in {} (use --force)",
+            project_dir.display()
+        );
+    }
+
+    // Ensure all necessary directories exist
+    for path in &[&config_path, &entry_path, &deno_config_path, &types_path] {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+    }
+
+    let config = default_project_config(shared::project::ProjectKind::Function, DEFAULT_ENTRY_FILE);
+    write_project_config(project_dir, &config)?;
+
+    // 1. Write deno.json (empty imports for minimal function)
+    fs::write(
+        &deno_config_path,
+        "{\n  \"imports\": {}\n}\n"
+    )
+    .with_context(|| format!("failed to write {}", deno_config_path.display()))?;
+
+    // 2. Write src/flux.d.ts (Global Type Definitions)
+    fs::write(
+        &types_path,
+        concat!(
+            "/**\n",
+            " * Flux Cloud Function Global Types\n",
+            " */\n",
+            "\n",
+            "interface FluxContext {\n",
+            "  /** The incoming HTTP request */\n",
+            "  req: Request;\n",
+            "  /** Environment variables and bindings */\n",
+            "  env: Record<string, string>;\n",
+            "  /** Unique identifier for this Flux project */\n",
+            "  project_id: string;\n",
+            "\n",
+            "  /** Helper to return a JSON response */\n",
+            "  json(data: any, init?: ResponseInit): Response;\n",
+            "  /** Helper to return a plain text response */\n",
+            "  text(data: string, init?: ResponseInit): Response;\n",
+            "  /** Helper to return an HTML response */\n",
+            "  html(data: string, init?: ResponseInit): Response;\n",
+            "}\n"
+        ),
+    )
+    .with_context(|| format!("failed to write {}", types_path.display()))?;
+
+    // 3. Write src/index.ts (Minimal Clean Entry)
+    fs::write(
+        &entry_path,
+        concat!(
+            "/// <reference types=\"./flux.d.ts\" />\n",
+            "\n",
+            "export default function (ctx: FluxContext) {\n",
+            "  return ctx.json({\n",
+            "    message: \"Hello from Flux!\",\n",
+            "    timestamp: new Date().toISOString()\n",
+            "  });\n",
+            "}\n"
+        ),
+    )
+    .with_context(|| format!("failed to write {}", entry_path.display()))?;
+
+    Ok(())
+}
+
+pub fn scaffold_server(project_dir: &Path, force: bool) -> Result<()> {
     let config_path = project_config_path(project_dir);
     let entry_path = project_dir.join(DEFAULT_ENTRY_FILE);
     let deno_config_path = project_dir.join("deno.json");
@@ -160,10 +244,10 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
         }
     }
 
-    let config = default_project_config(DEFAULT_ENTRY_FILE);
+    let config = default_project_config(shared::project::ProjectKind::Server, DEFAULT_ENTRY_FILE);
     write_project_config(project_dir, &config)?;
 
-    // 1. Write deno.json (Project Metadata & Imports)
+    // 1. Write deno.json
     fs::write(
         &deno_config_path,
         concat!(
@@ -171,84 +255,31 @@ pub fn scaffold_project(project_dir: &Path, force: bool) -> Result<()> {
             "  \"imports\": {\n",
             "    \"hono\": \"npm:hono@4.10.6\",\n",
             "    \"zod\": \"npm:zod@3.23.8\",\n",
-            "    \"@hono/zod-validator\": \"npm:@hono/zod-validator@0.7.6\",\n",
-            "    \"drizzle-orm\": \"npm:drizzle-orm@0.31.0\",\n",
-            "    \"drizzle-zod\": \"npm:drizzle-zod@0.8.3\",\n",
-            "    \"pg\": \"npm:pg@8.12.0\"\n",
+            "    \"@hono/zod-validator\": \"npm:@hono/zod-validator@0.7.6\"\n",
             "  }\n",
             "}\n"
         ),
     )
     .with_context(|| format!("failed to write {}", deno_config_path.display()))?;
 
-    // 2. Write src/index.ts (Combined Application Logic & Infrastructure Examples)
+    // 2. Write src/index.ts (Server Template: Full Deno Server)
     fs::write(
         &entry_path,
         concat!(
             "import { Hono } from \"hono\";\n",
-            "import { z } from \"zod\";\n",
-            "import { zValidator } from \"@hono/zod-validator\";\n",
             "\n",
             "/**\n",
-            " * Flux Hello World\n",
-            " * Every request is recorded and can be replayed for instant debugging.\n",
+            " * Flux Standalone Server\n",
+            " * This server runs as a standalone process (Open Source).\n",
             " */\n",
             "const app = new Hono();\n",
             "\n",
             "app.get(\"/\", (c) => {\n",
             "  return c.json({\n",
-            "    message: \"Welcome to Flux!\",\n",
+            "    message: \"Flux Server is online!\",\n",
             "    timestamp: new Date().toISOString()\n",
             "  });\n",
             "});\n",
-            "\n",
-            "/**\n",
-            " * Example: POST with Zod validation\n",
-            " */\n",
-            "const helloSchema = z.object({\n",
-            "  name: z.string().min(1)\n",
-            "});\n",
-            "\n",
-            "app.post(\"/hello\", zValidator(\"json\", helloSchema), (c) => {\n",
-            "  const { name } = c.req.valid(\"json\");\n",
-            "  return c.json({\n",
-            "    message: `Hello, ${name}!`\n",
-            "  });\n",
-            "});\n",
-            "\n",
-            "/**\n",
-            " * Example: Database and Data Model (Drizzle + Postgres)\n",
-            " * \n",
-            " * To use:\n",
-            " * 1. Set DATABASE_URL in your environment.\n",
-            " * 2. Uncomment the code below.\n",
-            " */\n",
-            "/*\n",
-            "import { drizzle } from \"drizzle-orm/node-postgres\";\n",
-            "import { pgTable, text, serial, boolean, timestamp } from \"drizzle-orm/pg-core\";\n",
-            "import { createInsertSchema, createSelectSchema } from \"drizzle-zod\";\n",
-            "import pg from \"flux:pg\";\n",
-            "\n",
-            "export const todos = pgTable(\"todos\", {\n",
-            "  id: serial(\"id\").primaryKey(),\n",
-            "  title: text(\"title\").notNull(),\n",
-            "  completed: boolean(\"completed\").default(false),\n",
-            "  createdAt: timestamp(\"created_at\").defaultNow(),\n",
-            "});\n",
-            "\n",
-            "const pool = new pg.Pool({ connectionString: Deno.env.get(\"DATABASE_URL\") });\n",
-            "export const db = drizzle(pool);\n",
-            "\n",
-            "export const insertTodoSchema = createInsertSchema(todos);\n",
-            "export const selectTodoSchema = createSelectSchema(todos);\n",
-            "export type Todo = z.infer<typeof selectTodoSchema>;\n",
-            "\n",
-            "// Example route using the database\n",
-            "app.get(\"/todos\", async (c) => {\n",
-            "  const allTodos = await db.select().from(todos);\n",
-            "  return c.json(allTodos);\n",
-            "});\n",
-            "*/\n",
             "\n",
             "Deno.serve(app.fetch);\n"
         ),
@@ -301,7 +332,7 @@ pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {
     let mut config = if project_config_path(&project_dir).exists() {
         load_project_config(&project_dir)?
     } else {
-        default_project_config(&entry_name)
+        default_project_config(shared::project::ProjectKind::Function, &entry_name)
     };
     config.entry = format!("./{entry_name}");
     if config.artifact.trim().is_empty() {

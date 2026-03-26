@@ -89,12 +89,15 @@ pub async fn execute(args: DevArgs) -> Result<()> {
                 .context("failed to write dev artifact")?;
 
             let project_id = analysis.artifact.project_id.clone();
+            let is_function = analysis.config.kind == shared::project::ProjectKind::Function;
+            
             let runtime_args = build_runtime_args(
                 &artifact_tmp,
                 &auth.url,
                 &auth.token,
                 &args,
                 project_id.as_deref(),
+                is_function,
             );
 
             let mut child = tokio::process::Command::new(&binary)
@@ -135,7 +138,14 @@ pub async fn execute(args: DevArgs) -> Result<()> {
     }
 }
 
-fn build_runtime_args(artifact_path: &Path, server_url: &str, token: &str, args: &DevArgs, project_id: Option<&str>) -> Vec<String> {
+fn build_runtime_args(
+    artifact_path: &Path,
+    server_url: &str,
+    token: &str,
+    args: &DevArgs,
+    project_id: Option<&str>,
+    is_function: bool,
+) -> Vec<String> {
     let mut runtime_args = vec![
         "--artifact".to_string(),
         artifact_path.to_string_lossy().into_owned(),
@@ -156,7 +166,7 @@ fn build_runtime_args(artifact_path: &Path, server_url: &str, token: &str, args:
         runtime_args.push(project_id.to_string());
     }
 
-    if args.serve {
+    if args.serve || is_function {
         runtime_args.push("--serve".to_string());
     }
 

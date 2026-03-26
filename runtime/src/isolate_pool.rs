@@ -110,11 +110,11 @@ impl IsolatePool {
     pub fn new_with_mode(
         size: usize,
         artifact: RuntimeArtifact,
-        is_server_mode: bool,
+        _is_server_mode: bool,
     ) -> Result<Self> {
         let mut workers = Vec::with_capacity(size);
         for id in 0..size {
-            let sender = spawn_isolate_worker_with_mode(id, artifact.clone(), is_server_mode)?;
+            let sender = spawn_isolate_worker_with_mode(id, artifact.clone(), _is_server_mode)?;
             workers.push(IsolateWorker { sender });
         }
 
@@ -123,7 +123,7 @@ impl IsolatePool {
             next: AtomicUsize::new(0),
             queue_send_timeout: Duration::from_secs(30),
             result_timeout: Duration::from_secs(120),
-            is_server_mode,
+            is_server_mode: _is_server_mode,
         })
     }
 
@@ -269,7 +269,7 @@ fn spawn_isolate_worker(
                     }
                 };
 
-                let is_server_mode = match isolate_result {
+                let _is_server_mode = match isolate_result {
                     Ok(iso) => {
                         let detected = iso.is_server_mode;
                         let _ = init_tx.send(Ok(detected));
@@ -308,64 +308,58 @@ fn spawn_isolate_worker(
                         }
                     };
 
-                    let result = if is_server_mode {
-                        match work.net_request {
-                            Some(net_req) => match isolate
-                                .dispatch_request_with_recorded(
-                                    work.context.clone(),
-                                    net_req,
-                                    work.recorded_checkpoints,
-                                )
-                                .await
-                            {
-                                Ok(NetRequestExecution {
-                                    response: net_resp,
+                    let result = if let Some(net_req) = work.net_request {
+                        match isolate
+                            .dispatch_request_with_recorded(
+                                work.context.clone(),
+                                net_req,
+                                work.recorded_checkpoints,
+                            )
+                            .await
+                        {
+                            Ok(NetRequestExecution {
+                                response: net_resp,
+                                checkpoints,
+                                error: js_error,
+                                logs,
+                                has_live_io,
+                                ..
+                            }) => {
+                                // A JS-thrown error or a 500 Internal Server Error is a runtime
+                                // failure. A 503 (or other 5xx) with no JS error is a clean
+                                // server-controlled response (e.g. pre-aborted signal shutdown).
+                                let status = if js_error.is_some() || net_resp.status == 500 {
+                                    "error".to_string()
+                                } else {
+                                    "ok".to_string()
+                                };
+                                let error = js_error.or_else(|| {
+                                    if net_resp.status == 500 {
+                                        Some(format!("HTTP Internal Server Error ({})", net_resp.status))
+                                    } else {
+                                        None
+                                    }
+                                });
+                                ExecutionResult {
+                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
+                                    request_id: context.request_id,
+                                    code_version: context.code_version,
+                                    status,
+                                    body: serde_json::json!({
+                                        "net_response": {
+                                            "status": net_resp.status,
+                                            "headers": net_resp.headers,
+                                            "body": net_resp.body,
+                                        }
+                                    }),
+                                    error,
+                                    duration_ms: started.elapsed().as_millis() as i32,
                                     checkpoints,
-                                    error: js_error,
                                     logs,
                                     has_live_io,
-                                    ..
-                                }) => {
-                                    // A JS-thrown error or a 500 Internal Server Error is a runtime
-                                    // failure. A 503 (or other 5xx) with no JS error is a clean
-                                    // server-controlled response (e.g. pre-aborted signal shutdown).
-                                    let status = if js_error.is_some() || net_resp.status == 500 {
-                                        "error".to_string()
-                                    } else {
-                                        "ok".to_string()
-                                    };
-                                    let error = js_error.or_else(|| {
-                                        if net_resp.status == 500 {
-                                            Some(format!("HTTP Internal Server Error ({})", net_resp.status))
-                                        } else {
-                                            None
-                                        }
-                                    });
-                                    ExecutionResult {
-                                        execution_id: context.execution_id, project_id: context.project_id.clone(),
-                                        request_id: context.request_id,
-                                        code_version: context.code_version,
-                                        status,
-                                        body: serde_json::json!({
-                                            "net_response": {
-                                                "status": net_resp.status,
-                                                "headers": net_resp.headers,
-                                                "body": net_resp.body,
-                                            }
-                                        }),
-                                        error,
-                                        duration_ms: started.elapsed().as_millis() as i32,
-                                        checkpoints,
-                                        logs,
-                                        has_live_io,
-                                    }
-                                },
-                                Err(err) => error_result(work.context, err.to_string()),
+                                }
                             },
-                            None => error_result(
-                                work.context,
-                                "server-mode isolate received non-HTTP work item",
-                            ),
+                            Err(err) => error_result(work.context, err.to_string()),
                         }
                     } else {
                         match isolate
@@ -446,7 +440,7 @@ fn spawn_isolate_worker(
 fn spawn_isolate_worker_with_mode(
     isolate_id: usize,
     artifact: RuntimeArtifact,
-    is_server_mode: bool,
+    _is_server_mode: bool,
 ) -> Result<mpsc::Sender<WorkItem>> {
     let (tx, mut rx) = mpsc::channel::<WorkItem>(64);
 
@@ -490,64 +484,58 @@ fn spawn_isolate_worker_with_mode(
                         }
                     };
 
-                    let result = if is_server_mode {
-                        match work.net_request {
-                            Some(net_req) => match isolate
-                                .dispatch_request_with_recorded(
-                                    work.context.clone(),
-                                    net_req,
-                                    work.recorded_checkpoints,
-                                )
-                                .await
-                            {
-                                Ok(NetRequestExecution {
-                                    response: net_resp,
+                    let result = if let Some(net_req) = work.net_request {
+                        match isolate
+                            .dispatch_request_with_recorded(
+                                work.context.clone(),
+                                net_req,
+                                work.recorded_checkpoints,
+                            )
+                            .await
+                        {
+                            Ok(NetRequestExecution {
+                                response: net_resp,
+                                checkpoints,
+                                error: js_error,
+                                logs,
+                                has_live_io,
+                                ..
+                            }) => {
+                                // A JS-thrown error or a 500 Internal Server Error is a runtime
+                                // failure. A 503 (or other 5xx) with no JS error is a clean
+                                // server-controlled response (e.g. pre-aborted signal shutdown).
+                                let status = if js_error.is_some() || net_resp.status == 500 {
+                                    "error".to_string()
+                                } else {
+                                    "ok".to_string()
+                                };
+                                let error = js_error.or_else(|| {
+                                    if net_resp.status == 500 {
+                                        Some(format!("HTTP Internal Server Error ({})", net_resp.status))
+                                    } else {
+                                        None
+                                    }
+                                });
+                                ExecutionResult {
+                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
+                                    request_id: context.request_id,
+                                    code_version: context.code_version,
+                                    status,
+                                    body: serde_json::json!({
+                                        "net_response": {
+                                            "status": net_resp.status,
+                                            "headers": net_resp.headers,
+                                            "body": net_resp.body,
+                                        }
+                                    }),
+                                    error,
+                                    duration_ms: started.elapsed().as_millis() as i32,
                                     checkpoints,
-                                    error: js_error,
                                     logs,
                                     has_live_io,
-                                    ..
-                                }) => {
-                                    // A JS-thrown error or a 500 Internal Server Error is a runtime
-                                    // failure. A 503 (or other 5xx) with no JS error is a clean
-                                    // server-controlled response (e.g. pre-aborted signal shutdown).
-                                    let status = if js_error.is_some() || net_resp.status == 500 {
-                                        "error".to_string()
-                                    } else {
-                                        "ok".to_string()
-                                    };
-                                    let error = js_error.or_else(|| {
-                                        if net_resp.status == 500 {
-                                            Some(format!("HTTP Internal Server Error ({})", net_resp.status))
-                                        } else {
-                                            None
-                                        }
-                                    });
-                                    ExecutionResult {
-                                        execution_id: context.execution_id, project_id: context.project_id.clone(),
-                                        request_id: context.request_id,
-                                        code_version: context.code_version,
-                                        status,
-                                        body: serde_json::json!({
-                                            "net_response": {
-                                                "status": net_resp.status,
-                                                "headers": net_resp.headers,
-                                                "body": net_resp.body,
-                                            }
-                                        }),
-                                        error,
-                                        duration_ms: started.elapsed().as_millis() as i32,
-                                        checkpoints,
-                                        logs,
-                                        has_live_io,
-                                    }
-                                },
-                                Err(err) => error_result(work.context, err.to_string()),
+                                }
                             },
-                            None => error_result(
-                                work.context,
-                                "server-mode isolate received non-HTTP work item",
-                            ),
+                            Err(err) => error_result(work.context, err.to_string()),
                         }
                     } else {
                         match isolate

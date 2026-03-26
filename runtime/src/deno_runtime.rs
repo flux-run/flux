@@ -1114,6 +1114,7 @@ deno_core::extension!(
         op_flux_postgres_query,
         op_flux_postgres_session_query,
         op_flux_env_get,
+        op_flux_env_list,
         op_flux_now,
         op_flux_now_high_res,
         op_flux_parse_url,
@@ -1220,6 +1221,12 @@ fn op_crypto_verify_rs256(#[serde] request: serde_json::Value) -> Result<bool, J
 #[string]
 fn op_flux_env_get(#[string] key: String) -> Option<String> {
     std::env::var(key).ok()
+}
+
+#[op2]
+#[serde]
+fn op_flux_env_list() -> std::collections::HashMap<String, String> {
+    std::env::vars().collect()
 }
 
 /// Called by JS at the start of every execution to register a state slot.
@@ -8118,7 +8125,14 @@ if (typeof Deno.env.get !== "function") {
     };
 }
 
+if (typeof Deno.env.toObject !== "function") {
+    Deno.env.toObject = function() {
+        return Deno.core.ops.op_flux_env_list();
+    };
+}
+
 globalThis.__flux_net_handler = null;
+globalThis.__flux_user_handler = null; // New: holds exported default function
 globalThis.__flux_net_server = null;
 globalThis.__flux_registration_open = true;
 globalThis.__flux_listener_registered = false;
@@ -8220,16 +8234,19 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
   const __eid = globalThis.__FLUX_EXECUTION_ID__;
   globalThis.__flux_last_error = globalThis.__flux_last_error || {};
     const serverState = globalThis.__flux_net_server;
-    const handler = serverState && !serverState.closed
-        ? serverState.handler
-        : globalThis.__flux_net_handler;
+    
+    // The handler can be from Deno.serve() OR a direct export default function.
+    // If it's an exported function, we wrap it in the FluxContext.
+    const isServerMode = !!(serverState && !serverState.closed);
+    const handler = isServerMode ? serverState.handler : globalThis.__flux_user_handler;
+
     if (serverState && serverState.closed) {
         const message = serverState.reason == null ? "Server closed" : String(serverState.reason);
         Deno.core.ops.op_net_respond(__eid, reqId, 503, "[]", message);
         return;
     }
   if (!handler) {
-    Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", "No Deno.serve handler registered");
+    Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", "No request handler registered");
     return;
   }
 
@@ -8260,7 +8277,34 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
 
   let response;
   try {
-    response = await handler(request);
+    if (isServerMode) {
+        // Deno.serve mode: handler(request)
+        response = await handler(request);
+    } else {
+        // Flux Function mode: handler(ctx)
+        const ctx = {
+            req: request,
+            env: Deno.env.toObject(),
+            project_id: globalThis.__FLUX_PROJECT_ID__,
+            json: (data, init) => {
+              const body = JSON.stringify(data);
+              const headers = new Headers(init?.headers);
+              if (!headers.has("content-type")) {
+                headers.set("content-type", "application/json");
+              }
+              return new Response(body, { ...init, headers });
+            },
+            text: (data, init) => new Response(String(data), init),
+            html: (data, init) => {
+              const headers = new Headers(init?.headers);
+              if (!headers.has("content-type")) {
+                headers.set("content-type", "text/html; charset=utf-8");
+              }
+              return new Response(String(data), { ...init, headers });
+            }
+        };
+        response = await handler(ctx);
+    }
   } catch (err) {
     const msg = String(err && err.stack ? err.stack : err);
     globalThis.__flux_last_error[__eid] = msg;
