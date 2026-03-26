@@ -34,6 +34,5 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 
 COPY --from=builder /app/target/release/flux-runtime /usr/local/bin/flux-runtime
 
-EXPOSE 8081
-# Run in listen mode for the executor to proxy to
-CMD ["flux-runtime", "--listen", "--port", "8081", "--host", "0.0.0.0"]
+EXPOSE 8080
+CMD ["flux-runtime"]

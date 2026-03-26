@@ -34,5 +34,5 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 
 COPY --from=builder /app/target/release/flux-server /usr/local/bin/flux-server
 
-EXPOSE 3003
-CMD ["flux-server"]
+EXPOSE 8080
+CMD ["sh", "-c", "GRPC_PORT=${PORT:-8080} flux-server"]

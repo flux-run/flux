@@ -21,7 +21,7 @@ struct Args {
     artifact: Option<String>,
 
     /// URL of the flux-server gRPC endpoint.
-    #[arg(long, value_name = "URL", default_value = "http://127.0.0.1:50051")]
+    #[arg(long, value_name = "URL", env = "FLUX_SERVER_URL", default_value = "http://127.0.0.1:3003")]
     server_url: String,
 
     /// Service token for authenticating with flux-server.
@@ -34,11 +34,11 @@ struct Args {
     token: String,
 
     /// HTTP listen host.
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, env = "HOST", default_value = "0.0.0.0")]
     host: String,
 
     /// HTTP listen port.
-    #[arg(long, default_value_t = 3000)]
+    #[arg(long, env = "PORT", default_value_t = 3000)]
     port: u16,
 
     /// Number of V8 isolates to keep warm.
@@ -257,7 +257,7 @@ async fn main() -> Result<()> {
             let net_req = runtime::deno_runtime::NetRequest {
                 req_id: boot_context.request_id.clone(),
                 method: trace.method.clone(),
-                url: format!("http://localhost{}", trace.path),
+                url: format!("http://{}{}", host, trace.path),
                 headers_json,
                 body: body.clone(),
             };
