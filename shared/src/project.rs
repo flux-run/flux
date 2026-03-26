@@ -95,3 +95,15 @@ pub struct NpmPackageSnapshot {
     pub fetched_url: String,
     pub root_sha256: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Deployment {
+    pub id: String, // SHA256 of the artifact
+    pub timestamp: String,
+    pub entry: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BuildHistory {
+    pub deployments: Vec<Deployment>,
+}

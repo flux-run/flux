@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use chrono::Utc;
 
 use anyhow::{Context, Result, bail};
 use deno_ast::swc::ast::{
@@ -315,9 +316,52 @@ pub fn write_artifact(artifact_path: &Path, artifact: &FluxBuildArtifact) -> Res
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    
     let json = serde_json::to_string_pretty(artifact).context("failed to serialize artifact")?;
-    fs::write(artifact_path, json)
-        .with_context(|| format!("failed to write {}", artifact_path.display()))
+    
+    // 1. Write the "latest" artifact for convenience
+    fs::write(artifact_path, &json)
+        .with_context(|| format!("failed to write {}", artifact_path.display()))?;
+
+    // 2. Write the versioned artifact in .flux/artifacts/<hash>.json
+    if let Some(project_dir) = artifact_path.parent().and_then(|p| p.parent()) {
+        let artifacts_dir = project_dir.join(".flux").join("artifacts");
+        fs::create_dir_all(&artifacts_dir).context("failed to create artifacts directory")?;
+        
+        let versioned_path = artifacts_dir.join(format!("{}.json", artifact.graph_sha256));
+        fs::write(&versioned_path, json).with_context(|| format!("failed to write versioned artifact {}", versioned_path.display()))?;
+        
+        // 3. Register the deployment in history
+        register_deployment(project_dir, artifact)?;
+    }
+
+    Ok(())
+}
+
+fn register_deployment(project_dir: &Path, artifact: &FluxBuildArtifact) -> Result<()> {
+    let history_path = project_dir.join(".flux").join("deployments.json");
+    let mut history = if history_path.exists() {
+        let source = fs::read_to_string(&history_path)?;
+        serde_json::from_str::<shared::project::BuildHistory>(&source).unwrap_or_default()
+    } else {
+        shared::project::BuildHistory::default()
+    };
+
+    let now = Utc::now().to_rfc3339();
+    
+    // Avoid duplicate entries for the same hash (e.g. if building twice without changes)
+    if !history.deployments.iter().any(|d| d.id == artifact.graph_sha256) {
+        history.deployments.push(shared::project::Deployment {
+            id: artifact.graph_sha256.clone(),
+            timestamp: now,
+            entry: artifact.entry_specifier.clone(),
+        });
+
+        let json = serde_json::to_string_pretty(&history)?;
+        fs::write(&history_path, json)?;
+    }
+
+    Ok(())
 }
 
 pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {

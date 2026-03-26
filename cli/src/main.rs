@@ -20,12 +20,15 @@ mod replay;
 mod resume;
 mod run;
 mod runtime_process;
+mod runtime_runner;
 mod server;
 mod status;
 mod start;
+mod tui;
 mod tail;
 mod trace;
 mod why;
+mod deployments;
 
 #[derive(Parser)]
 #[command(name = "flux")]
@@ -87,6 +90,8 @@ enum Commands {
         #[command(subcommand)]
         command: server::ServerCommand,
     },
+    /// List the project's build history and deployments.
+    Deployments(deployments::DeploymentsArgs),
 }
 
 #[tokio::main]
@@ -123,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Run(args) => run::execute(args).await?,
         Commands::Start(args) => start::execute(args).await?,
         Commands::Server { command } => server::execute(command).await?,
+        Commands::Deployments(args) => deployments::execute(args).await?,
     }
 
     Ok(())

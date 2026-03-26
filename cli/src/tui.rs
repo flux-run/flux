@@ -43,6 +43,7 @@ pub struct TuiApp {
     pub entry_file: String,
     pub server_url: String,
     pub executions: Vec<TuiExecution>,
+    pub system_logs: Vec<CapturedIo>,
     pub list_state: ListState,
 }
 
@@ -53,6 +54,7 @@ impl TuiApp {
             entry_file,
             server_url,
             executions: Vec::new(),
+            system_logs: Vec::new(),
             list_state: ListState::default(),
         }
     }
@@ -106,6 +108,11 @@ impl TuiApp {
                         level,
                         message,
                     });
+                } else {
+                    self.system_logs.push(CapturedIo::Log {
+                        level,
+                        message,
+                    });
                 }
             }
             _ => {}
@@ -132,8 +139,21 @@ pub fn render(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut T
         .block(Block::default().borders(Borders::ALL).style(Style::default().fg(Color::Blue)));
         f.render_widget(header, chunks[0]);
 
+        let mut list_items = Vec::new();
+
+        // System logs (startup errors etc)
+        for log in &app.system_logs {
+            if let CapturedIo::Log { level, message } = log {
+                let color = if level == "error" { Color::Red } else { Color::DarkGray };
+                list_items.push(ListItem::new(Line::from(vec![
+                    Span::styled(format!(" [S] "), Style::default().fg(Color::Yellow)),
+                    Span::styled(message.clone(), Style::default().fg(color)),
+                ])));
+            }
+        }
+
         // Executions List
-        let items: Vec<ListItem> = app.executions.iter().map(|exec| {
+        for exec in &app.executions {
             let mut lines = Vec::new();
             
             let status_span = match exec.status.as_deref() {
@@ -167,7 +187,13 @@ pub fn render(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut T
                             Span::styled(format!("{}ms", duration_ms), Style::default().fg(Color::Cyan)),
                         ]));
                     }
-                    _ => {}
+                    CapturedIo::Log { level, message } => {
+                         let color = if level == "error" { Color::Red } else { Color::DarkGray };
+                         lines.push(Line::from(vec![
+                            Span::raw("   ├─ log:     "),
+                            Span::styled(message.clone(), Style::default().fg(color)),
+                        ]));
+                    }
                 }
             }
 
@@ -183,10 +209,10 @@ pub fn render(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut T
                 ]));
             }
 
-            ListItem::new(lines)
-        }).collect();
+            list_items.push(ListItem::new(lines));
+        }
 
-        let list = List::new(items)
+        let list = List::new(list_items)
             .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
         f.render_widget(list, chunks[1]);

@@ -83,59 +83,46 @@ pub async fn execute(args: DevArgs) -> Result<()> {
                 }
             }
             eprintln!("\nFix errors to continue dev...");
-        } else {
-            let artifact_tmp = watch_dir.join(".flux_artifact_dev.json");
-            crate::project::write_artifact(&artifact_tmp, &analysis.artifact)
-                .context("failed to write dev artifact")?;
-
-            let project_id = analysis.artifact.project_id.clone();
-            let is_function = analysis.config.kind == shared::project::ProjectKind::Function;
-            
-            let runtime_args = build_runtime_args(
-                &artifact_tmp,
-                &auth.url,
-                &auth.token,
-                &args,
-                project_id.as_deref(),
-                is_function,
-            );
-
-            let mut child = tokio::process::Command::new(&binary)
-                .args(runtime_args)
-                .spawn()
-                .context("failed to spawn flux-runtime")?;
-            eprintln!("[flux dev] started pid {:?}", child.id());
-
-            let fingerprint_before = watch_fingerprint(&watch_dir)?;
-            let should_restart = loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(args.poll_ms)).await;
-
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        eprintln!("[flux dev] runtime exited ({status}), restarting");
-                        break true;
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        eprintln!("[flux dev] wait error: {err}, restarting");
-                        break true;
-                    }
-                }
-
-                if watch_fingerprint(&watch_dir)? != fingerprint_before {
-                    eprintln!("[flux dev] change detected, restarting");
-                    break true;
-                }
-            };
-
-            if should_restart {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(args.poll_ms)).await;
+            continue;
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+        let artifact_tmp = watch_dir.join(".flux_artifact_dev.json");
+        crate::project::write_artifact(&artifact_tmp, &analysis.artifact)
+            .context("failed to write dev artifact")?;
+
+        let project_id = analysis.artifact.project_id.clone();
+        let is_function = analysis.config.kind == shared::project::ProjectKind::Function;
+        
+        let runtime_args = build_runtime_args(
+            &artifact_tmp,
+            &auth.url,
+            &auth.token,
+            &args,
+            project_id.as_deref(),
+            is_function,
+        );
+
+        let result = crate::runtime_runner::run_with_tui(crate::runtime_runner::RuntimeConfig {
+            project_name: "flux-dev".to_string(),
+            project_id: project_id.clone(),
+            display_path: entry.to_string_lossy().to_string(),
+            binary_path: binary.clone(),
+            args: runtime_args,
+            server_url: auth.url.clone(),
+            watch_dir: Some(watch_dir.clone()),
+            poll_ms: args.poll_ms,
+        }).await?;
+
+        if result == crate::runtime_runner::RunResult::Finished {
+            break;
+        }
+
+        // Small delay before restarting after change detection
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     }
+
+    Ok(())
 }
 
 fn build_runtime_args(

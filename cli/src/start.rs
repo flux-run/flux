@@ -1,23 +1,16 @@
 use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use crate::runtime_process::spawn_runtime;
-use crate::events::FluxEvent;
-use crate::run::{render, TuiApp};
-
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrossEvent, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{backend::CrosstermBackend, Terminal};
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Args)]
 pub struct StartArgs {
     /// Path to a pre-built Flux artifact JSON (optional, defaults to .flux/artifact.json).
     #[arg(long, value_name = "FILE")]
     pub artifact: Option<String>,
+
+    /// Specific version (SHA256) to run from the build history.
+    #[arg(long, short, value_name = "SHA")]
+    pub version: Option<String>,
 
     /// JSON input passed to the exported default handler.
     #[arg(long, value_name = "JSON", default_value = "{}")]
@@ -51,6 +44,13 @@ pub async fn execute(args: StartArgs) -> Result<()> {
     // 1. Resolve artifact path
     let artifact_path = if let Some(ref path) = args.artifact {
         PathBuf::from(path)
+    } else if let Some(ref sha) = args.version {
+        // Look for the specific version in .flux/artifacts/
+        let path = cwd.join(".flux").join("artifacts").join(format!("{}.json", sha));
+        if !path.exists() {
+            bail!("Version {} not found in .flux/artifacts/", sha);
+        }
+        path
     } else {
         // Look for .flux/artifact.json in the current directory
         cwd.join(".flux").join("artifact.json")
@@ -102,79 +102,23 @@ pub async fn execute(args: StartArgs) -> Result<()> {
         prog_args.push(args.input.clone());
     }
 
-    // 4. Setup TUI and run
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
+    // 4. Run with unified runtime_runner
     let project_name = cwd.file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("flux-project")
         .to_string();
-    let mut app = TuiApp::new(project_name, "artifact".to_string(), auth.url.clone());
 
-    let mut child = spawn_runtime(binary, &prog_args, true).await?;
-    let stdout = child.stdout.take().context("failed to take stdout")?;
-    let mut reader = BufReader::new(stdout).lines();
-
-    let mut done = false;
-    while !done {
-        tokio::select! {
-            line_res = reader.next_line() => {
-                match line_res {
-                    Ok(Some(line)) => {
-                        if line.starts_with("[flux-event] ") {
-                            if let Some(event) = FluxEvent::from_json(&line[13..]) {
-                                app.handle_event(event);
-                            }
-                        } else {
-                            app.handle_event(FluxEvent::Log {
-                                level: "info".to_string(),
-                                message: line,
-                            });
-                        }
-                        render(&mut terminal, &mut app)?;
-                    }
-                    _ => {
-                        done = true;
-                    }
-                }
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
-                if event::poll(std::time::Duration::from_millis(0))? {
-                    if let CrossEvent::Key(key) = event::read()? {
-                         if let KeyCode::Char('c') = key.code {
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                                done = true;
-                            }
-                        }
-                    }
-                }
-                render(&mut terminal, &mut app)?;
-            }
-        }
-    }
-
-    // Cleanup TUI
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Some(exec) = app.executions.first() {
-        let dashboard_url = std::env::var("FLUX_DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-        let project_id_str = project_id.unwrap_or_else(|| "default".to_string());
-        
-        println!("\n  {} Execution Finished\n", if exec.status.as_deref() == Some("ok") { "✔" } else { "✘" });
-        println!("  {} View in Dashboard:  {}/project/{}/executions/{}", "→", dashboard_url, project_id_str, exec.id);
-        println!("  {} Replay locally:     flux replay {}", "→", exec.id);
-        println!("  {} Debug root cause:   flux why {}\n", "→", exec.id);
-    }
+    let project_id_copy = project_id.clone();
+    crate::runtime_runner::run_with_tui(crate::runtime_runner::RuntimeConfig {
+        project_name,
+        project_id: project_id_copy,
+        display_path: "artifact".to_string(),
+        binary_path: binary,
+        args: prog_args,
+        server_url: auth.url.clone(),
+        watch_dir: None,
+        poll_ms: 0,
+    }).await?;
 
     Ok(())
 }

@@ -1,18 +1,6 @@
 use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use crate::runtime_process::spawn_runtime;
-use crate::events::FluxEvent;
-
-pub mod tui;
-pub use tui::{TuiApp, render};
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrossEvent, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{backend::CrosstermBackend, Terminal};
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -150,76 +138,18 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     let prog_args = build_runtime_args(&auth.url, &auth.token, &args, Some(entry_str), project_id.as_deref());
 
-    // Setup TUI
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let project_name = "project-alpha".to_string(); // TODO: resolve from flux.json
-    let mut app = TuiApp::new(project_name, entry_str.to_string(), auth.url.clone());
-
-    let mut child = spawn_runtime(binary, &prog_args, true).await?;
-    let stdout = child.stdout.take().context("failed to take stdout")?;
-    let mut reader = BufReader::new(stdout).lines();
-
-    let mut done = false;
-    while !done {
-        tokio::select! {
-            line_res = reader.next_line() => {
-                match line_res {
-                    Ok(Some(line)) => {
-                        if line.starts_with("[flux-event] ") {
-                            if let Some(event) = FluxEvent::from_json(&line[13..]) {
-                                app.handle_event(event);
-                            }
-                        } else {
-                            app.handle_event(FluxEvent::Log {
-                                level: "info".to_string(),
-                                message: line,
-                            });
-                        }
-                        render(&mut terminal, &mut app)?;
-                    }
-                    _ => {
-                        done = true;
-                    }
-                }
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
-                if event::poll(std::time::Duration::from_millis(0))? {
-                    if let CrossEvent::Key(key) = event::read()? {
-                         if let KeyCode::Char('c') = key.code {
-                            if key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                                done = true;
-                            }
-                        }
-                    }
-                }
-                render(&mut terminal, &mut app)?;
-            }
-        }
-    }
-
-    // Cleanup TUI
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
- 
-    if let Some(exec) = app.executions.first() {
-        let dashboard_url = std::env::var("FLUX_DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-        let project_id = project_id.unwrap_or_else(|| "default".to_string());
-        
-        println!("\n  {} Execution Finished\n", if exec.status.as_deref() == Some("ok") { "✔" } else { "✘" });
-        println!("  {} View in Dashboard:  {}/project/{}/executions/{}", "→", dashboard_url, project_id, exec.id);
-        println!("  {} Replay locally:     flux replay {}", "→", exec.id);
-        println!("  {} Debug root cause:   flux why {}\n", "→", exec.id);
-    }
+    // 4. Run with unified runtime_runner
+    let project_id_copy = project_id.clone();
+    crate::runtime_runner::run_with_tui(crate::runtime_runner::RuntimeConfig {
+        project_name: "flux-script".to_string(),
+        project_id: project_id_copy,
+        display_path: entry_str.to_string(),
+        binary_path: binary,
+        args: prog_args,
+        server_url: auth.url.clone(),
+        watch_dir: None,
+        poll_ms: 0,
+    }).await?;
 
     if let Some(path_str) = temp_entry {
         let _ = std::fs::remove_file(path_str);
