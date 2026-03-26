@@ -322,7 +322,27 @@ pub fn write_artifact(artifact_path: &Path, artifact: &FluxBuildArtifact) -> Res
 
 pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {
     let entry_path = canonicalize_existing_path(entry)?;
-    let project_dir = entry_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    
+    // Search upwards for flux.json to find the project root
+    let mut current_dir = entry_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    
+    let mut search_dir = current_dir.clone();
+    while !project_config_path(&search_dir).exists() {
+        if let Some(parent) = search_dir.parent() {
+            search_dir = parent.to_path_buf();
+        } else {
+            // Reached the filesystem root without finding flux.json,
+            // default to the current working directory.
+            break;
+        }
+    }
+    
+    // If we found flux.json, that's our project_dir. Otherwise, our default (current_dir) stays.
+    if project_config_path(&search_dir).exists() {
+        project_dir = search_dir;
+    }
+
     let entry_name = entry_path
         .file_name()
         .and_then(|value| value.to_str())
@@ -334,7 +354,14 @@ pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {
     } else {
         default_project_config(shared::project::ProjectKind::Function, &entry_name)
     };
-    config.entry = format!("./{entry_name}");
+    
+    // Entry should be relative to project_dir
+    let relative_entry = entry_path.strip_prefix(&project_dir)
+        .unwrap_or(&entry_path)
+        .to_string_lossy()
+        .to_string();
+    config.entry = format!("./{relative_entry}");
+
     if config.artifact.trim().is_empty() {
         config.artifact = DEFAULT_ARTIFACT_PATH.to_string();
     }

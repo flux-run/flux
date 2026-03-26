@@ -4,8 +4,8 @@ use clap::Args;
 use crate::runtime_process::spawn_runtime;
 use crate::events::FluxEvent;
 
-mod tui;
-use tui::{TuiApp, render};
+pub mod tui;
+pub use tui::{TuiApp, render};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrossEvent, KeyCode},
     execute,
@@ -18,7 +18,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 pub struct RunArgs {
     /// Entry file to execute as a plain script.
     #[arg(value_name = "ENTRY")]
-    pub entry: Option<String>,
+    pub entry: String,
 
     /// Path to a pre-built Flux artifact JSON.
     #[arg(long, value_name = "FILE")]
@@ -71,29 +71,26 @@ pub struct RunArgs {
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
-    if args.entry.is_none() && args.artifact.is_none() {
-        bail!("either ENTRY or --artifact <FILE> must be provided");
-    }
-
     let mut temp_entry = None;
-    if let Some(ref entry_str) = args.entry {
-        if entry_str == "-" {
-            use std::io::Read;
-            let mut buffer = String::new();
-            std::io::stdin().read_to_string(&mut buffer).context("failed to read from stdin")?;
-            
-            let cwd = std::env::current_dir().context("failed to get current directory")?;
-            let file_path = cwd.join(format!(".flux-stdin-{}.ts", uuid::Uuid::new_v4()));
-            std::fs::write(&file_path, buffer).context("failed to write temp stdin file")?;
-            temp_entry = Some(file_path.to_string_lossy().to_string());
-        } else {
-            let entry = PathBuf::from(entry_str);
-            if !entry.exists() {
-                bail!("entry file not found: {}", entry.display());
-            }
+    let entry_str = &args.entry;
+
+    if entry_str == "-" {
+        use std::io::Read;
+        let mut buffer = String::new();
+        std::io::stdin().read_to_string(&mut buffer).context("failed to read from stdin")?;
+        
+        let cwd = std::env::current_dir().context("failed to get current directory")?;
+        let file_path = cwd.join(format!(".flux-stdin-{}.ts", uuid::Uuid::new_v4()));
+        std::fs::write(&file_path, buffer).context("failed to write temp stdin file")?;
+        temp_entry = Some(file_path.to_string_lossy().to_string());
+    } else {
+        let entry = PathBuf::from(entry_str);
+        if !entry.exists() {
+            bail!("entry file not found: {}", entry.display());
         }
     }
-    let entry_str = temp_entry.as_ref().or(args.entry.as_ref());
+
+    let entry_str = temp_entry.as_ref().unwrap_or(&args.entry);
 
     if let Some(ref artifact_str) = args.artifact {
         let artifact = PathBuf::from(artifact_str);
@@ -126,7 +123,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         } else {
             dotenvy::dotenv().ok().map(PathBuf::from)
         }
-    } else if let Some(ref entry_str) = entry_str {
+    } else {
         let entry = PathBuf::from(entry_str);
         let env_path = entry
             .parent()
@@ -138,8 +135,6 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         } else {
             dotenvy::dotenv().ok().map(PathBuf::from)
         }
-    } else {
-        dotenvy::dotenv().ok().map(PathBuf::from)
     };
     if let Some(ref p) = loaded_env {
         eprintln!("env       {}", p.display());
@@ -148,16 +143,12 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let auth = crate::config::resolve_optional_auth(args.url.clone(), args.token.clone())?;
 
     let project_id = args.project_id.clone().or_else(|| {
-        if let Some(ref entry_str) = entry_str {
-            let entry = std::path::PathBuf::from(entry_str);
-            let project_dir = entry.parent().unwrap_or(std::path::Path::new("."));
-            crate::project::load_project_config(project_dir).ok().and_then(|c| c.project_id)
-        } else {
-            None
-        }
+        let entry = std::path::PathBuf::from(entry_str);
+        let project_dir = entry.parent().unwrap_or(std::path::Path::new("."));
+        crate::project::load_project_config(project_dir).ok().and_then(|c| c.project_id)
     });
 
-    let prog_args = build_runtime_args(&auth.url, &auth.token, &args, entry_str.map(|s| s.as_str()), project_id.as_deref());
+    let prog_args = build_runtime_args(&auth.url, &auth.token, &args, Some(entry_str), project_id.as_deref());
 
     // Setup TUI
     enable_raw_mode()?;
@@ -167,8 +158,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let project_name = "project-alpha".to_string(); // TODO: resolve from flux.json
-    let entry_file = entry_str.map(|s| s.as_str()).unwrap_or("unknown").to_string();
-    let mut app = TuiApp::new(project_name, entry_file, auth.url.clone());
+    let mut app = TuiApp::new(project_name, entry_str.to_string(), auth.url.clone());
 
     let mut child = spawn_runtime(binary, &prog_args, true).await?;
     let stdout = child.stdout.take().context("failed to take stdout")?;
@@ -245,22 +235,8 @@ fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs, entry_str: 
         prog_args.push("--artifact".to_string());
         prog_args.push(artifact.clone());
     } else if let Some(entry_str) = entry_str {
-        // Auto-detect a pre-built artifact adjacent to the entry file.
-        // `flux build <entry>` places its output at <entry_dir>/.flux/artifact.json.
-        // If that file exists, use it so npm: imports resolve correctly via the
-        // ArtifactModuleLoader (dynamic resolution is disabled in artifact mode).
-        let auto_artifact = PathBuf::from(entry_str)
-            .parent()
-            .map(|p| p.join(".flux").join("artifact.json"))
-            .filter(|p| p.exists());
-
-        if let Some(artifact_path) = auto_artifact {
-            prog_args.push("--artifact".to_string());
-            prog_args.push(artifact_path.to_string_lossy().to_string());
-        } else {
-            prog_args.push("--entry".to_string());
-            prog_args.push(entry_str.to_string());
-        }
+        prog_args.push("--entry".to_string());
+        prog_args.push(entry_str.to_string());
     }
 
     prog_args.extend(vec![

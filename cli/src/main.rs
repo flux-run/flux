@@ -22,6 +22,7 @@ mod run;
 mod runtime_process;
 mod server;
 mod status;
+mod start;
 mod tail;
 mod trace;
 mod why;
@@ -79,6 +80,8 @@ enum Commands {
     Dev(dev::DevArgs),
     /// Run a JS/TS file as a plain script or a long-running server.
     Run(run::RunArgs),
+    /// Start the current Flux project using the latest build artifact.
+    Start(start::StartArgs),
     /// Manage the Flux server process.
     Server {
         #[command(subcommand)]
@@ -118,6 +121,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Check(args) => check::execute(args).await?,
         Commands::Dev(args) => dev::execute(args).await?,
         Commands::Run(args) => run::execute(args).await?,
+        Commands::Start(args) => start::execute(args).await?,
         Commands::Server { command } => server::execute(command).await?,
     }
 
