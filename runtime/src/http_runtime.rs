@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 
 use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{boot_runtime_artifact, FetchCheckpoint, NetRequest};
-use crate::isolate_pool::{ExecutionContext, IsolatePool, ExecutionResult, execute_one_shot_artifact};
+use crate::isolate_pool::{ExecutionContext, IsolatePool, execute_one_shot_artifact};
 
 #[derive(Debug, Clone)]
 pub struct HttpRuntimeConfig {
@@ -49,6 +49,7 @@ struct HealthResponse {
     is_server_mode: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct InternalResumeRequest {
     request: serde_json::Value,

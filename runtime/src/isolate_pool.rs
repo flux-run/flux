@@ -530,7 +530,7 @@ fn spawn_isolate_worker(
                                 output,
                                 checkpoints,
                                 error,
-                                error_stack,
+                                error_stack: _,
                                 error_source,
                                 error_type,
                                 logs,

@@ -558,6 +558,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT \
                 id::text, \
@@ -687,7 +689,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(req.error_type.clone())
         .execute(&mut *tx)
         .await
-        .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;")))?;
+        .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;
 
         sqlx::query(
             "UPDATE flux.executions \
