@@ -1667,7 +1667,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let project_id = uuid::Uuid::parse_str(&req.project_id)
             .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?;
 
-        let rows: Vec<(uuid::Uuid, String, Option<std::time::SystemTime>)> = sqlx::query_as(
+        let rows: Vec<(uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
             "SELECT id, name, created_at FROM control.functions WHERE project_id = $1",
         )
         .bind(project_id)
@@ -1679,7 +1679,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             pb::FunctionEntry {
                 id: id.to_string(),
                 name,
-                created_at: created_at.map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()).unwrap_or_default(),
+                created_at: created_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
             }
         }).collect();
 
@@ -1713,7 +1713,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let project_id = uuid::Uuid::parse_str(&req.project_id)
             .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?;
 
-        let rows: Vec<(String, String, std::time::SystemTime)> = sqlx::query_as(
+        let rows: Vec<(String, String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
             "SELECT key, value, updated_at FROM control.env_vars WHERE project_id = $1",
         )
         .bind(project_id)
@@ -1725,7 +1725,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             pb::EnvVarEntry {
                 key,
                 value,
-                updated_at: chrono::DateTime::<chrono::Utc>::from(updated_at).to_rfc3339(),
+                updated_at: updated_at.to_rfc3339(),
             }
         }).collect();
 
