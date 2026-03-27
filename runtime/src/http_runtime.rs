@@ -139,6 +139,13 @@ fn gateway_mode_unavailable_response() -> Response {
         .into_response()
 }
 
+fn request_originates_from_executor(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(EXECUTOR_RECORDING_OWNER_HEADER)
+        .and_then(|value| value.to_str().ok())
+        == Some(EXECUTOR_RECORDING_OWNER_VALUE)
+}
+
 fn runtime_should_record_execution(
     state: &RuntimeState,
     headers: &axum::http::HeaderMap,
@@ -147,10 +154,7 @@ fn runtime_should_record_execution(
         return false;
     }
 
-    headers
-        .get(EXECUTOR_RECORDING_OWNER_HEADER)
-        .and_then(|value| value.to_str().ok())
-        != Some(EXECUTOR_RECORDING_OWNER_VALUE)
+    !request_originates_from_executor(headers)
 }
 
 async fn handle_request(
@@ -186,6 +190,9 @@ async fn handle_request(
 
     let code_version = state.code_version.read().await.clone();
     let mut ctx = ExecutionContext::with_project(code_version.clone(), state.project_id.clone());
+    if request_originates_from_executor(&headers) {
+        ctx.cloud_ctx = true;
+    }
 
     let exec_id = match headers
         .get("x-flux-execution-id")
@@ -215,7 +222,6 @@ async fn handle_request(
             pool.execute(payload, ctx, max_duration_ms).await
         } else {
             // Cold start fallback
-            ctx.cloud_ctx = true;
             execute_one_shot_artifact(artifact, payload, ctx, max_duration_ms).await
         }
     } else {
