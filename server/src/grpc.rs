@@ -19,9 +19,61 @@ pub struct TenantIdentity {
     pub token_id: Option<uuid::Uuid>,
 }
 
-fn normalized_issue_title(error_name: &str, error_message: &str, fallback_error: &str) -> String {
+fn is_generic_error_label(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "" | "unhandled exception"
+            | "unknown runtime error"
+            | "unknown error"
+            | "runtime error"
+            | "exception"
+            | "error"
+    )
+}
+
+fn stack_error_headline(stack: &str) -> Option<String> {
+    stack
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("at "))
+        .map(|line| line.strip_prefix("Uncaught ").unwrap_or(line).trim())
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn stack_error_name_and_message(stack: &str) -> (Option<String>, Option<String>) {
+    let Some(headline) = stack_error_headline(stack) else {
+        return (None, None);
+    };
+
+    if let Some((name, message)) = headline.split_once(':') {
+        let normalized_name = name.trim();
+        let normalized_message = message.trim();
+        if !normalized_name.is_empty()
+            && !normalized_message.is_empty()
+            && (normalized_name.ends_with("Error")
+                || normalized_name.ends_with("Exception")
+                || normalized_name == "DOMException")
+        {
+            return (
+                Some(normalized_name.to_string()),
+                Some(normalized_message.to_string()),
+            );
+        }
+    }
+
+    (None, Some(headline))
+}
+
+fn normalized_issue_title(
+    error_name: &str,
+    error_message: &str,
+    error_stack: &str,
+    fallback_error: &str,
+) -> String {
     let normalized_name = error_name.trim();
     let normalized_message = error_message.trim();
+    let stack_headline = stack_error_headline(error_stack);
     let fallback = fallback_error.trim();
 
     if !normalized_name.is_empty() && !normalized_message.is_empty() {
@@ -30,6 +82,25 @@ fn normalized_issue_title(error_name: &str, error_message: &str, fallback_error:
             return normalized_message.to_string();
         }
         return format!("{normalized_name}: {normalized_message}");
+    }
+
+    if let Some(headline) = stack_headline
+        .as_deref()
+        .filter(|value| !is_generic_error_label(value))
+    {
+        return headline.to_string();
+    }
+
+    if !normalized_message.is_empty() && !is_generic_error_label(normalized_message) {
+        return normalized_message.to_string();
+    }
+
+    if !fallback.is_empty() && !is_generic_error_label(fallback) {
+        return fallback.to_string();
+    }
+
+    if let Some(headline) = stack_headline {
+        return headline;
     }
 
     if !normalized_message.is_empty() {
@@ -257,7 +328,7 @@ fn analyze_execution(exec: &WhyExecution, checkpoints: &[WhyCheckpoint]) -> (Str
     let fallback_error = exec.error.as_deref().unwrap_or_default();
     let error_name = exec.error_name.as_deref().unwrap_or_default();
     let error_message = exec.error_message.as_deref().unwrap_or_default();
-    let error_headline = normalized_issue_title(error_name, error_message, fallback_error);
+    let error_headline = normalized_issue_title(error_name, error_message, "", fallback_error);
     let has_error = has_error_details(error_name, error_message, fallback_error);
     let error_phase = execution_phase_label(exec.error_phase.as_deref().unwrap_or("runtime"));
     let is_platform_failure = exec.is_user_code == Some(false)
@@ -796,9 +867,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let request_headers_json: serde_json::Value =
             serde_json::from_str(&req.request_headers_json).unwrap_or(serde_json::Value::Null);
-        let error_name = (!req.error_name.trim().is_empty()).then_some(req.error_name.clone());
-        let error_message =
-            (!req.error_message.trim().is_empty()).then_some(req.error_message.clone());
+        let (stack_error_name, stack_error_message) =
+            stack_error_name_and_message(&req.error_stack);
+        let error_name = (!req.error_name.trim().is_empty())
+            .then_some(req.error_name.clone())
+            .or(stack_error_name.clone());
+        let error_message = (!req.error_message.trim().is_empty())
+            .then_some(req.error_message.clone())
+            .or(stack_error_message.clone())
+            .or((!req.error.trim().is_empty()).then_some(req.error.clone()));
         let error_phase = (!req.error_phase.trim().is_empty()).then_some(req.error_phase.clone());
         let is_user_code = if req.status == "ok" || req.status == "running" {
             None
@@ -886,13 +963,20 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             let error_stack = req.error_stack.clone();
             let fingerprint = issue_fingerprint(
                 &req.error_fingerprint,
-                &req.error_name,
-                &req.error_message,
+                error_name.as_deref().unwrap_or_default(),
+                error_message.as_deref().unwrap_or_default(),
                 &error_stack,
                 &error_msg,
             );
-            let title = normalized_issue_title(&req.error_name, &req.error_message, &error_msg);
-            let sample_message = if req.error_message.trim().is_empty() {
+            let title = normalized_issue_title(
+                error_name.as_deref().unwrap_or_default(),
+                error_message.as_deref().unwrap_or_default(),
+                &error_stack,
+                &error_msg,
+            );
+            let sample_message = if let Some(message) = error_message.as_deref() {
+                message.to_string()
+            } else if req.error_message.trim().is_empty() {
                 if title.trim().is_empty() {
                     req.error.clone()
                 } else {

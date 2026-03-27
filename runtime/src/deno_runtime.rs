@@ -8721,9 +8721,10 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
         response = await handler(ctx);
     }
   } catch (err) {
+    const name = err && err.name ? String(err.name) : "Error";
     const msg = String(err && err.message ? err.message : err);
     const stack = err && err.stack ? String(err.stack) : null;
-    globalThis.__flux_last_error[__eid] = { message: msg, stack: stack };
+    globalThis.__flux_last_error[__eid] = { name, message: msg, stack: stack };
     Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", msg);
     return;
   }
