@@ -63,7 +63,7 @@ docker run -d --name flux-pg \
 SQLX_OFFLINE=true cargo build -p server
 
 LOCAL_MODE=true \
-  INTERNAL_SERVICE_TOKEN=dev-token \
+  FLUX_SERVICE_TOKEN=dev-token \
   DATABASE_URL="postgresql://postgres:password@localhost:5432/flux" \
   ./target/debug/server
 ```

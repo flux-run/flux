@@ -39,7 +39,7 @@ services:
     environment:
       DATABASE_URL: postgres://flux:password@postgres:5432/flux
       REDIS_URL: redis://redis:6379
-      INTERNAL_SERVICE_TOKEN: local-development-token
+      FLUX_SERVICE_TOKEN: local-development-token
     depends_on:
       postgres:
         condition: service_healthy

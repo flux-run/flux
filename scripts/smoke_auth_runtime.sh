@@ -87,7 +87,7 @@ cargo build -p server -p cli >/dev/null
 echo "[info] Starting server on ${URL}"
 GRPC_PORT="${PORT}" \
 DATABASE_URL="${DATABASE_URL_INPUT}" \
-INTERNAL_SERVICE_TOKEN="${TOKEN}" \
+FLUX_SERVICE_TOKEN="${TOKEN}" \
 cargo run -p server >"${SERVER_LOG}" 2>&1 &
 SERVER_PID="$!"
 

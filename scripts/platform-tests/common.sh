@@ -263,11 +263,11 @@ server_base_url() {
 }
 
 api_internal_service_token() {
-  printf '%s\n' "${API_INTERNAL_SERVICE_TOKEN:-${INTERNAL_SERVICE_TOKEN:-dev-service-token}}"
+  printf '%s\n' "${API_INTERNAL_SERVICE_TOKEN:-${FLUX_SERVICE_TOKEN:-dev-service-token}}"
 }
 
 data_engine_service_token() {
-  printf '%s\n' "${DATA_ENGINE_SERVICE_TOKEN:-${INTERNAL_SERVICE_TOKEN:-fluxbase_secret_token}}"
+  printf '%s\n' "${DATA_ENGINE_SERVICE_TOKEN:-${FLUX_SERVICE_TOKEN:-fluxbase_secret_token}}"
 }
 
 fetch_function_id() {

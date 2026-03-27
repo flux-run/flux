@@ -10,7 +10,7 @@ echo "=================================================="
 
 # Export minimal config needed for local dev
 export DATABASE_URL=${DATABASE_URL:-"postgresql://flux:password@localhost:5432/flux"}
-export INTERNAL_SERVICE_TOKEN="local-development-token"
+export FLUX_SERVICE_TOKEN=${FLUX_SERVICE_TOKEN:-"local-development-token"}
 export FLUX_SERVER_URL="http://127.0.0.1:50051"
 export GRPC_PORT="50051"
 export RUST_LOG="info"
@@ -26,7 +26,7 @@ SERVER_PID=$!
 sleep 2
 
 echo "⚙️ 2. Starting flux-runtime (Execution + Telemetry) on :8081"
-export FLUX_SERVICE_TOKEN=$INTERNAL_SERVICE_TOKEN
+# Set runtime service token
 cargo run -p runtime -- --serve --port 8081 --entry artifacts/create-order.js > runtime.log 2>&1 &
 RUNTIME_PID=$!
 

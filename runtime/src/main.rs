@@ -86,7 +86,11 @@ async fn main() -> Result<()> {
     // Gateway mode: no entry file needed. Requests supply their own artifact.
     if args.gateway {
         let placeholder_js = "export default function _gateway(ctx) { \n\
-            return ctx.json({ error: 'no artifact provided' }, 404);\n\
+            return ctx.json({ \n\
+                error: 'no_artifact_loaded', \n\
+                message: 'The runtime is in gateway mode but no function artifact has been hot-swapped yet.', \n\
+                tip: 'Check flux-executor logs for hot-reload failures or verify FLUX_SERVICE_TOKEN.' \n\
+            }, 503);\n\
         }";
         let artifact = runtime::build_artifact("_gateway", placeholder_js.to_string());
         tracing::info!("Starting flux-runtime in gateway mode on port {}", args.port);

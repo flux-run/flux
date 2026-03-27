@@ -17,7 +17,7 @@ impl ServerConfig {
             .parse::<u16>()
             .expect("GRPC_PORT must be a valid u16");
 
-        let service_token = std::env::var("INTERNAL_SERVICE_TOKEN").ok();
+        let service_token = std::env::var("FLUX_SERVICE_TOKEN").ok();
 
         Self {
             grpc_port,

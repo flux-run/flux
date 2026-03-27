@@ -236,7 +236,7 @@ export async function startServer(
       ...opts.env,
       GRPC_PORT: String(port),
       DATABASE_URL: opts.databaseUrl,
-      INTERNAL_SERVICE_TOKEN: opts.serviceToken,
+      FLUX_SERVICE_TOKEN: opts.serviceToken,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

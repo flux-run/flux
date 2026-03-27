@@ -18,7 +18,7 @@ target/debug/flux
 target/debug/flux server start --database-url postgres://localhost:5432/flux
 ```
 
-The `--service-token` flag (or `INTERNAL_SERVICE_TOKEN` env var) sets the shared secret between server and runtime. Defaults to `dev-service-token` for local development.
+The `--service-token` flag (or `FLUX_SERVICE_TOKEN` env var) sets the shared secret between server and runtime. Defaults to `dev-service-token` for local development.
 
 ## 3) Initialize Auth Once
 

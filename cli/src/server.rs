@@ -17,7 +17,7 @@ pub struct ServerStartArgs {
     pub port: u16,
     #[arg(long, env = "DATABASE_URL", value_name = "URL")]
     pub database_url: Option<String>,
-    #[arg(long, env = "INTERNAL_SERVICE_TOKEN", value_name = "TOKEN")]
+    #[arg(long, env = "FLUX_SERVICE_TOKEN", value_name = "TOKEN")]
     pub service_token: Option<String>,
     #[arg(long)]
     pub release: bool,
@@ -46,7 +46,7 @@ async fn execute_start(args: ServerStartArgs) -> Result<()> {
 
     let service_token = args
         .service_token
-        .or_else(|| std::env::var("INTERNAL_SERVICE_TOKEN").ok())
+        .or_else(|| std::env::var("FLUX_SERVICE_TOKEN").ok())
         .unwrap_or_else(|| "dev-service-token".to_string());
 
     write_server_port(args.port)?;
@@ -75,7 +75,7 @@ async fn start_server_binary(
     let err = std::process::Command::new(bin)
         .env("GRPC_PORT", port.to_string())
         .env("DATABASE_URL", database_url)
-        .env("INTERNAL_SERVICE_TOKEN", service_token)
+        .env("FLUX_SERVICE_TOKEN", service_token)
         .env(
             "RUST_LOG",
             std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
@@ -95,7 +95,7 @@ async fn start_server_binary(
     let status = tokio::process::Command::new(bin)
         .env("GRPC_PORT", port.to_string())
         .env("DATABASE_URL", database_url)
-        .env("INTERNAL_SERVICE_TOKEN", service_token)
+        .env("FLUX_SERVICE_TOKEN", service_token)
         .env(
             "RUST_LOG",
             std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
