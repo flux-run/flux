@@ -34,5 +34,8 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 
 COPY --from=builder /app/target/release/flux-runtime /usr/local/bin/flux-runtime
 
+# Copy the current directory to /app so the runtime can find index.js/src/index.ts
+COPY . .
+
 EXPOSE 8080
 CMD ["flux-runtime"]
