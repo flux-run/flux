@@ -46,6 +46,7 @@ struct HealthResponse {
     status: String,
     route: String,
     code_version: String,
+    is_server_mode: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +63,7 @@ struct InternalReloadRequest {
 }
 
 pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifact) -> Result<()> {
+    // Determine is_server_mode by booting once (run_http_runtime is called from main, so Send isn't an issue here)
     let boot = boot_runtime_artifact(
         &artifact,
         ExecutionContext::with_project(artifact.code_version().to_string(), config.project_id.clone()),
@@ -108,11 +110,13 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
 }
 
 async fn health(State(state): State<RuntimeState>) -> Json<HealthResponse> {
+    let pool = state.pool.read().await;
     let code_version = state.code_version.read().await.clone();
     Json(HealthResponse {
         status: "ok".to_string(),
         route: state.route_name.clone(),
         code_version,
+        is_server_mode: pool.is_server_mode,
     })
 }
 
@@ -129,8 +133,7 @@ async fn handle_request(
     });
     
     // Only enforce route-name matching when no per-request artifact is supplied.
-    // In gateway mode (--gateway) the route is always "_gateway" but callers hit /<function_name>.
-    if provided_artifact.is_none() && route != state.route_name {
+    if provided_artifact.is_none() && route != state.route_name && state.route_name != "_gateway" {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "route not found" })),
@@ -162,10 +165,17 @@ async fn handle_request(
         .and_then(|v| v.parse::<u64>().ok());
 
     let result = if let Some(artifact) = provided_artifact {
-        // Cloud gateway mode: pass rich ctx object to handler
-        ctx.cloud_ctx = true;
-        execute_one_shot_artifact(artifact, payload, ctx, max_duration_ms).await
+        let pool = state.pool.read().await;
+        if pool.artifact_id() == artifact.code_version() {
+            // Already warm! Use the pool.
+            pool.execute(payload, ctx, max_duration_ms).await
+        } else {
+            // Cold start fallback
+            ctx.cloud_ctx = true;
+            execute_one_shot_artifact(artifact, payload, ctx, max_duration_ms).await
+        }
     } else {
+        // Shared global runtime mode: use whatever is currently warm
         let pool = state.pool.read().await;
         pool.execute(payload, ctx, max_duration_ms).await
     };
@@ -313,72 +323,107 @@ async fn handle_net_request(
 }
 
 /// Hot-swap the isolate pool with a new artifact, without restarting the process.
-/// Called by flux-control immediately after a successful `flux deploy`.
+/// Called by flux-executor immediately after detecting a deployment update.
 async fn handle_internal_reload(
     State(state): State<RuntimeState>,
     headers: axum::http::HeaderMap,
     Json(payload): Json<InternalReloadRequest>,
 ) -> Response {
-    // Require the service token for security
     if state.service_token.is_empty() {
+        tracing::error!("❌ Hot-reload rejected: service_token is empty");
         return (StatusCode::FORBIDDEN, "runtime internal reload is disabled").into_response();
     }
     let provided = headers.get("x-internal-token").and_then(|v| v.to_str().ok()).unwrap_or_default();
     if provided != state.service_token {
+        tracing::error!("❌ Hot-reload rejected: invalid internal token. Provided: '{}', Expected: '{}'", provided, state.service_token);
         return (StatusCode::UNAUTHORIZED, "invalid internal token").into_response();
     }
 
-    // Parse the new artifact from the request body
+    tracing::info!("🔄 Hot-reload request received");
+
+    tracing::info!("🔍 Parsing artifact JSON...");
     let new_artifact = match serde_json::from_value::<shared::project::FluxBuildArtifact>(payload.artifact) {
         Ok(a) => RuntimeArtifact::Built(a),
         Err(e) => {
-            tracing::error!("reload: failed to parse artifact: {}", e);
+            tracing::error!("❌ Artifact parse error: {}", e);
             return (StatusCode::BAD_REQUEST, format!("invalid artifact: {}", e)).into_response();
         }
     };
 
     let new_version = new_artifact.code_version().to_string();
+    tracing::info!("📖 Acquiring code_version read lock...");
+    let current_version = state.code_version.read().await.clone();
+    tracing::info!("🎯 Comparison: new='{}', current='{}'", new_version, current_version);
+    
+    if new_version == current_version {
+        tracing::info!("⏭️ Skipping reload: version already matches");
+        return (StatusCode::OK, Json(serde_json::json!({ "reloaded": false, "reason": "Already on this version" }))).into_response();
+    }
+
     tracing::info!("🔄 Hot-reloading runtime with artifact version: {}", new_version);
 
-    // Boot the new artifact to detect its mode
-    let boot = match boot_runtime_artifact(
-        &new_artifact,
-        ExecutionContext::with_project(new_version.clone(), state.project_id.clone()),
-    ).await {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!("reload: boot failed: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("boot failed: {}", e)).into_response();
+    // DETERMINISTIC THREAD-OFF: boot_runtime_artifact is !Send because it creates a JsRuntime.
+    // We run it in a separate thread and signal result back to this sync/Send-safe handler.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let ctx = ExecutionContext::with_project(new_version.clone(), state.project_id.clone());
+    
+    tracing::info!("🧵 Spawning reload worker thread...");
+    std::thread::spawn(move || {
+        tracing::info!("👷 Worker thread started. Building local tokio runtime...");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build local reload runtime");
+            
+        tracing::info!("🚀 Booting runtime artifact in worker thread...");
+        let result = rt.block_on(async {
+            boot_runtime_artifact(&new_artifact, ctx).await
+        });
+        if let Err(ref e) = result {
+            tracing::error!("❌ Boot artifact failed in worker thread: {}", e);
         }
+        tracing::info!("👢 Boot complete. Success? {}", result.is_ok());
+        let _ = tx.send((result, new_artifact));
+    });
+
+    tracing::info!("⏳ Waiting for boot results from worker thread...");
+    let (boot_result, artifact) = match rx.await {
+        Ok(res) => {
+            tracing::info!("📥 Received results from worker thread");
+            res
+        },
+        Err(_) => {
+            tracing::error!("❌ Reload worker thread panicked or dropped sender");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Reload worker thread panicked").into_response();
+        }
+    };
+
+    let boot = match boot_result {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("boot failed: {}", e)).into_response(),
     };
 
     if let Some(error) = boot.result.error.as_ref() {
-        tracing::error!("reload: boot execution error: {}", error);
-        return (StatusCode::BAD_REQUEST, format!("boot error: {}", error)).into_response();
+        tracing::error!("❌ Boot script error: {}", error);
+        return (StatusCode::BAD_REQUEST, format!("boot execution error: {}", error)).into_response();
     }
 
-    // Build the new pool
+    // Allocate the new pool based on the boot detection
     let new_pool = match IsolatePool::new_with_mode(
         state.isolate_pool_size,
-        new_artifact,
+        artifact,
         boot.is_server_mode,
     ) {
         Ok(p) => p,
-        Err(e) => {
-            tracing::error!("reload: failed to create new pool: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("pool creation failed: {}", e)).into_response();
-        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("pool allocation failed: {}", e)).into_response(),
     };
 
-    // Atomically swap the pool and code version
+    // Atomic swap
     *state.pool.write().await = new_pool;
     *state.code_version.write().await = new_version.clone();
 
     tracing::info!("✅ Runtime hot-reloaded to version: {}", new_version);
-    (StatusCode::OK, Json(serde_json::json!({
-        "reloaded": true,
-        "code_version": new_version
-    }))).into_response()
+    (StatusCode::OK, Json(serde_json::json!({ "reloaded": true, "code_version": new_version }))).into_response()
 }
 
 async fn handle_internal_resume(
@@ -405,46 +450,9 @@ fn attach_execution_headers(
     code_version: &str,
 ) {
     let headers = response.headers_mut();
-    if let Ok(v) = HeaderValue::from_str(execution_id) {
-        headers.insert(HeaderName::from_static("x-flux-execution-id"), v);
-    }
-    if let Ok(v) = HeaderValue::from_str(request_id) {
-        headers.insert(HeaderName::from_static("x-flux-request-id"), v);
-    }
-    if let Ok(v) = HeaderValue::from_str(code_version) {
-        headers.insert(HeaderName::from_static("x-flux-code-version"), v);
-    }
-}
-
-fn error_result(ctx: ExecutionContext, err: String) -> ExecutionResult {
-    ExecutionResult {
-        execution_id: ctx.execution_id,
-        request_id: ctx.request_id,
-        project_id: ctx.project_id,
-        code_version: ctx.code_version,
-        status: "error".to_string(),
-        body: serde_json::Value::Null,
-        error: Some(err),
-        duration_ms: 0,
-        checkpoints: vec![],
-        logs: vec![],
-        has_live_io: false,
-        boundary_stop: None,
-
-        // Advanced Telemetry
-        client_ip: None,
-        user_agent: None,
-        request_method: None,
-        request_headers: None,
-        request_body: None,
-        response_status: None,
-        response_body: None,
-        error_message: None,
-        error_stack: None,
-        error_source: None,
-        error_type: None,
-        error_fingerprint: None,
-    }
+    let _ = HeaderValue::from_str(execution_id).map(|v| headers.insert(HeaderName::from_static("x-flux-execution-id"), v));
+    let _ = HeaderValue::from_str(request_id).map(|v| headers.insert(HeaderName::from_static("x-flux-request-id"), v));
+    let _ = HeaderValue::from_str(code_version).map(|v| headers.insert(HeaderName::from_static("x-flux-code-version"), v));
 }
 
 async fn shutdown_signal() {

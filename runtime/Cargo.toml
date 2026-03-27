@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-axum = { version = "0.8.8", features = ["macros"] }
+axum = { version = "0.7.9", features = ["macros"] }
 base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4.44", features = ["serde"] }
@@ -31,8 +31,8 @@ subtle = "2"
 shared = { path = "../shared" }
 tokio = { version = "1.50.0", features = ["full"] }
 tokio-rustls = "0.26.2"
-tower = { version = "0.5.3", features = ["util"] }
-tower-http = { version = "0.6.8", features = ["trace", "cors"] }
+tower = { version = "0.4.13", features = ["util"] }
+tower-http = { version = "0.5.2", features = ["trace", "cors"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 url = "2"

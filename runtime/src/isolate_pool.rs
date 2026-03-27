@@ -92,6 +92,7 @@ pub struct IsolatePool {
     /// True when all isolates in this pool run a `Deno.serve()` server app
     /// instead of a one-shot exported handler.
     pub is_server_mode: bool,
+    pub artifact: RuntimeArtifact,
 }
 
 #[derive(Debug)]
@@ -125,9 +126,14 @@ impl IsolatePool {
             workers,
             next: AtomicUsize::new(0),
             queue_send_timeout: Duration::from_secs(30),
-            result_timeout: Duration::from_secs(120),
+            result_timeout: Duration::from_secs(30),
             is_server_mode,
+            artifact,
         })
+    }
+
+    pub fn artifact_id(&self) -> &str {
+        self.artifact.code_version()
     }
 
     pub fn new_with_mode(
@@ -145,8 +151,9 @@ impl IsolatePool {
             workers,
             next: AtomicUsize::new(0),
             queue_send_timeout: Duration::from_secs(30),
-            result_timeout: Duration::from_secs(120),
+            result_timeout: Duration::from_secs(30),
             is_server_mode: _is_server_mode,
+            artifact,
         })
     }
 
