@@ -22,6 +22,7 @@ pub struct TenantIdentity {
 #[derive(Clone)]
 pub struct InternalAuthGrpc {
     pool: PgPool,
+    #[allow(dead_code)]
     expected_token: String,
     mode: String,
     cache: moka::future::Cache<String, TenantIdentity>,
