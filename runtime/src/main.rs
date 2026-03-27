@@ -148,8 +148,10 @@ async fn main() -> Result<()> {
         println!("server:   {}", args.server_url);
         if let Some(path) = &args.artifact {
             println!("artifact: {}", path);
+        } else if let Some(entry) = &args.entry {
+            println!("entry:    {}", entry);
         } else {
-            println!("entry:    {}", args.entry);
+            println!("entry:    (auto)");
         }
     }
     if args.replay.is_none() {
@@ -472,7 +474,7 @@ async fn main() -> Result<()> {
                 &args.token,
                 runtime::server_client::ExecutionEnvelope {
                     method: if is_server_mode { "REPLAY_HTTP".to_string() } else { "REPLAY_RUN".to_string() },
-                    path: args.entry.clone(),
+                    path: args.entry.clone().unwrap_or_else(|| "index".to_string()),
                     project_id: args.project_id.clone(),
                     request_json: serde_json::Value::String(input_str.clone()),
                     result: execution.clone(),
