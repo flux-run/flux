@@ -300,6 +300,7 @@ async fn main() -> Result<()> {
                 checkpoints: res.checkpoints,
                 logs: res.logs,
                 has_live_io: false,
+                boundary_stop: None,
             };
 
             // Robust error capture: fallback to logs if error is missing but status is error
@@ -465,6 +466,7 @@ async fn main() -> Result<()> {
                 checkpoints: res.checkpoints,
                 logs: res.logs,
                 has_live_io: res.has_live_io,
+                boundary_stop: None,
             }
         };
 

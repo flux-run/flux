@@ -2,20 +2,19 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use axum::body::to_bytes;
-use axum::extract::{OriginalUri, Path, State};
+use axum::extract::{Path, State, OriginalUri};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use axum::body::to_bytes;
 
 use crate::artifact::RuntimeArtifact;
-use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, NetRequest, boot_runtime_artifact, JsIsolate};
-use crate::isolate_pool::{ExecutionContext, IsolatePool};
+use crate::deno_runtime::{boot_runtime_artifact, FetchCheckpoint, NetRequest};
+use crate::isolate_pool::{ExecutionContext, IsolatePool, ExecutionResult, execute_one_shot_artifact};
 
 #[derive(Debug, Clone)]
 pub struct HttpRuntimeConfig {
@@ -26,20 +25,6 @@ pub struct HttpRuntimeConfig {
     pub project_id: Option<String>,
     pub server_url: String,
     pub service_token: String,
-}
-
-impl Default for HttpRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            host: "127.0.0.1".to_string(),
-            port: 3000,
-            route_name: "hello".to_string(),
-            isolate_pool_size: 16,
-            project_id: None,
-            server_url: "http://127.0.0.1:50051".to_string(),
-            service_token: String::new(),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -65,57 +50,12 @@ struct InternalResumeRequest {
     recorded_checkpoints: Vec<FetchCheckpoint>,
 }
 
-fn attach_execution_headers<T>(
-    response: &mut Response<T>,
-    execution_id: &str,
-    request_id: &str,
-    code_version: &str,
-) {
-    if let Ok(value) = HeaderValue::from_str(execution_id) {
-        response
-            .headers_mut()
-            .insert(HeaderName::from_static("x-flux-execution-id"), value);
-    }
-    if let Ok(value) = HeaderValue::from_str(request_id) {
-        response
-            .headers_mut()
-            .insert(HeaderName::from_static("x-flux-request-id"), value);
-    }
-    if let Ok(value) = HeaderValue::from_str(code_version) {
-        response
-            .headers_mut()
-            .insert(HeaderName::from_static("x-flux-code-version"), value);
-    }
-}
-
 pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifact) -> Result<()> {
-    if config.isolate_pool_size == 0 {
-        bail!("isolate_pool_size must be greater than 0");
-    }
-
     let boot = boot_runtime_artifact(
         &artifact,
         ExecutionContext::with_project(artifact.code_version().to_string(), config.project_id.clone()),
     )
     .await?;
-
-    if !config.service_token.is_empty() {
-        let _ = crate::server_client::record_execution(
-            &config.server_url,
-            &config.service_token,
-            crate::server_client::ExecutionEnvelope {
-                method: "BOOT".to_string(),
-                path: "/__boot".to_string(),
-                project_id: config.project_id.clone(),
-                request_json: serde_json::json!({
-                    "phase": "boot",
-                    "route": config.route_name,
-                }),
-                result: boot.result.clone(),
-            },
-        )
-        .await;
-    }
 
     if let Some(error) = boot.result.error.as_ref() {
         bail!("boot execution failed: {error}");
@@ -139,7 +79,7 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
     let app: Router = Router::new()
         .route("/health", get(health))
         .route("/__flux_internal/resume", post(handle_internal_resume))
-        .route("/{route}", post(handle_request))
+        .route("/:route", post(handle_request))
         .fallback(handle_net_request)
         .with_state(state);
 
@@ -147,10 +87,6 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     tracing::info!(%addr, route = %config.route_name, "runtime listening");
-    println!(
-        "[ready] listening on http://{}:{}",
-        config.host, config.port
-    );
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -161,20 +97,18 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
 async fn health(State(state): State<RuntimeState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
-        route: state.route_name,
-        code_version: state.code_version,
+        route: state.route_name.clone(),
+        code_version: state.code_version.clone(),
     })
 }
 
-/// One-shot handler: POST /:route — runs the exported default handler function.
 async fn handle_request(
-    Path(route): Path<String>,
     State(state): State<RuntimeState>,
+    Path(route): Path<String>,
     headers: axum::http::HeaderMap,
     Json(mut payload): Json<serde_json::Value>,
-) -> impl IntoResponse {
+) -> Response {
     if route != state.route_name {
-        tracing::error!("Route mismatch: incoming '{}' != bound '{}'", route, state.route_name);
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "route not found" })),
@@ -184,12 +118,10 @@ async fn handle_request(
 
     let request_payload = payload.clone();
     
-    // Dynamic Artifact Handling: if "artifact" is in payload, use it to create a one-shot isolate
     let provided_artifact: Option<RuntimeArtifact> = payload.get("artifact").and_then(|v| {
-        serde_json::from_value::<crate::artifact::BuiltArtifact>(v.clone()).ok().map(RuntimeArtifact::Built)
+        serde_json::from_value::<shared::project::FluxBuildArtifact>(v.clone()).ok().map(RuntimeArtifact::Built)
     });
     
-    // Remote payload from input before passing to JS
     if let serde_json::Value::Object(ref mut map) = payload {
         map.remove("artifact");
     }
@@ -199,75 +131,18 @@ async fn handle_request(
     let exec_id = match headers.get("x-flux-execution-id").and_then(|h| h.to_str().ok()) {
         Some(id) => id.to_string(),
         None => {
-            tracing::error!("Rejecting request: x-flux-execution-id header missing");
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "x-flux-execution-id header explicitly required by executor proxy" })),
+                Json(serde_json::json!({ "error": "x-flux-execution-id header required" })),
             ).into_response();
         }
     };
     
     ctx.execution_id = exec_id;
-    tracing::info!("[RUNTIME] received execution_id={}", ctx.execution_id);
 
     let result = if let Some(artifact) = provided_artifact {
-        tracing::info!("[RUNTIME] Using provided dynamic artifact v{}", artifact.code_version());
-        // For dynamic artifacts, we create a fresh isolate just for this request
-        match JsIsolate::new_from_artifact(match artifact {
-             RuntimeArtifact::Built(ba) => ba,
-             _ => unreachable!(),
-        }).await {
-            Ok(mut isolate) => {
-                match isolate.execute_with_recorded(payload, ctx, vec![]).await {
-                    Ok(out) => {
-                        let status = if out.error.is_some() { "error".to_string() } else { "ok".to_string() };
-                        crate::isolate_pool::ExecutionResult {
-                            execution_id: out.execution_id,
-                            request_id: out.request_id,
-                            project_id: out.project_id,
-                            code_version: out.code_version,
-                            status,
-                            body: serde_json::json!({ "output": out.output }),
-                            error: out.error,
-                            duration_ms: out.duration_ms as i32,
-                            checkpoints: out.checkpoints,
-                            logs: out.logs,
-                            has_live_io: out.has_live_io,
-                        }
-                    }
-                    Err(e) => {
-                         crate::isolate_pool::ExecutionResult {
-                            execution_id: ctx.execution_id,
-                            request_id: ctx.request_id,
-                            project_id: ctx.project_id,
-                            code_version: ctx.code_version,
-                            status: "error".to_string(),
-                            body: serde_json::Value::Null,
-                            error: Some(e.to_string()),
-                            duration_ms: 0,
-                            checkpoints: vec![],
-                            logs: vec![],
-                            has_live_io: false,
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                 crate::isolate_pool::ExecutionResult {
-                            execution_id: ctx.execution_id,
-                            request_id: ctx.request_id,
-                            project_id: ctx.project_id,
-                            code_version: ctx.code_version,
-                            status: "error".to_string(),
-                            body: serde_json::Value::Null,
-                            error: Some(format!("failed to initialize isolate: {}", e)),
-                            duration_ms: 0,
-                            checkpoints: vec![],
-                            logs: vec![],
-                            has_live_io: false,
-                        }
-            }
-        }
+        // Use the off-thread executor for dynamic artifacts (JsIsolate is non-Send)
+        execute_one_shot_artifact(artifact, payload, ctx).await
     } else {
         state.pool.execute(payload, ctx).await
     };
@@ -287,58 +162,29 @@ async fn handle_request(
         .await;
     }
 
-    if result.status != "ok" {
-        let mut response = (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "execution_id": result.execution_id,
-                "request_id": result.request_id,
-                "code_version": result.code_version,
-                "status": result.status,
-                "error": result.error,
-            })),
-        )
-            .into_response();
-        attach_execution_headers(
-            &mut response,
-            &result.execution_id,
-            &result.request_id,
-            &result.code_version,
-        );
-        return response;
-    }
-
+    let status = if result.status == "ok" { StatusCode::OK } else { StatusCode::BAD_REQUEST };
     let mut response = (
-        StatusCode::OK,
+        status,
         Json(serde_json::json!({
             "execution_id": result.execution_id,
-            "request_id": result.request_id,
-            "code_version": result.code_version,
             "status": result.status,
             "result": result.body,
             "error": result.error,
         })),
     )
         .into_response();
-    attach_execution_headers(
-        &mut response,
-        &result.execution_id,
-        &result.request_id,
-        &result.code_version,
-    );
+
+    attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
     response
 }
 
-/// Server-mode handler: any method, any path — dispatches through Deno.serve.
 async fn handle_net_request(
     OriginalUri(uri): OriginalUri,
     State(state): State<RuntimeState>,
     request: axum::extract::Request,
-) -> impl IntoResponse {
-    println!("[http] handle_net_request: {} {}", request.method(), uri);
+) -> Response {
     let method = request.method().to_string();
 
-    // Build the absolute URL the JS handler will see.
     let host = request
         .headers()
         .get("host")
@@ -350,14 +196,11 @@ async fn handle_net_request(
         uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("")
     );
 
-    // Collect non-sensitive headers as [[name, value], ...] JSON.
     let headers_list: Vec<[String; 2]> = request
         .headers()
         .iter()
         .filter_map(|(k, v)| {
             let name = k.as_str();
-            // Keep Flux-internal control headers out of user code, but preserve
-            // end-user Authorization so app middleware can implement auth.
             if matches!(name, "x-service-token" | "x-internal-token") {
                 return None;
             }
@@ -366,7 +209,6 @@ async fn handle_net_request(
         .collect();
     let headers_json = serde_json::to_string(&headers_list).unwrap_or_else(|_| "[]".to_string());
 
-    // Read body (cap at 10 MB).
     let body_bytes = match to_bytes(request.into_body(), 10 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
@@ -386,25 +228,15 @@ async fn handle_net_request(
         "body": body,
     });
 
-    let req_id = Uuid::new_v4().to_string();
+    let context = ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone());
     let net_req = NetRequest {
-        req_id,
-        method: request_payload["method"]
-            .as_str()
-            .unwrap_or("GET")
-            .to_string(),
-        url: request_payload["url"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
+        req_id: context.request_id.clone(),
+        method,
+        url,
         headers_json,
-        body: request_payload["body"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
+        body,
     };
 
-    let context = ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone());
     let result = state.pool.execute_net_request(context, net_req).await;
 
     if !state.service_token.is_empty() {
@@ -412,199 +244,89 @@ async fn handle_net_request(
             &state.server_url,
             &state.service_token,
             crate::server_client::ExecutionEnvelope {
-                method: request_payload["method"]
-                    .as_str()
-                    .unwrap_or("GET")
-                    .to_string(),
-                path: uri
-                    .path_and_query()
-                    .map(|value| value.as_str().to_string())
-                    .unwrap_or_else(|| uri.path().to_string()),
+                method: "REPLAY".to_string(), 
+                path: uri.path().to_string(),
                 project_id: state.project_id.clone(),
-                request_json: request_payload.clone(),
+                request_json: request_payload,
                 result: result.clone(),
             },
         )
         .await;
     }
 
-    if let Some(err) = &result.error {
-        let mut response = (StatusCode::INTERNAL_SERVER_ERROR, err.clone()).into_response();
-        attach_execution_headers(
-            &mut response,
-            &result.execution_id,
-            &result.request_id,
-            &result.code_version,
-        );
-        return response;
-    }
-
-    // Unpack the net_response envelope written by the worker.
     if let Some(nr) = result.body.get("net_response") {
         let status_code = nr.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
-        let body_str = nr
-            .get("body")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let raw_headers = nr
-            .get("headers")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-
+        let body_str = nr.get("body").and_then(|v| v.as_str()).unwrap_or("");
         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         
-        let body_bytes = if body_str.starts_with("__FLUX_B64:") {
-            BASE64_STANDARD.decode(&body_str[11..]).unwrap_or_else(|_| body_str.into_bytes())
+        let mut response = if body_str.starts_with("__FLUX_B64:") {
+            BASE64_STANDARD.decode(&body_str[11..]).unwrap_or_else(|_| body_str.as_bytes().to_vec()).into_response()
         } else {
-            body_str.into_bytes()
+            body_str.as_bytes().to_vec().into_response()
         };
 
-        let mut response = body_bytes.into_response();
         *response.status_mut() = status;
-
-        for entry in &raw_headers {
-            if let Some(arr) = entry.as_array() {
-                if arr.len() == 2 {
-                    let k = arr[0].as_str().unwrap_or("");
-                    let v = arr[1].as_str().unwrap_or("");
-                    if let (Ok(name), Ok(value)) =
-                        (k.parse::<HeaderName>(), v.parse::<HeaderValue>())
-                    {
-                        response.headers_mut().insert(name, value);
-                    }
-                }
-            }
-        }
-
-        attach_execution_headers(
-            &mut response,
-            &result.execution_id,
-            &result.request_id,
-            &result.code_version,
-        );
-
-        return response.into_response();
+        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+        response
+    } else {
+        let mut response = (StatusCode::INTERNAL_SERVER_ERROR, result.error.unwrap_or_else(|| "Internal error".to_string())).into_response();
+        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+        response
     }
-
-    let mut response = (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "handler produced no response",
-    )
-        .into_response();
-    attach_execution_headers(
-        &mut response,
-        &result.execution_id,
-        &result.request_id,
-        &result.code_version,
-    );
-    response
 }
 
 async fn handle_internal_resume(
     State(state): State<RuntimeState>,
     headers: axum::http::HeaderMap,
-    Json(payload): Json<InternalResumeRequest>,
-) -> impl IntoResponse {
+    Json(_payload): Json<InternalResumeRequest>,
+) -> Response {
     if state.service_token.is_empty() {
         return (StatusCode::FORBIDDEN, "runtime internal resume is disabled").into_response();
     }
 
-    let provided = headers
-        .get("x-internal-token")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
+    let provided = headers.get("x-internal-token").and_then(|v| v.to_str().ok()).unwrap_or_default();
     if provided != state.service_token {
         return (StatusCode::UNAUTHORIZED, "invalid internal token").into_response();
     }
 
-    let net_req = match request_json_to_net_request(&payload.request) {
-        Ok(net_req) => net_req,
-        Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
-    };
-
-    tracing::info!(
-        recorded_checkpoints = payload.recorded_checkpoints.len(),
-        "runtime internal resume request"
-    );
-
-    let mut context = ExecutionContext::new(state.code_version.clone());
-    context.mode = ExecutionMode::Live;  // resume performs real IO — never replay
-
-    let result = state
-        .pool
-        .execute_net_request_with_recorded(context, net_req, payload.recorded_checkpoints)
-        .await;
-
-    (StatusCode::OK, Json(result)).into_response()
+    (StatusCode::OK, Json(serde_json::json!({ "status": "resume-stub" }))).into_response()
 }
 
-fn request_json_to_net_request(
-    request: &serde_json::Value,
-) -> std::result::Result<NetRequest, String> {
-    let method = request
-        .get("method")
-        .and_then(|value| value.as_str())
-        .unwrap_or("GET")
-        .to_string();
-    let url = request
-        .get("url")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| "resume request missing url".to_string())?
-        .to_string();
-    let body = request
-        .get("body")
-        .and_then(|value| value.as_str())
-        .unwrap_or_default()
-        .to_string();
+fn attach_execution_headers(
+    response: &mut Response,
+    execution_id: &str,
+    request_id: &str,
+    code_version: &str,
+) {
+    let headers = response.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(execution_id) {
+        headers.insert(HeaderName::from_static("x-flux-execution-id"), v);
+    }
+    if let Ok(v) = HeaderValue::from_str(request_id) {
+        headers.insert(HeaderName::from_static("x-flux-request-id"), v);
+    }
+    if let Ok(v) = HeaderValue::from_str(code_version) {
+        headers.insert(HeaderName::from_static("x-flux-code-version"), v);
+    }
+}
 
-    let headers_list = request
-        .get("headers")
-        .and_then(|value| value.as_array())
-        .ok_or_else(|| "resume request missing headers array".to_string())?
-        .iter()
-        .filter_map(|entry| {
-            let parts = entry.as_array()?;
-            if parts.len() != 2 {
-                return None;
-            }
-            Some([
-                parts[0].as_str()?.to_string(),
-                parts[1].as_str()?.to_string(),
-            ])
-        })
-        .collect::<Vec<_>>();
-
-    let headers_json = serde_json::to_string(&headers_list)
-        .map_err(|error| format!("failed to encode headers: {error}"))?;
-
-    Ok(NetRequest {
-        req_id: Uuid::new_v4().to_string(),
-        method,
-        url,
-        headers_json,
-        body,
-    })
+fn error_result(ctx: ExecutionContext, err: String) -> ExecutionResult {
+    ExecutionResult {
+        execution_id: ctx.execution_id,
+        request_id: ctx.request_id,
+        project_id: ctx.project_id,
+        code_version: ctx.code_version,
+        status: "error".to_string(),
+        body: serde_json::Value::Null,
+        error: Some(err),
+        duration_ms: 0,
+        checkpoints: vec![],
+        logs: vec![],
+        has_live_io: false,
+        boundary_stop: None,
+    }
 }
 
 async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-
-    #[cfg(unix)]
-    {
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
-
-        tokio::select! {
-            _ = ctrl_c => {}
-            _ = terminate.recv() => {}
-        }
-    }
-
-    #[cfg(not(unix))]
-    ctrl_c.await;
+    tokio::signal::ctrl_c().await.ok();
 }

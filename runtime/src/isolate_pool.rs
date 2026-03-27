@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{
     ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry, NetRequest,
-    NetRequestExecution,
+    NetRequestExecution, boot_runtime_artifact,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +59,7 @@ pub struct ExecutionResult {
     pub checkpoints: Vec<FetchCheckpoint>,
     pub logs: Vec<LogEntry>,
     pub has_live_io: bool,
+    pub boundary_stop: Option<String>,
 }
 
 #[derive(Debug)]
@@ -235,6 +236,75 @@ impl IsolatePool {
     }
 }
 
+pub async fn execute_one_shot_artifact(
+    artifact: RuntimeArtifact,
+    payload: serde_json::Value,
+    context: ExecutionContext,
+) -> ExecutionResult {
+    let (result_tx, result_rx) = oneshot::channel::<ExecutionResult>();
+    let context_for_thread = context.clone();
+    
+    std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = result_tx.send(error_result(context_for_thread, format!("Failed to create runtime: {e}")));
+                return;
+            }
+        };
+
+        let local_set = tokio::task::LocalSet::new();
+        local_set.block_on(&runtime, async move {
+            let started = std::time::Instant::now();
+            
+            let isolate_result = match &artifact {
+                RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, 0).await,
+                RuntimeArtifact::Built(artifact) => {
+                    JsIsolate::new_from_artifact(artifact).await
+                }
+            };
+
+            let mut isolate = match isolate_result {
+                Ok(iso) => iso,
+                Err(e) => {
+                    let _ = result_tx.send(error_result(context_for_thread.clone(), format!("Failed to init isolate: {e}")));
+                    return;
+                }
+            };
+
+            let res = match isolate.execute_with_recorded(payload, context_for_thread.clone(), vec![]).await {
+                Ok(out) => {
+                    let status = if out.error.is_some() { "error".to_string() } else { "ok".to_string() };
+                    ExecutionResult {
+                        execution_id: context_for_thread.execution_id.clone(),
+                        request_id: context_for_thread.request_id.clone(),
+                        project_id: context_for_thread.project_id.clone(),
+                        code_version: context_for_thread.code_version.clone(),
+                        status,
+                        body: serde_json::json!({ "output": out.output }),
+                        error: out.error,
+                        duration_ms: started.elapsed().as_millis() as i32,
+                        checkpoints: out.checkpoints,
+                        logs: out.logs,
+                        has_live_io: out.has_live_io,
+                        boundary_stop: out.boundary_stop,
+                    }
+                }
+                Err(e) => error_result(context_for_thread, e.to_string()),
+            };
+            let _ = result_tx.send(res);
+        });
+    });
+
+    match result_rx.await {
+        Ok(res) => res,
+        Err(_) => error_result(context, "Execution thread panicked or dropped result channel"),
+    }
+}
+
 fn spawn_isolate_worker(
     isolate_id: usize,
     artifact: RuntimeArtifact,
@@ -245,9 +315,6 @@ fn spawn_isolate_worker(
     std::thread::Builder::new()
         .name(format!("flux-isolate-{}", isolate_id))
         .spawn(move || {
-            // Each isolate worker thread owns its own single-threaded tokio runtime
-            // AND a LocalSet so that `spawn_local` futures can run alongside the
-            // V8 event loop on the same thread.
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -281,9 +348,6 @@ fn spawn_isolate_worker(
                     }
                 };
 
-                // Process work items serially per worker. Each HTTP execution gets
-                // a fresh isolate so requests reuse the program artifact, not the
-                // previous request's JS heap.
                 while let Some(work) = rx.recv().await {
                     let context = work.context.clone();
                     let started = std::time::Instant::now();
@@ -325,9 +389,6 @@ fn spawn_isolate_worker(
                                 has_live_io,
                                 ..
                             }) => {
-                                // A JS-thrown error or a 500 Internal Server Error is a runtime
-                                // failure. A 503 (or other 5xx) with no JS error is a clean
-                                // server-controlled response (e.g. pre-aborted signal shutdown).
                                 let status = if js_error.is_some() || net_resp.status == 500 {
                                     "error".to_string()
                                 } else {
@@ -357,6 +418,7 @@ fn spawn_isolate_worker(
                                     checkpoints,
                                     logs,
                                     has_live_io,
+                                    boundary_stop: None,
                                 }
                             },
                             Err(err) => error_result(work.context, err.to_string()),
@@ -376,6 +438,7 @@ fn spawn_isolate_worker(
                                 error,
                                 logs,
                                 has_live_io,
+                                boundary_stop,
                                 ..
                             }) => {
                                 let (status, body, error) = match error {
@@ -402,6 +465,7 @@ fn spawn_isolate_worker(
                                     checkpoints,
                                     logs,
                                     has_live_io,
+                                    boundary_stop,
                                 }
                             }
                             Err(err) => ExecutionResult {
@@ -416,6 +480,7 @@ fn spawn_isolate_worker(
                                 checkpoints: vec![],
                                 logs: vec![],
                                 has_live_io: false,
+                                boundary_stop: None,
                             },
                         }
                     };
@@ -501,9 +566,6 @@ fn spawn_isolate_worker_with_mode(
                                 has_live_io,
                                 ..
                             }) => {
-                                // A JS-thrown error or a 500 Internal Server Error is a runtime
-                                // failure. A 503 (or other 5xx) with no JS error is a clean
-                                // server-controlled response (e.g. pre-aborted signal shutdown).
                                 let status = if js_error.is_some() || net_resp.status == 500 {
                                     "error".to_string()
                                 } else {
@@ -533,6 +595,7 @@ fn spawn_isolate_worker_with_mode(
                                     checkpoints,
                                     logs,
                                     has_live_io,
+                                    boundary_stop: None,
                                 }
                             },
                             Err(err) => error_result(work.context, err.to_string()),
@@ -552,6 +615,7 @@ fn spawn_isolate_worker_with_mode(
                                 error,
                                 logs,
                                 has_live_io,
+                                boundary_stop,
                                 ..
                             }) => {
                                 let (status, body, error) = match error {
@@ -578,6 +642,7 @@ fn spawn_isolate_worker_with_mode(
                                     checkpoints,
                                     logs,
                                     has_live_io,
+                                    boundary_stop,
                                 }
                             }
                             Err(err) => ExecutionResult {
@@ -592,6 +657,7 @@ fn spawn_isolate_worker_with_mode(
                                 checkpoints: vec![],
                                 logs: vec![],
                                 has_live_io: false,
+                                boundary_stop: None,
                             },
                         }
                     };
@@ -618,5 +684,6 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
         checkpoints: vec![],
         logs: vec![],
         has_live_io: false,
+        boundary_stop: None,
     }
 }
