@@ -5644,7 +5644,14 @@ impl JsIsolate {
             let headers_j = serde_json::to_string(payload.get("headers").unwrap_or(&serde_json::Value::Null))
                 .unwrap_or_else(|_| "{}".to_string());
             format!(
-                "{{ json: (d, _s) => d, text: (d, _s) => String(d), html: (d, _s) => String(d), body: {body_j}, input: {body_j}, method: {method_j}, path: {path_j}, headers: {headers_j} }}",
+                concat!(
+                    "{{ ",
+                    "json: (d, s) => ({{ __fluxResponse: true, body: JSON.stringify(d), contentType: 'application/json', status: s || 200 }}), ",
+                    "text: (d, s) => ({{ __fluxResponse: true, body: String(d), contentType: 'text/plain', status: s || 200 }}), ",
+                    "html: (d, s) => ({{ __fluxResponse: true, body: String(d), contentType: 'text/html', status: s || 200 }}), ",
+                    "body: {body_j}, input: {body_j}, method: {method_j}, path: {path_j}, headers: {headers_j} ",
+                    "}}"
+                ),
                 body_j = body_j, method_j = method_j, path_j = path_j, headers_j = headers_j
             )
         } else if wrap_payload_in_input {
