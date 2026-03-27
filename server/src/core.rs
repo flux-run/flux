@@ -143,15 +143,58 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             request_id UUID NOT NULL,
             project_id TEXT,
             org_id TEXT,
+            token_id UUID,
             method TEXT NOT NULL,
             path TEXT NOT NULL,
             status TEXT NOT NULL,
             request JSONB,
             response JSONB,
+            request_method TEXT,
+            request_headers JSONB,
+            request_body TEXT,
+            response_status INT,
+            response_body TEXT,
+            client_ip TEXT,
+            user_agent TEXT,
             error TEXT,
+            error_stack TEXT,
+            error_fingerprint TEXT,
             code_sha TEXT NOT NULL,
             started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             duration_ms INTEGER NOT NULL DEFAULT 0
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS flux.spans (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            execution_id UUID NOT NULL REFERENCES flux.executions(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,
+            label TEXT,
+            start_ms INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            metadata JSONB
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS flux.issues (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            function_id UUID NOT NULL REFERENCES control.functions(id) ON DELETE CASCADE,
+            fingerprint TEXT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            occurrence_count INTEGER NOT NULL DEFAULT 1,
+            unique_ips INTEGER NOT NULL DEFAULT 1,
+            unique_tokens INTEGER NOT NULL DEFAULT 0,
+            first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE(function_id, fingerprint)
         )"#,
     )
     .execute(pool)
