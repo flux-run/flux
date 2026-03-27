@@ -77,6 +77,21 @@ fn issue_fingerprint(
     hex::encode(Sha256::digest(basis.as_bytes()))
 }
 
+fn has_error_details(error_name: &str, error_message: &str, fallback_error: &str) -> bool {
+    !error_name.trim().is_empty()
+        || !error_message.trim().is_empty()
+        || !fallback_error.trim().is_empty()
+}
+
+fn execution_phase_label(phase: &str) -> &'static str {
+    match phase.trim() {
+        "init" => "Initialization",
+        "external" => "External dependency",
+        "runtime" => "Runtime execution",
+        _ => "Runtime execution",
+    }
+}
+
 #[derive(Clone)]
 pub struct InternalAuthGrpc {
     pool: PgPool,
@@ -222,6 +237,11 @@ struct WhyExecution {
     status: String,
     duration_ms: i32,
     error: Option<String>,
+    error_name: Option<String>,
+    error_message: Option<String>,
+    error_phase: Option<String>,
+    error_source: Option<String>,
+    is_user_code: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -234,6 +254,18 @@ struct WhyCheckpoint {
 }
 
 fn analyze_execution(exec: &WhyExecution, checkpoints: &[WhyCheckpoint]) -> (String, String) {
+    let fallback_error = exec.error.as_deref().unwrap_or_default();
+    let error_name = exec.error_name.as_deref().unwrap_or_default();
+    let error_message = exec.error_message.as_deref().unwrap_or_default();
+    let error_headline = normalized_issue_title(error_name, error_message, fallback_error);
+    let has_error = has_error_details(error_name, error_message, fallback_error);
+    let error_phase = execution_phase_label(exec.error_phase.as_deref().unwrap_or("runtime"));
+    let is_platform_failure = exec.is_user_code == Some(false)
+        || matches!(
+            exec.error_source.as_deref(),
+            Some("platform_runtime" | "platform_executor")
+        );
+
     if exec.status == "error" {
         if let Some(last) = checkpoints.last() {
             if last.boundary == "http" {
@@ -249,35 +281,49 @@ fn analyze_execution(exec: &WhyExecution, checkpoints: &[WhyCheckpoint]) -> (Str
                     .unwrap_or("unknown");
 
                 if status >= 500 {
+                    let mut reason = format!(
+                        "external service error\ncall    {} {}\nstatus  {}\nindex   {}",
+                        last.boundary.to_uppercase(),
+                        url,
+                        status,
+                        last.call_index
+                    );
+                    if has_error {
+                        reason.push_str(&format!("\nerror   {}", error_headline));
+                    }
                     return (
-                        format!(
-                            "external service error\ncall    {} {}\nstatus  {}\nindex   {}",
-                            last.boundary.to_uppercase(),
-                            url,
-                            status,
-                            last.call_index
-                        ),
+                        reason,
                         "the upstream service returned a 5xx — not a bug in your code".to_string(),
                     );
                 }
 
                 if status == 429 {
-                    return (
-                        format!("rate limited\ncall    {}", url),
-                        "add retry with exponential backoff".to_string(),
-                    );
+                    let mut reason = format!("rate limited\ncall    {}", url);
+                    if has_error {
+                        reason.push_str(&format!("\nerror   {}", error_headline));
+                    }
+                    return (reason, "add retry with exponential backoff".to_string());
                 }
 
                 if status == 401 || status == 403 {
+                    let mut reason = format!("auth failure\ncall    {}\nstatus  {}", url, status);
+                    if has_error {
+                        reason.push_str(&format!("\nerror   {}", error_headline));
+                    }
                     return (
-                        format!("auth failure\ncall    {}\nstatus  {}", url, status),
+                        reason,
                         "check credentials/token for this service".to_string(),
                     );
                 }
 
                 if status == 0 {
+                    let mut reason =
+                        format!("network failure — no response received\ncall    {}", url);
+                    if has_error {
+                        reason.push_str(&format!("\nerror   {}", error_headline));
+                    }
                     return (
-                        format!("network failure — no response received\ncall    {}", url),
+                        reason,
                         "check connectivity or add timeout handling".to_string(),
                     );
                 }
@@ -290,12 +336,17 @@ fn analyze_execution(exec: &WhyExecution, checkpoints: &[WhyCheckpoint]) -> (Str
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown query");
                 let error = exec.error.as_deref().unwrap_or("");
+                let error_detail = if error.trim().is_empty() {
+                    error_headline.as_str()
+                } else {
+                    error
+                };
 
                 if error.contains("duplicate key") || error.contains("unique") {
                     return (
                         format!(
                             "duplicate key violation\nquery   {}\nerror   {}",
-                            query, error
+                            query, error_detail
                         ),
                         "check for existing record before inserting".to_string(),
                     );
@@ -316,18 +367,43 @@ fn analyze_execution(exec: &WhyExecution, checkpoints: &[WhyCheckpoint]) -> (Str
                 }
 
                 return (
-                    format!("database error\nquery   {}\nerror   {}", query, error),
+                    format!(
+                        "database error\nquery   {}\nerror   {}",
+                        query, error_detail
+                    ),
                     String::new(),
                 );
             }
         }
 
+        let summary = if has_error {
+            error_headline
+        } else {
+            "Unhandled exception".to_string()
+        };
+
+        if is_platform_failure {
+            let suggestion = if exec.error_phase.as_deref() == Some("init") {
+                "inspect runtime/bootstrap initialization and retry the execution".to_string()
+            } else {
+                "retry once and inspect platform/runtime health if it persists".to_string()
+            };
+
+            return (
+                format!(
+                    "runtime failure before response generation\nerror   {}\nphase   {}",
+                    summary, error_phase
+                ),
+                suggestion,
+            );
+        }
+
         return (
             format!(
-                "function threw before any IO\nerror   {}",
-                exec.error.as_deref().unwrap_or("unknown error")
+                "unhandled exception in user code\nerror   {}\nphase   {}",
+                summary, error_phase
             ),
-            "check input validation and early-exit logic".to_string(),
+            "remove or handle the thrown exception before the request returns".to_string(),
         );
     }
 
@@ -1131,10 +1207,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             String,
             i32,
             Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<bool>,
             serde_json::Value,
         )> = sqlx::query_as(
-            "SELECT status, method, path, duration_ms, error, \
-                    COALESCE(response, '{}'::jsonb) as response \
+            "SELECT status, method, path, duration_ms, error, error_name, error_message, \
+                    error_phase, error_source, is_user_code, COALESCE(response, '{}'::jsonb) as response \
              FROM flux.executions \
              WHERE id = $1 AND org_id = $2",
         )
@@ -1144,8 +1225,19 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .await
         .map_err(|e| Status::internal(format!("failed to fetch execution: {e}")))?;
 
-        let (status, method, path, duration_ms, db_error, response_json) =
-            execution.ok_or_else(|| Status::not_found("execution not found"))?;
+        let (
+            status,
+            method,
+            path,
+            duration_ms,
+            db_error,
+            error_name,
+            error_message,
+            error_phase,
+            error_source,
+            is_user_code,
+            response_json,
+        ) = execution.ok_or_else(|| Status::not_found("execution not found"))?;
 
         // Extract the real error body from the response JSONB.
         // The runtime encodes opaque bodies as "__FLUX_B64:<base64>".
@@ -1225,6 +1317,11 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 status: status.clone(),
                 duration_ms,
                 error: effective_error,
+                error_name,
+                error_message,
+                error_phase,
+                error_source,
+                is_user_code,
             },
             &checkpoints,
         );
