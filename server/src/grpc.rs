@@ -569,6 +569,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 duration_ms, \
                 code_sha, \
                 error, \
+                error_source, \
+                error_type, \
                 to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') \
              FROM flux.executions \
              WHERE org_id = $1 \
@@ -594,6 +596,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                     duration_ms,
                     code_version,
                     error,
+                    error_source,
+                    error_type,
                     timestamp,
                 )| pb::LogEntry {
                     execution_id,
@@ -606,6 +610,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                     error: error.unwrap_or_default(),
                     code_version: code_version.unwrap_or_default(),
                     project_id: _project_id.unwrap_or_default(),
+                    error_source: error_source.unwrap_or_default(),
+                    error_type: error_type.unwrap_or_default(),
                 },
             )
             .collect();
@@ -655,8 +661,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         sqlx::query(
             "INSERT INTO flux.executions \
              (id, request_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms, token_id, \
-              client_ip, user_agent, request_method, request_headers, request_body, response_status, response_body, error_stack, error_fingerprint) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+              client_ip, user_agent, request_method, request_headers, request_body, response_status, response_body, error_stack, error_fingerprint, error_source, error_type) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
@@ -677,16 +683,19 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(req.response_body.clone())
         .bind(req.error_stack.clone())
         .bind(req.error_fingerprint.clone())
+        .bind(req.error_source.clone())
+        .bind(req.error_type.clone())
         .execute(&mut *tx)
         .await
-        .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;
+        .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;")))?;
 
         sqlx::query(
             "UPDATE flux.executions \
              SET method = $2, path = $3, status = $4, request = $5, response = $6, \
                  error = NULLIF($7, ''), code_sha = $8, duration_ms = $9, project_id = $10, org_id = $11, \
                  client_ip = $12, user_agent = $13, request_method = $14, request_headers = $15, request_body = $16, \
-                 response_status = $17, response_body = $18, error_stack = $19, error_fingerprint = $20 \
+                 response_status = $17, response_body = $18, error_stack = $19, error_fingerprint = $20, \
+                 error_source = $21, error_type = $22 \
              WHERE id = $1",
         )
         .bind(execution_id)
@@ -709,6 +718,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(req.response_body.clone())
         .bind(req.error_stack.clone())
         .bind(req.error_fingerprint.clone())
+        .bind(req.error_source.clone())
+        .bind(req.error_type.clone())
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to update execution: {e}")))?;

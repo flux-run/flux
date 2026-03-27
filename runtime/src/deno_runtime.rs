@@ -1034,6 +1034,8 @@ pub struct NetRequestExecution {
     pub error_message: Option<String>,
     pub error_stack: Option<String>,
     pub logs: Vec<LogEntry>,
+    pub error_source: Option<String>,
+    pub error_type: Option<String>,
     pub has_live_io: bool,
     /// Set when replay stops at an IO boundary with no recorded checkpoint.
     /// Value is the boundary name (e.g. "postgres", "http", "tcp", "redis").
@@ -1048,6 +1050,8 @@ pub struct JsExecutionOutput {
     pub error_message: Option<String>,
     pub error_stack: Option<String>,
     pub logs: Vec<LogEntry>,
+    pub error_source: Option<String>,
+    pub error_type: Option<String>,
     pub has_live_io: bool,
     /// Set when replay stops at an IO boundary with no recorded checkpoint.
     pub boundary_stop: Option<String>,
@@ -5534,6 +5538,8 @@ impl JsIsolate {
                 error: Some(sentinel_error),
                 error_message: None,
                 error_stack: None,
+                error_source: Some("platform_runtime".to_string()),
+                error_type: Some("system_stop".to_string()),
                 logs: exec.logs,
                 has_live_io: false,
                 boundary_stop: Some(boundary),
@@ -5548,12 +5554,25 @@ impl JsIsolate {
             )
         })?;
 
+        let error_source = if error.is_some() {
+            Some("user_code".to_string())
+        } else {
+            None
+        };
+        let error_type = if error.is_some() {
+            Some("exception".to_string())
+        } else {
+            None
+        };
+
         Ok(NetRequestExecution {
             response,
             checkpoints: exec.checkpoints,
             error,
             error_message,
             error_stack,
+            error_source,
+            error_type,
             logs: exec.logs,
             has_live_io: exec.has_live_io,
             boundary_stop: exec.boundary_stop,
@@ -5764,12 +5783,25 @@ impl JsIsolate {
             .cloned()
             .unwrap_or(serde_json::Value::Null);
 
+        let error_source = if error.is_some() {
+            Some("user_code".to_string())
+        } else {
+            None
+        };
+        let error_type = if error.is_some() {
+            Some("exception".to_string())
+        } else {
+            None
+        };
+
         Ok(JsExecutionOutput {
             output,
             checkpoints,
             error,
             error_message,
             error_stack,
+            error_source,
+            error_type,
             logs,
             has_live_io,
             boundary_stop,
@@ -5891,7 +5923,12 @@ impl JsIsolate {
             error: None,
             error_message: None,
             error_stack: None,
-            logs: execution.as_ref().map(|e| e.logs.clone()).unwrap_or_default(),
+            error_source: None,
+            error_type: None,
+            logs: execution
+                .as_ref()
+                .map(|e| e.logs.clone())
+                .unwrap_or_default(),
             has_live_io: execution.as_ref().map(|e| e.has_live_io).unwrap_or(false),
             boundary_stop: None,
         })
@@ -6070,7 +6107,10 @@ async fn boot_inline_runtime_artifact(
             request_body: None,
             response_status: None,
             response_body: None,
+            error_message: None,
             error_stack: None,
+            error_source: None,
+            error_type: None,
             error_fingerprint: None,
         },
         is_server_mode,
@@ -6240,7 +6280,10 @@ async fn boot_built_runtime_artifact(
             request_body: None,
             response_status: None,
             response_body: None,
+            error_message: None,
             error_stack: None,
+            error_source: None,
+            error_type: None,
             error_fingerprint: None,
         },
         is_server_mode,

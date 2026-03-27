@@ -59,6 +59,8 @@ pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelop
         response_body: envelope.result.response_body.unwrap_or_default(),
         error_stack: envelope.result.error_stack.unwrap_or_default(),
         error_fingerprint: envelope.result.error_fingerprint.unwrap_or_default(),
+        error_source: envelope.result.error_source.unwrap_or_default(),
+        error_type: envelope.result.error_type.unwrap_or_default(),
     });
 
     request.metadata_mut().insert(

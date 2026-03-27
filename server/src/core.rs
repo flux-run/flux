@@ -159,6 +159,8 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             error TEXT,
             error_stack TEXT,
             error_fingerprint TEXT,
+            error_source TEXT,
+            error_type TEXT,
             code_sha TEXT NOT NULL,
             started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             duration_ms INTEGER NOT NULL DEFAULT 0

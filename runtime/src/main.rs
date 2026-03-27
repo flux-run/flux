@@ -337,7 +337,10 @@ async fn main() -> Result<()> {
                 request_body: Some(body.clone()),
                 response_status: Some(res.response.status as i32),
                 response_body: Some(res.response.body.clone()),
+                error_message: None,
                 error_stack: res.error_stack,
+                error_source: res.error_source,
+                error_type: res.error_type,
                 error_fingerprint: None,
             };
 
@@ -514,7 +517,10 @@ async fn main() -> Result<()> {
                 request_body: None,
                 response_status: None,
                 response_body: None,
+                error_message: None,
                 error_stack: res.error_stack,
+                error_source: res.error_source,
+                error_type: res.error_type,
                 error_fingerprint: None,
             }
         };

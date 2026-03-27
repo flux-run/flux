@@ -348,7 +348,10 @@ fn error_result(ctx: ExecutionContext, err: String) -> ExecutionResult {
         request_body: None,
         response_status: None,
         response_body: None,
+        error_message: None,
         error_stack: None,
+        error_source: None,
+        error_type: None,
         error_fingerprint: None,
     }
 }

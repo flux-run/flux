@@ -122,6 +122,8 @@ message LogEntry {
   string error = 8;
   string code_version = 9;
   string project_id = 10;
+  string error_source = 11;
+  string error_type = 12;
 }
 
 message CheckpointEntry {
@@ -164,6 +166,8 @@ message RecordExecutionRequest {
   string response_body = 20;
   string error_stack = 21;
   string error_fingerprint = 22;
+  string error_source = 23;
+  string error_type = 24;
 }
 
 message RecordExecutionResponse {

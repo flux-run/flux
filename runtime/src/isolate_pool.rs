@@ -74,7 +74,12 @@ pub struct ExecutionResult {
     pub request_body: Option<String>,
     pub response_status: Option<i32>,
     pub response_body: Option<String>,
+
+    // Error details
+    pub error_message: Option<String>,
     pub error_stack: Option<String>,
+    pub error_source: Option<String>,
+    pub error_type: Option<String>,
     pub error_fingerprint: Option<String>,
 }
 
@@ -333,7 +338,10 @@ pub async fn execute_one_shot_artifact(
                         request_body: None,
                         response_status: None,
                         response_body: None,
+                        error_message: None,
                         error_stack: out.error_stack,
+                        error_source: out.error_source,
+                        error_type: out.error_type,
                         error_fingerprint: None,
                     }
                 }
@@ -447,6 +455,8 @@ fn spawn_isolate_worker(
                                 checkpoints,
                                 error: js_error,
                                 error_stack,
+                                error_source,
+                                error_type,
                                 logs,
                                 has_live_io,
                                 boundary_stop,
@@ -491,7 +501,10 @@ fn spawn_isolate_worker(
                                     request_body: Some(body_cloned),
                                     response_status: Some(net_resp.status as i32),
                                     response_body: Some(net_resp.body),
+                                    error_message: None,
                                     error_stack,
+                                    error_source,
+                                    error_type,
                                     error_fingerprint: None,
                                 }
                             },
@@ -510,6 +523,9 @@ fn spawn_isolate_worker(
                                 output,
                                 checkpoints,
                                 error,
+                                error_stack,
+                                error_source,
+                                error_type,
                                 logs,
                                 has_live_io,
                                 boundary_stop,
@@ -549,7 +565,10 @@ fn spawn_isolate_worker(
                                     request_body: None,
                                     response_status: None,
                                     response_body: None,
+                                    error_message: None,
                                     error_stack: None,
+                                    error_source,
+                                    error_type,
                                     error_fingerprint: None,
                                 }
                             }
@@ -575,7 +594,10 @@ fn spawn_isolate_worker(
                                 request_body: None,
                                 response_status: None,
                                 response_body: None,
+                                error_message: None,
                                 error_stack: None,
+                                error_source: None,
+                                error_type: None,
                                 error_fingerprint: None,
                             },
                         }
@@ -714,7 +736,10 @@ fn spawn_isolate_worker_with_mode(
                                     request_body: Some(net_req.body),
                                     response_status: Some(net_resp.status as i32),
                                     response_body: Some(net_resp.body),
+                                    error_message: None,
                                     error_stack,
+                                    error_source: None,
+                                    error_type: None,
                                     error_fingerprint: None,
                                 }
                             },
@@ -734,6 +759,8 @@ fn spawn_isolate_worker_with_mode(
                                 checkpoints,
                                 error,
                                 error_stack,
+                                error_source,
+                                error_type,
                                 logs,
                                 has_live_io,
                                 boundary_stop,
@@ -773,7 +800,10 @@ fn spawn_isolate_worker_with_mode(
                                     request_body: None,
                                     response_status: None,
                                     response_body: None,
+                                    error_message: None,
                                     error_stack,
+                                    error_source,
+                                    error_type,
                                     error_fingerprint: None,
                                 }
                             }
@@ -790,6 +820,8 @@ fn spawn_isolate_worker_with_mode(
                                 logs: Vec::new(),
                                 has_live_io: false,
                                 boundary_stop: None,
+
+                                // Advanced Telemetry
                                 client_ip: None,
                                 user_agent: None,
                                 request_method: None,
@@ -797,7 +829,10 @@ fn spawn_isolate_worker_with_mode(
                                 request_body: None,
                                 response_status: None,
                                 response_body: None,
+                                error_message: None,
                                 error_stack: None,
+                                error_source: None,
+                                error_type: None,
                                 error_fingerprint: None,
                             },
                         }
@@ -834,7 +869,10 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
         request_body: None,
         response_status: None,
         response_body: None,
+        error_message: None,
         error_stack: None,
+        error_source: None,
+        error_type: None,
         error_fingerprint: None,
     }
 }
