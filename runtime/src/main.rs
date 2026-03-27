@@ -66,6 +66,11 @@ struct Args {
     /// checkpoints for this ID and runs the local code against them.
     #[arg(long, value_name = "ID")]
     replay: Option<String>,
+
+    /// Start as a persistent HTTP gateway. No entry file required; each
+    /// inbound request must supply its own `artifact` JSON field.
+    #[arg(long)]
+    gateway: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -77,6 +82,28 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+
+    // Gateway mode: no entry file needed. Requests supply their own artifact.
+    if args.gateway {
+        let placeholder_js = "export default function _gateway(ctx) { \n\
+            return ctx.json({ error: 'no artifact provided' }, 404);\n\
+        }";
+        let artifact = runtime::build_artifact("_gateway", placeholder_js.to_string());
+        tracing::info!("Starting flux-runtime in gateway mode on port {}", args.port);
+        runtime::run_http_runtime(
+            runtime::HttpRuntimeConfig {
+                host: args.host,
+                port: args.port,
+                route_name: "_gateway".to_string(),
+                isolate_pool_size: 2, // minimal pool; real work done per-request
+                project_id: args.project_id,
+                server_url: args.server_url,
+                service_token: args.token,
+            },
+            artifact,
+        ).await?;
+        return Ok(());
+    }
 
     let (artifact, route_name) = if let Some(artifact_path) = &args.artifact {
         let artifact = runtime::load_built_artifact_from_file(artifact_path)

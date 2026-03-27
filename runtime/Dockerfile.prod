@@ -38,4 +38,4 @@ COPY --from=builder /app/target/release/flux-runtime /usr/local/bin/flux-runtime
 COPY . .
 
 EXPOSE 8080
-CMD ["flux-runtime"]
+CMD ["flux-runtime", "--gateway"]

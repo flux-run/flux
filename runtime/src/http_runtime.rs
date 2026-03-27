@@ -108,19 +108,21 @@ async fn handle_request(
     headers: axum::http::HeaderMap,
     Json(mut payload): Json<serde_json::Value>,
 ) -> Response {
-    if route != state.route_name {
+    let request_payload = payload.clone();
+    
+    let provided_artifact: Option<RuntimeArtifact> = payload.get("artifact").and_then(|v| {
+        serde_json::from_value::<shared::project::FluxBuildArtifact>(v.clone()).ok().map(RuntimeArtifact::Built)
+    });
+    
+    // Only enforce route-name matching when no per-request artifact is supplied.
+    // In gateway mode (--gateway) the route is always "_gateway" but callers hit /<function_name>.
+    if provided_artifact.is_none() && route != state.route_name {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "route not found" })),
         )
             .into_response();
     }
-
-    let request_payload = payload.clone();
-    
-    let provided_artifact: Option<RuntimeArtifact> = payload.get("artifact").and_then(|v| {
-        serde_json::from_value::<shared::project::FluxBuildArtifact>(v.clone()).ok().map(RuntimeArtifact::Built)
-    });
     
     if let serde_json::Value::Object(ref mut map) = payload {
         map.remove("artifact");
