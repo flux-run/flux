@@ -5153,7 +5153,7 @@ pub struct JsIsolate {
 
 impl JsIsolate {
     pub fn v8_isolate_handle(&mut self) -> deno_core::v8::IsolateHandle {
-        self.runtime.v8_isolate().get_handle()
+        self.runtime.v8_isolate().thread_safe_handle()
     }
 
     pub fn terminate_execution(&mut self) {

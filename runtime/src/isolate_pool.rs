@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{
     ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry, NetRequest,
-    NetRequestExecution, boot_runtime_artifact,
+    NetRequestExecution,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
