@@ -34,6 +34,7 @@ impl ExecutionContext {
             code_version: code_version.into(),
             mode: ExecutionMode::Live,
             verbose: false,
+            cloud_ctx: false,
         }
     }
 

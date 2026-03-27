@@ -1261,6 +1261,7 @@ fn op_begin_execution(
                 ExecutionMode::Live
             },
             verbose: false,
+            cloud_ctx: false,
         },
         call_index: 0,
         checkpoints: Vec::new(),
@@ -5634,9 +5635,9 @@ impl JsIsolate {
             let body_j = serde_json::to_string(payload.get("body").unwrap_or(&serde_json::Value::Null))
                 .unwrap_or_else(|_| "null".to_string());
             let method_j = serde_json::to_string(payload.get("method").unwrap_or(&serde_json::Value::Null))
-                .unwrap_or_else(|_| ""GET"".to_string());
+                .unwrap_or_else(|_| "\"GET\"".to_string());
             let path_j = serde_json::to_string(payload.get("path").unwrap_or(&serde_json::Value::Null))
-                .unwrap_or_else(|_| ""/"".to_string());
+                .unwrap_or_else(|_| "\"/\"".to_string());
             let headers_j = serde_json::to_string(payload.get("headers").unwrap_or(&serde_json::Value::Null))
                 .unwrap_or_else(|_| "{}".to_string());
             format!(
