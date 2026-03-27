@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use axum::body::to_bytes;
+use tokio::sync::RwLock;
 
 use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{boot_runtime_artifact, FetchCheckpoint, NetRequest};
@@ -27,12 +28,15 @@ pub struct HttpRuntimeConfig {
     pub service_token: String,
 }
 
+/// Shared runtime state — the pool is behind a RwLock so it can be hot-swapped
+/// on every `flux deploy` without restarting the process.
 #[derive(Clone)]
 struct RuntimeState {
     route_name: String,
-    code_version: String,
+    code_version: Arc<RwLock<String>>,
+    isolate_pool_size: usize,
     project_id: Option<String>,
-    pool: Arc<IsolatePool>,
+    pool: Arc<RwLock<IsolatePool>>,
     server_url: String,
     service_token: String,
 }
@@ -50,6 +54,13 @@ struct InternalResumeRequest {
     recorded_checkpoints: Vec<FetchCheckpoint>,
 }
 
+/// Request body for the hot-reload endpoint.
+/// `artifact` is the full FluxBuildArtifact JSON, as returned by `flux build`.
+#[derive(Debug, Deserialize)]
+struct InternalReloadRequest {
+    artifact: serde_json::Value,
+}
+
 pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifact) -> Result<()> {
     let boot = boot_runtime_artifact(
         &artifact,
@@ -61,15 +72,16 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         bail!("boot execution failed: {error}");
     }
 
-    let pool = Arc::new(IsolatePool::new_with_mode(
+    let pool = Arc::new(RwLock::new(IsolatePool::new_with_mode(
         config.isolate_pool_size,
         artifact.clone(),
         boot.is_server_mode,
-    )?);
-    
+    )?));
+
     let state = RuntimeState {
         route_name: config.route_name.clone(),
-        code_version: artifact.code_version().to_string(),
+        code_version: Arc::new(RwLock::new(artifact.code_version().to_string())),
+        isolate_pool_size: config.isolate_pool_size,
         project_id: config.project_id.clone(),
         pool,
         server_url: config.server_url,
@@ -79,6 +91,7 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
     let app: Router = Router::new()
         .route("/health", get(health))
         .route("/__flux_internal/resume", post(handle_internal_resume))
+        .route("/__flux_internal/reload", post(handle_internal_reload))
         .route("/{route}", post(handle_request))
         .fallback(handle_net_request)
         .with_state(state);
@@ -95,10 +108,11 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
 }
 
 async fn health(State(state): State<RuntimeState>) -> Json<HealthResponse> {
+    let code_version = state.code_version.read().await.clone();
     Json(HealthResponse {
         status: "ok".to_string(),
         route: state.route_name.clone(),
-        code_version: state.code_version.clone(),
+        code_version,
     })
 }
 
@@ -128,7 +142,8 @@ async fn handle_request(
         map.remove("artifact");
     }
 
-    let mut ctx = ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone());
+    let code_version = state.code_version.read().await.clone();
+    let mut ctx = ExecutionContext::with_project(code_version.clone(), state.project_id.clone());
     
     let exec_id = match headers.get("x-flux-execution-id").and_then(|h| h.to_str().ok()) {
         Some(id) => id.to_string(),
@@ -151,7 +166,8 @@ async fn handle_request(
         ctx.cloud_ctx = true;
         execute_one_shot_artifact(artifact, payload, ctx, max_duration_ms).await
     } else {
-        state.pool.execute(payload, ctx, max_duration_ms).await
+        let pool = state.pool.read().await;
+        pool.execute(payload, ctx, max_duration_ms).await
     };
 
     if !state.service_token.is_empty() {
@@ -184,7 +200,8 @@ async fn handle_request(
     )
         .into_response();
 
-    attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+    let code_v = state.code_version.read().await.clone();
+    attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &code_v);
     response
 }
 
@@ -242,7 +259,8 @@ async fn handle_net_request(
         "body": body,
     });
 
-    let context = ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone());
+    let code_version = state.code_version.read().await.clone();
+    let context = ExecutionContext::with_project(code_version.clone(), state.project_id.clone());
     let net_req = NetRequest {
         req_id: context.request_id.clone(),
         method,
@@ -251,8 +269,10 @@ async fn handle_net_request(
         body,
     };
 
-
-    let result = state.pool.execute_net_request(context, net_req, max_duration_ms).await;
+    let result = {
+        let pool = state.pool.read().await;
+        pool.execute_net_request(context, net_req, max_duration_ms).await
+    };
 
     if !state.service_token.is_empty() {
         let _ = crate::server_client::record_execution(
@@ -281,13 +301,84 @@ async fn handle_net_request(
         };
 
         *response.status_mut() = status;
-        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+        let code_v = state.code_version.read().await.clone();
+        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &code_v);
         response
     } else {
         let mut response = (StatusCode::INTERNAL_SERVER_ERROR, result.error.unwrap_or_else(|| "Internal error".to_string())).into_response();
-        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &result.code_version);
+        let code_v = state.code_version.read().await.clone();
+        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &code_v);
         response
     }
+}
+
+/// Hot-swap the isolate pool with a new artifact, without restarting the process.
+/// Called by flux-control immediately after a successful `flux deploy`.
+async fn handle_internal_reload(
+    State(state): State<RuntimeState>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<InternalReloadRequest>,
+) -> Response {
+    // Require the service token for security
+    if state.service_token.is_empty() {
+        return (StatusCode::FORBIDDEN, "runtime internal reload is disabled").into_response();
+    }
+    let provided = headers.get("x-internal-token").and_then(|v| v.to_str().ok()).unwrap_or_default();
+    if provided != state.service_token {
+        return (StatusCode::UNAUTHORIZED, "invalid internal token").into_response();
+    }
+
+    // Parse the new artifact from the request body
+    let new_artifact = match serde_json::from_value::<shared::project::FluxBuildArtifact>(payload.artifact) {
+        Ok(a) => RuntimeArtifact::Built(a),
+        Err(e) => {
+            tracing::error!("reload: failed to parse artifact: {}", e);
+            return (StatusCode::BAD_REQUEST, format!("invalid artifact: {}", e)).into_response();
+        }
+    };
+
+    let new_version = new_artifact.code_version().to_string();
+    tracing::info!("🔄 Hot-reloading runtime with artifact version: {}", new_version);
+
+    // Boot the new artifact to detect its mode
+    let boot = match boot_runtime_artifact(
+        &new_artifact,
+        ExecutionContext::with_project(new_version.clone(), state.project_id.clone()),
+    ).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("reload: boot failed: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("boot failed: {}", e)).into_response();
+        }
+    };
+
+    if let Some(error) = boot.result.error.as_ref() {
+        tracing::error!("reload: boot execution error: {}", error);
+        return (StatusCode::BAD_REQUEST, format!("boot error: {}", error)).into_response();
+    }
+
+    // Build the new pool
+    let new_pool = match IsolatePool::new_with_mode(
+        state.isolate_pool_size,
+        new_artifact,
+        boot.is_server_mode,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("reload: failed to create new pool: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("pool creation failed: {}", e)).into_response();
+        }
+    };
+
+    // Atomically swap the pool and code version
+    *state.pool.write().await = new_pool;
+    *state.code_version.write().await = new_version.clone();
+
+    tracing::info!("✅ Runtime hot-reloaded to version: {}", new_version);
+    (StatusCode::OK, Json(serde_json::json!({
+        "reloaded": true,
+        "code_version": new_version
+    }))).into_response()
 }
 
 async fn handle_internal_resume(
