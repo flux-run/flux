@@ -74,7 +74,7 @@ pub async fn execute(args: DevArgs) -> Result<()> {
         let analysis = crate::project::analyze_project(&entry)
             .await
             .context("failed to analyze project")?;
-        
+
         if crate::project::has_errors(&analysis.diagnostics) {
             eprintln!("\nCompatibility Errors:");
             for diag in &analysis.diagnostics {
@@ -93,7 +93,7 @@ pub async fn execute(args: DevArgs) -> Result<()> {
 
         let project_id = analysis.artifact.project_id.clone();
         let is_function = analysis.config.kind == shared::project::ProjectKind::Function;
-        
+
         let runtime_args = build_runtime_args(
             &artifact_tmp,
             &auth.url,
@@ -112,7 +112,8 @@ pub async fn execute(args: DevArgs) -> Result<()> {
             server_url: auth.url.clone(),
             watch_dir: Some(watch_dir.clone()),
             poll_ms: args.poll_ms,
-        }).await?;
+        })
+        .await?;
 
         if result == crate::runtime_runner::RunResult::Finished {
             break;

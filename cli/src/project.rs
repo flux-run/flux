@@ -1,22 +1,22 @@
+use chrono::Utc;
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use chrono::Utc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use deno_ast::swc::ast::{
     CallExpr, Callee, ExportAll, ImportDecl, Lit, NamedExport, TsImportEqualsDecl,
 };
 use deno_ast::swc::ecma_visit::{Visit, VisitWith};
-use deno_ast::{MediaType, ParseParams, parse_module};
+use deno_ast::{parse_module, MediaType, ParseParams};
 use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use shared::project::{
     ArtifactDependency, ArtifactDependencyKind, ArtifactMediaType, ArtifactModule,
-    ArtifactSourceKind, DEFAULT_ARTIFACT_PATH, DEFAULT_PROJECT_CONFIG_PATH, FLUX_PROJECT_VERSION,
-    FluxBuildArtifact, FluxProjectConfig, NpmPackageSnapshot,
+    ArtifactSourceKind, FluxBuildArtifact, FluxProjectConfig, NpmPackageSnapshot,
+    DEFAULT_ARTIFACT_PATH, DEFAULT_PROJECT_CONFIG_PATH, FLUX_PROJECT_VERSION,
 };
 use url::Url;
 
@@ -159,7 +159,11 @@ pub fn scaffold_project(
     }
 }
 
-pub fn scaffold_function(project_dir: &Path, project_id: Option<String>, force: bool) -> Result<()> {
+pub fn scaffold_function(
+    project_dir: &Path,
+    project_id: Option<String>,
+    force: bool,
+) -> Result<()> {
     let config_path = project_config_path(project_dir);
     let entry_path = project_dir.join(DEFAULT_ENTRY_FILE);
     let deno_config_path = project_dir.join("deno.json");
@@ -188,11 +192,8 @@ pub fn scaffold_function(project_dir: &Path, project_id: Option<String>, force: 
     write_project_config(project_dir, &config)?;
 
     // 1. Write deno.json (empty imports for minimal function)
-    fs::write(
-        &deno_config_path,
-        "{\n  \"imports\": {}\n}\n"
-    )
-    .with_context(|| format!("failed to write {}", deno_config_path.display()))?;
+    fs::write(&deno_config_path, "{\n  \"imports\": {}\n}\n")
+        .with_context(|| format!("failed to write {}", deno_config_path.display()))?;
 
     // 2. Write src/flux.d.ts (Global Type Definitions)
     fs::write(
@@ -309,7 +310,6 @@ pub fn scaffold_server(project_dir: &Path, project_id: Option<String>, force: bo
     Ok(())
 }
 
-
 pub fn resolve_built_artifact(entry: &Path) -> Result<(FluxProjectConfig, PathBuf)> {
     let project_dir = entry.parent().unwrap_or(Path::new("."));
     let config = load_project_config(project_dir).with_context(|| {
@@ -335,9 +335,9 @@ pub fn write_artifact(artifact_path: &Path, artifact: &FluxBuildArtifact) -> Res
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    
+
     let json = serde_json::to_string_pretty(artifact).context("failed to serialize artifact")?;
-    
+
     // 1. Write the "latest" artifact for convenience
     fs::write(artifact_path, &json)
         .with_context(|| format!("failed to write {}", artifact_path.display()))?;
@@ -346,10 +346,15 @@ pub fn write_artifact(artifact_path: &Path, artifact: &FluxBuildArtifact) -> Res
     if let Some(project_dir) = artifact_path.parent().and_then(|p| p.parent()) {
         let artifacts_dir = project_dir.join(".flux").join("artifacts");
         fs::create_dir_all(&artifacts_dir).context("failed to create artifacts directory")?;
-        
+
         let versioned_path = artifacts_dir.join(format!("{}.json", artifact.graph_sha256));
-        fs::write(&versioned_path, json).with_context(|| format!("failed to write versioned artifact {}", versioned_path.display()))?;
-        
+        fs::write(&versioned_path, json).with_context(|| {
+            format!(
+                "failed to write versioned artifact {}",
+                versioned_path.display()
+            )
+        })?;
+
         // 3. Register the deployment in history
         register_deployment(project_dir, artifact)?;
     }
@@ -367,9 +372,13 @@ fn register_deployment(project_dir: &Path, artifact: &FluxBuildArtifact) -> Resu
     };
 
     let now = Utc::now().to_rfc3339();
-    
+
     // Avoid duplicate entries for the same hash (e.g. if building twice without changes)
-    if !history.deployments.iter().any(|d| d.id == artifact.graph_sha256) {
+    if !history
+        .deployments
+        .iter()
+        .any(|d| d.id == artifact.graph_sha256)
+    {
         history.deployments.push(shared::project::Deployment {
             id: artifact.graph_sha256.clone(),
             timestamp: now,
@@ -385,11 +394,11 @@ fn register_deployment(project_dir: &Path, artifact: &FluxBuildArtifact) -> Resu
 
 pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {
     let entry_path = canonicalize_existing_path(entry)?;
-    
+
     // Search upwards for flux.json to find the project root
     let current_dir = entry_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    
+
     let mut search_dir = current_dir.clone();
     while !project_config_path(&search_dir).exists() {
         if let Some(parent) = search_dir.parent() {
@@ -400,7 +409,7 @@ pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {
             break;
         }
     }
-    
+
     // If we found flux.json, that's our project_dir. Otherwise, our default (current_dir) stays.
     if project_config_path(&search_dir).exists() {
         project_dir = search_dir;
@@ -417,9 +426,10 @@ pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {
     } else {
         default_project_config(shared::project::ProjectKind::Function, &entry_name, None)
     };
-    
+
     // Entry should be relative to project_dir
-    let relative_entry = entry_path.strip_prefix(&project_dir)
+    let relative_entry = entry_path
+        .strip_prefix(&project_dir)
         .unwrap_or(&entry_path)
         .to_string_lossy()
         .to_string();
@@ -702,15 +712,25 @@ fn resolve_local_bare_import(specifier: &str, base_specifier: &str) -> Result<Op
             let config = read_deno_config(&deno_config_path)?;
             if let Some(imports) = config.imports {
                 if let Some(target) = imports.get(specifier) {
-                    return resolve_dependency_specifier(target, &file_url_string(&deno_config_path)?).map(Some);
+                    return resolve_dependency_specifier(
+                        target,
+                        &file_url_string(&deno_config_path)?,
+                    )
+                    .map(Some);
                 }
 
                 // Support prefix matching (e.g. "drizzle-orm/pg-core" matched by "drizzle-orm")
                 for (key, target) in &imports {
-                    if specifier.starts_with(key) && specifier.as_bytes().get(key.len()) == Some(&b'/') {
+                    if specifier.starts_with(key)
+                        && specifier.as_bytes().get(key.len()) == Some(&b'/')
+                    {
                         let subpath = &specifier[key.len()..];
                         let joined_target = format!("{}{}", target, subpath);
-                        return resolve_dependency_specifier(&joined_target, &file_url_string(&deno_config_path)?).map(Some);
+                        return resolve_dependency_specifier(
+                            &joined_target,
+                            &file_url_string(&deno_config_path)?,
+                        )
+                        .map(Some);
                     }
                 }
             }
@@ -1608,12 +1628,10 @@ mod tests {
             .expect("analysis");
 
         assert!(has_errors(&analysis.diagnostics));
-        assert!(
-            analysis
-                .diagnostics
-                .iter()
-                .any(|diag| diag.code == "parse_failed" || diag.code == "node_import")
-        );
+        assert!(analysis
+            .diagnostics
+            .iter()
+            .any(|diag| diag.code == "parse_failed" || diag.code == "node_import"));
     }
 
     #[tokio::test]
@@ -1656,7 +1674,12 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::write(
             temp.path().join("flux.json"),
-            serde_json::to_string_pretty(&default_project_config(shared::project::ProjectKind::Function, "index.ts", None)).unwrap(),
+            serde_json::to_string_pretty(&default_project_config(
+                shared::project::ProjectKind::Function,
+                "index.ts",
+                None,
+            ))
+            .unwrap(),
         )
         .expect("write config");
         fs::write(temp.path().join("index.ts"), "export default 1;\n").expect("write entry");

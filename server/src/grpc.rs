@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use reqwest::Client;
 use reqwest::Url;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, postgres::PgListener};
+use sqlx::{postgres::PgListener, PgPool};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;
@@ -17,6 +17,64 @@ pub struct TenantIdentity {
     pub org_id: String,
     pub project_id: String,
     pub token_id: Option<uuid::Uuid>,
+}
+
+fn normalized_issue_title(error_name: &str, error_message: &str, fallback_error: &str) -> String {
+    let normalized_name = error_name.trim();
+    let normalized_message = error_message.trim();
+    let fallback = fallback_error.trim();
+
+    if !normalized_name.is_empty() && !normalized_message.is_empty() {
+        let prefix = format!("{normalized_name}:");
+        if normalized_message == normalized_name || normalized_message.starts_with(&prefix) {
+            return normalized_message.to_string();
+        }
+        return format!("{normalized_name}: {normalized_message}");
+    }
+
+    if !normalized_message.is_empty() {
+        return normalized_message.to_string();
+    }
+
+    if !fallback.is_empty() {
+        return fallback.to_string();
+    }
+
+    "Unhandled exception".to_string()
+}
+
+fn first_stack_frame(stack: &str) -> String {
+    stack
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("at ") || line.contains("://"))
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn issue_fingerprint(
+    explicit_fingerprint: &str,
+    error_name: &str,
+    error_message: &str,
+    error_stack: &str,
+    fallback_error: &str,
+) -> String {
+    if !explicit_fingerprint.trim().is_empty() {
+        return explicit_fingerprint.trim().to_string();
+    }
+
+    let basis = format!(
+        "{}|{}|{}",
+        error_name.trim(),
+        if error_message.trim().is_empty() {
+            fallback_error.trim()
+        } else {
+            error_message.trim()
+        },
+        first_stack_frame(error_stack),
+    );
+
+    hex::encode(Sha256::digest(basis.as_bytes()))
 }
 
 #[derive(Clone)]
@@ -85,7 +143,9 @@ impl InternalAuthGrpc {
 
         let provided_token = Self::read_bearer_token(metadata).unwrap_or_default();
         if provided_token.is_empty() {
-            return Err(Status::unauthenticated("missing authorization bearer token"));
+            return Err(Status::unauthenticated(
+                "missing authorization bearer token",
+            ));
         }
 
         if !provided_token.starts_with("flux_sk_") {
@@ -134,16 +194,17 @@ impl InternalAuthGrpc {
             ));
         }
 
-        let matches: Vec<uuid::Uuid> = sqlx::query_scalar(
-            "SELECT id FROM flux.executions WHERE id::text LIKE $1",
-        )
-        .bind(format!("{}%", raw))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| Status::internal(format!("failed to resolve execution_id: {e}")))?;
+        let matches: Vec<uuid::Uuid> =
+            sqlx::query_scalar("SELECT id FROM flux.executions WHERE id::text LIKE $1")
+                .bind(format!("{}%", raw))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| Status::internal(format!("failed to resolve execution_id: {e}")))?;
 
         if matches.is_empty() {
-            return Err(Status::not_found(format!("no execution found matching '{raw}'")));
+            return Err(Status::not_found(format!(
+                "no execution found matching '{raw}'"
+            )));
         }
 
         if matches.len() > 1 {
@@ -657,14 +718,23 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .await
             .map_err(|e| Status::internal(format!("failed to begin transaction: {e}")))?;
 
-        let request_headers_json: serde_json::Value = serde_json::from_str(&req.request_headers_json)
-            .unwrap_or(serde_json::Value::Null);
+        let request_headers_json: serde_json::Value =
+            serde_json::from_str(&req.request_headers_json).unwrap_or(serde_json::Value::Null);
+        let error_name = (!req.error_name.trim().is_empty()).then_some(req.error_name.clone());
+        let error_message =
+            (!req.error_message.trim().is_empty()).then_some(req.error_message.clone());
+        let error_phase = (!req.error_phase.trim().is_empty()).then_some(req.error_phase.clone());
+        let is_user_code = if req.status == "ok" || req.status == "running" {
+            None
+        } else {
+            Some(req.is_user_code)
+        };
 
         sqlx::query(
             "INSERT INTO flux.executions \
              (id, request_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms, token_id, \
-              client_ip, user_agent, request_method, request_headers, request_body, response_status, response_body, error_stack, error_fingerprint, error_source, error_type) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
+              client_ip, user_agent, request_method, request_headers, request_body, response_status, response_body, error_name, error_message, error_stack, error_fingerprint, error_phase, is_user_code, error_source, error_type) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
@@ -683,8 +753,12 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(req.request_body.clone())
         .bind(req.response_status)
         .bind(req.response_body.clone())
+        .bind(error_name.clone())
+        .bind(error_message.clone())
         .bind(req.error_stack.clone())
         .bind(req.error_fingerprint.clone())
+        .bind(error_phase.clone())
+        .bind(is_user_code)
         .bind(req.error_source.clone())
         .bind(req.error_type.clone())
         .execute(&mut *tx)
@@ -696,8 +770,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
              SET method = $2, path = $3, status = $4, request = $5, response = $6, \
                  error = NULLIF($7, ''), code_sha = $8, duration_ms = $9, project_id = $10, org_id = $11, \
                  client_ip = $12, user_agent = $13, request_method = $14, request_headers = $15, request_body = $16, \
-                 response_status = $17, response_body = $18, error_stack = $19, error_fingerprint = $20, \
-                 error_source = $21, error_type = $22 \
+                 response_status = $17, response_body = $18, error_name = $19, error_message = $20, error_stack = $21, error_fingerprint = $22, \
+                 error_phase = $23, is_user_code = $24, error_source = $25, error_type = $26 \
              WHERE id = $1",
         )
         .bind(execution_id)
@@ -718,8 +792,12 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(req.request_body.clone())
         .bind(req.response_status)
         .bind(req.response_body.clone())
+        .bind(error_name.clone())
+        .bind(error_message.clone())
         .bind(req.error_stack.clone())
         .bind(req.error_fingerprint.clone())
+        .bind(error_phase.clone())
+        .bind(is_user_code)
         .bind(req.error_source.clone())
         .bind(req.error_type.clone())
         .execute(&mut *tx)
@@ -730,23 +808,22 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         if req.status == "error" || req.status == "critical" {
             let error_msg = req.error.clone();
             let error_stack = req.error_stack.clone();
-            
-            // Simple fingerprinting: use the first 100 chars of the error or the first line of the stack
-            let fingerprint = if !req.error_fingerprint.is_empty() {
-                req.error_fingerprint.clone()
-            } else {
-                let base = if !error_stack.is_empty() {
-                    error_stack.lines().next().unwrap_or(&error_msg).to_string()
+            let fingerprint = issue_fingerprint(
+                &req.error_fingerprint,
+                &req.error_name,
+                &req.error_message,
+                &error_stack,
+                &error_msg,
+            );
+            let title = normalized_issue_title(&req.error_name, &req.error_message, &error_msg);
+            let sample_message = if req.error_message.trim().is_empty() {
+                if title.trim().is_empty() {
+                    req.error.clone()
                 } else {
-                    error_msg.chars().take(100).collect::<String>()
-                };
-                format!("{}:{}:{}", req.method, req.path, base)
-            };
-
-            let title = if !error_stack.is_empty() {
-                error_stack.lines().next().unwrap_or(&error_msg).to_string()
+                    title.clone()
+                }
             } else {
-                error_msg.clone()
+                req.error_message.clone()
             };
 
             // Resolve function_id from route
@@ -777,7 +854,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 .bind(title)
                 .bind(execution_id)
                 .bind(req.error_stack)
-                .bind(req.error)
+                .bind(sample_message)
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| Status::internal(format!("failed to upsert issue: {e}")))?;
@@ -942,16 +1019,18 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         tokio::spawn(async move {
             tracing::info!(project_id = %project_id, "tail: starting listener task");
-            
+
             loop {
                 let mut listener = match PgListener::connect_with(&pool).await {
                     Ok(mut listener) => {
                         if let Err(err) = listener.listen("flux_executions").await {
-                             tracing::error!(error = %err, "tail listener subscribe failed, retrying in 2s");
-                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                             continue;
+                            tracing::error!(error = %err, "tail listener subscribe failed, retrying in 2s");
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            continue;
                         }
-                        tracing::info!("tail: listener connected and subscribed to flux_executions");
+                        tracing::info!(
+                            "tail: listener connected and subscribed to flux_executions"
+                        );
                         listener
                     }
                     Err(err) => {
@@ -971,23 +1050,53 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                                 continue;
                             };
 
-                            let identity_org_id = val.get("org_id").and_then(|v| v.as_str()).unwrap_or_default();
+                            let identity_org_id = val
+                                .get("org_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default();
                             if identity_org_id != identity.org_id {
                                 continue;
                             }
 
-                            let entry_project_id = val.get("project_id").and_then(|v| v.as_str()).unwrap_or_default();
+                            let entry_project_id = val
+                                .get("project_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default();
                             if !project_id.is_empty() && entry_project_id != project_id {
                                 continue;
                             }
 
                             let event = pb::TailEvent {
-                                execution_id: val.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                                method: val.get("method").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                                path: val.get("path").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                                status: val.get("status").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                                duration_ms: val.get("duration_ms").and_then(|v| v.as_i64()).unwrap_or_default() as i32,
-                                error: val.get("error").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                                execution_id: val
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                method: val
+                                    .get("method")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                path: val
+                                    .get("path")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                status: val
+                                    .get("status")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                duration_ms: val
+                                    .get("duration_ms")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or_default()
+                                    as i32,
+                                error: val
+                                    .get("error")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
                                 started_at: 0,
                             };
 
@@ -1016,7 +1125,14 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let execution_id_raw = req.execution_id.clone();
         let execution_id = self.resolve_execution_id(&execution_id_raw).await?;
 
-        let execution: Option<(String, String, String, i32, Option<String>, serde_json::Value)> = sqlx::query_as(
+        let execution: Option<(
+            String,
+            String,
+            String,
+            i32,
+            Option<String>,
+            serde_json::Value,
+        )> = sqlx::query_as(
             "SELECT status, method, path, duration_ms, error, \
                     COALESCE(response, '{}'::jsonb) as response \
              FROM flux.executions \
@@ -1069,13 +1185,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let checkpoints: Vec<WhyCheckpoint> = checkpoint_rows
             .into_iter()
-            .map(|(call_index, boundary, request, response, duration_ms)| WhyCheckpoint {
-                call_index,
-                boundary,
-                request,
-                response,
-                duration_ms,
-            })
+            .map(
+                |(call_index, boundary, request, response, duration_ms)| WhyCheckpoint {
+                    call_index,
+                    boundary,
+                    request,
+                    response,
+                    duration_ms,
+                },
+            )
             .collect();
 
         // Fetch console logs for this execution
@@ -1370,9 +1488,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         &self,
         request: Request<pb::ResumeRequest>,
     ) -> Result<Response<pb::ResumeResponse>, Status> {
-        let auth_token = Self::read_bearer_token(request.metadata()).ok_or_else(|| {
-            Status::unauthenticated("missing authorization bearer token")
-        })?;
+        let auth_token = Self::read_bearer_token(request.metadata())
+            .ok_or_else(|| Status::unauthenticated("missing authorization bearer token"))?;
         let identity = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
         let source_execution_id_raw = req.execution_id.clone();
@@ -1422,11 +1539,11 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             0
         } else {
             checkpoint_rows
-            .iter()
-            .map(|(call_index, _, _, _, _, _, _)| *call_index)
-            .max()
-            .map(|call_index| call_index + 1)
-            .unwrap_or(0)
+                .iter()
+                .map(|(call_index, _, _, _, _, _, _)| *call_index)
+                .max()
+                .map(|call_index| call_index + 1)
+                .unwrap_or(0)
         };
         let from_index = if req.from_index < 0 {
             inferred_from_index
@@ -1683,10 +1800,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         })
         .to_string();
 
-        let mut conn = self.pool.acquire().await
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
             .map_err(|e| Status::internal(format!("failed to acquire connection: {e}")))?;
 
-        // Using a raw execute on a single connection to avoid pool-level 
+        // Using a raw execute on a single connection to avoid pool-level
         // issues with immediate NotificationResponse messages.
         let _ = sqlx::query("SELECT pg_notify('flux_executions', $1)")
             .bind(payload)
@@ -1705,15 +1825,17 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let project_id = uuid::Uuid::parse_str(&req.project_id)
             .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?;
-        
+
         // 1. Parse artifact to get SHA
         let artifact: shared::project::FluxBuildArtifact = serde_json::from_str(&req.artifact_json)
             .map_err(|e| Status::invalid_argument(format!("invalid artifact_json: {e}")))?;
         let artifact_id = artifact.graph_sha256;
 
         // 2. Insert or Update function
-        let mut tx = self.pool.begin().await
-            .map_err(|e| Status::internal(format!("failed to begin deploy transaction: {e}")))?;
+        let mut tx =
+            self.pool.begin().await.map_err(|e| {
+                Status::internal(format!("failed to begin deploy transaction: {e}"))
+            })?;
 
         let function_id: uuid::Uuid = sqlx::query_scalar(
             "INSERT INTO control.functions (project_id, name, latest_artifact_id) \
@@ -1744,13 +1866,18 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .await
         .map_err(|e| Status::internal(format!("failed to upsert route: {e}")))?;
 
-        tx.commit().await
+        tx.commit()
+            .await
             .map_err(|e| Status::internal(format!("failed to commit deploy: {e}")))?;
 
         Ok(Response::new(pb::DeployFunctionResponse {
             ok: true,
             function_id: function_id.to_string(),
-            message: format!("Function '{}' deployed successfully with artifact {}", req.name, &artifact_id[..8]),
+            message: format!(
+                "Function '{}' deployed successfully with artifact {}",
+                req.name,
+                &artifact_id[..8]
+            ),
         }))
     }
 
@@ -1763,21 +1890,23 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let project_id = uuid::Uuid::parse_str(&req.project_id)
             .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?;
 
-        let rows: Vec<(uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-            "SELECT id, name, created_at FROM control.functions WHERE project_id = $1",
-        )
-        .bind(project_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| Status::internal(format!("failed to list functions: {e}")))?;
+        let rows: Vec<(uuid::Uuid, String, Option<chrono::DateTime<chrono::Utc>>)> =
+            sqlx::query_as(
+                "SELECT id, name, created_at FROM control.functions WHERE project_id = $1",
+            )
+            .bind(project_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| Status::internal(format!("failed to list functions: {e}")))?;
 
-        let functions = rows.into_iter().map(|(id, name, created_at)| {
-            pb::FunctionEntry {
+        let functions = rows
+            .into_iter()
+            .map(|(id, name, created_at)| pb::FunctionEntry {
                 id: id.to_string(),
                 name,
                 created_at: created_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(Response::new(pb::ListFunctionsResponse { functions }))
     }
@@ -1817,13 +1946,14 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .await
         .map_err(|e| Status::internal(format!("failed to list env vars: {e}")))?;
 
-        let env_vars = rows.into_iter().map(|(key, value, updated_at)| {
-            pb::EnvVarEntry {
+        let env_vars = rows
+            .into_iter()
+            .map(|(key, value, updated_at)| pb::EnvVarEntry {
                 key,
                 value,
                 updated_at: updated_at.to_rfc3339(),
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(Response::new(pb::ListEnvVarsResponse { env_vars }))
     }

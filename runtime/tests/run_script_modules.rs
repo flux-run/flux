@@ -2,8 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use runtime::JsIsolate;
 use runtime::isolate_pool::ExecutionContext;
+use runtime::JsIsolate;
 use serde_json::json;
 
 struct TempDirGuard {

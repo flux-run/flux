@@ -168,6 +168,10 @@ message RecordExecutionRequest {
   string error_fingerprint = 22;
   string error_source = 23;
   string error_type = 24;
+  string error_name = 25;
+  string error_message = 26;
+  string error_phase = 27;
+  bool is_user_code = 28;
 }
 
 message RecordExecutionResponse {

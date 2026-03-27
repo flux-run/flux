@@ -6,9 +6,12 @@ mod build;
 mod check;
 mod config;
 mod config_cmd;
+mod deploy;
+mod deployments;
 mod dev;
 mod events;
 mod exec;
+mod functions;
 mod grpc;
 mod init;
 mod login;
@@ -22,15 +25,12 @@ mod run;
 mod runtime_process;
 mod runtime_runner;
 mod server;
-mod status;
 mod start;
-mod tui;
+mod status;
 mod tail;
 mod trace;
+mod tui;
 mod why;
-mod deployments;
-mod deploy;
-mod functions;
 
 #[derive(Parser)]
 #[command(name = "flux")]

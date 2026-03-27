@@ -1,7 +1,7 @@
+use crate::config;
+use crate::grpc;
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use crate::grpc;
-use crate::config;
 use tabled::{Table, Tabled};
 // use shared::pb;
 
@@ -37,20 +37,23 @@ pub async fn execute(args: FunctionsArgs) -> Result<()> {
         FunctionsCommand::List { project_id } => {
             let auth = config::resolve_optional_auth(None, None)?;
             let pid = project_id.or(auth.project_id).expect("No project_id found. Please specify --project-id or use 'flux login --project-id'.");
-            
+
             println!("🔍 Fetching functions for project {}...", pid);
             let functions = grpc::list_functions(&auth.url, &auth.token, &pid).await?;
-            
+
             if functions.is_empty() {
                 println!("No functions found for this project.");
                 return Ok(());
             }
 
-            let rows: Vec<FunctionRow> = functions.into_iter().map(|f| FunctionRow {
-                id: f.id,
-                name: f.name,
-                created_at: f.created_at,
-            }).collect();
+            let rows: Vec<FunctionRow> = functions
+                .into_iter()
+                .map(|f| FunctionRow {
+                    id: f.id,
+                    name: f.name,
+                    created_at: f.created_at,
+                })
+                .collect();
 
             println!("{}", Table::new(rows));
         }
@@ -113,19 +116,30 @@ pub async fn execute_env(args: EnvArgs) -> Result<()> {
                 return Ok(());
             }
 
-            let rows: Vec<EnvVarRow> = vars.into_iter().map(|v| EnvVarRow {
-                key: v.key,
-                value: v.value,
-                updated_at: v.updated_at,
-            }).collect();
+            let rows: Vec<EnvVarRow> = vars
+                .into_iter()
+                .map(|v| EnvVarRow {
+                    key: v.key,
+                    value: v.value,
+                    updated_at: v.updated_at,
+                })
+                .collect();
 
             println!("{}", Table::new(rows));
         }
-        EnvCommand::Set { project_id, key, value } => {
+        EnvCommand::Set {
+            project_id,
+            key,
+            value,
+        } => {
             let auth = config::resolve_optional_auth(None, None)?;
             let pid = project_id.or(auth.project_id).expect("No project_id found. Please specify --project-id or use 'flux login --project-id'.");
 
-            println!("🚀 Setting environment variable {}={}...", key, key.chars().map(|_| '*').collect::<String>());
+            println!(
+                "🚀 Setting environment variable {}={}...",
+                key,
+                key.chars().map(|_| '*').collect::<String>()
+            );
             grpc::set_env_var(&auth.url, &auth.token, &pid, &key, &value).await?;
             println!("✅ Environment variable set successfully.");
         }

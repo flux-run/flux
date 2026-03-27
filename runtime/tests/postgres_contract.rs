@@ -2,14 +2,14 @@ use std::sync::{Once, OnceLock};
 
 use anyhow::{Context, Result};
 use rcgen::generate_simple_self_signed;
-use runtime::JsIsolate;
 use runtime::deno_runtime::{ExecutionMode, FetchCheckpoint};
 use runtime::isolate_pool::ExecutionContext;
-use rustls::ServerConfig;
+use runtime::JsIsolate;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::ServerConfig;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use tokio_rustls::TlsAcceptor;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -38,7 +38,9 @@ export default function handler({ input }) {
         "sql": "select 1 as value",
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create postgres isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create postgres isolate")?;
     let live_output = isolate
         .execute(payload.clone(), ExecutionContext::new("postgres-live"))
         .await
@@ -63,8 +65,9 @@ export default function handler({ input }) {
     assert_eq!(live_output.checkpoints[0].method, "simple_query");
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create postgres replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create postgres replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -113,8 +116,9 @@ export default function handler({ input }) {
         "sql": "select 1 as value",
     });
 
-    let mut live_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create blocked postgres isolate")?;
+    let mut live_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create blocked postgres isolate")?;
     let live_output = live_isolate
         .execute(
             payload.clone(),
@@ -166,8 +170,9 @@ export default function handler({ input }) {
         duration_ms: 0,
     }];
 
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create blocked postgres replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create blocked postgres replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-blocked-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -213,8 +218,9 @@ export default function handler({ input }) {
         "params": ["hello"],
     });
 
-    let mut isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create postgres param isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create postgres param isolate")?;
     let live_output = isolate
         .execute(
             payload.clone(),
@@ -242,8 +248,9 @@ export default function handler({ input }) {
     assert_eq!(live_output.checkpoints[0].method, "query");
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create postgres param replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create postgres param replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-param-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -288,8 +295,9 @@ export default function handler({ input }) {
         "params": [42],
     });
 
-    let mut isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create postgres int4 param isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create postgres int4 param isolate")?;
     let live_output = isolate
         .execute(payload, ExecutionContext::new("postgres-int4-param-live"))
         .await
@@ -343,8 +351,9 @@ export default function handler({ input }) {
         "params": [42, true, 3.5, "hello"],
     });
 
-    let mut isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create postgres mixed-type isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create postgres mixed-type isolate")?;
     let live_output = isolate
         .execute(
             payload.clone(),
@@ -369,7 +378,8 @@ export default function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).await
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
         .context("failed to create postgres mixed-type replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-mixed-types-replay");
     replay_context.mode = ExecutionMode::Replay;
@@ -434,8 +444,9 @@ export default function handler({ input }) {
         "caCertPem": cert_pem,
     });
 
-    let mut isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create postgres tls isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create postgres tls isolate")?;
     let live_output = isolate
         .execute(payload.clone(), ExecutionContext::new("postgres-tls-live"))
         .await
@@ -464,8 +475,9 @@ export default function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create postgres tls replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create postgres tls replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-tls-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -534,8 +546,9 @@ export default async function handler({ input }) {
         "params": ["hello"],
     });
 
-    let mut isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create node-pg shim isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create node-pg shim isolate")?;
     let live_output = isolate
         .execute(
             payload.clone(),
@@ -566,22 +579,19 @@ export default async function handler({ input }) {
         })
     );
     assert_eq!(live_output.checkpoints.len(), 3);
-    assert!(
-        live_output
-            .checkpoints
-            .iter()
-            .all(|cp| cp.boundary == "postgres")
-    );
-    assert!(
-        live_output
-            .checkpoints
-            .iter()
-            .all(|cp| cp.method == "query")
-    );
+    assert!(live_output
+        .checkpoints
+        .iter()
+        .all(|cp| cp.boundary == "postgres"));
+    assert!(live_output
+        .checkpoints
+        .iter()
+        .all(|cp| cp.method == "query"));
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create node-pg shim replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create node-pg shim replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-shim-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -630,8 +640,9 @@ export default async function handler({ input }) {
         "sql": "select 12.3400::numeric as amount",
     });
 
-    let mut isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create node-pg numeric parser isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create node-pg numeric parser isolate")?;
     let live_output = isolate
         .execute(
             payload.clone(),
@@ -657,7 +668,8 @@ export default async function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).await
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
         .context("failed to create node-pg numeric parser replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-numeric-replay");
     replay_context.mode = ExecutionMode::Replay;
@@ -752,12 +764,10 @@ export default async function handler({ input }) {
         })
     );
     assert_eq!(live_output.checkpoints.len(), 3);
-    assert!(
-        live_output
-            .checkpoints
-            .iter()
-            .all(|cp| cp.boundary == "postgres")
-    );
+    assert!(live_output
+        .checkpoints
+        .iter()
+        .all(|cp| cp.boundary == "postgres"));
 
     Ok(())
 }
@@ -842,12 +852,10 @@ export default async function handler({ input }) {
         })
     );
     assert_eq!(live_output.checkpoints.len(), 1);
-    assert!(
-        live_output
-            .checkpoints
-            .iter()
-            .all(|cp| cp.boundary == "postgres")
-    );
+    assert!(live_output
+        .checkpoints
+        .iter()
+        .all(|cp| cp.boundary == "postgres"));
 
     let recorded = live_output.checkpoints.clone();
     let mut replay_isolate = JsIsolate::new_for_run_entry(&module_path)
@@ -911,7 +919,8 @@ export default async function handler({ input }) {
         "sql": "select '{\"ok\":true,\"label\":\"json\"}'::jsonb as payload, '{1,2,3}'::int8[] as ids, '{\"alpha\",\"beta\"}'::text[] as tags",
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).await
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
         .context("failed to create node-pg json-array parser isolate")?;
     let live_output = isolate
         .execute(
@@ -944,7 +953,8 @@ export default async function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).await
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
         .context("failed to create node-pg json-array replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-json-array-replay");
     replay_context.mode = ExecutionMode::Replay;
@@ -1000,8 +1010,9 @@ export default async function handler({ input }) {
         "sql": "select '2026-03-17'::date as created_on, '12:34:56'::time as starts_at, '12:34:56+00'::timetz as starts_at_tz, '2026-03-17 12:34:56'::timestamp as created_at, '2026-03-17 12:34:56+00'::timestamptz as created_at_utc, '2 days 03:04:05'::interval as elapsed, '123e4567-e89b-12d3-a456-426614174000'::uuid as id",
     });
 
-    let mut isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create node-pg temporal parser isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create node-pg temporal parser isolate")?;
     let live_output = isolate
         .execute(
             payload.clone(),
@@ -1047,8 +1058,9 @@ export default async function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create node-pg temporal replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create node-pg temporal replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-temporal-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -1099,7 +1111,8 @@ export default async function handler({ input }) {
         "sql": "select '\\x6869'::bytea as payload, 42::oid as object_id",
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).await
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
         .context("failed to create node-pg bytea/oid parser isolate")?;
     let live_output = isolate
         .execute(
@@ -1134,7 +1147,8 @@ export default async function handler({ input }) {
     );
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate = JsIsolate::new_for_run(code).await
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
         .context("failed to create node-pg bytea/oid replay isolate")?;
     let mut replay_context = ExecutionContext::new("postgres-node-pg-bytea-oid-replay");
     replay_context.mode = ExecutionMode::Replay;

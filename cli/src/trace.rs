@@ -50,8 +50,8 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
         for log in &trace.logs {
             let (color, icon) = match log.level.as_str() {
                 "error" => ("\x1b[31m", "✗"),
-                "warn"  => ("\x1b[33m", "⚠"),
-                _       => ("\x1b[0m",  "›"),
+                "warn" => ("\x1b[33m", "⚠"),
+                _ => ("\x1b[0m", "›"),
             };
             println!("  {}{}  {}\x1b[0m", color, icon, log.message);
         }

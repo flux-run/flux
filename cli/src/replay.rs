@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use clap::Args;
 use std::path::Path;
 
@@ -85,17 +85,30 @@ pub async fn execute(args: ReplayArgs) -> Result<()> {
         .spawn()
         .context("failed to spawn flux-runtime")?;
 
-    let status = child.wait().await.context("failed to wait for flux-runtime")?;
+    let status = child
+        .wait()
+        .await
+        .context("failed to wait for flux-runtime")?;
 
-    let dashboard_url = std::env::var("FLUX_DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let dashboard_url =
+        std::env::var("FLUX_DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     let project_id = analysis_project_id(&artifact_tmp).unwrap_or_else(|| "default".to_string());
 
     // Cleanup temp artifact
     let _ = std::fs::remove_file(artifact_tmp);
 
-    println!("\n  {} Replay Finished\n", if status.success() { "✔" } else { "✘" });
-    println!("  {} View in Dashboard:  {}/project/{}/executions/{}", "→", dashboard_url, project_id, args.execution_id);
-    println!("  {} Debug root cause:   flux why {}\n", "→", args.execution_id);
+    println!(
+        "\n  {} Replay Finished\n",
+        if status.success() { "✔" } else { "✘" }
+    );
+    println!(
+        "  {} View in Dashboard:  {}/project/{}/executions/{}",
+        "→", dashboard_url, project_id, args.execution_id
+    );
+    println!(
+        "  {} Debug root cause:   flux why {}\n",
+        "→", args.execution_id
+    );
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));

@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use std::io::{stdout, Write};
 use crossterm::{
     cursor::{MoveToColumn, MoveToPreviousLine},
     event::{self, Event, KeyCode},
@@ -8,6 +7,7 @@ use crossterm::{
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
+use std::io::{stdout, Write};
 
 use crate::config::CliConfig;
 use crate::grpc::{normalize_grpc_url, validate_service_token};
@@ -82,11 +82,11 @@ fn prompt_template() -> Result<&'static str> {
     let result: Result<&'static str> = (|| loop {
         // Move back to the start of the options
         execute!(stdout, MoveToPreviousLine(2), MoveToColumn(0))?;
-        
+
         for (i, option) in options.iter().enumerate() {
             // Clear the line and ensure we're at column 0
             execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
-            
+
             if i == selected {
                 execute!(
                     stdout,
@@ -97,12 +97,7 @@ fn prompt_template() -> Result<&'static str> {
                     Print("\r\n")
                 )?;
             } else {
-                execute!(
-                    stdout,
-                    Print("   "),
-                    Print(option),
-                    Print("\r\n")
-                )?;
+                execute!(stdout, Print("   "), Print(option), Print("\r\n"))?;
             }
         }
 
@@ -120,7 +115,9 @@ fn prompt_template() -> Result<&'static str> {
                     }
                 }
                 KeyCode::Enter => break Ok(options[selected]),
-                KeyCode::Char('c') if key_event.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                KeyCode::Char('c')
+                    if key_event.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                {
                     return Err(anyhow::anyhow!("Operation cancelled"));
                 }
                 _ => {}
@@ -130,7 +127,7 @@ fn prompt_template() -> Result<&'static str> {
 
     execute!(stdout, crossterm::cursor::Show)?;
     disable_raw_mode()?;
-    println!(); 
+    println!();
 
     result
 }
@@ -162,7 +159,7 @@ async fn init_auth() -> Result<()> {
     let config = CliConfig {
         url: Some(normalized_url.clone()),
         token: Some(token),
-        project_id: auth_result.project_id, 
+        project_id: auth_result.project_id,
     };
     config.save()?;
 

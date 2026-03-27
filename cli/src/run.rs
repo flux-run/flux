@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
+use std::path::PathBuf;
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -65,8 +65,10 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     if entry_str == "-" {
         use std::io::Read;
         let mut buffer = String::new();
-        std::io::stdin().read_to_string(&mut buffer).context("failed to read from stdin")?;
-        
+        std::io::stdin()
+            .read_to_string(&mut buffer)
+            .context("failed to read from stdin")?;
+
         let cwd = std::env::current_dir().context("failed to get current directory")?;
         let file_path = cwd.join(format!(".flux-stdin-{}.ts", uuid::Uuid::new_v4()));
         std::fs::write(&file_path, buffer).context("failed to write temp stdin file")?;
@@ -100,9 +102,9 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         let artifact = PathBuf::from(artifact_str);
         // artifact is typically at <project>/<src>/.flux/artifact.json — go up 3 levels
         let env_path = artifact
-            .parent()  // .flux/
-            .and_then(|p| p.parent())  // src/
-            .and_then(|p| p.parent())  // project root
+            .parent() // .flux/
+            .and_then(|p| p.parent()) // src/
+            .and_then(|p| p.parent()) // project root
             .map(|p| p.join(".env"))
             .filter(|p| p.exists());
         if let Some(p) = env_path {
@@ -133,10 +135,18 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let project_id = args.project_id.clone().or_else(|| {
         let entry = std::path::PathBuf::from(entry_str);
         let project_dir = entry.parent().unwrap_or(std::path::Path::new("."));
-        crate::project::load_project_config(project_dir).ok().and_then(|c| c.project_id)
+        crate::project::load_project_config(project_dir)
+            .ok()
+            .and_then(|c| c.project_id)
     });
 
-    let prog_args = build_runtime_args(&auth.url, &auth.token, &args, Some(entry_str), project_id.as_deref());
+    let prog_args = build_runtime_args(
+        &auth.url,
+        &auth.token,
+        &args,
+        Some(entry_str),
+        project_id.as_deref(),
+    );
 
     // 4. Run with unified runtime_runner
     let project_id_copy = project_id.clone();
@@ -149,7 +159,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         server_url: auth.url.clone(),
         watch_dir: None,
         poll_ms: 0,
-    }).await?;
+    })
+    .await?;
 
     if let Some(path_str) = temp_entry {
         let _ = std::fs::remove_file(path_str);
@@ -158,7 +169,13 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     Ok(())
 }
 
-fn build_runtime_args(server_url: &str, token: &str, args: &RunArgs, entry_str: Option<&str>, project_id: Option<&str>) -> Vec<String> {
+fn build_runtime_args(
+    server_url: &str,
+    token: &str,
+    args: &RunArgs,
+    entry_str: Option<&str>,
+    project_id: Option<&str>,
+) -> Vec<String> {
     let mut prog_args = Vec::new();
 
     if let Some(ref artifact) = args.artifact {

@@ -1,21 +1,21 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
-use axum::extract::{Path, State, OriginalUri};
+use anyhow::{bail, Result};
+use axum::body::to_bytes;
+use axum::extract::{OriginalUri, Path, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use axum::body::to_bytes;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{boot_runtime_artifact, FetchCheckpoint, NetRequest};
-use crate::isolate_pool::{ExecutionContext, IsolatePool, execute_one_shot_artifact};
+use crate::isolate_pool::{execute_one_shot_artifact, ExecutionContext, IsolatePool};
 
 #[derive(Debug, Clone)]
 pub struct HttpRuntimeConfig {
@@ -67,7 +67,10 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
     // Determine is_server_mode by booting once (run_http_runtime is called from main, so Send isn't an issue here)
     let boot = boot_runtime_artifact(
         &artifact,
-        ExecutionContext::with_project(artifact.code_version().to_string(), config.project_id.clone()),
+        ExecutionContext::with_project(
+            artifact.code_version().to_string(),
+            config.project_id.clone(),
+        ),
     )
     .await?;
 
@@ -128,11 +131,13 @@ async fn handle_request(
     Json(mut payload): Json<serde_json::Value>,
 ) -> Response {
     let request_payload = payload.clone();
-    
+
     let provided_artifact: Option<RuntimeArtifact> = payload.get("artifact").and_then(|v| {
-        serde_json::from_value::<shared::project::FluxBuildArtifact>(v.clone()).ok().map(RuntimeArtifact::Built)
+        serde_json::from_value::<shared::project::FluxBuildArtifact>(v.clone())
+            .ok()
+            .map(RuntimeArtifact::Built)
     });
-    
+
     // Only enforce route-name matching when no per-request artifact is supplied.
     if provided_artifact.is_none() && route != state.route_name && state.route_name != "_gateway" {
         return (
@@ -141,27 +146,32 @@ async fn handle_request(
         )
             .into_response();
     }
-    
+
     if let serde_json::Value::Object(ref mut map) = payload {
         map.remove("artifact");
     }
 
     let code_version = state.code_version.read().await.clone();
     let mut ctx = ExecutionContext::with_project(code_version.clone(), state.project_id.clone());
-    
-    let exec_id = match headers.get("x-flux-execution-id").and_then(|h| h.to_str().ok()) {
+
+    let exec_id = match headers
+        .get("x-flux-execution-id")
+        .and_then(|h| h.to_str().ok())
+    {
         Some(id) => id.to_string(),
         None => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": "x-flux-execution-id header required" })),
-            ).into_response();
+            )
+                .into_response();
         }
     };
-    
+
     ctx.execution_id = exec_id;
-    
-    let max_duration_ms = headers.get("x-flux-max-duration-ms")
+
+    let max_duration_ms = headers
+        .get("x-flux-max-duration-ms")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok());
 
@@ -196,7 +206,11 @@ async fn handle_request(
         .await;
     }
 
-    let status = if result.status == "ok" { StatusCode::OK } else { StatusCode::BAD_REQUEST };
+    let status = if result.status == "ok" {
+        StatusCode::OK
+    } else {
+        StatusCode::BAD_REQUEST
+    };
     let mut response = (
         status,
         Json(serde_json::json!({
@@ -212,7 +226,12 @@ async fn handle_request(
         .into_response();
 
     let code_v = state.code_version.read().await.clone();
-    attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &code_v);
+    attach_execution_headers(
+        &mut response,
+        &result.execution_id,
+        &result.request_id,
+        &code_v,
+    );
     response
 }
 
@@ -247,7 +266,9 @@ async fn handle_net_request(
         .collect();
     let headers_json = serde_json::to_string(&headers_list).unwrap_or_else(|_| "[]".to_string());
 
-    let max_duration_ms = request.headers().get("x-flux-max-duration-ms")
+    let max_duration_ms = request
+        .headers()
+        .get("x-flux-max-duration-ms")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok());
 
@@ -282,7 +303,8 @@ async fn handle_net_request(
 
     let result = {
         let pool = state.pool.read().await;
-        pool.execute_net_request(context, net_req, max_duration_ms).await
+        pool.execute_net_request(context, net_req, max_duration_ms)
+            .await
     };
 
     if !state.service_token.is_empty() {
@@ -290,7 +312,7 @@ async fn handle_net_request(
             &state.server_url,
             &state.service_token,
             crate::server_client::ExecutionEnvelope {
-                method: "REPLAY".to_string(), 
+                method: "REPLAY".to_string(),
                 path: uri.path().to_string(),
                 project_id: state.project_id.clone(),
                 request_json: request_payload,
@@ -304,21 +326,38 @@ async fn handle_net_request(
         let status_code = nr.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
         let body_str = nr.get("body").and_then(|v| v.as_str()).unwrap_or("");
         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        
+
         let mut response = if body_str.starts_with("__FLUX_B64:") {
-            BASE64_STANDARD.decode(&body_str[11..]).unwrap_or_else(|_| body_str.as_bytes().to_vec()).into_response()
+            BASE64_STANDARD
+                .decode(&body_str[11..])
+                .unwrap_or_else(|_| body_str.as_bytes().to_vec())
+                .into_response()
         } else {
             body_str.as_bytes().to_vec().into_response()
         };
 
         *response.status_mut() = status;
         let code_v = state.code_version.read().await.clone();
-        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &code_v);
+        attach_execution_headers(
+            &mut response,
+            &result.execution_id,
+            &result.request_id,
+            &code_v,
+        );
         response
     } else {
-        let mut response = (StatusCode::INTERNAL_SERVER_ERROR, result.error.unwrap_or_else(|| "Internal error".to_string())).into_response();
+        let mut response = (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            result.error.unwrap_or_else(|| "Internal error".to_string()),
+        )
+            .into_response();
         let code_v = state.code_version.read().await.clone();
-        attach_execution_headers(&mut response, &result.execution_id, &result.request_id, &code_v);
+        attach_execution_headers(
+            &mut response,
+            &result.execution_id,
+            &result.request_id,
+            &code_v,
+        );
         response
     }
 }
@@ -334,40 +373,60 @@ async fn handle_internal_reload(
         tracing::error!("❌ Hot-reload rejected: service_token is empty");
         return (StatusCode::FORBIDDEN, "runtime internal reload is disabled").into_response();
     }
-    let provided = headers.get("x-internal-token").and_then(|v| v.to_str().ok()).unwrap_or_default();
+    let provided = headers
+        .get("x-internal-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
     if provided != state.service_token {
-        tracing::error!("❌ Hot-reload rejected: invalid internal token. Provided: '{}', Expected: '{}'", provided, state.service_token);
+        tracing::error!(
+            "❌ Hot-reload rejected: invalid internal token. Provided: '{}', Expected: '{}'",
+            provided,
+            state.service_token
+        );
         return (StatusCode::UNAUTHORIZED, "invalid internal token").into_response();
     }
 
     tracing::info!("🔄 Hot-reload request received");
 
     tracing::info!("🔍 Parsing artifact JSON...");
-    let new_artifact = match serde_json::from_value::<shared::project::FluxBuildArtifact>(payload.artifact) {
-        Ok(a) => RuntimeArtifact::Built(a),
-        Err(e) => {
-            tracing::error!("❌ Artifact parse error: {}", e);
-            return (StatusCode::BAD_REQUEST, format!("invalid artifact: {}", e)).into_response();
-        }
-    };
+    let new_artifact =
+        match serde_json::from_value::<shared::project::FluxBuildArtifact>(payload.artifact) {
+            Ok(a) => RuntimeArtifact::Built(a),
+            Err(e) => {
+                tracing::error!("❌ Artifact parse error: {}", e);
+                return (StatusCode::BAD_REQUEST, format!("invalid artifact: {}", e))
+                    .into_response();
+            }
+        };
 
     let new_version = new_artifact.code_version().to_string();
     tracing::info!("📖 Acquiring code_version read lock...");
     let current_version = state.code_version.read().await.clone();
-    tracing::info!("🎯 Comparison: new='{}', current='{}'", new_version, current_version);
-    
+    tracing::info!(
+        "🎯 Comparison: new='{}', current='{}'",
+        new_version,
+        current_version
+    );
+
     if new_version == current_version {
         tracing::info!("⏭️ Skipping reload: version already matches");
-        return (StatusCode::OK, Json(serde_json::json!({ "reloaded": false, "reason": "Already on this version" }))).into_response();
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "reloaded": false, "reason": "Already on this version" })),
+        )
+            .into_response();
     }
 
-    tracing::info!("🔄 Hot-reloading runtime with artifact version: {}", new_version);
+    tracing::info!(
+        "🔄 Hot-reloading runtime with artifact version: {}",
+        new_version
+    );
 
     // DETERMINISTIC THREAD-OFF: boot_runtime_artifact is !Send because it creates a JsRuntime.
     // We run it in a separate thread and signal result back to this sync/Send-safe handler.
     let (tx, rx) = tokio::sync::oneshot::channel();
     let ctx = ExecutionContext::with_project(new_version.clone(), state.project_id.clone());
-    
+
     tracing::info!("🧵 Spawning reload worker thread...");
     std::thread::spawn(move || {
         tracing::info!("👷 Worker thread started. Building local tokio runtime...");
@@ -375,11 +434,9 @@ async fn handle_internal_reload(
             .enable_all()
             .build()
             .expect("failed to build local reload runtime");
-            
+
         tracing::info!("🚀 Booting runtime artifact in worker thread...");
-        let result = rt.block_on(async {
-            boot_runtime_artifact(&new_artifact, ctx).await
-        });
+        let result = rt.block_on(async { boot_runtime_artifact(&new_artifact, ctx).await });
         if let Err(ref e) = result {
             tracing::error!("❌ Boot artifact failed in worker thread: {}", e);
         }
@@ -392,39 +449,60 @@ async fn handle_internal_reload(
         Ok(res) => {
             tracing::info!("📥 Received results from worker thread");
             res
-        },
+        }
         Err(_) => {
             tracing::error!("❌ Reload worker thread panicked or dropped sender");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Reload worker thread panicked").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Reload worker thread panicked",
+            )
+                .into_response();
         }
     };
 
     let boot = match boot_result {
         Ok(b) => b,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("boot failed: {}", e)).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("boot failed: {}", e),
+            )
+                .into_response()
+        }
     };
 
     if let Some(error) = boot.result.error.as_ref() {
         tracing::error!("❌ Boot script error: {}", error);
-        return (StatusCode::BAD_REQUEST, format!("boot execution error: {}", error)).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("boot execution error: {}", error),
+        )
+            .into_response();
     }
 
     // Allocate the new pool based on the boot detection
-    let new_pool = match IsolatePool::new_with_mode(
-        state.isolate_pool_size,
-        artifact,
-        boot.is_server_mode,
-    ) {
-        Ok(p) => p,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("pool allocation failed: {}", e)).into_response(),
-    };
+    let new_pool =
+        match IsolatePool::new_with_mode(state.isolate_pool_size, artifact, boot.is_server_mode) {
+            Ok(p) => p,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("pool allocation failed: {}", e),
+                )
+                    .into_response()
+            }
+        };
 
     // Atomic swap
     *state.pool.write().await = new_pool;
     *state.code_version.write().await = new_version.clone();
 
     tracing::info!("✅ Runtime hot-reloaded to version: {}", new_version);
-    (StatusCode::OK, Json(serde_json::json!({ "reloaded": true, "code_version": new_version }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "reloaded": true, "code_version": new_version })),
+    )
+        .into_response()
 }
 
 async fn handle_internal_resume(
@@ -436,12 +514,19 @@ async fn handle_internal_resume(
         return (StatusCode::FORBIDDEN, "runtime internal resume is disabled").into_response();
     }
 
-    let provided = headers.get("x-internal-token").and_then(|v| v.to_str().ok()).unwrap_or_default();
+    let provided = headers
+        .get("x-internal-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
     if provided != state.service_token {
         return (StatusCode::UNAUTHORIZED, "invalid internal token").into_response();
     }
 
-    (StatusCode::OK, Json(serde_json::json!({ "status": "resume-stub" }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": "resume-stub" })),
+    )
+        .into_response()
 }
 
 fn attach_execution_headers(
@@ -451,9 +536,12 @@ fn attach_execution_headers(
     code_version: &str,
 ) {
     let headers = response.headers_mut();
-    let _ = HeaderValue::from_str(execution_id).map(|v| headers.insert(HeaderName::from_static("x-flux-execution-id"), v));
-    let _ = HeaderValue::from_str(request_id).map(|v| headers.insert(HeaderName::from_static("x-flux-request-id"), v));
-    let _ = HeaderValue::from_str(code_version).map(|v| headers.insert(HeaderName::from_static("x-flux-code-version"), v));
+    let _ = HeaderValue::from_str(execution_id)
+        .map(|v| headers.insert(HeaderName::from_static("x-flux-execution-id"), v));
+    let _ = HeaderValue::from_str(request_id)
+        .map(|v| headers.insert(HeaderName::from_static("x-flux-request-id"), v));
+    let _ = HeaderValue::from_str(code_version)
+        .map(|v| headers.insert(HeaderName::from_static("x-flux-code-version"), v));
 }
 
 async fn shutdown_signal() {

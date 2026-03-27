@@ -1,7 +1,7 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use clap::Args;
 
-use crate::project::{DiagnosticSeverity, analyze_project, has_errors, resolve_entry_path};
+use crate::project::{analyze_project, has_errors, resolve_entry_path, DiagnosticSeverity};
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {

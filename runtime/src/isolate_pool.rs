@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{
-    ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate, LogEntry, NetRequest,
-    NetRequestExecution,
+    structured_error_from_anyhow, ExecutionMode, FetchCheckpoint, JsExecutionOutput, JsIsolate,
+    LogEntry, NetRequest, NetRequestExecution,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,11 +76,18 @@ pub struct ExecutionResult {
     pub response_body: Option<String>,
 
     // Error details
+    pub error_name: Option<String>,
     pub error_message: Option<String>,
     pub error_stack: Option<String>,
+    pub error_phase: Option<String>,
+    pub is_user_code: Option<bool>,
     pub error_source: Option<String>,
     pub error_type: Option<String>,
     pub error_fingerprint: Option<String>,
+}
+
+fn measured_duration_ms(started: Instant) -> i32 {
+    std::cmp::max(1, started.elapsed().as_millis() as i32)
 }
 
 #[derive(Debug)]
@@ -279,7 +286,7 @@ pub async fn execute_one_shot_artifact(
 ) -> ExecutionResult {
     let (result_tx, result_rx) = oneshot::channel::<ExecutionResult>();
     let context_for_thread = context.clone();
-    
+
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -287,26 +294,30 @@ pub async fn execute_one_shot_artifact(
         {
             Ok(rt) => rt,
             Err(e) => {
-                let _ = result_tx.send(error_result(context_for_thread, format!("Failed to create runtime: {e}")));
+                let _ = result_tx.send(error_result(
+                    context_for_thread,
+                    format!("Failed to create runtime: {e}"),
+                ));
                 return;
             }
         };
 
         let local_set = tokio::task::LocalSet::new();
         local_set.block_on(&runtime, async move {
-            let started = std::time::Instant::now();
-            
+            let started = Instant::now();
+
             let isolate_result = match &artifact {
                 RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, 0).await,
-                RuntimeArtifact::Built(artifact) => {
-                    JsIsolate::new_from_artifact(artifact).await
-                }
+                RuntimeArtifact::Built(artifact) => JsIsolate::new_from_artifact(artifact).await,
             };
 
             let mut isolate = match isolate_result {
                 Ok(iso) => iso,
                 Err(e) => {
-                    let _ = result_tx.send(error_result(context_for_thread.clone(), format!("Failed to init isolate: {e}")));
+                    let _ = result_tx.send(error_result(
+                        context_for_thread.clone(),
+                        format!("Failed to init isolate: {e}"),
+                    ));
                     return;
                 }
             };
@@ -320,9 +331,16 @@ pub async fn execute_one_shot_artifact(
                 })
             });
 
-            let res = match isolate.execute_with_recorded(payload, context_for_thread.clone(), vec![]).await {
+            let res = match isolate
+                .execute_with_recorded(payload, context_for_thread.clone(), vec![])
+                .await
+            {
                 Ok(out) => {
-                    let status = if out.error.is_some() { "error".to_string() } else { "ok".to_string() };
+                    let status = if out.error.is_some() {
+                        "error".to_string()
+                    } else {
+                        "ok".to_string()
+                    };
                     ExecutionResult {
                         execution_id: context_for_thread.execution_id.clone(),
                         request_id: context_for_thread.request_id.clone(),
@@ -331,7 +349,7 @@ pub async fn execute_one_shot_artifact(
                         status,
                         body: serde_json::json!({ "output": out.output }),
                         error: out.error,
-                        duration_ms: started.elapsed().as_millis() as i32,
+                        duration_ms: measured_duration_ms(started),
                         checkpoints: out.checkpoints,
                         logs: out.logs,
                         has_live_io: out.has_live_io,
@@ -345,14 +363,48 @@ pub async fn execute_one_shot_artifact(
                         request_body: None,
                         response_status: None,
                         response_body: None,
-                        error_message: None,
+                        error_name: out.error_name,
+                        error_message: out.error_message,
                         error_stack: out.error_stack,
+                        error_phase: out.error_phase,
+                        is_user_code: out.is_user_code,
                         error_source: out.error_source,
                         error_type: out.error_type,
                         error_fingerprint: None,
                     }
                 }
-                Err(e) => error_result(context_for_thread, e.to_string()),
+                Err(err) => {
+                    let extracted = structured_error_from_anyhow(&err, "runtime", true);
+                    ExecutionResult {
+                        execution_id: context_for_thread.execution_id,
+                        request_id: context_for_thread.request_id,
+                        project_id: context_for_thread.project_id,
+                        code_version: context_for_thread.code_version,
+                        status: "error".to_string(),
+                        body: serde_json::Value::Null,
+                        error: extracted.error,
+                        duration_ms: measured_duration_ms(started),
+                        checkpoints: vec![],
+                        logs: vec![],
+                        has_live_io: false,
+                        boundary_stop: None,
+                        client_ip: None,
+                        user_agent: None,
+                        request_method: None,
+                        request_headers: None,
+                        request_body: None,
+                        response_status: None,
+                        response_body: None,
+                        error_name: extracted.name,
+                        error_message: extracted.message,
+                        error_stack: extracted.stack,
+                        error_phase: extracted.phase,
+                        is_user_code: extracted.is_user_code,
+                        error_source: extracted.source,
+                        error_type: extracted.error_type,
+                        error_fingerprint: None,
+                    }
+                }
             };
 
             if let Some(w) = watchdog {
@@ -365,7 +417,10 @@ pub async fn execute_one_shot_artifact(
 
     match result_rx.await {
         Ok(res) => res,
-        Err(_) => error_result(context, "Execution thread panicked or dropped result channel"),
+        Err(_) => error_result(
+            context,
+            "Execution thread panicked or dropped result channel",
+        ),
     }
 }
 
@@ -394,7 +449,9 @@ fn spawn_isolate_worker(
 
             local_set.block_on(&runtime, async move {
                 let isolate_result = match &artifact {
-                    RuntimeArtifact::Inline(artifact) => JsIsolate::new(&artifact.code, isolate_id).await,
+                    RuntimeArtifact::Inline(artifact) => {
+                        JsIsolate::new(&artifact.code, isolate_id).await
+                    }
                     RuntimeArtifact::Built(artifact) => {
                         JsIsolate::new_from_artifact(artifact).await
                     }
@@ -414,7 +471,7 @@ fn spawn_isolate_worker(
 
                 while let Some(work) = rx.recv().await {
                     let context = work.context.clone();
-                    let started = std::time::Instant::now();
+                    let started = Instant::now();
 
                     let isolate_result = match &artifact {
                         RuntimeArtifact::Inline(artifact) => {
@@ -461,7 +518,11 @@ fn spawn_isolate_worker(
                                 response: net_resp,
                                 checkpoints,
                                 error: js_error,
+                                error_name,
+                                error_message,
                                 error_stack,
+                                error_phase,
+                                is_user_code,
                                 error_source,
                                 error_type,
                                 logs,
@@ -476,13 +537,17 @@ fn spawn_isolate_worker(
                                 };
                                 let error = js_error.or_else(|| {
                                     if net_resp.status == 500 {
-                                        Some(format!("HTTP Internal Server Error ({})", net_resp.status))
+                                        Some(format!(
+                                            "HTTP Internal Server Error ({})",
+                                            net_resp.status
+                                        ))
                                     } else {
                                         None
                                     }
                                 });
                                 ExecutionResult {
-                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
+                                    execution_id: context.execution_id,
+                                    project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
                                     status,
@@ -494,7 +559,7 @@ fn spawn_isolate_worker(
                                         }
                                     }),
                                     error,
-                                    duration_ms: started.elapsed().as_millis() as i32,
+                                    duration_ms: measured_duration_ms(started),
                                     checkpoints,
                                     logs,
                                     has_live_io,
@@ -504,18 +569,58 @@ fn spawn_isolate_worker(
                                     client_ip: None,
                                     user_agent: None,
                                     request_method: Some(method),
-                                    request_headers: Some(serde_json::to_value(headers_json).unwrap_or(serde_json::Value::Null)),
+                                    request_headers: Some(
+                                        serde_json::to_value(headers_json)
+                                            .unwrap_or(serde_json::Value::Null),
+                                    ),
                                     request_body: Some(body_cloned),
                                     response_status: Some(net_resp.status as i32),
                                     response_body: Some(net_resp.body),
-                                    error_message: None,
+                                    error_name,
+                                    error_message,
                                     error_stack,
+                                    error_phase,
+                                    is_user_code,
                                     error_source,
                                     error_type,
                                     error_fingerprint: None,
                                 }
-                            },
-                            Err(err) => error_result(work.context, err.to_string()),
+                            }
+                            Err(err) => {
+                                let extracted = structured_error_from_anyhow(&err, "runtime", true);
+                                ExecutionResult {
+                                    execution_id: context.execution_id,
+                                    project_id: context.project_id.clone(),
+                                    request_id: context.request_id,
+                                    code_version: context.code_version,
+                                    status: "error".to_string(),
+                                    body: serde_json::Value::Null,
+                                    error: extracted.error,
+                                    duration_ms: measured_duration_ms(started),
+                                    checkpoints: vec![],
+                                    logs: vec![],
+                                    has_live_io: false,
+                                    boundary_stop: None,
+                                    client_ip: None,
+                                    user_agent: None,
+                                    request_method: Some(method),
+                                    request_headers: Some(
+                                        serde_json::to_value(headers_json)
+                                            .unwrap_or(serde_json::Value::Null),
+                                    ),
+                                    request_body: Some(body_cloned),
+                                    response_status: None,
+                                    response_body: None,
+                                    error_name: extracted.name,
+                                    error_message: extracted.message,
+                                    error_stack: extracted.stack,
+                                    error_phase: extracted.phase,
+                                    is_user_code: extracted.is_user_code,
+                                    error_source: extracted.source,
+                                    error_type: extracted.error_type,
+                                    error_fingerprint: None,
+                                }
+                            }
                         }
                     } else {
                         match isolate
@@ -530,7 +635,11 @@ fn spawn_isolate_worker(
                                 output,
                                 checkpoints,
                                 error,
-                                error_stack: _,
+                                error_name,
+                                error_message,
+                                error_stack,
+                                error_phase,
+                                is_user_code,
                                 error_source,
                                 error_type,
                                 logs,
@@ -552,13 +661,14 @@ fn spawn_isolate_worker(
                                     ),
                                 };
                                 ExecutionResult {
-                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
+                                    execution_id: context.execution_id,
+                                    project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
                                     status,
                                     body,
                                     error,
-                                    duration_ms: started.elapsed().as_millis() as i32,
+                                    duration_ms: measured_duration_ms(started),
                                     checkpoints,
                                     logs,
                                     has_live_io,
@@ -572,45 +682,56 @@ fn spawn_isolate_worker(
                                     request_body: None,
                                     response_status: None,
                                     response_body: None,
-                                    error_message: None,
-                                    error_stack: None,
+                                    error_name,
+                                    error_message,
+                                    error_stack,
+                                    error_phase,
+                                    is_user_code,
                                     error_source,
                                     error_type,
                                     error_fingerprint: None,
                                 }
                             }
-                            Err(err) => ExecutionResult {
-                                execution_id: context.execution_id,
-                                project_id: context.project_id.clone(),
-                                request_id: context.request_id,
-                                code_version: context.code_version,
-                                status: "error".to_string(),
-                                body: serde_json::Value::Null,
-                                error: Some(err.to_string()),
-                                duration_ms: started.elapsed().as_millis() as i32,
-                                checkpoints: vec![],
-                                logs: vec![],
-                                has_live_io: false,
-                                boundary_stop: None,
+                            Err(err) => {
+                                let extracted = structured_error_from_anyhow(&err, "runtime", true);
+                                ExecutionResult {
+                                    execution_id: context.execution_id,
+                                    project_id: context.project_id.clone(),
+                                    request_id: context.request_id,
+                                    code_version: context.code_version,
+                                    status: "error".to_string(),
+                                    body: serde_json::Value::Null,
+                                    error: extracted.error,
+                                    duration_ms: measured_duration_ms(started),
+                                    checkpoints: vec![],
+                                    logs: vec![],
+                                    has_live_io: false,
+                                    boundary_stop: None,
 
-                                // Advanced Telemetry
-                                client_ip: None,
-                                user_agent: None,
-                                request_method: None,
-                                request_headers: None,
-                                request_body: None,
-                                response_status: None,
-                                response_body: None,
-                                error_message: None,
-                                error_stack: None,
-                                error_source: None,
-                                error_type: None,
-                                error_fingerprint: None,
-                            },
+                                    // Advanced Telemetry
+                                    client_ip: None,
+                                    user_agent: None,
+                                    request_method: None,
+                                    request_headers: None,
+                                    request_body: None,
+                                    response_status: None,
+                                    response_body: None,
+                                    error_name: extracted.name,
+                                    error_message: extracted.message,
+                                    error_stack: extracted.stack,
+                                    error_phase: extracted.phase,
+                                    is_user_code: extracted.is_user_code,
+                                    error_source: extracted.source,
+                                    error_type: extracted.error_type,
+                                    error_fingerprint: None,
+                                }
+                            }
                         }
                     };
 
-                    if let Some(w) = watchdog { w.abort(); }
+                    if let Some(w) = watchdog {
+                        w.abort();
+                    }
                     let _ = work.result_tx.send(result);
                 }
             });
@@ -653,7 +774,7 @@ fn spawn_isolate_worker_with_mode(
             local_set.block_on(&runtime, async move {
                 while let Some(work) = rx.recv().await {
                     let context = work.context.clone();
-                    let started = std::time::Instant::now();
+                    let started = Instant::now();
 
                     let isolate_result = match &artifact {
                         RuntimeArtifact::Inline(artifact) => {
@@ -697,8 +818,13 @@ fn spawn_isolate_worker_with_mode(
                                 response: net_resp,
                                 checkpoints,
                                 error: js_error,
-                                error_message: _msg,
+                                error_name,
+                                error_message,
                                 error_stack,
+                                error_phase,
+                                is_user_code,
+                                error_source,
+                                error_type,
                                 logs,
                                 has_live_io,
                                 boundary_stop,
@@ -711,13 +837,17 @@ fn spawn_isolate_worker_with_mode(
                                 };
                                 let error = js_error.or_else(|| {
                                     if net_resp.status == 500 {
-                                        Some(format!("HTTP Internal Server Error ({})", net_resp.status))
+                                        Some(format!(
+                                            "HTTP Internal Server Error ({})",
+                                            net_resp.status
+                                        ))
                                     } else {
                                         None
                                     }
                                 });
                                 ExecutionResult {
-                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
+                                    execution_id: context.execution_id,
+                                    project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
                                     status,
@@ -729,7 +859,7 @@ fn spawn_isolate_worker_with_mode(
                                         }
                                     }),
                                     error,
-                                    duration_ms: std::cmp::max(1, started.elapsed().as_millis() as i32),
+                                    duration_ms: measured_duration_ms(started),
                                     checkpoints,
                                     logs,
                                     has_live_io,
@@ -739,18 +869,58 @@ fn spawn_isolate_worker_with_mode(
                                     client_ip: None,
                                     user_agent: None,
                                     request_method: Some(net_req.method),
-                                    request_headers: Some(serde_json::to_value(net_req.headers_json).unwrap_or(serde_json::Value::Null)),
+                                    request_headers: Some(
+                                        serde_json::to_value(net_req.headers_json)
+                                            .unwrap_or(serde_json::Value::Null),
+                                    ),
                                     request_body: Some(net_req.body),
                                     response_status: Some(net_resp.status as i32),
                                     response_body: Some(net_resp.body),
-                                    error_message: None,
+                                    error_name,
+                                    error_message,
                                     error_stack,
-                                    error_source: None,
-                                    error_type: None,
+                                    error_phase,
+                                    is_user_code,
+                                    error_source,
+                                    error_type,
                                     error_fingerprint: None,
                                 }
-                            },
-                            Err(err) => error_result(work.context, err.to_string()),
+                            }
+                            Err(err) => {
+                                let extracted = structured_error_from_anyhow(&err, "runtime", true);
+                                ExecutionResult {
+                                    execution_id: context.execution_id,
+                                    project_id: context.project_id.clone(),
+                                    request_id: context.request_id,
+                                    code_version: context.code_version,
+                                    status: "error".to_string(),
+                                    body: serde_json::Value::Null,
+                                    error: extracted.error,
+                                    duration_ms: measured_duration_ms(started),
+                                    checkpoints: vec![],
+                                    logs: vec![],
+                                    has_live_io: false,
+                                    boundary_stop: None,
+                                    client_ip: None,
+                                    user_agent: None,
+                                    request_method: Some(net_req.method),
+                                    request_headers: Some(
+                                        serde_json::to_value(net_req.headers_json)
+                                            .unwrap_or(serde_json::Value::Null),
+                                    ),
+                                    request_body: Some(net_req.body),
+                                    response_status: None,
+                                    response_body: None,
+                                    error_name: extracted.name,
+                                    error_message: extracted.message,
+                                    error_stack: extracted.stack,
+                                    error_phase: extracted.phase,
+                                    is_user_code: extracted.is_user_code,
+                                    error_source: extracted.source,
+                                    error_type: extracted.error_type,
+                                    error_fingerprint: None,
+                                }
+                            }
                         }
                     } else {
                         match isolate
@@ -765,7 +935,11 @@ fn spawn_isolate_worker_with_mode(
                                 output,
                                 checkpoints,
                                 error,
+                                error_name,
+                                error_message,
                                 error_stack,
+                                error_phase,
+                                is_user_code,
                                 error_source,
                                 error_type,
                                 logs,
@@ -787,13 +961,14 @@ fn spawn_isolate_worker_with_mode(
                                     ),
                                 };
                                 ExecutionResult {
-                                    execution_id: context.execution_id, project_id: context.project_id.clone(),
+                                    execution_id: context.execution_id,
+                                    project_id: context.project_id.clone(),
                                     request_id: context.request_id,
                                     code_version: context.code_version,
                                     status,
                                     body,
                                     error,
-                                    duration_ms: std::cmp::max(1, started.elapsed().as_millis() as i32),
+                                    duration_ms: measured_duration_ms(started),
                                     checkpoints,
                                     logs,
                                     has_live_io,
@@ -807,45 +982,56 @@ fn spawn_isolate_worker_with_mode(
                                     request_body: None,
                                     response_status: None,
                                     response_body: None,
-                                    error_message: None,
+                                    error_name,
+                                    error_message,
                                     error_stack,
+                                    error_phase,
+                                    is_user_code,
                                     error_source,
                                     error_type,
                                     error_fingerprint: None,
                                 }
                             }
-                            Err(err) => ExecutionResult {
-                                execution_id: context.execution_id,
-                                request_id: context.request_id,
-                                project_id: context.project_id.clone(),
-                                code_version: context.code_version,
-                                status: "critical".to_string(),
-                                body: serde_json::Value::Null,
-                                error: Some(err.to_string()),
-                                duration_ms: started.elapsed().as_millis() as i32,
-                                checkpoints: Vec::new(),
-                                logs: Vec::new(),
-                                has_live_io: false,
-                                boundary_stop: None,
+                            Err(err) => {
+                                let extracted = structured_error_from_anyhow(&err, "runtime", true);
+                                ExecutionResult {
+                                    execution_id: context.execution_id,
+                                    request_id: context.request_id,
+                                    project_id: context.project_id.clone(),
+                                    code_version: context.code_version,
+                                    status: "critical".to_string(),
+                                    body: serde_json::Value::Null,
+                                    error: extracted.error,
+                                    duration_ms: measured_duration_ms(started),
+                                    checkpoints: Vec::new(),
+                                    logs: Vec::new(),
+                                    has_live_io: false,
+                                    boundary_stop: None,
 
-                                // Advanced Telemetry
-                                client_ip: None,
-                                user_agent: None,
-                                request_method: None,
-                                request_headers: None,
-                                request_body: None,
-                                response_status: None,
-                                response_body: None,
-                                error_message: None,
-                                error_stack: None,
-                                error_source: None,
-                                error_type: None,
-                                error_fingerprint: None,
-                            },
+                                    // Advanced Telemetry
+                                    client_ip: None,
+                                    user_agent: None,
+                                    request_method: None,
+                                    request_headers: None,
+                                    request_body: None,
+                                    response_status: None,
+                                    response_body: None,
+                                    error_name: extracted.name,
+                                    error_message: extracted.message,
+                                    error_stack: extracted.stack,
+                                    error_phase: extracted.phase,
+                                    is_user_code: extracted.is_user_code,
+                                    error_source: extracted.source,
+                                    error_type: extracted.error_type,
+                                    error_fingerprint: None,
+                                }
+                            }
                         }
                     };
 
-                    if let Some(w) = watchdog { w.abort(); }
+                    if let Some(w) = watchdog {
+                        w.abort();
+                    }
                     let _ = work.result_tx.send(result);
                 }
             });
@@ -876,8 +1062,11 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
         request_body: None,
         response_status: None,
         response_body: None,
+        error_name: None,
         error_message: None,
         error_stack: None,
+        error_phase: None,
+        is_user_code: None,
         error_source: None,
         error_type: None,
         error_fingerprint: None,

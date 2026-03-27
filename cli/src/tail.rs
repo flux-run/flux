@@ -42,12 +42,7 @@ pub async fn execute(args: TailArgs) -> Result<()> {
         } else {
             println!(
                 "  {}  \x1b[1m{}\x1b[0m {}  {}ms  \x1b[2m{}\x1b[0m\n     \x1b[31m└─ {}\x1b[0m",
-                status_display,
-                event.method,
-                event.path,
-                event.duration_ms,
-                short_id,
-                event.error
+                status_display, event.method, event.path, event.duration_ms, short_id, event.error
             );
         }
     }

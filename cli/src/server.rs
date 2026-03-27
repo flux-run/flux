@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 
 #[derive(Debug, Subcommand)]
@@ -43,7 +43,6 @@ async fn execute_start(args: ServerStartArgs) -> Result<()> {
         .or_else(|| std::env::var("DATABASE_URL").ok())
         .ok_or_else(|| anyhow::anyhow!("DATABASE_URL must be set or passed with --database-url"))?;
 
-
     let service_token = args
         .service_token
         .or_else(|| std::env::var("FLUX_SERVICE_TOKEN").ok())
@@ -52,13 +51,7 @@ async fn execute_start(args: ServerStartArgs) -> Result<()> {
     write_server_port(args.port)?;
 
     println!("starting server binary {}", binary.display());
-    start_server_binary(
-        &binary,
-        args.port,
-        &database_url,
-        &service_token,
-    )
-    .await
+    start_server_binary(&binary, args.port, &database_url, &service_token).await
 }
 
 #[cfg(unix)]

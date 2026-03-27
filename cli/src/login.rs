@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use std::io::stdout;
 use crossterm::{
     cursor::{MoveToColumn, MoveToPreviousLine},
     event::{self, Event, KeyCode},
@@ -8,6 +7,7 @@ use crossterm::{
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
+use std::io::stdout;
 
 use crate::config::CliConfig;
 use crate::grpc::{normalize_grpc_url, validate_service_token};
@@ -27,7 +27,8 @@ pub async fn execute(args: LoginArgs) -> Result<()> {
         (Some(u), Some(t)) => (normalize_grpc_url(&u), t),
         (Some(u), None) => {
             let n_u = normalize_grpc_url(&u);
-            let t = rpassword::prompt_password("Service token: ").context("failed to read service token")?;
+            let t = rpassword::prompt_password("Service token: ")
+                .context("failed to read service token")?;
             (n_u, t)
         }
         _ => prompt_login()?,
@@ -37,7 +38,7 @@ pub async fn execute(args: LoginArgs) -> Result<()> {
         let result = validate_service_token(&url, &token).await?;
         println!("✔ Logged in as developer@fluxbase.co");
         println!("✔ Server: {}", url);
-        
+
         let config = CliConfig {
             url: Some(url.clone()),
             token: Some(token),
@@ -52,7 +53,6 @@ pub async fn execute(args: LoginArgs) -> Result<()> {
         };
         config.save()?;
     }
-
 
     println!("saved CLI auth config");
     println!("server:  {}", url);
@@ -74,11 +74,11 @@ fn prompt_login() -> Result<(String, String)> {
     let env_result: Result<usize> = (|| loop {
         // Move back to the start of options
         execute!(stdout, MoveToPreviousLine(2), MoveToColumn(0))?;
-        
+
         for (i, option) in options.iter().enumerate() {
             // Clear line and reset column
             execute!(stdout, Clear(ClearType::CurrentLine), MoveToColumn(0))?;
-            
+
             if i == selected {
                 execute!(
                     stdout,
@@ -89,12 +89,7 @@ fn prompt_login() -> Result<(String, String)> {
                     Print("\r\n")
                 )?;
             } else {
-                execute!(
-                    stdout,
-                    Print("   "),
-                    Print(option),
-                    Print("\r\n")
-                )?;
+                execute!(stdout, Print("   "), Print(option), Print("\r\n"))?;
             }
         }
 
@@ -112,7 +107,9 @@ fn prompt_login() -> Result<(String, String)> {
                     }
                 }
                 KeyCode::Enter => break Ok(selected),
-                KeyCode::Char('c') if key_event.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                KeyCode::Char('c')
+                    if key_event.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                {
                     return Err(anyhow::anyhow!("Operation cancelled"));
                 }
                 _ => {}
@@ -131,11 +128,14 @@ fn prompt_login() -> Result<(String, String)> {
     } else {
         println!("? Server URL:");
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input).context("failed to read server URL")?;
+        std::io::stdin()
+            .read_line(&mut input)
+            .context("failed to read server URL")?;
         input.trim().to_string()
     };
 
-    let token = rpassword::prompt_password("Service token: ").context("failed to read service token")?;
+    let token =
+        rpassword::prompt_password("Service token: ").context("failed to read service token")?;
 
     Ok((normalize_grpc_url(&url), token))
 }

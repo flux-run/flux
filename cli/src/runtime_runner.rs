@@ -1,9 +1,9 @@
+use crate::events::FluxEvent;
+use crate::runtime_process::spawn_runtime;
+use crate::tui::{render, TuiApp};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use crate::runtime_process::spawn_runtime;
-use crate::events::FluxEvent;
-use crate::tui::{TuiApp, render};
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrossEvent, KeyCode},
@@ -43,7 +43,7 @@ pub async fn run_with_tui(config: RuntimeConfig) -> Result<RunResult> {
     let mut child = spawn_runtime(config.binary_path, &config.args, true).await?;
     let runtime_stdout = child.stdout.take().context("failed to take stdout")?;
     let runtime_stderr = child.stderr.take().context("failed to take stderr")?;
-    
+
     let mut stdout_reader = BufReader::new(runtime_stdout).lines();
     let mut stderr_reader = BufReader::new(runtime_stderr).lines();
 
@@ -134,7 +134,7 @@ pub async fn run_with_tui(config: RuntimeConfig) -> Result<RunResult> {
     if app.executions.is_empty() && !app.system_logs.is_empty() {
         app.project_name = format!("{} (EXITED WITH ERRORS)", app.project_name);
         render(&mut terminal, &mut app)?;
-        
+
         loop {
             if event::poll(std::time::Duration::from_millis(100))? {
                 if let CrossEvent::Key(key) = event::read()? {
@@ -160,11 +160,22 @@ pub async fn run_with_tui(config: RuntimeConfig) -> Result<RunResult> {
     terminal.show_cursor()?;
 
     if let Some(exec) = app.executions.first() {
-        let dashboard_url = std::env::var("FLUX_DASHBOARD_URL").unwrap_or_else(|_| "https://fluxbase.co".to_string());
+        let dashboard_url = std::env::var("FLUX_DASHBOARD_URL")
+            .unwrap_or_else(|_| "https://fluxbase.co".to_string());
         let project_id_str = config.project_id.unwrap_or_else(|| "default".to_string());
-        
-        println!("\n  {} Execution Finished\n", if exec.status.as_deref() == Some("ok") { "✔" } else { "✘" });
-        println!("  {} View in Dashboard:  {}/project/{}/executions/{}", "→", dashboard_url, project_id_str, exec.id);
+
+        println!(
+            "\n  {} Execution Finished\n",
+            if exec.status.as_deref() == Some("ok") {
+                "✔"
+            } else {
+                "✘"
+            }
+        );
+        println!(
+            "  {} View in Dashboard:  {}/project/{}/executions/{}",
+            "→", dashboard_url, project_id_str, exec.id
+        );
         println!("  {} Replay locally:     flux replay {}", "→", exec.id);
         println!("  {} Debug root cause:   flux why {}\n", "→", exec.id);
     }

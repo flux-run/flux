@@ -1,8 +1,8 @@
+use crate::config;
+use crate::grpc;
 use anyhow::{Context, Result};
 use clap::Args;
-use crate::grpc;
-use crate::config;
-use shared::project::{FluxProjectConfig, FluxBuildArtifact};
+use shared::project::{FluxBuildArtifact, FluxProjectConfig};
 use std::path::Path;
 
 #[derive(Args)]
@@ -32,14 +32,18 @@ pub async fn execute(args: DeployArgs) -> Result<()> {
     // 3. Load artifact
     let artifact_path = Path::new(&project_config.artifact);
     if !artifact_path.exists() {
-        anyhow::bail!("Build failed: artifact not found at {}", project_config.artifact);
+        anyhow::bail!(
+            "Build failed: artifact not found at {}",
+            project_config.artifact
+        );
     }
     let artifact_json = std::fs::read_to_string(artifact_path)?;
     let _artifact: FluxBuildArtifact = serde_json::from_str(&artifact_json)?;
 
     // 4. Resolve auth and project context
     let auth = config::resolve_optional_auth(None, None)?;
-    let project_id = args.project_id
+    let project_id = args
+        .project_id
         .or(project_config.project_id)
         .or(auth.project_id)
         .context("No project_id found. Please specify --project-id or log in to a project.")?;
@@ -52,7 +56,10 @@ pub async fn execute(args: DeployArgs) -> Result<()> {
             .unwrap_or_else(|| "default".to_string())
     });
 
-    println!("🚀 Deploying function '{}' to project {}...", function_name, project_id);
+    println!(
+        "🚀 Deploying function '{}' to project {}...",
+        function_name, project_id
+    );
 
     // 5. Trigger deployment RPC
     let response = grpc::deploy_function(
@@ -61,7 +68,8 @@ pub async fn execute(args: DeployArgs) -> Result<()> {
         &project_id,
         &function_name,
         &artifact_json,
-    ).await?;
+    )
+    .await?;
 
     if response.ok {
         println!("✅ Deployment successful!");

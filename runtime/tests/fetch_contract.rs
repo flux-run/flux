@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
-use axum::Router;
 use axum::extract::Query;
 use axum::routing::get;
-use runtime::JsIsolate;
-use runtime::deno_runtime::{ExecutionMode, FetchCheckpoint, reset_http_response_cache_for_tests};
+use axum::Router;
+use runtime::deno_runtime::{reset_http_response_cache_for_tests, ExecutionMode, FetchCheckpoint};
 use runtime::isolate_pool::ExecutionContext;
+use runtime::JsIsolate;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fetch_replay_returns_buffered_body_via_reader() -> Result<()> {
@@ -59,7 +59,9 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/data"),
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create live isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create live isolate")?;
     let live_context = ExecutionContext::new("fetch-contract-live");
     let live_output = isolate
         .execute(payload.clone(), live_context)
@@ -95,8 +97,9 @@ export default async function handler({ input }) {
         Some(&serde_json::json!("buffered-response"))
     );
 
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create replay isolate")?;
     let mut replay_context = ExecutionContext::new("fetch-contract-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -146,7 +149,9 @@ export default async function handler({ input }) {
         "url": "http://169.254.169.254/latest/meta-data",
     });
 
-    let mut live_isolate = JsIsolate::new_for_run(code).await.context("failed to create live isolate")?;
+    let mut live_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create live isolate")?;
     let live_output = live_isolate
         .execute(payload.clone(), ExecutionContext::new("fetch-ssrf-live"))
         .await
@@ -178,8 +183,9 @@ export default async function handler({ input }) {
         duration_ms: 0,
     }];
 
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create replay isolate")?;
     let mut replay_context = ExecutionContext::new("fetch-ssrf-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -223,8 +229,9 @@ export default async function handler({ input }) {
 "#;
 
     let blocked_payload = serde_json::json!({ "url": format!("{localhost_url}/data") });
-    let mut blocked_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create blocked isolate")?;
+    let mut blocked_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create blocked isolate")?;
     let blocked_output = blocked_isolate
         .execute(
             blocked_payload.clone(),
@@ -254,8 +261,9 @@ export default async function handler({ input }) {
     );
 
     let _guard = EnvVarGuard::set("FLUXBASE_ALLOW_LOOPBACK_FETCH", "1");
-    let mut allowed_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create allowed isolate")?;
+    let mut allowed_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create allowed isolate")?;
     let allowed_output = allowed_isolate
         .execute(
             blocked_payload,
@@ -313,7 +321,9 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/redirect-metadata"),
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create redirect isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create redirect isolate")?;
     let output = isolate
         .execute(payload, ExecutionContext::new("fetch-redirect-ssrf"))
         .await
@@ -354,8 +364,9 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/cache"),
     });
 
-    let mut first_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create first cache isolate")?;
+    let mut first_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create first cache isolate")?;
     let first_output = first_isolate
         .execute(
             payload.clone(),
@@ -380,8 +391,9 @@ export default async function handler({ input }) {
         .await
         .context("cache test server task failed")??;
 
-    let mut second_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create second cache isolate")?;
+    let mut second_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create second cache isolate")?;
     let second_output = second_isolate
         .execute(payload, ExecutionContext::new("fetch-http-cache-live-2"))
         .await
@@ -444,8 +456,9 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/cache"),
     });
 
-    let mut prime_isolate =
-        JsIsolate::new_for_run(prime_code).await.context("failed to create cache prime isolate")?;
+    let mut prime_isolate = JsIsolate::new_for_run(prime_code)
+        .await
+        .context("failed to create cache prime isolate")?;
     let prime_output = prime_isolate
         .execute(
             payload.clone(),
@@ -466,8 +479,9 @@ export default async function handler({ input }) {
         .await
         .context("cache bypass test server task failed")??;
 
-    let mut bypass_isolate =
-        JsIsolate::new_for_run(bypass_code).await.context("failed to create cache bypass isolate")?;
+    let mut bypass_isolate = JsIsolate::new_for_run(bypass_code)
+        .await
+        .context("failed to create cache bypass isolate")?;
     let bypass_output = bypass_isolate
         .execute(payload, ExecutionContext::new("fetch-http-cache-bypass"))
         .await
@@ -532,8 +546,9 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/cache?slot=second"),
     });
 
-    let mut first_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create first LRU isolate")?;
+    let mut first_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create first LRU isolate")?;
     let first_output = first_isolate
         .execute(
             first_payload.clone(),
@@ -547,8 +562,9 @@ export default async function handler({ input }) {
         Some(&serde_json::json!(true))
     );
 
-    let mut second_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create second LRU isolate")?;
+    let mut second_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create second LRU isolate")?;
     let second_output = second_isolate
         .execute(
             second_payload.clone(),
@@ -568,8 +584,9 @@ export default async function handler({ input }) {
         .await
         .context("LRU cache test server task failed")??;
 
-    let mut cached_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create retained-cache isolate")?;
+    let mut cached_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create retained-cache isolate")?;
     let cached_output = cached_isolate
         .execute(
             second_payload,
@@ -585,8 +602,9 @@ export default async function handler({ input }) {
     assert_eq!(cached_output.checkpoints.len(), 1);
     assert_cache_hit_metadata(&cached_output.checkpoints[0].response);
 
-    let mut evicted_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create evicted-cache isolate")?;
+    let mut evicted_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create evicted-cache isolate")?;
     let evicted_output = evicted_isolate
         .execute(
             first_payload,
@@ -634,8 +652,9 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/cache?size=large"),
     });
 
-    let mut prime_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create large-response cache isolate")?;
+    let mut prime_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create large-response cache isolate")?;
     let prime_output = prime_isolate
         .execute(
             payload.clone(),
@@ -655,8 +674,9 @@ export default async function handler({ input }) {
         .await
         .context("large-response cache test server task failed")??;
 
-    let mut second_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create large-response replay isolate")?;
+    let mut second_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create large-response replay isolate")?;
     let second_output = second_isolate
         .execute(
             payload,
@@ -716,8 +736,9 @@ export default async function handler({ input }) {
         "url": format!("{base_url}/json"),
     });
 
-    let mut isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create body contract isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create body contract isolate")?;
     let output = isolate
         .execute(payload, ExecutionContext::new("fetch-body-contract"))
         .await

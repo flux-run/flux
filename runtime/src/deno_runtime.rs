@@ -6,30 +6,30 @@ use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Once;
-use std::sync::mpsc;
 use std::sync::{OnceLock, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use base64::Engine;
 use base64::engine::general_purpose::{
     STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE,
     URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
 };
+use base64::Engine;
 use bytes::BytesMut;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, Utc};
 use deno_ast::{
     EmitOptions, MediaType, ParseParams, SourceMapOption, TranspileModuleOptions, TranspileOptions,
 };
 use deno_core::{
-    JsRuntime, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse, ModuleLoader,
-    ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType, OpState, ResolutionKind,
-    RuntimeOptions, op2, resolve_import, resolve_path,
+    op2, resolve_import, resolve_path, JsRuntime, ModuleLoadOptions, ModuleLoadReferrer,
+    ModuleLoadResponse, ModuleLoader, ModuleSource, ModuleSourceCode, ModuleSpecifier, ModuleType,
+    OpState, ResolutionKind, RuntimeOptions,
 };
-use deno_error::JsErrorBox;
+use deno_error::{JsErrorBox, JsErrorClass};
 use postgres::config::SslMode as PostgresSslMode;
 use postgres::types::{FromSql, IsNull, ToSql, Type as PostgresType};
 use postgres::{Client as PostgresClient, Config as PostgresConfig, NoTls, SimpleQueryMessage};
@@ -104,12 +104,8 @@ fn maybe_crash_after_postgres_commit_before_checkpoint(sql: &str) {
         .map(|value| value == "1")
         .unwrap_or(false);
 
-    if enabled
-        && CRASH_AFTER_POSTGRES_COMMIT_BEFORE_CHECKPOINT.swap(false, Ordering::SeqCst)
-    {
-        tracing::error!(
-            "crashing after postgres commit before checkpoint capture by request"
-        );
+    if enabled && CRASH_AFTER_POSTGRES_COMMIT_BEFORE_CHECKPOINT.swap(false, Ordering::SeqCst) {
+        tracing::error!("crashing after postgres commit before checkpoint capture by request");
         std::process::exit(1);
     }
 }
@@ -1031,8 +1027,11 @@ pub struct NetRequestExecution {
     pub response: NetResponse,
     pub checkpoints: Vec<FetchCheckpoint>,
     pub error: Option<String>,
+    pub error_name: Option<String>,
     pub error_message: Option<String>,
     pub error_stack: Option<String>,
+    pub error_phase: Option<String>,
+    pub is_user_code: Option<bool>,
     pub logs: Vec<LogEntry>,
     pub error_source: Option<String>,
     pub error_type: Option<String>,
@@ -1047,8 +1046,11 @@ pub struct JsExecutionOutput {
     pub output: serde_json::Value,
     pub checkpoints: Vec<FetchCheckpoint>,
     pub error: Option<String>,
+    pub error_name: Option<String>,
     pub error_message: Option<String>,
     pub error_stack: Option<String>,
+    pub error_phase: Option<String>,
+    pub is_user_code: Option<bool>,
     pub logs: Vec<LogEntry>,
     pub error_source: Option<String>,
     pub error_type: Option<String>,
@@ -1062,6 +1064,237 @@ pub struct BootExecutionResult {
     pub result: ExecutionResult,
     pub is_server_mode: bool,
     pub has_handler: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StructuredExecutionError {
+    pub error: Option<String>,
+    pub name: Option<String>,
+    pub message: Option<String>,
+    pub stack: Option<String>,
+    pub phase: Option<String>,
+    pub is_user_code: Option<bool>,
+    pub source: Option<String>,
+    pub error_type: Option<String>,
+}
+
+fn format_error_summary(
+    name: Option<&str>,
+    message: Option<&str>,
+    fallback: Option<&str>,
+) -> Option<String> {
+    let normalized_name = name.map(str::trim).filter(|value| !value.is_empty());
+    let normalized_message = message.map(str::trim).filter(|value| !value.is_empty());
+
+    if let Some(message) = normalized_message {
+        if let Some(name) = normalized_name {
+            let prefixed = format!("{name}:");
+            if message == name || message.starts_with(&prefixed) {
+                return Some(message.to_string());
+            }
+            return Some(format!("{name}: {message}"));
+        }
+        return Some(message.to_string());
+    }
+
+    fallback
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_error_type(name: Option<&str>, has_error: bool) -> Option<String> {
+    match name.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("TypeError") => Some("type_error".to_string()),
+        Some("ReferenceError") => Some("reference_error".to_string()),
+        Some("Error") => Some("user_thrown_exception".to_string()),
+        Some(other) => {
+            let mut normalized = String::with_capacity(other.len() + 4);
+            for (index, ch) in other.chars().enumerate() {
+                if ch.is_ascii_uppercase() && index > 0 {
+                    normalized.push('_');
+                }
+                normalized.push(ch.to_ascii_lowercase());
+            }
+            Some(normalized)
+        }
+        None if has_error => Some("exception".to_string()),
+        None => None,
+    }
+}
+
+fn infer_error_phase(message: Option<&str>, stack: Option<&str>, fallback_phase: &str) -> String {
+    let mut haystack = String::new();
+    if let Some(message) = message {
+        haystack.push_str(&message.to_ascii_lowercase());
+        haystack.push('\n');
+    }
+    if let Some(stack) = stack {
+        haystack.push_str(&stack.to_ascii_lowercase());
+    }
+
+    if haystack.contains("flux:http")
+        || haystack.contains("flux:pg")
+        || haystack.contains("flux:redis")
+        || haystack.contains("fetch failed")
+        || haystack.contains("tcp connect failed")
+        || haystack.contains("postgres")
+        || haystack.contains("redis")
+        || haystack.contains("connect failed")
+        || haystack.contains("read failed")
+        || haystack.contains("write failed")
+    {
+        return "external".to_string();
+    }
+
+    fallback_phase.to_string()
+}
+
+fn is_known_js_error_name(value: &str) -> bool {
+    matches!(
+        value,
+        "Error"
+            | "TypeError"
+            | "ReferenceError"
+            | "SyntaxError"
+            | "RangeError"
+            | "URIError"
+            | "EvalError"
+            | "AggregateError"
+    ) || value.ends_with("Error")
+}
+
+fn parse_rendered_js_error(rendered: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let trimmed = rendered.trim();
+    if trimmed.is_empty() {
+        return (None, None, None);
+    }
+
+    let stack = if trimmed.contains('\n') {
+        Some(trimmed.to_string())
+    } else {
+        None
+    };
+
+    let first_line = trimmed.lines().next().unwrap_or(trimmed).trim();
+    let normalized_line = first_line
+        .strip_prefix("Uncaught ")
+        .unwrap_or(first_line)
+        .trim();
+
+    if let Some((name, message)) = normalized_line.split_once(':') {
+        let normalized_name = name.trim();
+        if is_known_js_error_name(normalized_name) {
+            return (
+                Some(normalized_name.to_string()),
+                Some(message.trim().to_string()),
+                stack,
+            );
+        }
+    }
+
+    (None, Some(normalized_line.to_string()), stack)
+}
+
+fn structured_error_from_parts(
+    name: Option<String>,
+    message: Option<String>,
+    stack: Option<String>,
+    fallback_error: Option<String>,
+    fallback_phase: &str,
+    is_user_code: bool,
+) -> StructuredExecutionError {
+    let normalized_stack = stack.filter(|value| !value.trim().is_empty());
+    let error = format_error_summary(
+        name.as_deref(),
+        message.as_deref(),
+        fallback_error.as_deref(),
+    );
+
+    let has_error = error.is_some();
+    StructuredExecutionError {
+        error,
+        name: name.clone(),
+        message: message.clone(),
+        stack: normalized_stack.clone(),
+        phase: has_error.then(|| {
+            infer_error_phase(
+                message.as_deref(),
+                normalized_stack.as_deref(),
+                fallback_phase,
+            )
+        }),
+        is_user_code: has_error.then_some(is_user_code),
+        source: has_error.then(|| {
+            if is_user_code {
+                "user_code".to_string()
+            } else {
+                "platform_runtime".to_string()
+            }
+        }),
+        error_type: normalize_error_type(name.as_deref(), has_error),
+    }
+}
+
+fn structured_error_from_json(
+    error_val: Option<serde_json::Value>,
+    fallback_phase: &str,
+    is_user_code: bool,
+) -> StructuredExecutionError {
+    let fallback_error = error_val
+        .as_ref()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned));
+    let name = error_val
+        .as_ref()
+        .and_then(|value| value.get("name"))
+        .and_then(|value| value.as_str().map(ToOwned::to_owned));
+    let message = error_val
+        .as_ref()
+        .and_then(|value| value.get("message"))
+        .and_then(|value| value.as_str().map(ToOwned::to_owned));
+    let stack = error_val
+        .as_ref()
+        .and_then(|value| value.get("stack"))
+        .and_then(|value| value.as_str().map(ToOwned::to_owned));
+
+    structured_error_from_parts(
+        name,
+        message,
+        stack,
+        fallback_error,
+        fallback_phase,
+        is_user_code,
+    )
+}
+
+pub fn structured_error_from_anyhow(
+    error: &anyhow::Error,
+    fallback_phase: &str,
+    is_user_code: bool,
+) -> StructuredExecutionError {
+    let mut name = None;
+    let mut message = None;
+
+    for cause in error.chain() {
+        if let Some(js_error) = cause.downcast_ref::<JsErrorBox>() {
+            name = Some(js_error.get_class().into_owned());
+            message = Some(js_error.get_message().into_owned());
+            break;
+        }
+    }
+
+    let rendered = format!("{error:#}");
+    let rendered_stack = rendered.contains('\n').then_some(rendered.clone());
+    let (parsed_name, parsed_message, parsed_stack) = parse_rendered_js_error(&rendered);
+
+    structured_error_from_parts(
+        name.or(parsed_name),
+        message.or(parsed_message),
+        rendered_stack.or(parsed_stack),
+        Some(rendered),
+        fallback_phase,
+        is_user_code,
+    )
 }
 
 #[derive(Debug)]
@@ -1383,7 +1616,7 @@ fn op_flux_fetch(
                 response: response.clone(),
                 duration_ms: checkpoint.duration_ms,
             });
-            return Ok(response)
+            return Ok(response);
         }
         {
             let map = state.borrow_mut::<RuntimeStateMap>();
@@ -1392,7 +1625,9 @@ fn op_flux_fetch(
             }
         }
         tracing::debug!(%request_id, %call_index, url = %original_url, method = %method, "replay: stopping at http boundary (no recorded checkpoint)");
-        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:http:{call_index}")));
+        return Err(JsErrorBox::generic(format!(
+            "__FLUX_BOUNDARY_STOP:http:{call_index}"
+        )));
     }
 
     let resolved_url = original_url.clone();
@@ -1511,7 +1746,9 @@ fn op_flux_tcp_exchange(
             }
         }
         tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: stopping at tcp boundary (no recorded checkpoint)");
-        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:tcp:{call_index}")));
+        return Err(JsErrorBox::generic(format!(
+            "__FLUX_BOUNDARY_STOP:tcp:{call_index}"
+        )));
     }
 
     let request_json = serde_json::json!({
@@ -1730,7 +1967,7 @@ fn op_flux_postgres_simple_query(
                 response: response.clone(),
                 duration_ms: checkpoint.duration_ms,
             });
-            return Ok(postgres_checkpoint_response_json(&response, true))
+            return Ok(postgres_checkpoint_response_json(&response, true));
         }
         {
             let map = state.borrow_mut::<RuntimeStateMap>();
@@ -1739,7 +1976,9 @@ fn op_flux_postgres_simple_query(
             }
         }
         tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: stopping at postgres boundary (no recorded checkpoint)");
-        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:postgres:{call_index}")));
+        return Err(JsErrorBox::generic(format!(
+            "__FLUX_BOUNDARY_STOP:postgres:{call_index}"
+        )));
     }
 
     let started = std::time::Instant::now();
@@ -1858,7 +2097,9 @@ fn op_flux_postgres_session_query(
             }
         }
         tracing::debug!(%request_id, %call_index, session_id = %session_id, "replay: stopping at postgres boundary (no recorded checkpoint)");
-        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:postgres:{call_index}")));
+        return Err(JsErrorBox::generic(format!(
+            "__FLUX_BOUNDARY_STOP:postgres:{call_index}"
+        )));
     }
 
     let (target, tls_enabled, live_outcome, duration_ms) = {
@@ -2016,7 +2257,9 @@ fn op_flux_postgres_query(
             }
         }
         tracing::debug!(%request_id, %call_index, host = %host, port = %port, "replay: stopping at postgres boundary (no recorded checkpoint)");
-        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:postgres:{call_index}")));
+        return Err(JsErrorBox::generic(format!(
+            "__FLUX_BOUNDARY_STOP:postgres:{call_index}"
+        )));
     }
 
     let started = std::time::Instant::now();
@@ -2146,7 +2389,9 @@ fn op_flux_redis_command(
             }
         }
         tracing::debug!(%request_id, %call_index, command = %command, host = %target.host, port = %target.port, "replay: stopping at redis boundary (no recorded checkpoint)");
-        return Err(JsErrorBox::generic(format!("__FLUX_BOUNDARY_STOP:redis:{call_index}")));
+        return Err(JsErrorBox::generic(format!(
+            "__FLUX_BOUNDARY_STOP:redis:{call_index}"
+        )));
     }
 
     let started = Instant::now();
@@ -2640,14 +2885,18 @@ fn print_checkpoint_replay(checkpoint: &FetchCheckpoint) {
     match cp.boundary.as_str() {
         "postgres" => {
             let sql = cp.request.get("sql").and_then(|v| v.as_str()).unwrap_or("");
-            let host = cp.request.get("host").and_then(|v| v.as_str()).unwrap_or("");
+            let host = cp
+                .request
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let row_count = cp
                 .response
                 .get("row_count")
                 .or_else(|| cp.response.get("rowCount"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            
+
             // Structured event for CLI
             emit_flux_event(serde_json::json!({
                 "type": "db_query",
@@ -2676,7 +2925,7 @@ fn print_checkpoint_replay(checkpoint: &FetchCheckpoint) {
                 .get("status")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            
+
             // Structured event for CLI
             emit_flux_event(serde_json::json!({
                 "type": "fetch_end",
@@ -3104,7 +3353,7 @@ fn connect_postgres_client(
         {
             config.ssl_mode(PostgresSslMode::Require);
         }
-        
+
         let tls_config = build_tls_client_config(tls.ca_cert_pem.as_deref())?;
         let connector = PostgresMakeTlsConnector::new(TlsConnector::from(tls_config));
         config
@@ -3938,14 +4187,15 @@ fn op_flux_now_high_res(state: &mut OpState, #[string] execution_id: String) -> 
     let now_hr = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_micros() as f64 / 1000.0;
-        
+        .as_micros() as f64
+        / 1000.0;
+
     let map = state.borrow_mut::<RuntimeStateMap>();
     let exec = match map.get_mut(&execution_id) {
         Some(e) => e,
         None => return now_hr,
     };
-    
+
     let call_index = exec.call_index;
     exec.call_index = exec.call_index.saturating_add(1);
 
@@ -3953,8 +4203,12 @@ fn op_flux_now_high_res(state: &mut OpState, #[string] execution_id: String) -> 
         ExecutionMode::Live => {
             // Rebase relative to the execution start time if possible
             let start = exec.recorded_now_ms.unwrap_or(0) as f64;
-            let elapsed = if start > 0.0 { (now_hr - start).max(0.0) } else { 0.0 };
-            
+            let elapsed = if start > 0.0 {
+                (now_hr - start).max(0.0)
+            } else {
+                0.0
+            };
+
             exec.checkpoints.push(FetchCheckpoint {
                 call_index,
                 boundary: "performance.now".to_string(),
@@ -3967,8 +4221,10 @@ fn op_flux_now_high_res(state: &mut OpState, #[string] execution_id: String) -> 
             elapsed
         }
         ExecutionMode::Replay => {
-            let checkpoint = exec.recorded.remove(&call_index).unwrap_or_else(|| {
-                FetchCheckpoint {
+            let checkpoint = exec
+                .recorded
+                .remove(&call_index)
+                .unwrap_or_else(|| FetchCheckpoint {
                     call_index,
                     boundary: "performance.now".to_string(),
                     url: "".to_string(),
@@ -3976,8 +4232,7 @@ fn op_flux_now_high_res(state: &mut OpState, #[string] execution_id: String) -> 
                     request: serde_json::json!({}),
                     response: serde_json::json!(0.0),
                     duration_ms: 0,
-                }
-            });
+                });
             checkpoint.response.as_f64().unwrap_or(0.0)
         }
     }
@@ -4209,7 +4464,11 @@ fn op_flux_crypto_record(
 
 #[op2]
 #[serde]
-fn op_random_bytes(state: &mut OpState, #[string] execution_id: String, #[smi] len: u32) -> Result<serde_json::Value, JsErrorBox> {
+fn op_random_bytes(
+    state: &mut OpState,
+    #[string] execution_id: String,
+    #[smi] len: u32,
+) -> Result<serde_json::Value, JsErrorBox> {
     let map = state.borrow_mut::<RuntimeStateMap>();
     let exec = map.get_mut(&execution_id).ok_or_else(|| {
         JsErrorBox::new(
@@ -4217,7 +4476,7 @@ fn op_random_bytes(state: &mut OpState, #[string] execution_id: String, #[smi] l
             format!("op_random_bytes: execution_id '{execution_id}' not found"),
         )
     })?;
-    
+
     let call_index = exec.call_index;
     exec.call_index = exec.call_index.saturating_add(1);
 
@@ -4226,7 +4485,7 @@ fn op_random_bytes(state: &mut OpState, #[string] execution_id: String, #[smi] l
             let mut bytes = vec![0u8; len as usize];
             rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bytes);
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            
+
             exec.checkpoints.push(FetchCheckpoint {
                 call_index,
                 boundary: "crypto.getRandomValues".to_string(),
@@ -4236,14 +4495,16 @@ fn op_random_bytes(state: &mut OpState, #[string] execution_id: String, #[smi] l
                 response: serde_json::json!({ "bytes": b64 }),
                 duration_ms: 0,
             });
-            
+
             Ok(serde_json::json!({
                 "bytes": b64
             }))
         }
         ExecutionMode::Replay => {
-            let checkpoint = exec.recorded.remove(&call_index).unwrap_or_else(|| {
-                FetchCheckpoint {
+            let checkpoint = exec
+                .recorded
+                .remove(&call_index)
+                .unwrap_or_else(|| FetchCheckpoint {
                     call_index,
                     boundary: "crypto.getRandomValues".to_string(),
                     url: "".to_string(),
@@ -4251,8 +4512,7 @@ fn op_random_bytes(state: &mut OpState, #[string] execution_id: String, #[smi] l
                     request: serde_json::json!({}),
                     response: serde_json::json!({ "bytes": "" }),
                     duration_ms: 0,
-                }
-            });
+                });
             Ok(checkpoint.response)
         }
     }
@@ -4282,7 +4542,10 @@ fn op_random_uuid(state: &mut OpState, #[string] execution_id: String) -> String
                 .get(idx)
                 .cloned()
                 .unwrap_or_else(|| Uuid::new_v4().to_string());
-            println!("  \x1b[2m›\x1b[0m \x1b[1mUUID\x1b[0m  \x1b[2m→\x1b[0m {}", val);
+            println!(
+                "  \x1b[2m›\x1b[0m \x1b[1mUUID\x1b[0m  \x1b[2m→\x1b[0m {}",
+                val
+            );
             val
         }
     }
@@ -4364,7 +4627,9 @@ fn make_http_request(
             }
 
             let current_body_bytes = current_body.as_ref().map(|b| {
-                BASE64_STANDARD.decode(b).unwrap_or_else(|_| b.clone().into_bytes())
+                BASE64_STANDARD
+                    .decode(b)
+                    .unwrap_or_else(|_| b.clone().into_bytes())
             });
 
             let response = match current_body_bytes.as_ref() {
@@ -4773,9 +5038,12 @@ impl ModuleLoader for TypescriptModuleLoader {
                 ));
             }
 
-            let path = module_specifier
-                .to_file_path()
-                .map_err(|_| JsErrorBox::generic(format!("Only file:// URLs are supported: {}", module_specifier)))?;
+            let path = module_specifier.to_file_path().map_err(|_| {
+                JsErrorBox::generic(format!(
+                    "Only file:// URLs are supported: {}",
+                    module_specifier
+                ))
+            })?;
 
             let media_type = MediaType::from_path(&path);
             let module_type = match media_type {
@@ -5184,9 +5452,7 @@ impl JsIsolate {
     pub async fn new_for_run_entry(entry: &Path) -> Result<Self> {
         let source_maps = Rc::new(RefCell::new(HashMap::new()));
         let mut runtime = JsRuntime::new(RuntimeOptions {
-            module_loader: Some(Rc::new(TypescriptModuleLoader { 
-                source_maps,
-            })),
+            module_loader: Some(Rc::new(TypescriptModuleLoader { source_maps })),
             extensions: flux_extensions(),
             create_params: Some(
                 deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
@@ -5253,7 +5519,10 @@ impl JsIsolate {
         })
     }
 
-    pub async fn new_from_any_artifact(artifact: &RuntimeArtifact, isolate_id: usize) -> Result<Self> {
+    pub async fn new_from_any_artifact(
+        artifact: &RuntimeArtifact,
+        isolate_id: usize,
+    ) -> Result<Self> {
         match artifact {
             RuntimeArtifact::Built(b) => Self::new_from_artifact(b).await,
             RuntimeArtifact::Inline(i) => Self::new(&i.code, isolate_id).await,
@@ -5345,9 +5614,7 @@ impl JsIsolate {
     async fn new_internal(_user_code: &str, prepared: String) -> Result<Self> {
         let source_maps = Rc::new(RefCell::new(HashMap::new()));
         let mut runtime = JsRuntime::new(RuntimeOptions {
-            module_loader: Some(Rc::new(TypescriptModuleLoader {
-                source_maps,
-            })),
+            module_loader: Some(Rc::new(TypescriptModuleLoader { source_maps })),
             extensions: flux_extensions(),
             create_params: Some(
                 deno_core::v8::CreateParams::default().heap_limits(0, V8_HEAP_LIMIT),
@@ -5375,7 +5642,7 @@ impl JsIsolate {
             .load_main_es_module_from_code(&specifier, prepared)
             .await
             .context("failed to load user code as module")?;
-        
+
         let evaluation = runtime.mod_evaluate(module_id);
         tokio::time::timeout(
             EXECUTION_TIMEOUT,
@@ -5423,7 +5690,13 @@ impl JsIsolate {
         req: NetRequest,
         recorded_checkpoints: Vec<FetchCheckpoint>,
     ) -> Result<NetRequestExecution> {
-        unsafe { std::env::set_var("DATABASE_URL", std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/test".to_string())); }
+        unsafe {
+            std::env::set_var(
+                "DATABASE_URL",
+                std::env::var("DATABASE_URL")
+                    .unwrap_or_else(|_| "postgres://localhost/test".to_string()),
+            );
+        }
         let execution_id = context.execution_id.clone();
         let request_id = context.request_id.clone();
         let recorded: HashMap<u32, FetchCheckpoint> = recorded_checkpoints
@@ -5483,13 +5756,11 @@ impl JsIsolate {
         .map_err(|_| anyhow::anyhow!("server-mode request timed out after {EXECUTION_TIMEOUT:?}"))?
         .context("event loop failed during request dispatch")?;
 
-        let error_val = self
-            .runtime
-            .execute_script(
-                "flux:get_last_error",
-                format!("JSON.stringify(globalThis.__flux_last_error || {{}})")
-            )?;
-        
+        let error_val = self.runtime.execute_script(
+            "flux:get_last_error",
+            format!("JSON.stringify(globalThis.__flux_last_error || {{}})"),
+        )?;
+
         let error_json: String = {
             deno_core::scope!(scope, &mut self.runtime);
             let local = deno_core::v8::Local::new(scope, error_val);
@@ -5499,22 +5770,11 @@ impl JsIsolate {
                 "{}".to_string()
             }
         };
-        
-        let error_obj: Option<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&error_json)
-            .ok()
-            .and_then(|v| v.get(&execution_id).cloned());
-        
-        let error_message = error_obj.as_ref()
-            .and_then(|v| v.get("message"))
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
-            
-        let error_stack = error_obj.as_ref()
-            .and_then(|v| v.get("stack"))
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        let error = error_message.clone().or_else(|| {
-            error_obj.as_ref().and_then(|v| v.as_str().map(|s| s.to_string()))
-        });
+        let error_obj: Option<serde_json::Value> =
+            serde_json::from_str::<serde_json::Value>(&error_json)
+                .ok()
+                .and_then(|v| v.get(&execution_id).cloned());
 
         let state = self.runtime.op_state();
         let mut state = state.borrow_mut();
@@ -5536,8 +5796,11 @@ impl JsIsolate {
                 response: dummy_response,
                 checkpoints: exec.checkpoints,
                 error: Some(sentinel_error),
+                error_name: None,
                 error_message: None,
                 error_stack: None,
+                error_phase: Some("external".to_string()),
+                is_user_code: Some(false),
                 error_source: Some("platform_runtime".to_string()),
                 error_type: Some("system_stop".to_string()),
                 logs: exec.logs,
@@ -5554,25 +5817,19 @@ impl JsIsolate {
             )
         })?;
 
-        let error_source = if error.is_some() {
-            Some("user_code".to_string())
-        } else {
-            None
-        };
-        let error_type = if error.is_some() {
-            Some("exception".to_string())
-        } else {
-            None
-        };
+        let structured_error = structured_error_from_json(error_obj, "runtime", true);
 
         Ok(NetRequestExecution {
             response,
             checkpoints: exec.checkpoints,
-            error,
-            error_message,
-            error_stack,
-            error_source,
-            error_type,
+            error: structured_error.error,
+            error_name: structured_error.name,
+            error_message: structured_error.message,
+            error_stack: structured_error.stack,
+            error_phase: structured_error.phase,
+            is_user_code: structured_error.is_user_code,
+            error_source: structured_error.source,
+            error_type: structured_error.error_type,
             logs: exec.logs,
             has_live_io: exec.has_live_io,
             boundary_stop: exec.boundary_stop,
@@ -5673,14 +5930,18 @@ impl JsIsolate {
         let handler_arg = if is_cloud_ctx {
             // Cloud function mode: pass a ctx object as the sole handler argument.
             // It contains response helpers (json/text/html) + the request data.
-            let body_j = serde_json::to_string(payload.get("body").unwrap_or(&serde_json::Value::Null))
-                .unwrap_or_else(|_| "null".to_string());
-            let method_j = serde_json::to_string(payload.get("method").unwrap_or(&serde_json::Value::Null))
-                .unwrap_or_else(|_| "\"GET\"".to_string());
-            let path_j = serde_json::to_string(payload.get("path").unwrap_or(&serde_json::Value::Null))
-                .unwrap_or_else(|_| "\"/\"".to_string());
-            let headers_j = serde_json::to_string(payload.get("headers").unwrap_or(&serde_json::Value::Null))
-                .unwrap_or_else(|_| "{}".to_string());
+            let body_j =
+                serde_json::to_string(payload.get("body").unwrap_or(&serde_json::Value::Null))
+                    .unwrap_or_else(|_| "null".to_string());
+            let method_j =
+                serde_json::to_string(payload.get("method").unwrap_or(&serde_json::Value::Null))
+                    .unwrap_or_else(|_| "\"GET\"".to_string());
+            let path_j =
+                serde_json::to_string(payload.get("path").unwrap_or(&serde_json::Value::Null))
+                    .unwrap_or_else(|_| "\"/\"".to_string());
+            let headers_j =
+                serde_json::to_string(payload.get("headers").unwrap_or(&serde_json::Value::Null))
+                    .unwrap_or_else(|_| "{}".to_string());
             format!(
                 concat!(
                     "{{ ",
@@ -5710,7 +5971,7 @@ impl JsIsolate {
                                  const result = await globalThis.__flux_user_handler({handler_arg});\n\
                  globalThis.__flux_last_result[__eid] = result ?? null;\n\
                }} catch (err) {{\n\
-                 globalThis.__flux_last_error[__eid] = {{ message: String(err && err.message ? err.message : err), stack: err && err.stack ? String(err.stack) : null }};\n\
+                 globalThis.__flux_last_error[__eid] = {{ name: err && err.name ? String(err.name) : \"Error\", message: String(err && err.message ? err.message : err), stack: err && err.stack ? String(err.stack) : null }};\n\
                }}\n\
              }})();",
             eid = eid_json,
@@ -5764,44 +6025,25 @@ impl JsIsolate {
             }
         };
 
-        let error_val = envelope.get("error").cloned();
-        let error_message = error_val
-            .as_ref()
-            .and_then(|v| v.get("message"))
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
-        let error_stack = error_val
-            .as_ref()
-            .and_then(|v| v.get("stack"))
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
-
-        let error = error_message.clone().or_else(|| {
-            error_val.and_then(|v| v.as_str().map(|s| s.to_string()))
-        });
+        let structured_error =
+            structured_error_from_json(envelope.get("error").cloned(), "runtime", true);
 
         let output = envelope
             .get("result")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
 
-        let error_source = if error.is_some() {
-            Some("user_code".to_string())
-        } else {
-            None
-        };
-        let error_type = if error.is_some() {
-            Some("exception".to_string())
-        } else {
-            None
-        };
-
         Ok(JsExecutionOutput {
             output,
             checkpoints,
-            error,
-            error_message,
-            error_stack,
-            error_source,
-            error_type,
+            error: structured_error.error,
+            error_name: structured_error.name,
+            error_message: structured_error.message,
+            error_stack: structured_error.stack,
+            error_phase: structured_error.phase,
+            is_user_code: structured_error.is_user_code,
+            error_source: structured_error.source,
+            error_type: structured_error.error_type,
             logs,
             has_live_io,
             boundary_stop,
@@ -5841,10 +6083,14 @@ impl JsIsolate {
             let res = self
                 .execute_handler_with_recorded(input, context, Vec::new(), false)
                 .await;
-            
+
             let duration_ms = started.elapsed().as_millis() as u64;
-            let status = if res.as_ref().map(|o| o.error.is_none()).unwrap_or(false) { "ok" } else { "error" };
-            
+            let status = if res.as_ref().map(|o| o.error.is_none()).unwrap_or(false) {
+                "ok"
+            } else {
+                "error"
+            };
+
             emit_flux_event(serde_json::json!({
                 "type": "execution_end",
                 "id": execution_id,
@@ -5922,7 +6168,10 @@ impl JsIsolate {
                 .unwrap_or_default(),
             error: None,
             error_message: None,
+            error_name: None,
             error_stack: None,
+            error_phase: None,
+            is_user_code: None,
             error_source: None,
             error_type: None,
             logs: execution
@@ -5959,29 +6208,29 @@ async fn boot_inline_runtime_artifact(
     let prepared = prepare_user_code(user_code);
 
     let main_specifier = ModuleSpecifier::parse("file:///flux_user_code.ts").unwrap();
-    let transformed_entry = transpile_module_source(
-        &main_specifier,
-        MediaType::TypeScript,
-        prepared,
-        None,
-    ).context("failed to transpile inline entry module")?;
+    let transformed_entry =
+        transpile_module_source(&main_specifier, MediaType::TypeScript, prepared, None)
+            .context("failed to transpile inline entry module")?;
 
     let mut modules = HashMap::new();
     let entry_source = transformed_entry.clone();
     let entry_sha256 = sha256_hex(entry_source.as_bytes());
-    modules.insert(main_specifier.to_string(), ArtifactModule {
-        specifier: main_specifier.to_string(),
-        base_specifier: main_specifier.to_string(),
-        source_kind: ArtifactSourceKind::Local,
-        media_type: ArtifactMediaType::TypeScript,
-        sha256: entry_sha256,
-        source: entry_source.clone(),
-        size_bytes: entry_source.len(),
-        dependencies: Vec::new(),
-    });
+    modules.insert(
+        main_specifier.to_string(),
+        ArtifactModule {
+            specifier: main_specifier.to_string(),
+            base_specifier: main_specifier.to_string(),
+            source_kind: ArtifactSourceKind::Local,
+            media_type: ArtifactMediaType::TypeScript,
+            sha256: entry_sha256,
+            source: entry_source.clone(),
+            size_bytes: entry_source.len(),
+            dependencies: Vec::new(),
+        },
+    );
 
     let mut runtime = JsRuntime::new(RuntimeOptions {
-        module_loader: Some(Rc::new(ArtifactModuleLoader { 
+        module_loader: Some(Rc::new(ArtifactModuleLoader {
             source_maps: Rc::new(RefCell::new(HashMap::new())),
             modules,
         })),
@@ -6035,13 +6284,16 @@ async fn boot_inline_runtime_artifact(
         .context("failed to set boot execution_id")?;
 
     let mut error = None;
+    let mut structured_error = StructuredExecutionError::default();
     let module_id = match runtime
         .load_main_es_module_from_code(&main_specifier, transformed_entry)
         .await
     {
         Ok(id) => Some(id),
         Err(err) => {
-            error = Some(format!("{err:#}"));
+            let err = anyhow::Error::from(err);
+            structured_error = structured_error_from_anyhow(&err, "init", true);
+            error = structured_error.error.clone();
             None
         }
     };
@@ -6055,16 +6307,28 @@ async fn boot_inline_runtime_artifact(
         .await
         {
             Err(_) => {
-                error = Some(format!(
-                    "module initialization timed out after {EXECUTION_TIMEOUT:?}"
-                ));
+                structured_error = structured_error_from_parts(
+                    Some("Error".to_string()),
+                    Some(format!(
+                        "module initialization timed out after {EXECUTION_TIMEOUT:?}"
+                    )),
+                    None,
+                    None,
+                    "init",
+                    true,
+                );
+                error = structured_error.error.clone();
             }
             Ok(Err(err)) => {
-                error = Some(format!("{err:#}"));
+                let err = anyhow::Error::from(err);
+                structured_error = structured_error_from_anyhow(&err, "init", true);
+                error = structured_error.error.clone();
             }
             Ok(Ok(())) => {
                 if let Err(err) = evaluation.await {
-                    error = Some(format!("{err:#}"));
+                    let err = anyhow::Error::from(err);
+                    structured_error = structured_error_from_anyhow(&err, "init", true);
+                    error = structured_error.error.clone();
                 }
             }
         }
@@ -6107,10 +6371,13 @@ async fn boot_inline_runtime_artifact(
             request_body: None,
             response_status: None,
             response_body: None,
-            error_message: None,
-            error_stack: None,
-            error_source: None,
-            error_type: None,
+            error_name: structured_error.name,
+            error_message: structured_error.message,
+            error_stack: structured_error.stack,
+            error_phase: structured_error.phase,
+            is_user_code: structured_error.is_user_code,
+            error_source: structured_error.source,
+            error_type: structured_error.error_type,
             error_fingerprint: None,
         },
         is_server_mode,
@@ -6124,7 +6391,8 @@ async fn boot_built_runtime_artifact(
 ) -> Result<BootExecutionResult> {
     let started = std::time::Instant::now();
     let execution_id = context.execution_id.clone();
-    let request_id = context.request_id.clone(); let project_id = context.project_id.clone();
+    let request_id = context.request_id.clone();
+    let project_id = context.project_id.clone();
     let code_version = context.code_version.clone();
     let source_maps = Rc::new(RefCell::new(HashMap::new()));
     let modules = artifact
@@ -6208,13 +6476,16 @@ async fn boot_built_runtime_artifact(
     .context("failed to transpile built artifact entry module")?;
 
     let mut error = None;
+    let mut structured_error = StructuredExecutionError::default();
     let module_id = match runtime
         .load_main_es_module_from_code(&main_module, transformed_entry)
         .await
     {
         Ok(module_id) => Some(module_id),
         Err(err) => {
-            error = Some(format!("{err:#}"));
+            let err = anyhow::Error::from(err);
+            structured_error = structured_error_from_anyhow(&err, "init", true);
+            error = structured_error.error.clone();
             None
         }
     };
@@ -6228,16 +6499,28 @@ async fn boot_built_runtime_artifact(
         .await
         {
             Err(_) => {
-                error = Some(format!(
-                    "module initialization timed out after {EXECUTION_TIMEOUT:?}"
-                ));
+                structured_error = structured_error_from_parts(
+                    Some("Error".to_string()),
+                    Some(format!(
+                        "module initialization timed out after {EXECUTION_TIMEOUT:?}"
+                    )),
+                    None,
+                    None,
+                    "init",
+                    true,
+                );
+                error = structured_error.error.clone();
             }
             Ok(Err(err)) => {
-                error = Some(format!("{err:#}"));
+                let err = anyhow::Error::from(err);
+                structured_error = structured_error_from_anyhow(&err, "init", true);
+                error = structured_error.error.clone();
             }
             Ok(Ok(())) => {
                 if let Err(err) = evaluation.await {
-                    error = Some(format!("{err:#}"));
+                    let err = anyhow::Error::from(err);
+                    structured_error = structured_error_from_anyhow(&err, "init", true);
+                    error = structured_error.error.clone();
                 }
             }
         }
@@ -6280,10 +6563,13 @@ async fn boot_built_runtime_artifact(
             request_body: None,
             response_status: None,
             response_body: None,
-            error_message: None,
-            error_stack: None,
-            error_source: None,
-            error_type: None,
+            error_name: structured_error.name,
+            error_message: structured_error.message,
+            error_stack: structured_error.stack,
+            error_phase: structured_error.phase,
+            is_user_code: structured_error.is_user_code,
+            error_source: structured_error.source,
+            error_type: structured_error.error_type,
             error_fingerprint: None,
         },
         is_server_mode,

@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
+use std::path::PathBuf;
 
 #[derive(Debug, Args)]
 pub struct StartArgs {
@@ -40,13 +40,16 @@ pub struct StartArgs {
 
 pub async fn execute(args: StartArgs) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
-    
+
     // 1. Resolve artifact path
     let artifact_path = if let Some(ref path) = args.artifact {
         PathBuf::from(path)
     } else if let Some(ref sha) = args.version {
         // Look for the specific version in .flux/artifacts/
-        let path = cwd.join(".flux").join("artifacts").join(format!("{}.json", sha));
+        let path = cwd
+            .join(".flux")
+            .join("artifacts")
+            .join(format!("{}.json", sha));
         if !path.exists() {
             bail!("Version {} not found in .flux/artifacts/", sha);
         }
@@ -66,7 +69,10 @@ pub async fn execute(args: StartArgs) -> Result<()> {
     // 2. Resolve project ID from flux.json
     let project_config = crate::project::load_project_config(&cwd).ok();
     let project_id = project_config.as_ref().and_then(|c| c.project_id.clone());
-    let project_kind = project_config.as_ref().map(|c| c.kind.clone()).unwrap_or(shared::project::ProjectKind::Function);
+    let project_kind = project_config
+        .as_ref()
+        .map(|c| c.kind.clone())
+        .unwrap_or(shared::project::ProjectKind::Function);
 
     // 3. Prepare runtime arguments
     let binary = crate::bin_resolution::ensure_binary("flux-runtime", args.release).await?;
@@ -103,7 +109,8 @@ pub async fn execute(args: StartArgs) -> Result<()> {
     }
 
     // 4. Run with unified runtime_runner
-    let project_name = cwd.file_name()
+    let project_name = cwd
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("flux-project")
         .to_string();
@@ -118,7 +125,8 @@ pub async fn execute(args: StartArgs) -> Result<()> {
         server_url: auth.url.clone(),
         watch_dir: None,
         poll_ms: 0,
-    }).await?;
+    })
+    .await?;
 
     Ok(())
 }

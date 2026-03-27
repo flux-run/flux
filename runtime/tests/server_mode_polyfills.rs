@@ -2,15 +2,15 @@ use std::net::SocketAddr;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use axum::Router;
 use axum::routing::get;
+use axum::Router;
 use base64::Engine as _;
-use runtime::JsIsolate;
 use runtime::artifact::build_artifact;
 use runtime::deno_runtime::NetRequest;
 use runtime::isolate_pool::{ExecutionContext, IsolatePool};
+use runtime::JsIsolate;
 use tokio::net::TcpListener;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 /// Decode a response body from the Flux runtime.
 /// The runtime encodes binary/text bodies as `__FLUX_B64:<base64>` so they
@@ -79,7 +79,10 @@ Deno.serve(async function handler(_request) {{
         "content-type header must be forwarded"
     );
     let decoded = decode_body(net_response["body"].as_str().unwrap_or_default());
-    assert_eq!(decoded, "buffered-response", "fetch response body must survive round-trip");
+    assert_eq!(
+        decoded, "buffered-response",
+        "fetch response body must survive round-trip"
+    );
     assert_eq!(
         result.checkpoints.len(),
         1,
@@ -205,13 +208,12 @@ Deno.serve(() => new Response("second"));
     .await?;
 
     assert_eq!(boot.result.status, "error");
-    assert!(
-        boot.result
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Deno.serve may only register one listener during boot")
-    );
+    assert!(boot
+        .result
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Deno.serve may only register one listener during boot"));
 
     Ok(())
 }
@@ -286,7 +288,9 @@ export default async function handler() {
 }
 "#;
 
-    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create isolate")?;
     let output = isolate
         .execute(serde_json::json!({}), ExecutionContext::new("fetch-abort"))
         .await
@@ -321,7 +325,9 @@ export default async function handler() {
 }
 "#;
 
-    let mut live_isolate = JsIsolate::new_for_run(code).await.context("failed to create live isolate")?;
+    let mut live_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create live isolate")?;
     let live_output = live_isolate
         .execute(serde_json::json!({}), ExecutionContext::new("timer-live"))
         .await
@@ -333,8 +339,9 @@ export default async function handler() {
     assert_eq!(live_output.checkpoints[0].boundary, "timer");
     assert_eq!(live_output.checkpoints[0].method, "delay");
 
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create replay isolate")?;
     let mut replay_context = ExecutionContext::new("timer-replay");
     replay_context.mode = runtime::deno_runtime::ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -372,7 +379,9 @@ export default async function handler() {
 }
 "#;
 
-    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create isolate")?;
     let output = isolate
         .execute(
             serde_json::json!({}),
@@ -413,7 +422,10 @@ export default async function handler() {
 // the underlying OpenSSL/BoringSSL build on arm64-apple-darwin.
 // CI runs on ubuntu-22.04 (amd64) where this test passes cleanly.
 // Track: https://github.com/denoland/deno/issues (deno_crypto arm64 compat)
-#[cfg_attr(target_os = "macos", ignore = "deno_crypto SIGABRT on Apple Silicon — passes in CI (Linux)")]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "deno_crypto SIGABRT on Apple Silicon — passes in CI (Linux)"
+)]
 async fn crypto_subtle_import_key_and_verify_support_rs256_jwks() -> Result<()> {
     let _lock = polyfill_test_lock().lock().await;
     let code = format!(
@@ -458,7 +470,9 @@ export default async function handler() {{
                 message = "flux-rs256-fixture",
         );
 
-    let mut isolate = JsIsolate::new_for_run(&code).await.context("failed to create isolate")?;
+    let mut isolate = JsIsolate::new_for_run(&code)
+        .await
+        .context("failed to create isolate")?;
     let output = isolate
         .execute(
             serde_json::json!({}),
@@ -477,7 +491,11 @@ export default async function handler() {{
                 "verified": true,
         })
     );
-    assert_eq!(output.checkpoints.len(), 2, "crypto.subtle operations must be recorded");
+    assert_eq!(
+        output.checkpoints.len(),
+        2,
+        "crypto.subtle operations must be recorded"
+    );
     assert_eq!(output.checkpoints[0].boundary, "crypto.subtle.importKey");
     assert_eq!(output.checkpoints[1].boundary, "crypto.subtle.verify");
 
@@ -497,7 +515,9 @@ export default async function handler() {
 }
 "#;
 
-    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create isolate")?;
     let output = isolate
         .execute(serde_json::json!({}), ExecutionContext::new("deno-env-get"))
         .await

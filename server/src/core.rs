@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use tokio::sync::watch;
 use tracing::info;
 
@@ -157,8 +157,12 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             client_ip TEXT,
             user_agent TEXT,
             error TEXT,
+            error_name TEXT,
+            error_message TEXT,
             error_stack TEXT,
             error_fingerprint TEXT,
+            error_phase TEXT,
+            is_user_code BOOLEAN,
             error_source TEXT,
             error_type TEXT,
             code_sha TEXT NOT NULL,
@@ -168,6 +172,19 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS error_name TEXT")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS error_message TEXT")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS error_phase TEXT")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS is_user_code BOOLEAN")
+        .execute(pool)
+        .await?;
 
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS flux.spans (

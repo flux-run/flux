@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use tokio::io::AsyncBufReadExt;
 
@@ -44,8 +44,10 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
     let entry_str = if args.entry == "-" {
         use std::io::Read;
         let mut buffer = String::new();
-        std::io::stdin().read_to_string(&mut buffer).context("failed to read from stdin")?;
-        
+        std::io::stdin()
+            .read_to_string(&mut buffer)
+            .context("failed to read from stdin")?;
+
         let cwd = std::env::current_dir().context("failed to get current directory")?;
         let file_path = cwd.join(format!(".flux-exec-stdin-{}.ts", uuid::Uuid::new_v4()));
         std::fs::write(&file_path, buffer).context("failed to write temp stdin file")?;
@@ -83,7 +85,9 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
 
     let project_id = args.project_id.clone().or_else(|| {
         let project_dir = entry.parent().unwrap_or(std::path::Path::new("."));
-        crate::project::load_project_config(project_dir).ok().and_then(|c| c.project_id)
+        crate::project::load_project_config(project_dir)
+            .ok()
+            .and_then(|c| c.project_id)
     });
 
     let runtime_port = pick_free_port()?;
@@ -108,7 +112,11 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
         println!("{}", line);
         if let Some(pos) = line.find("[boot] execution_id=") {
             let rest = &line[pos + 20..];
-            execution_id = rest.split_whitespace().next().unwrap_or_default().to_string();
+            execution_id = rest
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string();
             break;
         }
     }
@@ -122,7 +130,7 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
 
     // 2. Wait for either the HTTP readiness OR for the process to exit
     let mut wait_for_ready = Box::pin(wait_for_runtime(runtime_port, args.timeout_secs));
-    
+
     let result = tokio::select! {
         ready_res = &mut wait_for_ready => {
             if ready_res.is_ok() {
@@ -154,7 +162,7 @@ pub async fn execute(args: ExecArgs) -> Result<()> {
             }
         }
     };
- 
+
     if let Some(path_str) = temp_entry {
         let _ = std::fs::remove_file(path_str);
     }
@@ -231,7 +239,7 @@ async fn spawn_runtime(
 ) -> Result<tokio::process::Child> {
     let mut command = tokio::process::Command::new(binary);
     command.args(runtime_args);
-    
+
     command
         .env("FLUX_SERVER_URL", server_url)
         .env("FLUX_SERVICE_TOKEN", token);
@@ -240,9 +248,7 @@ async fn spawn_runtime(
         command.arg("--project-id").arg(id);
     }
 
-    command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
+    command.stdout(Stdio::piped()).stderr(Stdio::inherit());
 
     command
         .spawn()

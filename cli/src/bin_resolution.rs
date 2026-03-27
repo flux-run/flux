@@ -1,5 +1,5 @@
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use anyhow::{Result, Context};
 
 pub async fn ensure_binary(name: &str, release: bool) -> Result<PathBuf> {
     // 1. Try finding it in the same directory as the current executable
@@ -81,7 +81,7 @@ fn find_workspace_binary(workspace_root: &Path, name: &str, release: bool) -> Op
 
 async fn build_workspace_binary(workspace_root: &Path, name: &str, release: bool) -> Result<()> {
     let mut command = tokio::process::Command::new("cargo");
-    
+
     // Map bin names to package names if necessary
     let package = match name {
         "flux-runtime" => "runtime",
@@ -92,7 +92,7 @@ async fn build_workspace_binary(workspace_root: &Path, name: &str, release: bool
     command
         .current_dir(workspace_root)
         .args(["build", "-p", package]);
-    
+
     if name == "flux-runtime" {
         command.args(["--bin", "flux-runtime"]);
     }

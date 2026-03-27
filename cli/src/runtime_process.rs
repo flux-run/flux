@@ -13,9 +13,7 @@ pub async fn spawn_runtime(
         cmd.stderr(std::process::Stdio::piped());
     }
 
-    let child = cmd
-        .spawn()
-        .context("failed to spawn flux-runtime")?;
+    let child = cmd.spawn().context("failed to spawn flux-runtime")?;
 
     Ok(child)
 }

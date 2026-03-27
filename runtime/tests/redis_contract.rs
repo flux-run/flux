@@ -4,12 +4,12 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use runtime::JsIsolate;
 use runtime::deno_runtime::{ExecutionMode, FetchCheckpoint};
 use runtime::isolate_pool::ExecutionContext;
+use runtime::JsIsolate;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -45,7 +45,9 @@ export default function handler({ input }) {
         "connectionString": format!("redis://127.0.0.1:{port}/0"),
     });
 
-    let mut isolate = JsIsolate::new_for_run(code).await.context("failed to create redis isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create redis isolate")?;
     let live_output = isolate
         .execute(payload.clone(), ExecutionContext::new("redis-live"))
         .await
@@ -69,8 +71,9 @@ export default function handler({ input }) {
     assert_eq!(live_output.checkpoints[0].method, "GET");
 
     let recorded = live_output.checkpoints.clone();
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create redis replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create redis replay isolate")?;
     let mut replay_context = ExecutionContext::new("redis-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -119,8 +122,9 @@ export default function handler({ input }) {
         "connectionString": "redis://127.0.0.1:6379/0",
     });
 
-    let mut live_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create blocked redis isolate")?;
+    let mut live_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create blocked redis isolate")?;
     let live_output = live_isolate
         .execute(payload.clone(), ExecutionContext::new("redis-blocked-live"))
         .await
@@ -170,8 +174,9 @@ export default function handler({ input }) {
         duration_ms: 0,
     }];
 
-    let mut replay_isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create blocked redis replay isolate")?;
+    let mut replay_isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create blocked redis replay isolate")?;
     let mut replay_context = ExecutionContext::new("redis-blocked-replay");
     replay_context.mode = ExecutionMode::Replay;
     let replay_output = replay_isolate
@@ -277,12 +282,10 @@ export default async function handler({ input }) {
         })
     );
     assert_eq!(output.checkpoints.len(), 12);
-    assert!(
-        output
-            .checkpoints
-            .iter()
-            .all(|checkpoint| checkpoint.boundary == "redis")
-    );
+    assert!(output
+        .checkpoints
+        .iter()
+        .all(|checkpoint| checkpoint.boundary == "redis"));
 
     Ok(())
 }
@@ -314,8 +317,9 @@ export default function handler({ input }) {
         "connectionString": "redis://127.0.0.1:6379/0",
     });
 
-    let mut isolate =
-        JsIsolate::new_for_run(code).await.context("failed to create blocked-command isolate")?;
+    let mut isolate = JsIsolate::new_for_run(code)
+        .await
+        .context("failed to create blocked-command isolate")?;
     let output = isolate
         .execute(payload, ExecutionContext::new("redis-blocked-command"))
         .await

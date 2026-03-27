@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use deno_ast::{EmitOptions, MediaType, ParseParams, TranspileModuleOptions, TranspileOptions};
 use runtime::isolate_pool::ExecutionContext;
@@ -20,7 +20,12 @@ struct Args {
     artifact: Option<String>,
 
     /// URL of the flux-server gRPC endpoint.
-    #[arg(long, value_name = "URL", env = "FLUX_SERVER_URL", default_value = "http://127.0.0.1:3003")]
+    #[arg(
+        long,
+        value_name = "URL",
+        env = "FLUX_SERVER_URL",
+        default_value = "http://127.0.0.1:3003"
+    )]
     server_url: String,
 
     /// Service token for authenticating with flux-server.
@@ -93,7 +98,10 @@ async fn main() -> Result<()> {
             }, 503);\n\
         }";
         let artifact = runtime::build_artifact("_gateway", placeholder_js.to_string());
-        tracing::info!("Starting flux-runtime in gateway mode on port {}", args.port);
+        tracing::info!(
+            "Starting flux-runtime in gateway mode on port {}",
+            args.port
+        );
         runtime::run_http_runtime(
             runtime::HttpRuntimeConfig {
                 host: args.host,
@@ -105,7 +113,8 @@ async fn main() -> Result<()> {
                 service_token: args.token,
             },
             artifact,
-        ).await?;
+        )
+        .await?;
         return Ok(());
     }
 
@@ -124,14 +133,19 @@ async fn main() -> Result<()> {
         let entry = if let Some(e) = &args.entry {
             PathBuf::from(e)
         } else {
-            entry_fallback.iter()
+            entry_fallback
+                .iter()
                 .map(PathBuf::from)
                 .find(|p| p.exists())
                 .unwrap_or_else(|| PathBuf::from("index.js"))
         };
 
         if !entry.exists() {
-            bail!("entry file not found: {}. Tried: {}", entry.display(), entry_fallback.join(", "));
+            bail!(
+                "entry file not found: {}. Tried: {}",
+                entry.display(),
+                entry_fallback.join(", ")
+            );
         }
 
         match extension(&entry).as_deref() {
@@ -191,9 +205,12 @@ async fn main() -> Result<()> {
     }
 
     // Boot the project to detect if it's a server or a one-shot handler.
-    let mut boot_context = ExecutionContext::with_project(artifact.code_version().to_string(), args.project_id.clone());
+    let mut boot_context = ExecutionContext::with_project(
+        artifact.code_version().to_string(),
+        args.project_id.clone(),
+    );
     boot_context.verbose = args.verbose;
-    
+
     let mut recorded_checkpoints = Vec::new();
     let mut replay_input = args.script_input.clone();
 
@@ -203,9 +220,12 @@ async fn main() -> Result<()> {
         if args.token.is_empty() {
             // println!("replay:   {}", replay_id);
         }
-        let trace = runtime::server_client::get_trace(&args.server_url, &args.token, replay_id).await?;
-        recorded_checkpoints = trace.checkpoints.iter().map(|cp| {
-            runtime::deno_runtime::FetchCheckpoint {
+        let trace =
+            runtime::server_client::get_trace(&args.server_url, &args.token, replay_id).await?;
+        recorded_checkpoints = trace
+            .checkpoints
+            .iter()
+            .map(|cp| runtime::deno_runtime::FetchCheckpoint {
                 call_index: cp.call_index as u32,
                 boundary: cp.boundary.clone(),
                 url: String::new(),
@@ -213,11 +233,11 @@ async fn main() -> Result<()> {
                 request: serde_json::from_slice(&cp.request).unwrap_or(serde_json::Value::Null),
                 response: serde_json::from_slice(&cp.response).unwrap_or(serde_json::Value::Null),
                 duration_ms: cp.duration_ms,
-            }
-        }).collect();
-        
+            })
+            .collect();
+
         boot_context.mode = runtime::deno_runtime::ExecutionMode::Replay;
-        
+
         if replay_input.is_none() {
             replay_input = Some(trace.request_json.clone());
         }
@@ -225,9 +245,12 @@ async fn main() -> Result<()> {
     }
 
     if args.verbose {
-        println!("[boot] execution_id={} request_id={}", boot_context.execution_id, boot_context.request_id);
+        println!(
+            "[boot] execution_id={} request_id={}",
+            boot_context.execution_id, boot_context.request_id
+        );
     }
-    
+
     let boot = runtime::boot_runtime_artifact(&artifact, boot_context.clone()).await?;
 
     let is_server_mode = boot.is_server_mode;
@@ -268,7 +291,7 @@ async fn main() -> Result<()> {
         if !is_server_mode && !has_handler {
             return Ok(());
         }
-    }    // 1. If script_input or replay is provided, execute the handler once and exit.
+    } // 1. If script_input or replay is provided, execute the handler once and exit.
     if let Some(input_str) = &replay_input {
         if !has_handler && !is_server_mode {
             return Ok(());
@@ -278,20 +301,40 @@ async fn main() -> Result<()> {
         let started = Instant::now();
 
         let execution = if is_server_mode {
-            let trace = replay_trace.as_ref().ok_or_else(|| anyhow::anyhow!("replay trace missing for server-mode replay"))?;
+            let trace = replay_trace
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("replay trace missing for server-mode replay"))?;
 
             // Intelligent unpacking: Flux HTTP executions record an envelope.
             // If the request_json looks like an envelope, extract the real body and headers.
-            let (body, headers_json) = if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&trace.request_json) {
-                if envelope.get("method").is_some() && envelope.get("url").is_some() && envelope.get("body").is_some() {
-                    let b = envelope.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let h = serde_json::to_string(envelope.get("headers").unwrap_or(&serde_json::json!([]))).unwrap_or_else(|_| "[]".to_string());
+            let (body, headers_json) = if let Ok(envelope) =
+                serde_json::from_str::<serde_json::Value>(&trace.request_json)
+            {
+                if envelope.get("method").is_some()
+                    && envelope.get("url").is_some()
+                    && envelope.get("body").is_some()
+                {
+                    let b = envelope
+                        .get("body")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let h = serde_json::to_string(
+                        envelope.get("headers").unwrap_or(&serde_json::json!([])),
+                    )
+                    .unwrap_or_else(|_| "[]".to_string());
                     (b, h)
                 } else {
-                    (trace.request_json.clone(), "[[\"content-type\", \"application/json\"]]".to_string())
+                    (
+                        trace.request_json.clone(),
+                        "[[\"content-type\", \"application/json\"]]".to_string(),
+                    )
                 }
             } else {
-                (trace.request_json.clone(), "[[\"content-type\", \"application/json\"]]".to_string())
+                (
+                    trace.request_json.clone(),
+                    "[[\"content-type\", \"application/json\"]]".to_string(),
+                )
             };
 
             let original_failed = trace.status != "ok";
@@ -303,31 +346,41 @@ async fn main() -> Result<()> {
                 body: body.clone(),
             };
 
-            let res = isolate.dispatch_request_with_recorded(boot_context.clone(), net_req, recorded_checkpoints).await?;
+            let res = isolate
+                .dispatch_request_with_recorded(boot_context.clone(), net_req, recorded_checkpoints)
+                .await?;
 
             // Detect boundary stop — the sentinel signals that replay stopped cleanly at an IO boundary
-            let boundary_stop: Option<String> = res.boundary_stop.clone()
-                .or_else(|| {
-                    res.error.as_deref()
-                        .and_then(|e| e.strip_prefix("__FLUX_BOUNDARY_STOP:"))
-                        .map(|s| s.split(':').next().unwrap_or(s).to_string())
-                });
+            let boundary_stop: Option<String> = res.boundary_stop.clone().or_else(|| {
+                res.error
+                    .as_deref()
+                    .and_then(|e| e.strip_prefix("__FLUX_BOUNDARY_STOP:"))
+                    .map(|s| s.split(':').next().unwrap_or(s).to_string())
+            });
 
             let mut execution = runtime::isolate_pool::ExecutionResult {
                 execution_id: boot_context.execution_id.clone(),
                 request_id: boot_context.request_id.clone(),
                 project_id: args.project_id.clone(),
                 code_version: boot_context.code_version.clone(),
-                status: if boundary_stop.is_some() { "stopped".to_string() }
-                        else if res.response.status >= 400 { "error".to_string() }
-                        else { "ok".to_string() },
+                status: if boundary_stop.is_some() {
+                    "stopped".to_string()
+                } else if res.response.status >= 400 {
+                    "error".to_string()
+                } else {
+                    "ok".to_string()
+                },
                 body: serde_json::json!({
                     "status": res.response.status,
                     "headers": res.response.headers,
                     "body": res.response.body,
                 }),
-                error: if boundary_stop.is_some() { None } else { res.error },
-                duration_ms: 0, 
+                error: if boundary_stop.is_some() {
+                    None
+                } else {
+                    res.error
+                },
+                duration_ms: std::cmp::max(1, started.elapsed().as_millis() as i32),
                 checkpoints: res.checkpoints,
                 logs: res.logs,
                 has_live_io: false,
@@ -341,8 +394,11 @@ async fn main() -> Result<()> {
                 request_body: Some(body.clone()),
                 response_status: Some(res.response.status as i32),
                 response_body: Some(res.response.body.clone()),
-                error_message: None,
+                error_name: res.error_name,
+                error_message: res.error_message,
                 error_stack: res.error_stack,
+                error_phase: res.error_phase,
+                is_user_code: res.is_user_code,
                 error_source: res.error_source,
                 error_type: res.error_type,
                 error_fingerprint: None,
@@ -352,30 +408,35 @@ async fn main() -> Result<()> {
             if execution.error.is_none() && execution.status == "error" {
                 if let Some(error_log) = execution.logs.iter().rev().find(|l| l.level == "error") {
                     execution.error = Some(error_log.message.clone());
-                } else if let Some(warn_log) = execution.logs.iter().rev().find(|l| l.level == "warn") {
+                } else if let Some(warn_log) =
+                    execution.logs.iter().rev().find(|l| l.level == "warn")
+                {
                     execution.error = Some(warn_log.message.clone());
                 } else if res.response.status >= 500 {
-                     execution.error = Some("Internal Server Error (500)".to_string());
+                    execution.error = Some("Internal Server Error (500)".to_string());
                 }
             }
 
-            println!("\n  \x1b[1mreplaying {}\x1b[0m", args.replay.as_ref().unwrap());
+            println!(
+                "\n  \x1b[1mreplaying {}\x1b[0m",
+                args.replay.as_ref().unwrap()
+            );
             println!("  \x1b[32m✓\x1b[0m \x1b[2musing updated code\x1b[0m");
-            
+
             println!("\n  ────────────────────────────\n");
             println!("  \x1b[1mSTEP 0 — {} {}\x1b[0m\n", trace.method, trace.path);
 
             if let Ok(mut input_val) = serde_json::from_str::<serde_json::Value>(&body) {
-                 decode_flux_b64_in_value(&mut input_val);
-                 println!("  \x1b[1minput\x1b[0m");
-                 if let Some(obj) = input_val.as_object() {
-                     for (k, v) in obj {
-                         println!("    {}: {}", k, v);
-                     }
-                 } else {
-                     println!("    {}", input_val);
-                 }
-                 println!();
+                decode_flux_b64_in_value(&mut input_val);
+                println!("  \x1b[1minput\x1b[0m");
+                if let Some(obj) = input_val.as_object() {
+                    for (k, v) in obj {
+                        println!("    {}: {}", k, v);
+                    }
+                } else {
+                    println!("    {}", input_val);
+                }
+                println!();
             }
 
             let original_reached_db = trace.checkpoints.iter().any(|c| c.boundary == "postgres");
@@ -413,10 +474,16 @@ async fn main() -> Result<()> {
 
             if let Some(ref boundary) = boundary_stop {
                 // ⏸ BOUNDARY STOP — the clean, expected outcome when replay reaches uncharted IO
-                println!("  \x1b[33m⏸\x1b[0m \x1b[1mstopped at external boundary: {}\x1b[0m", boundary.to_uppercase());
+                println!(
+                    "  \x1b[33m⏸\x1b[0m \x1b[1mstopped at external boundary: {}\x1b[0m",
+                    boundary.to_uppercase()
+                );
                 println!();
                 println!("  \x1b[2mreason\x1b[0m");
-                println!("    no recorded checkpoint available for this {} call", boundary);
+                println!(
+                    "    no recorded checkpoint available for this {} call",
+                    boundary
+                );
                 println!("    replay never touches the real world");
                 println!();
 
@@ -424,10 +491,19 @@ async fn main() -> Result<()> {
                     println!("  \x1b[1mprogress vs original\x1b[0m");
                     if original_reached_db {
                         println!("    original: reached {} → failed", boundary.to_uppercase());
-                        println!("    replay:   reached {} boundary → stopped cleanly", boundary.to_uppercase());
+                        println!(
+                            "    replay:   reached {} boundary → stopped cleanly",
+                            boundary.to_uppercase()
+                        );
                     } else {
-                        println!("    original: failed before {} boundary", boundary.to_uppercase());
-                        println!("    replay:   reached {} boundary → stopped cleanly", boundary.to_uppercase());
+                        println!(
+                            "    original: failed before {} boundary",
+                            boundary.to_uppercase()
+                        );
+                        println!(
+                            "    replay:   reached {} boundary → stopped cleanly",
+                            boundary.to_uppercase()
+                        );
                         println!();
                         println!("  \x1b[32m✓\x1b[0m your code fix is working — replay progressed further than the original");
                     }
@@ -435,28 +511,45 @@ async fn main() -> Result<()> {
                 }
 
                 println!("  \x1b[1mnext\x1b[0m");
-                println!("    → run \x1b[1mflux resume {}\x1b[0m to continue with real IO", args.replay.as_deref().unwrap_or(""));
+                println!(
+                    "    → run \x1b[1mflux resume {}\x1b[0m to continue with real IO",
+                    args.replay.as_deref().unwrap_or("")
+                );
             } else if execution.status == "ok" {
                 println!("  \x1b[1mresult\x1b[0m");
                 println!("    \x1b[32m✓\x1b[0m \x1b[1mreplay successful\x1b[0m");
                 println!("\n  \x1b[1mnext steps\x1b[0m");
-                println!("    → run \x1b[1mflux resume {}\x1b[0m to apply with real IO", args.replay.as_deref().unwrap_or(""));
+                println!(
+                    "    → run \x1b[1mflux resume {}\x1b[0m to apply with real IO",
+                    args.replay.as_deref().unwrap_or("")
+                );
             } else {
                 println!("  \x1b[1mresult\x1b[0m");
                 if is_server_mode {
-                    let status = execution.body.get("net_response").and_then(|n| n.get("status")).and_then(|v| v.as_u64()).unwrap_or(500);
-                    println!("    \x1b[31m✗\x1b[0m \x1b[1mreplay failed ({})\x1b[0m", status);
+                    let status = execution
+                        .body
+                        .get("net_response")
+                        .and_then(|n| n.get("status"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(500);
+                    println!(
+                        "    \x1b[31m✗\x1b[0m \x1b[1mreplay failed ({})\x1b[0m",
+                        status
+                    );
                 } else {
                     println!("    \x1b[31m✗\x1b[0m \x1b[1mexecution failed\x1b[0m");
                 }
 
                 if original_failed && execution.status == "error" {
                     println!("\n  \x1b[1mdifference vs original\x1b[0m");
-                    let replay_reached_db = execution.checkpoints.iter().any(|c| c.boundary == "postgres");
+                    let replay_reached_db = execution
+                        .checkpoints
+                        .iter()
+                        .any(|c| c.boundary == "postgres");
                     if original_reached_db {
                         println!("    original: reached DB → failed");
                         println!("    replay:   reached DB → reproduced same failure");
-                         
+
                         println!("\n  \x1b[1minsight\x1b[0m");
                         println!("    Replay perfectly reproduced the original failure");
                         println!("    using the recorded database response.");
@@ -487,7 +580,10 @@ async fn main() -> Result<()> {
                 } else {
                     println!("    → examine the code above to identify the issue");
                 }
-                println!("    → then re-run:\n       flux replay {}", args.replay.as_deref().unwrap_or_default());
+                println!(
+                    "    → then re-run:\n       flux replay {}",
+                    args.replay.as_deref().unwrap_or_default()
+                );
             }
 
             return Ok(());
@@ -498,16 +594,20 @@ async fn main() -> Result<()> {
             let res = isolate
                 .execute_with_recorded(input.clone(), boot_context.clone(), recorded_checkpoints)
                 .await?;
-            
+
             runtime::isolate_pool::ExecutionResult {
                 execution_id: boot_context.execution_id.clone(),
                 request_id: boot_context.request_id.clone(),
                 project_id: args.project_id.clone(),
                 code_version: boot_context.code_version.clone(),
-                status: if res.error.is_some() { "error".to_string() } else { "ok".to_string() },
+                status: if res.error.is_some() {
+                    "error".to_string()
+                } else {
+                    "ok".to_string()
+                },
                 body: res.output,
                 error: res.error,
-                duration_ms: started.elapsed().as_millis() as i32,
+                duration_ms: std::cmp::max(1, started.elapsed().as_millis() as i32),
                 checkpoints: res.checkpoints,
                 logs: res.logs,
                 has_live_io: res.has_live_io,
@@ -521,8 +621,11 @@ async fn main() -> Result<()> {
                 request_body: None,
                 response_status: None,
                 response_body: None,
-                error_message: None,
+                error_name: res.error_name,
+                error_message: res.error_message,
                 error_stack: res.error_stack,
+                error_phase: res.error_phase,
+                is_user_code: res.is_user_code,
                 error_source: res.error_source,
                 error_type: res.error_type,
                 error_fingerprint: None,
@@ -534,7 +637,11 @@ async fn main() -> Result<()> {
                 &args.server_url,
                 &args.token,
                 runtime::server_client::ExecutionEnvelope {
-                    method: if is_server_mode { "REPLAY_HTTP".to_string() } else { "REPLAY_RUN".to_string() },
+                    method: if is_server_mode {
+                        "REPLAY_HTTP".to_string()
+                    } else {
+                        "REPLAY_RUN".to_string()
+                    },
                     path: args.entry.clone().unwrap_or_else(|| "index".to_string()),
                     project_id: args.project_id.clone(),
                     request_json: serde_json::Value::String(input_str.clone()),
@@ -557,8 +664,16 @@ async fn main() -> Result<()> {
         } else {
             println!("  \x1b[1mresult\x1b[0m");
             if is_server_mode {
-                let status = execution.body.get("net_response").and_then(|n| n.get("status")).and_then(|v| v.as_u64()).unwrap_or(500);
-                println!("    \x1b[31m✗\x1b[0m \x1b[1mrequest failed ({})\x1b[0m", status);
+                let status = execution
+                    .body
+                    .get("net_response")
+                    .and_then(|n| n.get("status"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(500);
+                println!(
+                    "    \x1b[31m✗\x1b[0m \x1b[1mrequest failed ({})\x1b[0m",
+                    status
+                );
             } else {
                 println!("    \x1b[31m✗\x1b[0m \x1b[1mexecution failed\x1b[0m");
             }
@@ -577,7 +692,10 @@ async fn main() -> Result<()> {
             } else {
                 println!("    → examine the logs above to identify the issue");
             }
-            println!("    → then re-run:\n       flux replay {}", args.replay.as_deref().unwrap_or_default());
+            println!(
+                "    → then re-run:\n       flux replay {}",
+                args.replay.as_deref().unwrap_or_default()
+            );
         }
         return Ok(());
     }
@@ -717,10 +835,16 @@ fn get_explanation(err: &str) -> Option<String> {
 fn get_smart_suggestion(err: &str) -> Option<String> {
     if err.contains("relation") && err.contains("does not exist") {
         let table = err.split('"').nth(1).unwrap_or("unknown");
-        return Some(format!("fix your database schema by creating the missing table \"{}\"", table));
+        return Some(format!(
+            "fix your database schema by creating the missing table \"{}\"",
+            table
+        ));
     }
     if err.contains("postgres connect failed") || err.contains("db error") {
-        return Some("verify your DATABASE_URL environment variable and ensure your database is running.".to_string());
+        return Some(
+            "verify your DATABASE_URL environment variable and ensure your database is running."
+                .to_string(),
+        );
     }
     None
 }

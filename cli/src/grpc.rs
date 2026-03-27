@@ -1,7 +1,7 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
+use tonic::metadata::MetadataValue;
 use tonic::Request;
 use tonic::Streaming;
-use tonic::metadata::MetadataValue;
 
 pub use shared::pb;
 
@@ -145,7 +145,10 @@ pub async fn validate_service_token(url: &str, token: &str) -> Result<AuthResult
         match validate_service_token_rest(&endpoint, token).await {
             Ok(result) => return Ok(result),
             Err(e) => {
-                println!("  Cloud authentication failed: {}. Falling back to gRPC...", e);
+                println!(
+                    "  Cloud authentication failed: {}. Falling back to gRPC...",
+                    e
+                );
             }
         }
     }
@@ -174,7 +177,11 @@ pub async fn validate_service_token(url: &str, token: &str) -> Result<AuthResult
 
     Ok(AuthResult {
         auth_mode: response.auth_mode,
-        project_id: if response.project_id.is_empty() { None } else { Some(response.project_id) },
+        project_id: if response.project_id.is_empty() {
+            None
+        } else {
+            Some(response.project_id)
+        },
     })
 }
 
@@ -195,11 +202,14 @@ async fn validate_service_token_rest(url: &str, token: &str) -> Result<AuthResul
         bail!("REST validation failed ({}): {}", status, err_body);
     }
 
-    let body: serde_json::Value = response.json().await.context("failed to parse REST validation response")?;
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("failed to parse REST validation response")?;
     let auth_mode = body["auth_mode"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("REST response missing auth_mode"))?;
-    
+
     let project_id = body["project_id"].as_str().map(|s| s.to_string());
 
     Ok(AuthResult {
@@ -358,7 +368,11 @@ pub async fn why(url: &str, token: &str, execution_id: &str) -> Result<WhyView> 
         reason: response.reason,
         suggestion: response.suggestion,
         error_body: response.error_body,
-        logs: response.logs.into_iter().map(|l| (l.level, l.message)).collect(),
+        logs: response
+            .logs
+            .into_iter()
+            .map(|l| (l.level, l.message))
+            .collect(),
     })
 }
 
@@ -521,7 +535,10 @@ pub async fn deploy_function(
         match deploy_function_rest(&endpoint, token, project_id, name, artifact_json).await {
             Ok(result) => return Ok(result),
             Err(e) => {
-                println!("  Cloud deployment via REST failed: {}. Falling back to gRPC...", e);
+                println!(
+                    "  Cloud deployment via REST failed: {}. Falling back to gRPC...",
+                    e
+                );
             }
         }
     }
@@ -597,14 +614,21 @@ async fn deploy_function_rest(
     })
 }
 
-pub async fn list_functions(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::FunctionEntry>> {
+pub async fn list_functions(
+    url: &str,
+    token: &str,
+    project_id: &str,
+) -> Result<Vec<pb::FunctionEntry>> {
     let endpoint = normalize_grpc_url(url);
 
     if endpoint.starts_with("https://") {
         match list_functions_rest(&endpoint, token, project_id).await {
             Ok(result) => return Ok(result),
             Err(e) => {
-                println!("  Cloud list functions via REST failed: {}. Falling back to gRPC...", e);
+                println!(
+                    "  Cloud list functions via REST failed: {}. Falling back to gRPC...",
+                    e
+                );
             }
         }
     }
@@ -632,7 +656,11 @@ pub async fn list_functions(url: &str, token: &str, project_id: &str) -> Result<
     Ok(response.functions)
 }
 
-async fn list_functions_rest(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::FunctionEntry>> {
+async fn list_functions_rest(
+    url: &str,
+    token: &str,
+    project_id: &str,
+) -> Result<Vec<pb::FunctionEntry>> {
     let client = reqwest::Client::new();
     let list_url = format!("{}/functions/{}", url.trim_end_matches('/'), project_id);
 
@@ -664,11 +692,15 @@ async fn list_functions_rest(url: &str, token: &str, project_id: &str) -> Result
         .await
         .context("failed to parse REST list functions response")?;
 
-    Ok(result.functions.into_iter().map(|f| pb::FunctionEntry {
-        id: f.id,
-        name: f.name,
-        created_at: f.created_at.unwrap_or_default(),
-    }).collect())
+    Ok(result
+        .functions
+        .into_iter()
+        .map(|f| pb::FunctionEntry {
+            id: f.id,
+            name: f.name,
+            created_at: f.created_at.unwrap_or_default(),
+        })
+        .collect())
 }
 
 pub async fn delete_function(url: &str, token: &str, function_id: &str) -> Result<()> {
@@ -678,7 +710,10 @@ pub async fn delete_function(url: &str, token: &str, function_id: &str) -> Resul
         match delete_function_rest(&endpoint, token, function_id).await {
             Ok(_) => return Ok(()),
             Err(e) => {
-                println!("  Cloud delete function via REST failed: {}. Falling back to gRPC...", e);
+                println!(
+                    "  Cloud delete function via REST failed: {}. Falling back to gRPC...",
+                    e
+                );
             }
         }
     }
@@ -729,14 +764,21 @@ async fn delete_function_rest(url: &str, token: &str, function_id: &str) -> Resu
     Ok(())
 }
 
-pub async fn list_env_vars(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::EnvVarEntry>> {
+pub async fn list_env_vars(
+    url: &str,
+    token: &str,
+    project_id: &str,
+) -> Result<Vec<pb::EnvVarEntry>> {
     let endpoint = normalize_grpc_url(url);
 
     if endpoint.starts_with("https://") {
         match list_env_vars_rest(&endpoint, token, project_id).await {
             Ok(result) => return Ok(result),
             Err(e) => {
-                println!("  Cloud list env vars via REST failed: {}. Falling back to gRPC...", e);
+                println!(
+                    "  Cloud list env vars via REST failed: {}. Falling back to gRPC...",
+                    e
+                );
             }
         }
     }
@@ -764,7 +806,11 @@ pub async fn list_env_vars(url: &str, token: &str, project_id: &str) -> Result<V
     Ok(response.env_vars)
 }
 
-async fn list_env_vars_rest(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::EnvVarEntry>> {
+async fn list_env_vars_rest(
+    url: &str,
+    token: &str,
+    project_id: &str,
+) -> Result<Vec<pb::EnvVarEntry>> {
     let client = reqwest::Client::new();
     let list_url = format!("{}/env-vars/{}", url.trim_end_matches('/'), project_id);
 
@@ -796,21 +842,34 @@ async fn list_env_vars_rest(url: &str, token: &str, project_id: &str) -> Result<
         .await
         .context("failed to parse REST list env vars response")?;
 
-    Ok(result.env_vars.into_iter().map(|e| pb::EnvVarEntry {
-        key: e.key,
-        value: e.value,
-        updated_at: e.updated_at.unwrap_or_default(),
-    }).collect())
+    Ok(result
+        .env_vars
+        .into_iter()
+        .map(|e| pb::EnvVarEntry {
+            key: e.key,
+            value: e.value,
+            updated_at: e.updated_at.unwrap_or_default(),
+        })
+        .collect())
 }
 
-pub async fn set_env_var(url: &str, token: &str, project_id: &str, key: &str, value: &str) -> Result<()> {
+pub async fn set_env_var(
+    url: &str,
+    token: &str,
+    project_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<()> {
     let endpoint = normalize_grpc_url(url);
 
     if endpoint.starts_with("https://") {
         match set_env_var_rest(&endpoint, token, project_id, key, value).await {
             Ok(_) => return Ok(()),
             Err(e) => {
-                println!("  Cloud set env var via REST failed: {}. Falling back to gRPC...", e);
+                println!(
+                    "  Cloud set env var via REST failed: {}. Falling back to gRPC...",
+                    e
+                );
             }
         }
     }
@@ -844,7 +903,13 @@ pub async fn set_env_var(url: &str, token: &str, project_id: &str, key: &str, va
     Ok(())
 }
 
-async fn set_env_var_rest(url: &str, token: &str, project_id: &str, key: &str, value: &str) -> Result<()> {
+async fn set_env_var_rest(
+    url: &str,
+    token: &str,
+    project_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<()> {
     let client = reqwest::Client::new();
     let set_url = format!("{}/env-vars/{}", url.trim_end_matches('/'), project_id);
 
@@ -874,7 +939,10 @@ pub async fn delete_env_var(url: &str, token: &str, project_id: &str, key: &str)
         match delete_env_var_rest(&endpoint, token, project_id, key).await {
             Ok(_) => return Ok(()),
             Err(e) => {
-                println!("  Cloud delete env var via REST failed: {}. Falling back to gRPC...", e);
+                println!(
+                    "  Cloud delete env var via REST failed: {}. Falling back to gRPC...",
+                    e
+                );
             }
         }
     }
@@ -909,7 +977,12 @@ pub async fn delete_env_var(url: &str, token: &str, project_id: &str, key: &str)
 
 async fn delete_env_var_rest(url: &str, token: &str, project_id: &str, key: &str) -> Result<()> {
     let client = reqwest::Client::new();
-    let delete_url = format!("{}/env-vars/{}/{}", url.trim_end_matches('/'), project_id, key);
+    let delete_url = format!(
+        "{}/env-vars/{}/{}",
+        url.trim_end_matches('/'),
+        project_id,
+        key
+    );
 
     let response = client
         .delete(&delete_url)
