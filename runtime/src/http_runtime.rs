@@ -177,6 +177,9 @@ async fn handle_request(
             "status": result.status,
             "result": result.body,
             "error": result.error,
+            "duration_ms": result.duration_ms,
+            "checkpoints": result.checkpoints,
+            "logs": result.logs,
         })),
     )
         .into_response();
