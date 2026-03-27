@@ -295,7 +295,7 @@ async fn main() -> Result<()> {
                 req_id: boot_context.request_id.clone(),
                 method: trace.method.clone(),
                 url: format!("http://{}{}", args.host, trace.path),
-                headers_json,
+                headers_json: headers_json.clone(),
                 body: body.clone(),
             };
 
@@ -328,6 +328,17 @@ async fn main() -> Result<()> {
                 logs: res.logs,
                 has_live_io: false,
                 boundary_stop: None,
+
+                // Advanced Telemetry
+                client_ip: None,
+                user_agent: None,
+                request_method: Some(trace.method.clone()),
+                request_headers: Some(serde_json::Value::String(headers_json.clone())),
+                request_body: Some(body.clone()),
+                response_status: Some(res.response.status as i32),
+                response_body: Some(res.response.body.clone()),
+                error_stack: res.error_stack,
+                error_fingerprint: None,
             };
 
             // Robust error capture: fallback to logs if error is missing but status is error
@@ -373,7 +384,7 @@ async fn main() -> Result<()> {
                 println!("    \x1b[32m✓\x1b[0m original execution succeeded");
             }
 
-            if let Some(ref boundary) = boundary_stop {
+            if let Some(ref _boundary) = boundary_stop {
                 println!("    \x1b[32m✓\x1b[0m replay progressed beyond original failure point");
             } else if execution.status == "error" {
                 println!("    \x1b[31m✗\x1b[0m replay execution failed");
@@ -494,6 +505,17 @@ async fn main() -> Result<()> {
                 logs: res.logs,
                 has_live_io: res.has_live_io,
                 boundary_stop: None,
+
+                // Advanced Telemetry
+                client_ip: None,
+                user_agent: None,
+                request_method: None,
+                request_headers: None,
+                request_body: None,
+                response_status: None,
+                response_body: None,
+                error_stack: res.error_stack,
+                error_fingerprint: None,
             }
         };
 

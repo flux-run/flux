@@ -5691,7 +5691,7 @@ impl JsIsolate {
                                  const result = await globalThis.__flux_user_handler({handler_arg});\n\
                  globalThis.__flux_last_result[__eid] = result ?? null;\n\
                }} catch (err) {{\n\
-                 globalThis.__flux_last_error[__eid] = { message: String(err && err.message ? err.message : err), stack: err && err.stack ? String(err.stack) : null };\n\
+                 globalThis.__flux_last_error[__eid] = {{ message: String(err && err.message ? err.message : err), stack: err && err.stack ? String(err.stack) : null }};\n\
                }}\n\
              }})();",
             eid = eid_json,
@@ -5889,6 +5889,8 @@ impl JsIsolate {
                 .map(|e| e.checkpoints.clone())
                 .unwrap_or_default(),
             error: None,
+            error_message: None,
+            error_stack: None,
             logs: execution.as_ref().map(|e| e.logs.clone()).unwrap_or_default(),
             has_live_io: execution.as_ref().map(|e| e.has_live_io).unwrap_or(false),
             boundary_stop: None,
@@ -6059,6 +6061,17 @@ async fn boot_inline_runtime_artifact(
             logs,
             has_live_io: false,
             boundary_stop: None,
+
+            // Advanced Telemetry
+            client_ip: None,
+            user_agent: None,
+            request_method: None,
+            request_headers: None,
+            request_body: None,
+            response_status: None,
+            response_body: None,
+            error_stack: None,
+            error_fingerprint: None,
         },
         is_server_mode,
         has_handler,
@@ -6218,6 +6231,17 @@ async fn boot_built_runtime_artifact(
             logs,
             has_live_io: false,
             boundary_stop: None,
+
+            // Advanced Telemetry
+            client_ip: None,
+            user_agent: None,
+            request_method: None,
+            request_headers: None,
+            request_body: None,
+            response_status: None,
+            response_body: None,
+            error_stack: None,
+            error_fingerprint: None,
         },
         is_server_mode,
         has_handler,

@@ -324,6 +324,17 @@ pub async fn execute_one_shot_artifact(
                         logs: out.logs,
                         has_live_io: out.has_live_io,
                         boundary_stop: out.boundary_stop,
+
+                        // Advanced Telemetry
+                        client_ip: None,
+                        user_agent: None,
+                        request_method: None,
+                        request_headers: None,
+                        request_body: None,
+                        response_status: None,
+                        response_body: None,
+                        error_stack: out.error_stack,
+                        error_fingerprint: None,
                     }
                 }
                 Err(e) => error_result(context_for_thread, e.to_string()),
@@ -420,6 +431,9 @@ fn spawn_isolate_worker(
                     });
 
                     let result = if let Some(net_req) = work.net_request {
+                        let method = net_req.method.clone();
+                        let headers_json = net_req.headers_json.clone();
+                        let body_cloned = net_req.body.clone();
                         match isolate
                             .dispatch_request_with_recorded(
                                 work.context.clone(),
@@ -432,8 +446,10 @@ fn spawn_isolate_worker(
                                 response: net_resp,
                                 checkpoints,
                                 error: js_error,
+                                error_stack,
                                 logs,
                                 has_live_io,
+                                boundary_stop,
                                 ..
                             }) => {
                                 let status = if js_error.is_some() || net_resp.status == 500 {
@@ -465,7 +481,18 @@ fn spawn_isolate_worker(
                                     checkpoints,
                                     logs,
                                     has_live_io,
-                                    boundary_stop: None,
+                                    boundary_stop,
+
+                                    // Advanced Telemetry
+                                    client_ip: None,
+                                    user_agent: None,
+                                    request_method: Some(method),
+                                    request_headers: Some(serde_json::to_value(headers_json).unwrap_or(serde_json::Value::Null)),
+                                    request_body: Some(body_cloned),
+                                    response_status: Some(net_resp.status as i32),
+                                    response_body: Some(net_resp.body),
+                                    error_stack,
+                                    error_fingerprint: None,
                                 }
                             },
                             Err(err) => error_result(work.context, err.to_string()),
@@ -513,6 +540,17 @@ fn spawn_isolate_worker(
                                     logs,
                                     has_live_io,
                                     boundary_stop,
+
+                                    // Advanced Telemetry
+                                    client_ip: None,
+                                    user_agent: None,
+                                    request_method: None,
+                                    request_headers: None,
+                                    request_body: None,
+                                    response_status: None,
+                                    response_body: None,
+                                    error_stack: None,
+                                    error_fingerprint: None,
                                 }
                             }
                             Err(err) => ExecutionResult {
@@ -528,6 +566,17 @@ fn spawn_isolate_worker(
                                 logs: vec![],
                                 has_live_io: false,
                                 boundary_stop: None,
+
+                                // Advanced Telemetry
+                                client_ip: None,
+                                user_agent: None,
+                                request_method: None,
+                                request_headers: None,
+                                request_body: None,
+                                response_status: None,
+                                response_body: None,
+                                error_stack: None,
+                                error_fingerprint: None,
                             },
                         }
                     };
@@ -610,7 +659,7 @@ fn spawn_isolate_worker_with_mode(
                         match isolate
                             .dispatch_request_with_recorded(
                                 work.context.clone(),
-                                net_req,
+                                net_req.clone(),
                                 work.recorded_checkpoints,
                             )
                             .await
@@ -619,8 +668,11 @@ fn spawn_isolate_worker_with_mode(
                                 response: net_resp,
                                 checkpoints,
                                 error: js_error,
+                                error_message: _msg,
+                                error_stack,
                                 logs,
                                 has_live_io,
+                                boundary_stop,
                                 ..
                             }) => {
                                 let status = if js_error.is_some() || net_resp.status == 500 {
@@ -655,10 +707,10 @@ fn spawn_isolate_worker_with_mode(
                                     boundary_stop,
 
                                     // Advanced Telemetry
-                                    client_ip: None, // Caller (main.rs) should ideally fill this if available
+                                    client_ip: None,
                                     user_agent: None,
                                     request_method: Some(net_req.method),
-                                    request_headers: Some(serde_json::to_value(net_req.headers).unwrap_or(serde_json::Value::Null)),
+                                    request_headers: Some(serde_json::to_value(net_req.headers_json).unwrap_or(serde_json::Value::Null)),
                                     request_body: Some(net_req.body),
                                     response_status: Some(net_resp.status as i32),
                                     response_body: Some(net_resp.body),
@@ -677,6 +729,29 @@ fn spawn_isolate_worker_with_mode(
                             )
                             .await
                         {
+                            Ok(JsExecutionOutput {
+                                output,
+                                checkpoints,
+                                error,
+                                error_stack,
+                                logs,
+                                has_live_io,
+                                boundary_stop,
+                                ..
+                            }) => {
+                                let (status, body, error) = match error {
+                                    Some(err) => {
+                                        ("error".to_string(), serde_json::Value::Null, Some(err))
+                                    }
+                                    None => (
+                                        "ok".to_string(),
+                                        serde_json::json!({
+                                            "isolate_id": isolate_id,
+                                            "output": output,
+                                        }),
+                                        None,
+                                    ),
+                                };
                                 ExecutionResult {
                                     execution_id: context.execution_id, project_id: context.project_id.clone(),
                                     request_id: context.request_id,
@@ -724,15 +799,6 @@ fn spawn_isolate_worker_with_mode(
                                 response_body: None,
                                 error_stack: None,
                                 error_fingerprint: None,
-                            },
-                                status: "error".to_string(),
-                                body: serde_json::Value::Null,
-                                error: Some(err.to_string()),
-                                duration_ms: started.elapsed().as_millis() as i32,
-                                checkpoints: vec![],
-                                logs: vec![],
-                                has_live_io: false,
-                                boundary_stop: None,
                             },
                         }
                     };

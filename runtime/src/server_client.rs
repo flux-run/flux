@@ -48,7 +48,6 @@ pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelop
             .into_iter()
             .map(log_entry_to_proto)
             .collect(),
-        project_id: envelope.project_id.unwrap_or_default(),
 
         // Advanced Observability
         client_ip: envelope.result.client_ip.unwrap_or_default(),

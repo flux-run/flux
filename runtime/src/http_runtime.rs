@@ -339,6 +339,17 @@ fn error_result(ctx: ExecutionContext, err: String) -> ExecutionResult {
         logs: vec![],
         has_live_io: false,
         boundary_stop: None,
+
+        // Advanced Telemetry
+        client_ip: None,
+        user_agent: None,
+        request_method: None,
+        request_headers: None,
+        request_body: None,
+        response_status: None,
+        response_body: None,
+        error_stack: None,
+        error_fingerprint: None,
     }
 }
 
