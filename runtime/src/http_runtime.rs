@@ -166,9 +166,17 @@ async fn handle_request(
     let request_payload = payload.clone();
 
     let provided_artifact: Option<RuntimeArtifact> = payload.get("artifact").and_then(|v| {
-        serde_json::from_value::<shared::project::FluxBuildArtifact>(v.clone())
-            .ok()
-            .map(RuntimeArtifact::Built)
+        match serde_json::from_value::<shared::project::FluxBuildArtifact>(v.clone()) {
+            Ok(a) => Some(RuntimeArtifact::Built(a)),
+            Err(e) => {
+                tracing::warn!(
+                    route = %route,
+                    err = %e,
+                    "artifact deserialization failed — treating as no artifact"
+                );
+                None
+            }
+        }
     });
 
     if provided_artifact.is_none() && state.route_name == "_gateway" {
