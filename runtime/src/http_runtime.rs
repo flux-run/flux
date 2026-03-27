@@ -213,6 +213,10 @@ async fn handle_net_request(
         .collect();
     let headers_json = serde_json::to_string(&headers_list).unwrap_or_else(|_| "[]".to_string());
 
+    let max_duration_ms = request.headers().get("x-flux-max-duration-ms")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+
     let body_bytes = match to_bytes(request.into_body(), 10 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
@@ -241,9 +245,6 @@ async fn handle_net_request(
         body,
     };
 
-    let max_duration_ms = request.headers().get("x-flux-max-duration-ms")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok());
 
     let result = state.pool.execute_net_request(context, net_req, max_duration_ms).await;
 
