@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
@@ -42,6 +43,10 @@ struct RuntimeState {
     pool: Arc<RwLock<IsolatePool>>,
     server_url: String,
     service_token: String,
+    /// True once the pool has been loaded with a real user artifact (either at startup
+    /// or via hot-reload). In gateway mode this starts `false` and flips to `true` on
+    /// the first successful `/__flux_internal/reload`.
+    loaded: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -87,6 +92,8 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         boot.is_server_mode,
     )?));
 
+    // Gateway starts unloaded; any other launch (--artifact / --entry) is already loaded.
+    let is_gateway = config.route_name == "_gateway";
     let state = RuntimeState {
         route_name: config.route_name.clone(),
         code_version: Arc::new(RwLock::new(artifact.code_version().to_string())),
@@ -95,6 +102,7 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         pool,
         server_url: config.server_url,
         service_token: config.service_token,
+        loaded: Arc::new(AtomicBool::new(!is_gateway)),
     };
 
     let app: Router = Router::new()
@@ -179,7 +187,13 @@ async fn handle_request(
         }
     });
 
-    if provided_artifact.is_none() && state.route_name == "_gateway" {
+    // Block requests only when the gateway has never been loaded with real user code.
+    // After a successful hot-reload `state.loaded` is true even though route_name is
+    // still "_gateway", so requests can be served from the warm pool.
+    if provided_artifact.is_none()
+        && state.route_name == "_gateway"
+        && !state.loaded.load(Ordering::Acquire)
+    {
         return gateway_mode_unavailable_response();
     }
 
@@ -294,7 +308,7 @@ async fn handle_net_request(
     State(state): State<RuntimeState>,
     request: axum::extract::Request,
 ) -> Response {
-    if state.route_name == "_gateway" {
+    if state.route_name == "_gateway" && !state.loaded.load(Ordering::Acquire) {
         return gateway_mode_unavailable_response();
     }
 
@@ -563,6 +577,7 @@ async fn handle_internal_reload(
     // Atomic swap
     *state.pool.write().await = new_pool;
     *state.code_version.write().await = new_version.clone();
+    state.loaded.store(true, Ordering::Release);
 
     tracing::info!("✅ Runtime hot-reloaded to version: {}", new_version);
     (
