@@ -17,6 +17,9 @@ use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{boot_runtime_artifact, FetchCheckpoint, NetRequest};
 use crate::isolate_pool::{execute_one_shot_artifact, ExecutionContext, IsolatePool};
 
+const EXECUTOR_RECORDING_OWNER_HEADER: &str = "x-flux-recording-owner";
+const EXECUTOR_RECORDING_OWNER_VALUE: &str = "executor";
+
 #[derive(Debug, Clone)]
 pub struct HttpRuntimeConfig {
     pub host: String,
@@ -124,6 +127,32 @@ async fn health(State(state): State<RuntimeState>) -> Json<HealthResponse> {
     })
 }
 
+fn gateway_mode_unavailable_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "no_artifact_loaded",
+            "message": "The runtime is in gateway mode and cannot serve public traffic directly.",
+            "tip": "Route public traffic through flux-executor, or hot-swap/provide an artifact before invoking the runtime."
+        })),
+    )
+        .into_response()
+}
+
+fn runtime_should_record_execution(
+    state: &RuntimeState,
+    headers: &axum::http::HeaderMap,
+) -> bool {
+    if state.service_token.is_empty() {
+        return false;
+    }
+
+    headers
+        .get(EXECUTOR_RECORDING_OWNER_HEADER)
+        .and_then(|value| value.to_str().ok())
+        != Some(EXECUTOR_RECORDING_OWNER_VALUE)
+}
+
 async fn handle_request(
     State(state): State<RuntimeState>,
     Path(route): Path<String>,
@@ -137,6 +166,10 @@ async fn handle_request(
             .ok()
             .map(RuntimeArtifact::Built)
     });
+
+    if provided_artifact.is_none() && state.route_name == "_gateway" {
+        return gateway_mode_unavailable_response();
+    }
 
     // Only enforce route-name matching when no per-request artifact is supplied.
     if provided_artifact.is_none() && route != state.route_name && state.route_name != "_gateway" {
@@ -191,7 +224,7 @@ async fn handle_request(
         pool.execute(payload, ctx, max_duration_ms).await
     };
 
-    if !state.service_token.is_empty() {
+    if runtime_should_record_execution(&state, &headers) {
         let _ = crate::server_client::record_execution(
             &state.server_url,
             &state.service_token,
@@ -247,6 +280,11 @@ async fn handle_net_request(
     State(state): State<RuntimeState>,
     request: axum::extract::Request,
 ) -> Response {
+    if state.route_name == "_gateway" {
+        return gateway_mode_unavailable_response();
+    }
+
+    let should_record_execution = runtime_should_record_execution(&state, request.headers());
     let method = request.method().to_string();
 
     let host = request
@@ -265,7 +303,15 @@ async fn handle_net_request(
         .iter()
         .filter_map(|(k, v)| {
             let name = k.as_str();
-            if matches!(name, "x-service-token" | "x-internal-token") {
+            if matches!(
+                name,
+                "x-service-token"
+                    | "x-internal-token"
+                    | "x-flux-execution-id"
+                    | "x-flux-project-id"
+                    | "x-flux-max-duration-ms"
+                    | EXECUTOR_RECORDING_OWNER_HEADER
+            ) {
                 return None;
             }
             Some([name.to_string(), v.to_str().ok()?.to_string()])
@@ -314,7 +360,7 @@ async fn handle_net_request(
             .await
     };
 
-    if !state.service_token.is_empty() {
+    if should_record_execution {
         let _ = crate::server_client::record_execution(
             &state.server_url,
             &state.service_token,
