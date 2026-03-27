@@ -14,7 +14,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 
 use crate::artifact::RuntimeArtifact;
-use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, NetRequest, boot_runtime_artifact};
+use crate::deno_runtime::{ExecutionMode, FetchCheckpoint, NetRequest, boot_runtime_artifact, JsIsolate};
 use crate::isolate_pool::{ExecutionContext, IsolatePool};
 
 #[derive(Debug, Clone)]
@@ -126,6 +126,7 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
         artifact.clone(),
         boot.is_server_mode,
     )?);
+    
     let state = RuntimeState {
         route_name: config.route_name.clone(),
         code_version: artifact.code_version().to_string(),
@@ -170,7 +171,7 @@ async fn handle_request(
     Path(route): Path<String>,
     State(state): State<RuntimeState>,
     headers: axum::http::HeaderMap,
-    Json(payload): Json<serde_json::Value>,
+    Json(mut payload): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     if route != state.route_name {
         tracing::error!("Route mismatch: incoming '{}' != bound '{}'", route, state.route_name);
@@ -182,6 +183,17 @@ async fn handle_request(
     }
 
     let request_payload = payload.clone();
+    
+    // Dynamic Artifact Handling: if "artifact" is in payload, use it to create a one-shot isolate
+    let provided_artifact: Option<RuntimeArtifact> = payload.get("artifact").and_then(|v| {
+        serde_json::from_value::<crate::artifact::BuiltArtifact>(v.clone()).ok().map(RuntimeArtifact::Built)
+    });
+    
+    // Remote payload from input before passing to JS
+    if let serde_json::Value::Object(ref mut map) = payload {
+        map.remove("artifact");
+    }
+
     let mut ctx = ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone());
     
     let exec_id = match headers.get("x-flux-execution-id").and_then(|h| h.to_str().ok()) {
@@ -198,10 +210,67 @@ async fn handle_request(
     ctx.execution_id = exec_id;
     tracing::info!("[RUNTIME] received execution_id={}", ctx.execution_id);
 
-    let result = state
-        .pool
-        .execute(payload, ctx)
-        .await;
+    let result = if let Some(artifact) = provided_artifact {
+        tracing::info!("[RUNTIME] Using provided dynamic artifact v{}", artifact.code_version());
+        // For dynamic artifacts, we create a fresh isolate just for this request
+        match JsIsolate::new_from_artifact(match artifact {
+             RuntimeArtifact::Built(ba) => ba,
+             _ => unreachable!(),
+        }).await {
+            Ok(mut isolate) => {
+                match isolate.execute_with_recorded(payload, ctx, vec![]).await {
+                    Ok(out) => {
+                        let status = if out.error.is_some() { "error".to_string() } else { "ok".to_string() };
+                        crate::isolate_pool::ExecutionResult {
+                            execution_id: out.execution_id,
+                            request_id: out.request_id,
+                            project_id: out.project_id,
+                            code_version: out.code_version,
+                            status,
+                            body: serde_json::json!({ "output": out.output }),
+                            error: out.error,
+                            duration_ms: out.duration_ms as i32,
+                            checkpoints: out.checkpoints,
+                            logs: out.logs,
+                            has_live_io: out.has_live_io,
+                        }
+                    }
+                    Err(e) => {
+                         crate::isolate_pool::ExecutionResult {
+                            execution_id: ctx.execution_id,
+                            request_id: ctx.request_id,
+                            project_id: ctx.project_id,
+                            code_version: ctx.code_version,
+                            status: "error".to_string(),
+                            body: serde_json::Value::Null,
+                            error: Some(e.to_string()),
+                            duration_ms: 0,
+                            checkpoints: vec![],
+                            logs: vec![],
+                            has_live_io: false,
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                 crate::isolate_pool::ExecutionResult {
+                            execution_id: ctx.execution_id,
+                            request_id: ctx.request_id,
+                            project_id: ctx.project_id,
+                            code_version: ctx.code_version,
+                            status: "error".to_string(),
+                            body: serde_json::Value::Null,
+                            error: Some(format!("failed to initialize isolate: {}", e)),
+                            duration_ms: 0,
+                            checkpoints: vec![],
+                            logs: vec![],
+                            has_live_io: false,
+                        }
+            }
+        }
+    } else {
+        state.pool.execute(payload, ctx).await
+    };
 
     if !state.service_token.is_empty() {
         let _ = crate::server_client::record_execution(
@@ -334,6 +403,7 @@ async fn handle_net_request(
             .unwrap_or_default()
             .to_string(),
     };
+
     let context = ExecutionContext::with_project(state.code_version.clone(), state.project_id.clone());
     let result = state.pool.execute_net_request(context, net_req).await;
 

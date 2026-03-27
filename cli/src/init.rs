@@ -43,9 +43,9 @@ pub async fn execute(args: InitArgs) -> Result<()> {
         Some(InitSubcommand::Function) => "function",
         None => prompt_template()?,
     };
-
     let cwd = std::env::current_dir().context("failed to read current directory")?;
-    scaffold_project(&cwd, template, args.force)?;
+    let config = CliConfig::load().unwrap_or_default();
+    scaffold_project(&cwd, template, config.project_id, args.force)?;
 
     println!("\n  ✔  Project initialized successfully ({})\n", template);
     println!("  Created:");

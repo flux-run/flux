@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use std::io::stdout;
 
 mod add;
 mod bin_resolution;

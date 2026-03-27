@@ -137,18 +137,29 @@ pub fn write_project_config(project_dir: &Path, config: &FluxProjectConfig) -> R
     fs::write(&path, json).with_context(|| format!("failed to write {}", path.display()))
 }
 
-pub fn default_project_config(kind: shared::project::ProjectKind, entry_name: &str) -> FluxProjectConfig {
-    FluxProjectConfig::new(kind, format!("./{entry_name}"))
+pub fn default_project_config(
+    kind: shared::project::ProjectKind,
+    entry_name: &str,
+    project_id: Option<String>,
+) -> FluxProjectConfig {
+    let mut config = FluxProjectConfig::new(kind, format!("./{entry_name}"));
+    config.project_id = project_id;
+    config
 }
 
-pub fn scaffold_project(project_dir: &Path, template: &str, force: bool) -> Result<()> {
+pub fn scaffold_project(
+    project_dir: &Path,
+    template: &str,
+    project_id: Option<String>,
+    force: bool,
+) -> Result<()> {
     match template {
-        "server" => scaffold_server(project_dir, force),
-        "function" | _ => scaffold_function(project_dir, force),
+        "server" => scaffold_server(project_dir, project_id, force),
+        "function" | _ => scaffold_function(project_dir, project_id, force),
     }
 }
 
-pub fn scaffold_function(project_dir: &Path, force: bool) -> Result<()> {
+pub fn scaffold_function(project_dir: &Path, project_id: Option<String>, force: bool) -> Result<()> {
     let config_path = project_config_path(project_dir);
     let entry_path = project_dir.join(DEFAULT_ENTRY_FILE);
     let deno_config_path = project_dir.join("deno.json");
@@ -169,7 +180,11 @@ pub fn scaffold_function(project_dir: &Path, force: bool) -> Result<()> {
         }
     }
 
-    let config = default_project_config(shared::project::ProjectKind::Function, DEFAULT_ENTRY_FILE);
+    let config = default_project_config(
+        shared::project::ProjectKind::Function,
+        DEFAULT_ENTRY_FILE,
+        project_id,
+    );
     write_project_config(project_dir, &config)?;
 
     // 1. Write deno.json (empty imports for minimal function)
@@ -225,7 +240,7 @@ pub fn scaffold_function(project_dir: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn scaffold_server(project_dir: &Path, force: bool) -> Result<()> {
+pub fn scaffold_server(project_dir: &Path, project_id: Option<String>, force: bool) -> Result<()> {
     let config_path = project_config_path(project_dir);
     let entry_path = project_dir.join(DEFAULT_ENTRY_FILE);
     let deno_config_path = project_dir.join("deno.json");
@@ -245,7 +260,11 @@ pub fn scaffold_server(project_dir: &Path, force: bool) -> Result<()> {
         }
     }
 
-    let config = default_project_config(shared::project::ProjectKind::Server, DEFAULT_ENTRY_FILE);
+    let config = default_project_config(
+        shared::project::ProjectKind::Server,
+        DEFAULT_ENTRY_FILE,
+        project_id,
+    );
     write_project_config(project_dir, &config)?;
 
     // 1. Write deno.json
@@ -396,7 +415,7 @@ pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {
     let mut config = if project_config_path(&project_dir).exists() {
         load_project_config(&project_dir)?
     } else {
-        default_project_config(shared::project::ProjectKind::Function, &entry_name)
+        default_project_config(shared::project::ProjectKind::Function, &entry_name, None)
     };
     
     // Entry should be relative to project_dir
@@ -1637,7 +1656,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::write(
             temp.path().join("flux.json"),
-            serde_json::to_string_pretty(&default_project_config("index.ts")).unwrap(),
+            serde_json::to_string_pretty(&default_project_config(shared::project::ProjectKind::Function, "index.ts", None)).unwrap(),
         )
         .expect("write config");
         fs::write(temp.path().join("index.ts"), "export default 1;\n").expect("write entry");

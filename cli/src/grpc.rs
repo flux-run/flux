@@ -516,6 +516,16 @@ pub async fn deploy_function(
     artifact_json: &str,
 ) -> Result<pb::DeployFunctionResponse> {
     let endpoint = normalize_grpc_url(url);
+
+    if endpoint.starts_with("https://") {
+        match deploy_function_rest(&endpoint, token, project_id, name, artifact_json).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                println!("  Cloud deployment via REST failed: {}. Falling back to gRPC...", e);
+            }
+        }
+    }
+
     let mut client =
         pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
             .await
@@ -541,8 +551,64 @@ pub async fn deploy_function(
     Ok(response)
 }
 
+async fn deploy_function_rest(
+    url: &str,
+    token: &str,
+    project_id: &str,
+    name: &str,
+    artifact_json: &str,
+) -> Result<pb::DeployFunctionResponse> {
+    let client = reqwest::Client::new();
+    let deploy_url = format!("{}/functions/deploy", url.trim_end_matches('/'));
+
+    let response = client
+        .post(&deploy_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({
+            "project_id": project_id,
+            "name": name,
+            "artifact_json": artifact_json,
+        }))
+        .send()
+        .await
+        .context("failed to send REST deployment request")?;
+
+    if !response.status().is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        bail!("Deployment failed: {}", error_body);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct DeployResponse {
+        ok: bool,
+        function_id: String,
+        message: String,
+    }
+
+    let result: DeployResponse = response
+        .json()
+        .await
+        .context("failed to parse REST deployment response")?;
+
+    Ok(pb::DeployFunctionResponse {
+        ok: result.ok,
+        function_id: result.function_id,
+        message: result.message,
+    })
+}
+
 pub async fn list_functions(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::FunctionEntry>> {
     let endpoint = normalize_grpc_url(url);
+
+    if endpoint.starts_with("https://") {
+        match list_functions_rest(&endpoint, token, project_id).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                println!("  Cloud list functions via REST failed: {}. Falling back to gRPC...", e);
+            }
+        }
+    }
+
     let mut client =
         pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
             .await
@@ -566,8 +632,57 @@ pub async fn list_functions(url: &str, token: &str, project_id: &str) -> Result<
     Ok(response.functions)
 }
 
+async fn list_functions_rest(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::FunctionEntry>> {
+    let client = reqwest::Client::new();
+    let list_url = format!("{}/functions/{}", url.trim_end_matches('/'), project_id);
+
+    let response = client
+        .get(&list_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("failed to send REST list functions request")?;
+
+    if !response.status().is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        bail!("List functions failed: {}", error_body);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ListResponse {
+        functions: Vec<FunctionEntryJson>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FunctionEntryJson {
+        id: String,
+        name: String,
+        created_at: Option<String>,
+    }
+
+    let result: ListResponse = response
+        .json()
+        .await
+        .context("failed to parse REST list functions response")?;
+
+    Ok(result.functions.into_iter().map(|f| pb::FunctionEntry {
+        id: f.id,
+        name: f.name,
+        created_at: f.created_at.unwrap_or_default(),
+    }).collect())
+}
+
 pub async fn delete_function(url: &str, token: &str, function_id: &str) -> Result<()> {
     let endpoint = normalize_grpc_url(url);
+
+    if endpoint.starts_with("https://") {
+        match delete_function_rest(&endpoint, token, function_id).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                println!("  Cloud delete function via REST failed: {}. Falling back to gRPC...", e);
+            }
+        }
+    }
+
     let mut client =
         pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
             .await
@@ -595,8 +710,37 @@ pub async fn delete_function(url: &str, token: &str, function_id: &str) -> Resul
     Ok(())
 }
 
+async fn delete_function_rest(url: &str, token: &str, function_id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let delete_url = format!("{}/functions/{}", url.trim_end_matches('/'), function_id);
+
+    let response = client
+        .delete(&delete_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("failed to send REST delete function request")?;
+
+    if !response.status().is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        bail!("Delete function failed: {}", error_body);
+    }
+
+    Ok(())
+}
+
 pub async fn list_env_vars(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::EnvVarEntry>> {
     let endpoint = normalize_grpc_url(url);
+
+    if endpoint.starts_with("https://") {
+        match list_env_vars_rest(&endpoint, token, project_id).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                println!("  Cloud list env vars via REST failed: {}. Falling back to gRPC...", e);
+            }
+        }
+    }
+
     let mut client =
         pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
             .await
@@ -620,8 +764,57 @@ pub async fn list_env_vars(url: &str, token: &str, project_id: &str) -> Result<V
     Ok(response.env_vars)
 }
 
+async fn list_env_vars_rest(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::EnvVarEntry>> {
+    let client = reqwest::Client::new();
+    let list_url = format!("{}/env-vars/{}", url.trim_end_matches('/'), project_id);
+
+    let response = client
+        .get(&list_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("failed to send REST list env vars request")?;
+
+    if !response.status().is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        bail!("List env vars failed: {}", error_body);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ListResponse {
+        env_vars: Vec<EnvVarEntryJson>,
+    }
+    #[derive(serde::Deserialize)]
+    struct EnvVarEntryJson {
+        key: String,
+        value: String,
+        updated_at: Option<String>,
+    }
+
+    let result: ListResponse = response
+        .json()
+        .await
+        .context("failed to parse REST list env vars response")?;
+
+    Ok(result.env_vars.into_iter().map(|e| pb::EnvVarEntry {
+        key: e.key,
+        value: e.value,
+        updated_at: e.updated_at.unwrap_or_default(),
+    }).collect())
+}
+
 pub async fn set_env_var(url: &str, token: &str, project_id: &str, key: &str, value: &str) -> Result<()> {
     let endpoint = normalize_grpc_url(url);
+
+    if endpoint.starts_with("https://") {
+        match set_env_var_rest(&endpoint, token, project_id, key, value).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                println!("  Cloud set env var via REST failed: {}. Falling back to gRPC...", e);
+            }
+        }
+    }
+
     let mut client =
         pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
             .await
@@ -651,8 +844,41 @@ pub async fn set_env_var(url: &str, token: &str, project_id: &str, key: &str, va
     Ok(())
 }
 
+async fn set_env_var_rest(url: &str, token: &str, project_id: &str, key: &str, value: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let set_url = format!("{}/env-vars/{}", url.trim_end_matches('/'), project_id);
+
+    let response = client
+        .put(&set_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({
+            "key": key,
+            "value": value,
+        }))
+        .send()
+        .await
+        .context("failed to send REST set env var request")?;
+
+    if !response.status().is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        bail!("Set env var failed: {}", error_body);
+    }
+
+    Ok(())
+}
+
 pub async fn delete_env_var(url: &str, token: &str, project_id: &str, key: &str) -> Result<()> {
     let endpoint = normalize_grpc_url(url);
+
+    if endpoint.starts_with("https://") {
+        match delete_env_var_rest(&endpoint, token, project_id, key).await {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                println!("  Cloud delete env var via REST failed: {}. Falling back to gRPC...", e);
+            }
+        }
+    }
+
     let mut client =
         pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
             .await
@@ -676,6 +902,25 @@ pub async fn delete_env_var(url: &str, token: &str, project_id: &str, key: &str)
 
     if !response.ok {
         bail!("failed to delete environment variable");
+    }
+
+    Ok(())
+}
+
+async fn delete_env_var_rest(url: &str, token: &str, project_id: &str, key: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let delete_url = format!("{}/env-vars/{}/{}", url.trim_end_matches('/'), project_id, key);
+
+    let response = client
+        .delete(&delete_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("failed to send REST delete env var request")?;
+
+    if !response.status().is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        bail!("Delete env var failed: {}", error_body);
     }
 
     Ok(())
