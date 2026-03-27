@@ -1031,6 +1031,8 @@ pub struct NetRequestExecution {
     pub response: NetResponse,
     pub checkpoints: Vec<FetchCheckpoint>,
     pub error: Option<String>,
+    pub error_message: Option<String>,
+    pub error_stack: Option<String>,
     pub logs: Vec<LogEntry>,
     pub has_live_io: bool,
     /// Set when replay stops at an IO boundary with no recorded checkpoint.
@@ -1043,6 +1045,8 @@ pub struct JsExecutionOutput {
     pub output: serde_json::Value,
     pub checkpoints: Vec<FetchCheckpoint>,
     pub error: Option<String>,
+    pub error_message: Option<String>,
+    pub error_stack: Option<String>,
     pub logs: Vec<LogEntry>,
     pub has_live_io: bool,
     /// Set when replay stops at an IO boundary with no recorded checkpoint.
@@ -5492,10 +5496,21 @@ impl JsIsolate {
             }
         };
         
-        let error: Option<String> = serde_json::from_str::<serde_json::Value>(&error_json)
+        let error_obj: Option<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&error_json)
             .ok()
-            .and_then(|v| v.get(&execution_id).cloned())
+            .and_then(|v| v.get(&execution_id).cloned());
+        
+        let error_message = error_obj.as_ref()
+            .and_then(|v| v.get("message"))
             .and_then(|v| v.as_str().map(|s| s.to_string()));
+            
+        let error_stack = error_obj.as_ref()
+            .and_then(|v| v.get("stack"))
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+        let error = error_message.clone().or_else(|| {
+            error_obj.as_ref().and_then(|v| v.as_str().map(|s| s.to_string()))
+        });
 
         let state = self.runtime.op_state();
         let mut state = state.borrow_mut();
@@ -5517,6 +5532,8 @@ impl JsIsolate {
                 response: dummy_response,
                 checkpoints: exec.checkpoints,
                 error: Some(sentinel_error),
+                error_message: None,
+                error_stack: None,
                 logs: exec.logs,
                 has_live_io: false,
                 boundary_stop: Some(boundary),
@@ -5535,6 +5552,8 @@ impl JsIsolate {
             response,
             checkpoints: exec.checkpoints,
             error,
+            error_message,
+            error_stack,
             logs: exec.logs,
             has_live_io: exec.has_live_io,
             boundary_stop: exec.boundary_stop,
@@ -5672,7 +5691,7 @@ impl JsIsolate {
                                  const result = await globalThis.__flux_user_handler({handler_arg});\n\
                  globalThis.__flux_last_result[__eid] = result ?? null;\n\
                }} catch (err) {{\n\
-                 globalThis.__flux_last_error[__eid] = String(err && err.stack ? err.stack : err);\n\
+                 globalThis.__flux_last_error[__eid] = { message: String(err && err.message ? err.message : err), stack: err && err.stack ? String(err.stack) : null };\n\
                }}\n\
              }})();",
             eid = eid_json,
@@ -5711,38 +5730,46 @@ impl JsIsolate {
         let envelope: serde_json::Value =
             serde_json::from_str(&raw).context("handler result envelope is not valid JSON")?;
 
-        let (checkpoints, logs) = {
+        let (checkpoints, logs, has_live_io, boundary_stop) = {
             let state = self.runtime.op_state();
             let mut state = state.borrow_mut();
             let map = state.borrow_mut::<RuntimeStateMap>();
             match map.remove(&execution_id) {
-                Some(execution) => (execution.checkpoints, execution.logs),
-                None => (Vec::new(), Vec::new()),
+                Some(execution) => (
+                    execution.checkpoints,
+                    execution.logs,
+                    execution.has_live_io,
+                    execution.boundary_stop,
+                ),
+                None => (Vec::new(), Vec::new(), false, None),
             }
         };
 
-        let error = envelope
-            .get("error")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+        let error_val = envelope.get("error").cloned();
+        let error_message = error_val
+            .as_ref()
+            .and_then(|v| v.get("message"))
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let error_stack = error_val
+            .as_ref()
+            .and_then(|v| v.get("stack"))
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+        let error = error_message.clone().or_else(|| {
+            error_val.and_then(|v| v.as_str().map(|s| s.to_string()))
+        });
 
         let output = envelope
             .get("result")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
 
-        let state = self.runtime.op_state();
-        let mut state = state.borrow_mut();
-        let map = state.borrow_mut::<RuntimeStateMap>();
-        let execution = map.remove(&execution_id);
-        let has_live_io = execution.as_ref().map(|e| e.has_live_io).unwrap_or(false);
-        let boundary_stop = execution.as_ref().and_then(|e| e.boundary_stop.clone());
         Ok(JsExecutionOutput {
             output,
             checkpoints,
             error,
+            error_message,
+            error_stack,
             logs,
             has_live_io,
             boundary_stop,
@@ -8341,8 +8368,9 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
         response = await handler(ctx);
     }
   } catch (err) {
-    const msg = String(err && err.stack ? err.stack : err);
-    globalThis.__flux_last_error[__eid] = msg;
+    const msg = String(err && err.message ? err.message : err);
+    const stack = err && err.stack ? String(err.stack) : null;
+    globalThis.__flux_last_error[__eid] = { message: msg, stack: stack };
     Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", msg);
     return;
   }

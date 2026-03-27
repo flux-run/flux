@@ -184,13 +184,16 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS flux.issues (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            function_id UUID NOT NULL REFERENCES control.functions(id) ON DELETE CASCADE,
+            function_id UUID NOT NULL REFERENCES flux.functions(id) ON DELETE CASCADE,
             fingerprint TEXT NOT NULL,
             title TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'open',
             occurrence_count INTEGER NOT NULL DEFAULT 1,
             unique_ips INTEGER NOT NULL DEFAULT 1,
             unique_tokens INTEGER NOT NULL DEFAULT 0,
+            sample_execution_id UUID,
+            sample_stack TEXT,
+            sample_message TEXT,
             first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
             last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

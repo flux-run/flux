@@ -153,6 +153,17 @@ message RecordExecutionRequest {
   repeated CheckpointEntry checkpoints = 11;
   repeated ConsoleLogEntry logs = 12;
   string project_id = 13;
+  
+  // Advanced Observability
+  string client_ip = 14;
+  string user_agent = 15;
+  string request_method = 16;
+  string request_headers_json = 17;
+  string request_body = 18;
+  int32 response_status = 19;
+  string response_body = 20;
+  string error_stack = 21;
+  string error_fingerprint = 22;
 }
 
 message RecordExecutionResponse {

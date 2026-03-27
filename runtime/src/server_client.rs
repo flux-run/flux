@@ -48,6 +48,18 @@ pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelop
             .into_iter()
             .map(log_entry_to_proto)
             .collect(),
+        project_id: envelope.project_id.unwrap_or_default(),
+
+        // Advanced Observability
+        client_ip: envelope.result.client_ip.unwrap_or_default(),
+        user_agent: envelope.result.user_agent.unwrap_or_default(),
+        request_method: envelope.result.request_method.unwrap_or_default(),
+        request_headers_json: serde_json::to_string(&envelope.result.request_headers.unwrap_or(serde_json::Value::Null)).unwrap_or_default(),
+        request_body: envelope.result.request_body.unwrap_or_default(),
+        response_status: envelope.result.response_status.unwrap_or(0),
+        response_body: envelope.result.response_body.unwrap_or_default(),
+        error_stack: envelope.result.error_stack.unwrap_or_default(),
+        error_fingerprint: envelope.result.error_fingerprint.unwrap_or_default(),
     });
 
     request.metadata_mut().insert(

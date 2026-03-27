@@ -65,6 +65,17 @@ pub struct ExecutionResult {
     pub logs: Vec<LogEntry>,
     pub has_live_io: bool,
     pub boundary_stop: Option<String>,
+
+    // Advanced Telemetry
+    pub client_ip: Option<String>,
+    pub user_agent: Option<String>,
+    pub request_method: Option<String>,
+    pub request_headers: Option<serde_json::Value>,
+    pub request_body: Option<String>,
+    pub response_status: Option<i32>,
+    pub response_body: Option<String>,
+    pub error_stack: Option<String>,
+    pub error_fingerprint: Option<String>,
 }
 
 #[derive(Debug)]
@@ -637,11 +648,22 @@ fn spawn_isolate_worker_with_mode(
                                         }
                                     }),
                                     error,
-                                    duration_ms: started.elapsed().as_millis() as i32,
+                                    duration_ms: std::cmp::max(1, started.elapsed().as_millis() as i32),
                                     checkpoints,
                                     logs,
                                     has_live_io,
-                                    boundary_stop: None,
+                                    boundary_stop,
+
+                                    // Advanced Telemetry
+                                    client_ip: None, // Caller (main.rs) should ideally fill this if available
+                                    user_agent: None,
+                                    request_method: Some(net_req.method),
+                                    request_headers: Some(serde_json::to_value(net_req.headers).unwrap_or(serde_json::Value::Null)),
+                                    request_body: Some(net_req.body),
+                                    response_status: Some(net_resp.status as i32),
+                                    response_body: Some(net_resp.body),
+                                    error_stack,
+                                    error_fingerprint: None,
                                 }
                             },
                             Err(err) => error_result(work.context, err.to_string()),
@@ -655,28 +677,6 @@ fn spawn_isolate_worker_with_mode(
                             )
                             .await
                         {
-                            Ok(JsExecutionOutput {
-                                output,
-                                checkpoints,
-                                error,
-                                logs,
-                                has_live_io,
-                                boundary_stop,
-                                ..
-                            }) => {
-                                let (status, body, error) = match error {
-                                    Some(err) => {
-                                        ("error".to_string(), serde_json::Value::Null, Some(err))
-                                    }
-                                    None => (
-                                        "ok".to_string(),
-                                        serde_json::json!({
-                                            "isolate_id": isolate_id,
-                                            "output": output,
-                                        }),
-                                        None,
-                                    ),
-                                };
                                 ExecutionResult {
                                     execution_id: context.execution_id, project_id: context.project_id.clone(),
                                     request_id: context.request_id,
@@ -684,11 +684,22 @@ fn spawn_isolate_worker_with_mode(
                                     status,
                                     body,
                                     error,
-                                    duration_ms: started.elapsed().as_millis() as i32,
+                                    duration_ms: std::cmp::max(1, started.elapsed().as_millis() as i32),
                                     checkpoints,
                                     logs,
                                     has_live_io,
                                     boundary_stop,
+
+                                    // Advanced Telemetry
+                                    client_ip: None,
+                                    user_agent: None,
+                                    request_method: None,
+                                    request_headers: None,
+                                    request_body: None,
+                                    response_status: None,
+                                    response_body: None,
+                                    error_stack,
+                                    error_fingerprint: None,
                                 }
                             }
                             Err(err) => ExecutionResult {
@@ -696,6 +707,24 @@ fn spawn_isolate_worker_with_mode(
                                 request_id: context.request_id,
                                 project_id: context.project_id.clone(),
                                 code_version: context.code_version,
+                                status: "critical".to_string(),
+                                body: serde_json::Value::Null,
+                                error: Some(err.to_string()),
+                                duration_ms: started.elapsed().as_millis() as i32,
+                                checkpoints: Vec::new(),
+                                logs: Vec::new(),
+                                has_live_io: false,
+                                boundary_stop: None,
+                                client_ip: None,
+                                user_agent: None,
+                                request_method: None,
+                                request_headers: None,
+                                request_body: None,
+                                response_status: None,
+                                response_body: None,
+                                error_stack: None,
+                                error_fingerprint: None,
+                            },
                                 status: "error".to_string(),
                                 body: serde_json::Value::Null,
                                 error: Some(err.to_string()),
@@ -722,7 +751,7 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
     ExecutionResult {
         execution_id: context.execution_id,
         request_id: context.request_id,
-        project_id: context.project_id.clone(),
+        project_id: context.project_id,
         code_version: context.code_version,
         status: "error".to_string(),
         body: serde_json::Value::Null,
@@ -732,5 +761,14 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
         logs: vec![],
         has_live_io: false,
         boundary_stop: None,
+        client_ip: None,
+        user_agent: None,
+        request_method: None,
+        request_headers: None,
+        request_body: None,
+        response_status: None,
+        response_body: None,
+        error_stack: None,
+        error_fingerprint: None,
     }
 }

@@ -649,10 +649,14 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .await
             .map_err(|e| Status::internal(format!("failed to begin transaction: {e}")))?;
 
+        let request_headers_json: serde_json::Value = serde_json::from_str(&req.request_headers_json)
+            .unwrap_or(serde_json::Value::Null);
+
         sqlx::query(
             "INSERT INTO flux.executions \
-             (id, request_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms, token_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9) \
+             (id, request_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms, token_id, \
+              client_ip, user_agent, request_method, request_headers, request_body, response_status, response_body, error_stack, error_fingerprint) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
@@ -664,6 +668,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(request_json.clone())
         .bind(req.code_version.clone())
         .bind(identity.token_id)
+        .bind(req.client_ip.clone())
+        .bind(req.user_agent.clone())
+        .bind(req.request_method.clone())
+        .bind(request_headers_json.clone())
+        .bind(req.request_body.clone())
+        .bind(req.response_status)
+        .bind(req.response_body.clone())
+        .bind(req.error_stack.clone())
+        .bind(req.error_fingerprint.clone())
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;
@@ -671,23 +684,92 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         sqlx::query(
             "UPDATE flux.executions \
              SET method = $2, path = $3, status = $4, request = $5, response = $6, \
-                 error = NULLIF($7, ''), code_sha = $8, duration_ms = $9, project_id = $10, org_id = $11 \
+                 error = NULLIF($7, ''), code_sha = $8, duration_ms = $9, project_id = $10, org_id = $11, \
+                 client_ip = $12, user_agent = $13, request_method = $14, request_headers = $15, request_body = $16, \
+                 response_status = $17, response_body = $18, error_stack = $19, error_fingerprint = $20 \
              WHERE id = $1",
         )
         .bind(execution_id)
-        .bind(req.method)
-        .bind(req.path)
-        .bind(req.status)
+        .bind(req.method.clone())
+        .bind(req.path.clone())
+        .bind(req.status.clone())
         .bind(request_json)
         .bind(response_json)
-        .bind(req.error)
-        .bind(req.code_version)
+        .bind(req.error.clone())
+        .bind(req.code_version.clone())
         .bind(req.duration_ms)
-        .bind(project_id)
+        .bind(project_id.clone())
         .bind(org_id.clone())
+        .bind(req.client_ip.clone())
+        .bind(req.user_agent.clone())
+        .bind(req.request_method.clone())
+        .bind(request_headers_json)
+        .bind(req.request_body.clone())
+        .bind(req.response_status)
+        .bind(req.response_body.clone())
+        .bind(req.error_stack.clone())
+        .bind(req.error_fingerprint.clone())
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to update execution: {e}")))?;
+
+        // Automated Issue Grouping / Fingerprinting
+        if req.status == "error" || req.status == "critical" {
+            let error_msg = req.error.clone();
+            let error_stack = req.error_stack.clone();
+            
+            // Simple fingerprinting: use the first 100 chars of the error or the first line of the stack
+            let fingerprint = if !req.error_fingerprint.is_empty() {
+                req.error_fingerprint.clone()
+            } else {
+                let base = if !error_stack.is_empty() {
+                    error_stack.lines().next().unwrap_or(&error_msg).to_string()
+                } else {
+                    error_msg.chars().take(100).collect::<String>()
+                };
+                format!("{}:{}:{}", req.method, req.path, base)
+            };
+
+            let title = if !error_stack.is_empty() {
+                error_stack.lines().next().unwrap_or(&error_msg).to_string()
+            } else {
+                error_msg.clone()
+            };
+
+            // Resolve function_id from route
+            let route_info: Option<(uuid::Uuid,)> = sqlx::query_as(
+                "SELECT function_id FROM control.routes WHERE project_id = $1::uuid AND method = $2 AND path = $3"
+            )
+            .bind(project_id.clone())
+            .bind(req.method.clone())
+            .bind(req.path.clone())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(format!("failed to resolve route: {e}")))?;
+
+            if let Some((function_id,)) = route_info {
+                sqlx::query(
+                    "INSERT INTO flux.issues \
+                     (function_id, fingerprint, title, sample_execution_id, sample_stack, sample_message, occurrence_count, last_seen) \
+                     VALUES ($1, $2, $3, $4, $5, $6, 1, NOW()) \
+                     ON CONFLICT (function_id, fingerprint) DO UPDATE SET \
+                       occurrence_count = flux.issues.occurrence_count + 1, \
+                       last_seen = NOW(), \
+                       sample_execution_id = EXCLUDED.sample_execution_id, \
+                       sample_stack = EXCLUDED.sample_stack, \
+                       sample_message = EXCLUDED.sample_message"
+                )
+                .bind(function_id)
+                .bind(fingerprint)
+                .bind(title)
+                .bind(execution_id)
+                .bind(req.error_stack)
+                .bind(req.error)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Status::internal(format!("failed to upsert issue: {e}")))?;
+            }
+        }
 
         for checkpoint in req.checkpoints {
             let request_json: serde_json::Value =
