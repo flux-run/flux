@@ -147,7 +147,8 @@ async fn handle_request(
         .and_then(|v| v.parse::<u64>().ok());
 
     let result = if let Some(artifact) = provided_artifact {
-        // Use the off-thread executor for dynamic artifacts (JsIsolate is non-Send)
+        // Cloud gateway mode: pass rich ctx object to handler
+        ctx.cloud_ctx = true;
         execute_one_shot_artifact(artifact, payload, ctx, max_duration_ms).await
     } else {
         state.pool.execute(payload, ctx, max_duration_ms).await

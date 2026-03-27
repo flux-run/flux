@@ -20,6 +20,9 @@ pub struct ExecutionContext {
     pub code_version: String,
     pub mode: ExecutionMode,
     pub verbose: bool,
+    /// When true the invoke harness passes a cloud ctx object (json/text/html helpers)
+    /// as the handler's first argument instead of the raw request payload.
+    pub cloud_ctx: bool,
 }
 
 impl ExecutionContext {
@@ -42,6 +45,7 @@ impl ExecutionContext {
             code_version: code_version.into(),
             mode: ExecutionMode::Live,
             verbose: false,
+            cloud_ctx: false,
         }
     }
 }

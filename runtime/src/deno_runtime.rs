@@ -5628,7 +5628,22 @@ impl JsIsolate {
         let eid_json =
             serde_json::to_string(&execution_id).context("failed to encode execution_id")?;
         let payload_json = serde_json::to_string(&payload).context("failed to encode payload")?;
-        let handler_arg = if wrap_payload_in_input {
+        let handler_arg = if context.cloud_ctx {
+            // Cloud function mode: pass a ctx object as the sole handler argument.
+            // It contains response helpers (json/text/html) + the request data.
+            let body_j = serde_json::to_string(payload.get("body").unwrap_or(&serde_json::Value::Null))
+                .unwrap_or_else(|_| "null".to_string());
+            let method_j = serde_json::to_string(payload.get("method").unwrap_or(&serde_json::Value::Null))
+                .unwrap_or_else(|_| ""GET"".to_string());
+            let path_j = serde_json::to_string(payload.get("path").unwrap_or(&serde_json::Value::Null))
+                .unwrap_or_else(|_| ""/"".to_string());
+            let headers_j = serde_json::to_string(payload.get("headers").unwrap_or(&serde_json::Value::Null))
+                .unwrap_or_else(|_| "{}".to_string());
+            format!(
+                "{{ json: (d, _s) => d, text: (d, _s) => String(d), html: (d, _s) => String(d), body: {body_j}, input: {body_j}, method: {method_j}, path: {path_j}, headers: {headers_j} }}",
+                body_j = body_j, method_j = method_j, path_j = path_j, headers_j = headers_j
+            )
+        } else if wrap_payload_in_input {
             format!("{{ input: {payload_json}, ctx }}")
         } else {
             payload_json.clone()
