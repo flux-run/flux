@@ -154,6 +154,20 @@ fn has_error_details(error_name: &str, error_message: &str, fallback_error: &str
         || !fallback_error.trim().is_empty()
 }
 
+fn normalized_project_id(identity_project_id: &str, request_project_id: &str) -> Option<String> {
+    let identity = identity_project_id.trim();
+    if !identity.is_empty() && identity != "default" {
+        return Some(identity.to_string());
+    }
+
+    let request = request_project_id.trim();
+    if !request.is_empty() && request != "default" {
+        return Some(request.to_string());
+    }
+
+    None
+}
+
 fn execution_phase_label(phase: &str) -> &'static str {
     match phase.trim() {
         "init" => "Initialization",
@@ -840,6 +854,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             request_id = %req.request_id,
             org_id = %identity.org_id,
             project_id = %identity.project_id,
+            request_project_id = %req.project_id,
             method = %req.method,
             path = %req.path,
             status = %req.status,
@@ -856,7 +871,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let response_json: serde_json::Value = serde_json::from_str(&req.response_json)
             .map_err(|e| Status::invalid_argument(format!("invalid response_json: {e}")))?;
 
-        let project_id = identity.project_id;
+        let project_id = normalized_project_id(&identity.project_id, &req.project_id);
         let org_id = identity.org_id;
 
         let mut tx = self
@@ -987,17 +1002,27 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             };
 
             // Resolve function_id from route
-            let route_info: Option<(uuid::Uuid,)> = sqlx::query_as(
-                "SELECT function_id FROM control.routes WHERE project_id = $1::uuid AND method = $2 AND path = $3"
-            )
-            .bind(project_id.clone())
-            .bind(req.method.clone())
-            .bind(req.path.clone())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| Status::internal(format!("failed to resolve route: {e}")))?;
+            let route_project_id = project_id
+                .as_deref()
+                .and_then(|value| uuid::Uuid::parse_str(value).ok());
+            let route_method = if req.request_method.trim().is_empty() {
+                req.method.clone()
+            } else {
+                req.request_method.clone()
+            };
 
-            if let Some((function_id,)) = route_info {
+            if let Some(route_project_id) = route_project_id {
+                let route_info: Option<(uuid::Uuid,)> = sqlx::query_as(
+                    "SELECT function_id FROM control.routes WHERE project_id = $1 AND method = $2 AND path = $3"
+                )
+                .bind(route_project_id)
+                .bind(route_method)
+                .bind(req.path.clone())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| Status::internal(format!("failed to resolve route: {e}")))?;
+
+                if let Some((function_id,)) = route_info {
                 sqlx::query(
                     "INSERT INTO flux.issues \
                      (function_id, fingerprint, title, sample_execution_id, sample_stack, sample_message, occurrence_count, last_seen) \
@@ -1018,6 +1043,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| Status::internal(format!("failed to upsert issue: {e}")))?;
+                }
             }
         }
 
