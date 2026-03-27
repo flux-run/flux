@@ -84,6 +84,7 @@ struct WorkItem {
     recorded_checkpoints: Vec<FetchCheckpoint>,
     /// Some(_) means this is a server-mode HTTP dispatch, not a handler invocation.
     net_request: Option<NetRequest>,
+    max_duration_ms: Option<u64>,
     result_tx: oneshot::Sender<ExecutionResult>,
 }
 
@@ -132,8 +133,9 @@ impl IsolatePool {
         &self,
         payload: serde_json::Value,
         context: ExecutionContext,
+        max_duration_ms: Option<u64>,
     ) -> ExecutionResult {
-        self.execute_with_recorded(payload, context, Vec::new())
+        self.execute_with_recorded(payload, context, Vec::new(), max_duration_ms)
             .await
     }
 
@@ -143,6 +145,7 @@ impl IsolatePool {
         payload: serde_json::Value,
         context: ExecutionContext,
         recorded_checkpoints: Vec<FetchCheckpoint>,
+        max_duration_ms: Option<u64>,
     ) -> ExecutionResult {
         if self.workers.is_empty() {
             return error_result(context, "isolate pool is empty");
@@ -157,6 +160,7 @@ impl IsolatePool {
             context: context.clone(),
             recorded_checkpoints,
             net_request: None,
+            max_duration_ms,
             result_tx,
         };
 
@@ -187,8 +191,9 @@ impl IsolatePool {
         &self,
         context: ExecutionContext,
         net_request: NetRequest,
+        max_duration_ms: Option<u64>,
     ) -> ExecutionResult {
-        self.execute_net_request_with_recorded(context, net_request, Vec::new())
+        self.execute_net_request_with_recorded(context, net_request, Vec::new(), max_duration_ms)
             .await
     }
 
@@ -197,6 +202,7 @@ impl IsolatePool {
         context: ExecutionContext,
         net_request: NetRequest,
         recorded_checkpoints: Vec<FetchCheckpoint>,
+        max_duration_ms: Option<u64>,
     ) -> ExecutionResult {
         if self.workers.is_empty() {
             return error_result(context, "isolate pool is empty");
@@ -211,6 +217,7 @@ impl IsolatePool {
             context: context.clone(),
             recorded_checkpoints,
             net_request: Some(net_request),
+            max_duration_ms,
             result_tx,
         };
 
@@ -240,6 +247,7 @@ pub async fn execute_one_shot_artifact(
     artifact: RuntimeArtifact,
     payload: serde_json::Value,
     context: ExecutionContext,
+    max_duration_ms: Option<u64>,
 ) -> ExecutionResult {
     let (result_tx, result_rx) = oneshot::channel::<ExecutionResult>();
     let context_for_thread = context.clone();
@@ -275,6 +283,15 @@ pub async fn execute_one_shot_artifact(
                 }
             };
 
+            let isolate_handle = isolate.v8_isolate_handle();
+            let watchdog = max_duration_ms.map(|ms| {
+                let handle = isolate_handle.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                    handle.terminate_execution();
+                })
+            });
+
             let res = match isolate.execute_with_recorded(payload, context_for_thread.clone(), vec![]).await {
                 Ok(out) => {
                     let status = if out.error.is_some() { "error".to_string() } else { "ok".to_string() };
@@ -295,6 +312,11 @@ pub async fn execute_one_shot_artifact(
                 }
                 Err(e) => error_result(context_for_thread, e.to_string()),
             };
+
+            if let Some(w) = watchdog {
+                w.abort();
+            }
+
             let _ = result_tx.send(res);
         });
     });
@@ -372,6 +394,15 @@ fn spawn_isolate_worker(
                         }
                     };
 
+                    let isolate_handle = isolate.v8_isolate_handle();
+                    let watchdog = work.max_duration_ms.map(|ms| {
+                        let handle = isolate_handle.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                            handle.terminate_execution();
+                        })
+                    });
+
                     let result = if let Some(net_req) = work.net_request {
                         match isolate
                             .dispatch_request_with_recorded(
@@ -485,6 +516,7 @@ fn spawn_isolate_worker(
                         }
                     };
 
+                    if let Some(w) = watchdog { w.abort(); }
                     let _ = work.result_tx.send(result);
                 }
             });
@@ -549,6 +581,15 @@ fn spawn_isolate_worker_with_mode(
                         }
                     };
 
+                    let isolate_handle = isolate.v8_isolate_handle();
+                    let watchdog = work.max_duration_ms.map(|ms| {
+                        let handle = isolate_handle.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                            handle.terminate_execution();
+                        })
+                    });
+
                     let result = if let Some(net_req) = work.net_request {
                         match isolate
                             .dispatch_request_with_recorded(
@@ -662,6 +703,7 @@ fn spawn_isolate_worker_with_mode(
                         }
                     };
 
+                    if let Some(w) = watchdog { w.abort(); }
                     let _ = work.result_tx.send(result);
                 }
             });

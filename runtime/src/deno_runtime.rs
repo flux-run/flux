@@ -5152,6 +5152,13 @@ pub struct JsIsolate {
 }
 
 impl JsIsolate {
+    pub fn v8_isolate_handle(&mut self) -> deno_core::v8::IsolateHandle {
+        self.inner.v8_isolate().get_handle()
+    }
+
+    pub fn terminate_execution(&mut self) {
+        self.inner.v8_isolate().terminate_execution();
+    }
     pub async fn new(user_code: &str, _isolate_id: usize) -> Result<Self> {
         Self::new_internal(user_code, prepare_user_code(user_code)).await
     }

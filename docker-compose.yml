@@ -17,6 +17,16 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   flux:
     # Pull from GHCR (pre-built image)
     image: ghcr.io/flux-run/flux-server:latest
@@ -28,9 +38,12 @@ services:
       - "50051:50051"
     environment:
       DATABASE_URL: postgres://flux:password@postgres:5432/flux
+      REDIS_URL: redis://redis:6379
       INTERNAL_SERVICE_TOKEN: local-development-token
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:

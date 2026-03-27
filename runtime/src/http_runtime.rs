@@ -139,12 +139,16 @@ async fn handle_request(
     };
     
     ctx.execution_id = exec_id;
+    
+    let max_duration_ms = headers.get("x-flux-max-duration-ms")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
 
     let result = if let Some(artifact) = provided_artifact {
         // Use the off-thread executor for dynamic artifacts (JsIsolate is non-Send)
-        execute_one_shot_artifact(artifact, payload, ctx).await
+        execute_one_shot_artifact(artifact, payload, ctx, max_duration_ms).await
     } else {
-        state.pool.execute(payload, ctx).await
+        state.pool.execute(payload, ctx, max_duration_ms).await
     };
 
     if !state.service_token.is_empty() {
@@ -237,7 +241,11 @@ async fn handle_net_request(
         body,
     };
 
-    let result = state.pool.execute_net_request(context, net_req).await;
+    let max_duration_ms = request.headers().get("x-flux-max-duration-ms")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+
+    let result = state.pool.execute_net_request(context, net_req, max_duration_ms).await;
 
     if !state.service_token.is_empty() {
         let _ = crate::server_client::record_execution(
