@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::fs;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use tokio::process::Child;
 
 pub async fn spawn_runtime(

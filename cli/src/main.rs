@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::io::stdout;
 
 mod add;
 mod bin_resolution;
@@ -29,6 +30,8 @@ mod tail;
 mod trace;
 mod why;
 mod deployments;
+mod deploy;
+mod functions;
 
 #[derive(Parser)]
 #[command(name = "flux")]
@@ -92,10 +95,17 @@ enum Commands {
     },
     /// List the project's build history and deployments.
     Deployments(deployments::DeploymentsArgs),
+    /// Deploy the current project to Flux Cloud.
+    Deploy(deploy::DeployArgs),
+    /// Manage Flux Cloud functions.
+    Functions(functions::FunctionsArgs),
+    /// Manage project environment variables.
+    Env(functions::EnvArgs),
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     let cli = Cli::parse();
 
     match cli.command {
@@ -129,6 +139,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Start(args) => start::execute(args).await?,
         Commands::Server { command } => server::execute(command).await?,
         Commands::Deployments(args) => deployments::execute(args).await?,
+        Commands::Deploy(args) => deploy::execute(args).await?,
+        Commands::Functions(args) => functions::execute(args).await?,
+        Commands::Env(args) => functions::execute_env(args).await?,
     }
 
     Ok(())

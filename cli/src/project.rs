@@ -368,7 +368,7 @@ pub async fn analyze_project(entry: &Path) -> Result<ProjectAnalysis> {
     let entry_path = canonicalize_existing_path(entry)?;
     
     // Search upwards for flux.json to find the project root
-    let mut current_dir = entry_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let current_dir = entry_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     
     let mut search_dir = current_dir.clone();

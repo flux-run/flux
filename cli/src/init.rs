@@ -157,17 +157,18 @@ async fn init_auth() -> Result<()> {
         rpassword::prompt_password("Service token: ").context("failed to read service token")?;
 
     let normalized_url = normalize_grpc_url(&url);
-    let auth_mode = validate_service_token(&normalized_url, &token).await?;
+    let auth_result = validate_service_token(&normalized_url, &token).await?;
 
     let config = CliConfig {
         url: Some(normalized_url.clone()),
         token: Some(token),
+        project_id: auth_result.project_id, 
     };
     config.save()?;
 
     println!("\n✓ saved config to ~/.flux/config.toml");
     println!("  server: {}", normalized_url);
-    println!("  auth:   {}", auth_mode);
+    println!("  auth:   {}", auth_result.auth_mode);
 
     Ok(())
 }

@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use std::path::PathBuf;
 use crate::project::load_project_config;
 
 #[derive(Debug, Args)]

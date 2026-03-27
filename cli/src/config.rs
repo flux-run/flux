@@ -9,12 +9,14 @@ use crate::grpc::normalize_grpc_url;
 pub struct CliConfig {
     pub url: Option<String>,
     pub token: Option<String>,
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResolvedAuth {
     pub url: String,
     pub token: String,
+    pub project_id: Option<String>,
 }
 
 impl CliConfig {
@@ -59,6 +61,7 @@ pub fn resolve_auth(url: Option<String>, token: Option<String>) -> Result<Resolv
     Ok(ResolvedAuth {
         url: normalize_grpc_url(&url),
         token,
+        project_id: config.project_id,
     })
 }
 
@@ -75,6 +78,7 @@ pub fn resolve_optional_auth(url: Option<String>, token: Option<String>) -> Resu
     Ok(ResolvedAuth {
         url: normalize_grpc_url(&url),
         token,
+        project_id: config.project_id,
     })
 }
 

@@ -535,6 +535,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         Ok(Response::new(pb::ValidateTokenResponse {
             ok: true,
             auth_mode: format!("{}:{}", identity.org_id, identity.project_id),
+            project_id: identity.project_id,
         }))
     }
 
@@ -1597,6 +1598,183 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .await;
 
         Ok(Response::new(pb::PingTailResponse { ok: true }))
+    }
+
+    async fn deploy_function(
+        &self,
+        request: Request<pb::DeployFunctionRequest>,
+    ) -> Result<Response<pb::DeployFunctionResponse>, Status> {
+        let _identity = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+
+        let project_id = uuid::Uuid::parse_str(&req.project_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?;
+        
+        // 1. Parse artifact to get SHA
+        let artifact: shared::project::FluxBuildArtifact = serde_json::from_str(&req.artifact_json)
+            .map_err(|e| Status::invalid_argument(format!("invalid artifact_json: {e}")))?;
+        let artifact_id = artifact.graph_sha256;
+
+        // 2. Insert or Update function
+        let mut tx = self.pool.begin().await
+            .map_err(|e| Status::internal(format!("failed to begin deploy transaction: {e}")))?;
+
+        let function_id: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO control.functions (project_id, name, latest_artifact_id) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (project_id, name) DO UPDATE SET \
+               latest_artifact_id = EXCLUDED.latest_artifact_id, \
+               created_at = now() \
+             RETURNING id",
+        )
+        .bind(project_id)
+        .bind(&req.name)
+        .bind(&artifact_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(format!("failed to upsert function: {e}")))?;
+
+        // 3. Upsert route
+        sqlx::query(
+            "INSERT INTO control.routes (project_id, method, path, function_id) \
+             VALUES ($1, 'GET', $2, $3) \
+             ON CONFLICT (project_id, method, path) DO UPDATE SET \
+               function_id = EXCLUDED.function_id",
+        )
+        .bind(project_id)
+        .bind(format!("/api/{}", req.name))
+        .bind(function_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(format!("failed to upsert route: {e}")))?;
+
+        tx.commit().await
+            .map_err(|e| Status::internal(format!("failed to commit deploy: {e}")))?;
+
+        Ok(Response::new(pb::DeployFunctionResponse {
+            ok: true,
+            function_id: function_id.to_string(),
+            message: format!("Function '{}' deployed successfully with artifact {}", req.name, &artifact_id[..8]),
+        }))
+    }
+
+    async fn list_functions(
+        &self,
+        request: Request<pb::ListFunctionsRequest>,
+    ) -> Result<Response<pb::ListFunctionsResponse>, Status> {
+        let _identity = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+        let project_id = uuid::Uuid::parse_str(&req.project_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?;
+
+        let rows: Vec<(uuid::Uuid, String, Option<std::time::SystemTime>)> = sqlx::query_as(
+            "SELECT id, name, created_at FROM control.functions WHERE project_id = $1",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to list functions: {e}")))?;
+
+        let functions = rows.into_iter().map(|(id, name, created_at)| {
+            pb::FunctionEntry {
+                id: id.to_string(),
+                name,
+                created_at: created_at.map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()).unwrap_or_default(),
+            }
+        }).collect();
+
+        Ok(Response::new(pb::ListFunctionsResponse { functions }))
+    }
+
+    async fn delete_function(
+        &self,
+        request: Request<pb::DeleteFunctionRequest>,
+    ) -> Result<Response<pb::DeleteFunctionResponse>, Status> {
+        let _identity = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+        let function_id = uuid::Uuid::parse_str(&req.function_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid function_id: {e}")))?;
+
+        sqlx::query("DELETE FROM control.functions WHERE id = $1")
+            .bind(function_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Status::internal(format!("failed to delete function: {e}")))?;
+
+        Ok(Response::new(pb::DeleteFunctionResponse { ok: true }))
+    }
+
+    async fn list_env_vars(
+        &self,
+        request: Request<pb::ListEnvVarsRequest>,
+    ) -> Result<Response<pb::ListEnvVarsResponse>, Status> {
+        let _identity = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+        let project_id = uuid::Uuid::parse_str(&req.project_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?;
+
+        let rows: Vec<(String, String, std::time::SystemTime)> = sqlx::query_as(
+            "SELECT key, value, updated_at FROM control.env_vars WHERE project_id = $1",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to list env vars: {e}")))?;
+
+        let env_vars = rows.into_iter().map(|(key, value, updated_at)| {
+            pb::EnvVarEntry {
+                key,
+                value,
+                updated_at: chrono::DateTime::<chrono::Utc>::from(updated_at).to_rfc3339(),
+            }
+        }).collect();
+
+        Ok(Response::new(pb::ListEnvVarsResponse { env_vars }))
+    }
+
+    async fn set_env_var(
+        &self,
+        request: Request<pb::SetEnvVarRequest>,
+    ) -> Result<Response<pb::SetEnvVarResponse>, Status> {
+        let _identity = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+        let project_id = uuid::Uuid::parse_str(&req.project_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?;
+
+        sqlx::query(
+            "INSERT INTO control.env_vars (project_id, key, value, updated_at) \
+             VALUES ($1, $2, $3, now()) \
+             ON CONFLICT (project_id, key) DO UPDATE SET \
+               value = EXCLUDED.value, \
+               updated_at = now()",
+        )
+        .bind(project_id)
+        .bind(req.key)
+        .bind(req.value)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to set env var: {e}")))?;
+
+        Ok(Response::new(pb::SetEnvVarResponse { ok: true }))
+    }
+
+    async fn delete_env_var(
+        &self,
+        request: Request<pb::DeleteEnvVarRequest>,
+    ) -> Result<Response<pb::DeleteEnvVarResponse>, Status> {
+        let _identity = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+        let project_id = uuid::Uuid::parse_str(&req.project_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid project_id: {e}")))?;
+
+        sqlx::query("DELETE FROM control.env_vars WHERE project_id = $1 AND key = $2")
+            .bind(project_id)
+            .bind(req.key)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Status::internal(format!("failed to delete env var: {e}")))?;
+
+        Ok(Response::new(pb::DeleteEnvVarResponse { ok: true }))
     }
 }
 

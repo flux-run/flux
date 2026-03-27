@@ -11,6 +11,12 @@ service InternalAuthService {
   rpc Tail(TailRequest) returns (stream TailEvent);
   rpc Replay(ReplayRequest) returns (ReplayResponse);
   rpc Resume(ResumeRequest) returns (ResumeResponse);
+  rpc DeployFunction(DeployFunctionRequest) returns (DeployFunctionResponse);
+  rpc ListFunctions(ListFunctionsRequest) returns (ListFunctionsResponse);
+  rpc DeleteFunction(DeleteFunctionRequest) returns (DeleteFunctionResponse);
+  rpc ListEnvVars(ListEnvVarsRequest) returns (ListEnvVarsResponse);
+  rpc SetEnvVar(SetEnvVarRequest) returns (SetEnvVarResponse);
+  rpc DeleteEnvVar(DeleteEnvVarRequest) returns (DeleteEnvVarResponse);
   rpc PingTail(PingTailRequest) returns (PingTailResponse);
 }
 
@@ -22,11 +28,79 @@ message PingTailResponse {
   bool ok = 1;
 }
 
+message DeployFunctionRequest {
+  string project_id = 1;
+  string name = 2; // function name (e.g. "hello-world")
+  string artifact_json = 3; // The full FluxBuildArtifact JSON
+}
+
+message DeployFunctionResponse {
+  bool ok = 1;
+  string function_id = 2;
+  string message = 3;
+}
+
+message ListFunctionsRequest {
+  string project_id = 1;
+}
+
+message FunctionEntry {
+  string id = 1;
+  string name = 2;
+  string created_at = 3;
+}
+
+message ListFunctionsResponse {
+  repeated FunctionEntry functions = 1;
+}
+
+message DeleteFunctionRequest {
+  string function_id = 1;
+}
+
+message DeleteFunctionResponse {
+  bool ok = 1;
+}
+
+message ListEnvVarsRequest {
+  string project_id = 1;
+}
+
+message EnvVarEntry {
+  string key = 1;
+  string value = 2; // Note: usually masked in UI, but here for CLI use
+  string updated_at = 3;
+}
+
+message ListEnvVarsResponse {
+  repeated EnvVarEntry env_vars = 1;
+}
+
+message SetEnvVarRequest {
+  string project_id = 1;
+  string key = 2;
+  string value = 3;
+}
+
+message SetEnvVarResponse {
+  bool ok = 1;
+}
+
+message DeleteEnvVarRequest {
+  string project_id = 1;
+  string key = 2;
+}
+
+message DeleteEnvVarResponse {
+  bool ok = 1;
+}
+
 message ValidateTokenRequest {}
 
 message ValidateTokenResponse {
   bool ok = 1;
   string auth_mode = 2;
+  string project_id = 3;
 }
 
 message ListLogsRequest {

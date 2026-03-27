@@ -129,7 +129,13 @@ pub struct ResumeView {
     pub steps: Vec<ReplayStepView>,
 }
 
-pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
+#[derive(Debug, Clone)]
+pub struct AuthResult {
+    pub auth_mode: String,
+    pub project_id: Option<String>,
+}
+
+pub async fn validate_service_token(url: &str, token: &str) -> Result<AuthResult> {
     let endpoint = normalize_grpc_url(url);
 
     // If it's an HTTPS URL, we try the REST fallback first or as a fallback
@@ -137,7 +143,7 @@ pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
     if endpoint.starts_with("https://") {
         println!("  Attempting cloud authentication...");
         match validate_service_token_rest(&endpoint, token).await {
-            Ok(auth_mode) => return Ok(auth_mode),
+            Ok(result) => return Ok(result),
             Err(e) => {
                 println!("  Cloud authentication failed: {}. Falling back to gRPC...", e);
             }
@@ -166,10 +172,13 @@ pub async fn validate_service_token(url: &str, token: &str) -> Result<String> {
         bail!("service token was rejected by the server");
     }
 
-    Ok(response.auth_mode)
+    Ok(AuthResult {
+        auth_mode: response.auth_mode,
+        project_id: if response.project_id.is_empty() { None } else { Some(response.project_id) },
+    })
 }
 
-async fn validate_service_token_rest(url: &str, token: &str) -> Result<String> {
+async fn validate_service_token_rest(url: &str, token: &str) -> Result<AuthResult> {
     let client = reqwest::Client::new();
     let validate_url = format!("{}/auth/validate", url.trim_end_matches('/'));
 
@@ -190,8 +199,13 @@ async fn validate_service_token_rest(url: &str, token: &str) -> Result<String> {
     let auth_mode = body["auth_mode"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("REST response missing auth_mode"))?;
+    
+    let project_id = body["project_id"].as_str().map(|s| s.to_string());
 
-    Ok(auth_mode.to_string())
+    Ok(AuthResult {
+        auth_mode: auth_mode.to_string(),
+        project_id,
+    })
 }
 
 pub async fn list_logs(url: &str, token: &str, limit: u32) -> Result<Vec<LogEntry>> {
@@ -490,6 +504,179 @@ pub async fn ping_tail(url: &str, token: &str, project_id: Option<String>) -> Re
         .ping_tail(request)
         .await
         .map_err(|e| friendly_status_error("ping-tail request", e))?;
+
+    Ok(())
+}
+
+pub async fn deploy_function(
+    url: &str,
+    token: &str,
+    project_id: &str,
+    name: &str,
+    artifact_json: &str,
+) -> Result<pb::DeployFunctionResponse> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
+
+    let mut request = Request::new(pb::DeployFunctionRequest {
+        project_id: project_id.to_string(),
+        name: name.to_string(),
+        artifact_json: artifact_json.to_string(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .deploy_function(request)
+        .await
+        .map_err(|e| friendly_status_error("deploy request", e))?
+        .into_inner();
+
+    Ok(response)
+}
+
+pub async fn list_functions(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::FunctionEntry>> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
+
+    let mut request = Request::new(pb::ListFunctionsRequest {
+        project_id: project_id.to_string(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .list_functions(request)
+        .await
+        .map_err(|e| friendly_status_error("list functions request", e))?
+        .into_inner();
+
+    Ok(response.functions)
+}
+
+pub async fn delete_function(url: &str, token: &str, function_id: &str) -> Result<()> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
+
+    let mut request = Request::new(pb::DeleteFunctionRequest {
+        function_id: function_id.to_string(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .delete_function(request)
+        .await
+        .map_err(|e| friendly_status_error("delete function request", e))?
+        .into_inner();
+
+    if !response.ok {
+        bail!("failed to delete function");
+    }
+
+    Ok(())
+}
+
+pub async fn list_env_vars(url: &str, token: &str, project_id: &str) -> Result<Vec<pb::EnvVarEntry>> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
+
+    let mut request = Request::new(pb::ListEnvVarsRequest {
+        project_id: project_id.to_string(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .list_env_vars(request)
+        .await
+        .map_err(|e| friendly_status_error("list env vars request", e))?
+        .into_inner();
+
+    Ok(response.env_vars)
+}
+
+pub async fn set_env_var(url: &str, token: &str, project_id: &str, key: &str, value: &str) -> Result<()> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
+
+    let mut request = Request::new(pb::SetEnvVarRequest {
+        project_id: project_id.to_string(),
+        key: key.to_string(),
+        value: value.to_string(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .set_env_var(request)
+        .await
+        .map_err(|e| friendly_status_error("set env var request", e))?
+        .into_inner();
+
+    if !response.ok {
+        bail!("failed to set environment variable");
+    }
+
+    Ok(())
+}
+
+pub async fn delete_env_var(url: &str, token: &str, project_id: &str, key: &str) -> Result<()> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .map_err(|e| friendly_connect_error(&endpoint, e))?;
+
+    let mut request = Request::new(pb::DeleteEnvVarRequest {
+        project_id: project_id.to_string(),
+        key: key.to_string(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .delete_env_var(request)
+        .await
+        .map_err(|e| friendly_status_error("delete env var request", e))?
+        .into_inner();
+
+    if !response.ok {
+        bail!("failed to delete environment variable");
+    }
 
     Ok(())
 }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::Args;
 
-use crate::project::{resolve_entry_path, watch_fingerprint};
+use crate::project::resolve_entry_path;
 
 #[derive(Debug, Args)]
 pub struct DevArgs {

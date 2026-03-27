@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use std::io::{stdout, Write};
+use std::io::stdout;
 use crossterm::{
     cursor::{MoveToColumn, MoveToPreviousLine},
     event::{self, Event, KeyCode},
@@ -34,16 +34,25 @@ pub async fn execute(args: LoginArgs) -> Result<()> {
     };
 
     if !args.skip_verify {
-        let _ = validate_service_token(&url, &token).await?;
+        let result = validate_service_token(&url, &token).await?;
         println!("✔ Logged in as developer@fluxbase.co");
         println!("✔ Server: {}", url);
+        
+        let config = CliConfig {
+            url: Some(url.clone()),
+            token: Some(token),
+            project_id: result.project_id,
+        };
+        config.save()?;
+    } else {
+        let config = CliConfig {
+            url: Some(url.clone()),
+            token: Some(token),
+            project_id: None,
+        };
+        config.save()?;
     }
 
-    let config = CliConfig {
-        url: Some(url.clone()),
-        token: Some(token),
-    };
-    config.save()?;
 
     println!("saved CLI auth config");
     println!("server:  {}", url);

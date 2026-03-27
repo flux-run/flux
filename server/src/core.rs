@@ -225,6 +225,61 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query("CREATE SCHEMA IF NOT EXISTS control")
+        .execute(pool)
+        .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS control.projects (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            org_id UUID,
+            name TEXT NOT NULL,
+            base_domain TEXT,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS control.functions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            project_id UUID NOT NULL REFERENCES control.projects(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            latest_artifact_id TEXT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(project_id, name)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS control.routes (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            project_id UUID NOT NULL REFERENCES control.projects(id) ON DELETE CASCADE,
+            method TEXT NOT NULL,
+            path TEXT NOT NULL,
+            function_id UUID REFERENCES control.functions(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(project_id, method, path)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS control.env_vars (
+            project_id UUID NOT NULL REFERENCES control.projects(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (project_id, key)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Performance indexes — idempotent with IF NOT EXISTS.
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_executions_started_at ON flux.executions (started_at DESC)",

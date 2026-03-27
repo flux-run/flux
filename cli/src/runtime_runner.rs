@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use crate::runtime_process::spawn_runtime;
 use crate::events::FluxEvent;
-use crate::tui::{TuiApp, render, CapturedIo};
+use crate::tui::{TuiApp, render};
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrossEvent, KeyCode},
