@@ -5598,6 +5598,9 @@ impl JsIsolate {
             .map(|cp| (cp.call_index, cp))
             .collect();
 
+        // Read cloud_ctx before context is moved.
+        let is_cloud_ctx = context.cloud_ctx;
+
         // Register the state slot before injecting JS.
         {
             let state = self.runtime.op_state();
@@ -5629,7 +5632,7 @@ impl JsIsolate {
         let eid_json =
             serde_json::to_string(&execution_id).context("failed to encode execution_id")?;
         let payload_json = serde_json::to_string(&payload).context("failed to encode payload")?;
-        let handler_arg = if context.cloud_ctx {
+        let handler_arg = if is_cloud_ctx {
             // Cloud function mode: pass a ctx object as the sole handler argument.
             // It contains response helpers (json/text/html) + the request data.
             let body_j = serde_json::to_string(payload.get("body").unwrap_or(&serde_json::Value::Null))
