@@ -79,7 +79,7 @@ pub async fn run_http_runtime(config: HttpRuntimeConfig, artifact: RuntimeArtifa
     let app: Router = Router::new()
         .route("/health", get(health))
         .route("/__flux_internal/resume", post(handle_internal_resume))
-        .route("/:route", post(handle_request))
+        .route("/{route}", post(handle_request))
         .fallback(handle_net_request)
         .with_state(state);
 
