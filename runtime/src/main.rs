@@ -195,7 +195,7 @@ async fn main() -> Result<()> {
         (artifact, route_name)
     };
 
-    if args.replay.is_none() {
+    if args.replay.is_none() && !args.check_only {
         println!("server:   {}", args.server_url);
         if let Some(path) = &args.artifact {
             println!("artifact: {}", path);
@@ -205,7 +205,7 @@ async fn main() -> Result<()> {
             println!("entry:    (auto)");
         }
     }
-    if args.replay.is_none() {
+    if args.replay.is_none() && !args.check_only {
         println!("hash:     {}", artifact.code_version());
         println!("bytes:    {}", artifact.size_bytes());
     }
@@ -263,20 +263,144 @@ async fn main() -> Result<()> {
     // Used by `flux deploy` to reject bad code before upload.
     if args.check_only {
         if let Some(ref err_msg) = boot.result.error {
-            let name = boot
-                .result
-                .error_name
-                .as_deref()
-                .unwrap_or("Error");
+            let name = boot.result.error_name.as_deref().unwrap_or("Error");
             let message = boot
                 .result
                 .error_message
                 .as_deref()
                 .unwrap_or(err_msg.as_str());
-            eprintln!("{}: {}", name, message);
-            if let Some(ref stack) = boot.result.error_stack {
-                eprintln!("{}", stack);
+
+            // Parse the first user-code file+line+col from the stack trace.
+            // error_frames[0].file is only the basename; the full absolute path
+            // lives in error_stack as "at file:///abs/path/to/file.ts:line:col".
+            let reported_location = boot
+                .result
+                .error_stack
+                .as_deref()
+                .and_then(|stack| {
+                    stack
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| l.starts_with("at "))
+                        .find_map(|trimmed| {
+                            let file_start = trimmed.find("file://")?;
+                            let loc = trimmed[file_start..].trim_end_matches(')');
+                            let parts: Vec<&str> = loc.rsplitn(3, ':').collect();
+                            if parts.len() < 3 {
+                                return None;
+                            }
+                            let col = parts[0].parse::<usize>().ok()?;
+                            let line_no = parts[1].parse::<usize>().ok()?;
+                            let abs_path = parts[2]
+                                .strip_prefix("file://")
+                                .unwrap_or(parts[2])
+                                .to_string();
+                            if abs_path.starts_with('/') {
+                                Some((abs_path, line_no, col))
+                            } else {
+                                None
+                            }
+                        })
+                });
+
+            // Translate terse V8 SyntaxErrors into actionable messages.
+            // V8 reports "Unexpected reserved word" when `await` is used inside
+            // a non-async function. Scan the source from the reported position
+            // to find the actual `await` line so the pointer is accurate.
+            let (display_message, location, hint): (
+                &str,
+                Option<(String, usize, usize)>,
+                Option<&'static str>,
+            ) = if name == "SyntaxError" && message == "Unexpected reserved word" {
+                let refined =
+                    reported_location
+                        .as_ref()
+                        .and_then(|(abs_path, reported_line, _)| {
+                            let src = std::fs::read_to_string(abs_path).ok()?;
+                            let lines: Vec<&str> = src.lines().collect();
+                            let search_from = reported_line.saturating_sub(1);
+                            lines[search_from..].iter().enumerate().find_map(|(i, line)| {
+                                let col = line.find("await")?;
+                                // Ensure it's the keyword, not a substring (e.g. `awaiting`).
+                                let after = line[col + 5..].chars().next();
+                                if after.map_or(true, |c| !c.is_alphanumeric() && c != '_') {
+                                    Some((abs_path.clone(), search_from + i + 1, col + 1))
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .or(reported_location);
+                (
+                    "`await` is only valid in async functions",
+                    refined,
+                    Some("add `async` before `function` to fix this"),
+                )
+            } else {
+                (message, reported_location, None)
+            };
+
+            eprintln!("error[boot]: {}: {}", name, display_message);
+
+            if let Some((ref abs_path, line_1, col_1)) = location {
+                // Show relative path when inside the current working directory.
+                let display_path = std::env::current_dir()
+                    .ok()
+                    .and_then(|cwd| {
+                        std::path::Path::new(abs_path)
+                            .strip_prefix(&cwd)
+                            .ok()
+                            .map(|p| p.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_else(|| abs_path.clone());
+
+                eprintln!("   --> {}:{}:{}", display_path, line_1, col_1);
+
+                if let Ok(src) = std::fs::read_to_string(abs_path) {
+                    let src_lines: Vec<&str> = src.lines().collect();
+                    let total = src_lines.len();
+                    let start = line_1.saturating_sub(3).min(total);
+                    let end = (line_1 + 1).min(total);
+                    let gutter = format!("{}", end).len();
+
+                    eprintln!();
+                    for i in start..end {
+                        let n = i + 1;
+                        eprintln!("  {:>gutter$} | {}", n, src_lines[i], gutter = gutter);
+                        if n == line_1 {
+                            let pad = col_1.saturating_sub(1);
+                            eprintln!(
+                                "  {:>gutter$} | {}^-- here",
+                                "",
+                                " ".repeat(pad),
+                                gutter = gutter
+                            );
+                        }
+                    }
+                    eprintln!();
+                }
             }
+
+            if let Some(hint) = hint {
+                eprintln!("  = hint: {}", hint);
+                eprintln!();
+            }
+
+            // Show only the "at ..." frame lines from the stack (skip leading
+            // "Uncaught X: Y" which is already printed above).
+            if let Some(ref stack) = boot.result.error_stack {
+                let at_lines: Vec<&str> = stack
+                    .lines()
+                    .filter(|l| l.trim_start().starts_with("at "))
+                    .collect();
+                if !at_lines.is_empty() {
+                    eprintln!("stack:");
+                    for l in &at_lines {
+                        eprintln!("  {}", l.trim());
+                    }
+                }
+            }
+
             std::process::exit(1);
         }
         println!("boot:ok");

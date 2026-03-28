@@ -56,11 +56,15 @@ pub async fn execute(args: DeployArgs) -> Result<()> {
         .output()
         .context("failed to spawn flux-runtime for boot validation")?;
     if !validation.status.success() {
+        // Stream the runtime's structured error output directly to our stderr
+        // so it renders with its own formatting, then abort with a short message.
         let stderr = String::from_utf8_lossy(&validation.stderr);
-        anyhow::bail!(
-            "Boot validation failed — fix the error before deploying:\n\n{}",
-            stderr.trim()
-        );
+        let trimmed = stderr.trim();
+        if !trimmed.is_empty() {
+            eprintln!("{}", trimmed);
+            eprintln!();
+        }
+        anyhow::bail!("Deploy aborted: fix the boot error above before deploying.");
     }
     println!("✅ Boot validation passed.");
 

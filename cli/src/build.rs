@@ -17,12 +17,33 @@ pub async fn execute(args: BuildArgs) -> Result<()> {
 
     if has_errors(&analysis.diagnostics) {
         for diagnostic in &analysis.diagnostics {
-            println!(
-                "error   [{}] {}: {}",
-                diagnostic.code, diagnostic.specifier, diagnostic.message
-            );
+            // Show a relative display path where possible.
+            let display_spec = std::env::current_dir()
+                .ok()
+                .and_then(|cwd| {
+                    let path = diagnostic
+                        .specifier
+                        .strip_prefix("file://")
+                        .unwrap_or(&diagnostic.specifier);
+                    std::path::Path::new(path)
+                        .strip_prefix(&cwd)
+                        .ok()
+                        .map(|p| p.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| diagnostic.specifier.clone());
+
+            eprintln!("error[{}]: {}", diagnostic.code, display_spec);
+            // Strip the outer "failed to parse <url>: " wrapper that anyhow
+            // adds — the filename is already shown on the line above.
+            let msg = diagnostic
+                .message
+                .find(": ")
+                .map(|i| diagnostic.message[i + 2..].trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(diagnostic.message.trim());
+            eprintln!("  {}", msg);
         }
-        bail!("build failed due to unsupported imports or syntax")
+        bail!("build failed")
     }
 
     write_project_config(&analysis.project_dir, &analysis.config)?;

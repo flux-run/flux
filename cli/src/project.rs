@@ -875,11 +875,19 @@ impl GraphBuilder {
                     }
                 }
                 Err(err) => {
+                    // Build the full error chain so the SWC parse error
+                    // (which carries file/line/col) is not swallowed by the
+                    // outer "failed to parse …" context wrapper.
+                    let full_msg = err
+                        .chain()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(": ");
                     self.push_diagnostic(
                         DiagnosticSeverity::Error,
                         "parse_failed",
                         &loaded.specifier,
-                        err.to_string(),
+                        full_msg,
                     );
                     if let Some(owner) = npm_owner.as_deref() {
                         self.mark_npm(owner, NpmCompatibility::Incompatible);
