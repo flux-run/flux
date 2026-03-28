@@ -360,6 +360,30 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_console_logs_execution_seq ON flux.execution_console_logs (execution_id, seq)")
         .execute(pool).await?;
 
+    // Deployment lifecycle tracking — one record per artifact upload + each boot attempt.
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS control.deployments (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            function_id UUID NOT NULL REFERENCES control.functions(id) ON DELETE CASCADE,
+            artifact_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'deployed',
+            error_type TEXT,
+            error_message TEXT,
+            error_detail JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_deployments_function_created \
+         ON control.deployments (function_id, created_at DESC)",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
