@@ -40,6 +40,30 @@ pub async fn execute(args: DeployArgs) -> Result<()> {
     let artifact_json = std::fs::read_to_string(artifact_path)?;
     let _artifact: FluxBuildArtifact = serde_json::from_str(&artifact_json)?;
 
+    // 3.5. Boot validation — boots the artifact in a sandboxed runtime subprocess.
+    // Catches SyntaxError, module-level throw, bad top-level await, import mismatches, etc.
+    // Rejects the deploy before any upload if the code would fail to boot.
+    println!("🔍 Validating function boot...");
+    let binary = crate::bin_resolution::ensure_binary("flux-runtime", false).await?;
+    let validation = std::process::Command::new(&binary)
+        .args([
+            "--artifact",
+            artifact_path
+                .to_str()
+                .context("artifact path is not valid UTF-8")?,
+            "--check-only",
+        ])
+        .output()
+        .context("failed to spawn flux-runtime for boot validation")?;
+    if !validation.status.success() {
+        let stderr = String::from_utf8_lossy(&validation.stderr);
+        anyhow::bail!(
+            "Boot validation failed — fix the error before deploying:\n\n{}",
+            stderr.trim()
+        );
+    }
+    println!("✅ Boot validation passed.");
+
     // 4. Resolve auth and project context
     let auth = config::resolve_optional_auth(None, None)?;
     let project_id = args

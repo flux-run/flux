@@ -76,6 +76,12 @@ struct Args {
     /// inbound request must supply its own `artifact` JSON field.
     #[arg(long)]
     gateway: bool,
+
+    /// Boot the artifact, verify it doesn't crash at module-top-level, then exit.
+    /// Exits 0 on success; exits 1 and prints the error on boot failure.
+    /// Used by `flux deploy` to reject bad code before upload.
+    #[arg(long)]
+    check_only: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -252,6 +258,30 @@ async fn main() -> Result<()> {
     }
 
     let boot = runtime::boot_runtime_artifact(&artifact, boot_context.clone()).await?;
+
+    // --check-only: validate boot, print a structured result, then exit.
+    // Used by `flux deploy` to reject bad code before upload.
+    if args.check_only {
+        if let Some(ref err_msg) = boot.result.error {
+            let name = boot
+                .result
+                .error_name
+                .as_deref()
+                .unwrap_or("Error");
+            let message = boot
+                .result
+                .error_message
+                .as_deref()
+                .unwrap_or(err_msg.as_str());
+            eprintln!("{}: {}", name, message);
+            if let Some(ref stack) = boot.result.error_stack {
+                eprintln!("{}", stack);
+            }
+            std::process::exit(1);
+        }
+        println!("boot:ok");
+        return Ok(());
+    }
 
     let is_server_mode = boot.is_server_mode;
     let has_handler = boot.has_handler;
