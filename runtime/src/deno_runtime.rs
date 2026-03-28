@@ -1409,10 +1409,15 @@ struct RuntimeExecutionState {
     postgres_sessions: HashMap<String, PostgresSessionHandle>,
     /// Next deterministic Postgres session id for this execution.
     next_postgres_session_id: u32,
-    /// Snapshot of environment variables taken at execution start.
-    /// All `process.env` / `Deno.env` reads go through this snapshot so that
-    /// replay executions see the same values even if the host env changes.
+    /// Lazy snapshot of environment variables accessed during this execution.
+    /// Keys are only added on first access (Live: read from host env; Replay:
+    /// pre-seeded from the recorded Live execution's snapshot).  This avoids
+    /// capturing the entire process environment upfront and leaking secrets
+    /// that the user code never touches.
     env_snapshot: HashMap<String, String>,
+    /// True when env_snapshot is sealed — Replay executions pre-seed the map
+    /// from the stored record and then refuse to fall through to the host env.
+    env_frozen: bool,
 }
 
 deno_core::extension!(
@@ -1560,10 +1565,23 @@ fn op_flux_env_get(
     #[string] key: String,
 ) -> Option<String> {
     let map = state.borrow_mut::<RuntimeStateMap>();
-    if let Some(exec) = map.get(&execution_id) {
-        exec.env_snapshot.get(&key).cloned()
+    if let Some(exec) = map.get_mut(&execution_id) {
+        if let Some(val) = exec.env_snapshot.get(&key) {
+            return Some(val.clone());
+        }
+        // Key not yet seen.
+        if exec.env_frozen {
+            // Replay mode: the key was never accessed in the Live run — treat as absent.
+            return None;
+        }
+        // Live mode: lazily read from host env and freeze the value for this execution.
+        let val = std::env::var(&key).ok();
+        if let Some(ref v) = val {
+            exec.env_snapshot.insert(key, v.clone());
+        }
+        val
     } else {
-        // Fallback during boot / before state slot is registered.
+        // No state slot yet (e.g. very early boot). Fall through to host env.
         std::env::var(&key).ok()
     }
 }
@@ -1576,7 +1594,15 @@ fn op_flux_env_list(
 ) -> std::collections::HashMap<String, String> {
     let map = state.borrow_mut::<RuntimeStateMap>();
     if let Some(exec) = map.get(&execution_id) {
-        exec.env_snapshot.clone()
+        if exec.env_frozen {
+            // Replay: return only the keys that were present in the Live run.
+            exec.env_snapshot.clone()
+        } else {
+            // Live: return the full host env and eagerly snapshot everything
+            // (callers that enumerate the env see all keys).
+            let full: HashMap<String, String> = std::env::vars().collect();
+            full
+        }
     } else {
         std::env::vars().collect()
     }
@@ -1585,6 +1611,9 @@ fn op_flux_env_list(
 /// Called by JS at the start of every execution to register a state slot.
 /// `recorded_random_json` and `recorded_uuids_json` are JSON-encoded arrays for
 /// replay mode; pass `"[]"` for live executions.
+/// `env_snapshot_json` is a JSON object of `{key: value}` env vars recorded in
+/// the original Live execution; pass `"{}"` for live executions. When non-empty
+/// it seals the snapshot so Replay code never falls through to the host env.
 #[op2]
 fn op_begin_execution(
     state: &mut OpState,
@@ -1596,6 +1625,7 @@ fn op_begin_execution(
     #[string] recorded_random_json: String,
     #[string] recorded_uuids_json: String,
     #[string] recorded_now_ms_json: String,
+    #[string] env_snapshot_json: String,
 ) {
     let recorded_random: Vec<f64> = serde_json::from_str(&recorded_random_json).unwrap_or_default();
     let recorded_uuids: Vec<String> =
@@ -1607,6 +1637,13 @@ fn op_begin_execution(
         .ok()
         .flatten()
         .or_else(|| Some(current_time_ms()));
+
+    // Replay mode: we receive the env keys that were accessed during the original
+    // Live run and seal the snapshot so user code never reads from the host env.
+    // Live mode: callers pass "{}" and we lazily populate from host env on access.
+    let env_snapshot: HashMap<String, String> =
+        serde_json::from_str(&env_snapshot_json).unwrap_or_default();
+    let env_frozen = is_replay && !env_snapshot.is_empty();
 
     let exec_state = RuntimeExecutionState {
         context: ExecutionContext {
@@ -1637,7 +1674,8 @@ fn op_begin_execution(
         pending_responses: HashMap::new(),
         postgres_sessions: HashMap::new(),
         next_postgres_session_id: 0,
-        env_snapshot: std::env::vars().collect(),
+        env_snapshot,
+        env_frozen,
     };
 
     state
@@ -1660,6 +1698,7 @@ fn op_end_execution(state: &mut OpState, #[string] execution_id: String) -> Stri
             "random":      s.recorded_random,
             "uuids":       s.recorded_uuids,
             "now_ms":      s.recorded_now_ms,
+            "env":         s.env_snapshot,
         }))
         .unwrap_or_else(|_| "{}".to_string()),
         None => "{}".to_string(),
@@ -1709,7 +1748,24 @@ fn op_flux_fetch(
 
     // In Replay mode, return the recorded response instead of making a live call.
     if matches!(mode, ExecutionMode::Replay) {
-        if let Some(checkpoint) = recorded_checkpoint {
+        // Primary lookup: by call_index (deterministic when ops are executed in
+        // registration order, which is guaranteed for synchronous ops).
+        // Fallback lookup: by URL + method, to handle the case where async scheduling
+        // causes a different call_index ordering between Live and Replay runs.
+        let checkpoint = recorded_checkpoint.or_else(|| {
+            let map = state.borrow_mut::<RuntimeStateMap>();
+            if let Some(execution) = map.get_mut(&execution_id) {
+                // Find ANY remaining checkpoint that matches this URL+method.
+                let key = execution.recorded.iter()
+                    .find(|(_, cp)| cp.url == original_url && cp.method.eq_ignore_ascii_case(&method))
+                    .map(|(k, _)| *k);
+                key.and_then(|k| execution.recorded.remove(&k))
+            } else {
+                None
+            }
+        });
+
+        if let Some(checkpoint) = checkpoint {
             let response = checkpoint.response.clone();
             {
                 let map = state.borrow_mut::<RuntimeStateMap>();
@@ -5847,7 +5903,8 @@ impl JsIsolate {
                     pending_responses: HashMap::new(),
                     postgres_sessions: HashMap::new(),
                     next_postgres_session_id: 0,
-                    env_snapshot: std::env::vars().collect(),
+                    env_snapshot: HashMap::new(),
+                    env_frozen: false,
                 },
             );
         }
@@ -6042,7 +6099,8 @@ impl JsIsolate {
                     pending_responses: HashMap::new(),
                     postgres_sessions: HashMap::new(),
                     next_postgres_session_id: 0,
-                    env_snapshot: std::env::vars().collect(),
+                    env_snapshot: HashMap::new(),
+                    env_frozen: false,
                 },
             );
         }
@@ -6251,7 +6309,8 @@ impl JsIsolate {
                     pending_responses: HashMap::new(),
                     postgres_sessions: HashMap::new(),
                     next_postgres_session_id: 0,
-                    env_snapshot: std::env::vars().collect(),
+                    env_snapshot: HashMap::new(),
+                    env_frozen: false,
                 },
             );
         }
@@ -6388,7 +6447,8 @@ async fn boot_inline_runtime_artifact(
                 pending_responses: HashMap::new(),
                 postgres_sessions: HashMap::new(),
                 next_postgres_session_id: 0,
-                env_snapshot: std::env::vars().collect(),
+                env_snapshot: HashMap::new(),
+                    env_frozen: false,
             },
         );
     }
@@ -6562,7 +6622,8 @@ async fn boot_built_runtime_artifact(
                 pending_responses: HashMap::new(),
                 postgres_sessions: HashMap::new(),
                 next_postgres_session_id: 0,
-                env_snapshot: std::env::vars().collect(),
+                env_snapshot: HashMap::new(),
+                    env_frozen: false,
             },
         );
     }
