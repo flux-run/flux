@@ -1409,6 +1409,10 @@ struct RuntimeExecutionState {
     postgres_sessions: HashMap<String, PostgresSessionHandle>,
     /// Next deterministic Postgres session id for this execution.
     next_postgres_session_id: u32,
+    /// Snapshot of environment variables taken at execution start.
+    /// All `process.env` / `Deno.env` reads go through this snapshot so that
+    /// replay executions see the same values even if the host env changes.
+    env_snapshot: HashMap<String, String>,
 }
 
 deno_core::extension!(
@@ -1538,16 +1542,44 @@ fn op_crypto_verify_rs256(#[serde] request: serde_json::Value) -> Result<bool, J
     Ok(verifying_key.verify(&data, &signature).is_ok())
 }
 
+/// Returns the current wall-clock time as milliseconds since the Unix epoch.
+/// Used to seed `recorded_now_ms` at execution creation so that `Date.now()`
+/// and `performance.now()` are always anchored to their execution's start time.
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 #[op2]
 #[string]
-fn op_flux_env_get(#[string] key: String) -> Option<String> {
-    std::env::var(key).ok()
+fn op_flux_env_get(
+    state: &mut OpState,
+    #[string] execution_id: String,
+    #[string] key: String,
+) -> Option<String> {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    if let Some(exec) = map.get(&execution_id) {
+        exec.env_snapshot.get(&key).cloned()
+    } else {
+        // Fallback during boot / before state slot is registered.
+        std::env::var(&key).ok()
+    }
 }
 
 #[op2]
 #[serde]
-fn op_flux_env_list() -> std::collections::HashMap<String, String> {
-    std::env::vars().collect()
+fn op_flux_env_list(
+    state: &mut OpState,
+    #[string] execution_id: String,
+) -> std::collections::HashMap<String, String> {
+    let map = state.borrow_mut::<RuntimeStateMap>();
+    if let Some(exec) = map.get(&execution_id) {
+        exec.env_snapshot.clone()
+    } else {
+        std::env::vars().collect()
+    }
 }
 
 /// Called by JS at the start of every execution to register a state slot.
@@ -1568,7 +1600,13 @@ fn op_begin_execution(
     let recorded_random: Vec<f64> = serde_json::from_str(&recorded_random_json).unwrap_or_default();
     let recorded_uuids: Vec<String> =
         serde_json::from_str(&recorded_uuids_json).unwrap_or_default();
-    let recorded_now_ms: Option<u64> = serde_json::from_str(&recorded_now_ms_json).unwrap_or(None);
+    // In live mode the caller passes "null"; we seed to current wall-clock so
+    // performance.now() is always anchored to execution start even before the
+    // first Date.now() call.
+    let recorded_now_ms: Option<u64> = serde_json::from_str(&recorded_now_ms_json)
+        .ok()
+        .flatten()
+        .or_else(|| Some(current_time_ms()));
 
     let exec_state = RuntimeExecutionState {
         context: ExecutionContext {
@@ -1599,6 +1637,7 @@ fn op_begin_execution(
         pending_responses: HashMap::new(),
         postgres_sessions: HashMap::new(),
         next_postgres_session_id: 0,
+        env_snapshot: std::env::vars().collect(),
     };
 
     state
@@ -5796,7 +5835,7 @@ impl JsIsolate {
                     call_index: 0,
                     checkpoints: Vec::new(),
                     recorded,
-                    recorded_now_ms: None,
+                    recorded_now_ms: Some(current_time_ms()),
                     logs: Vec::new(),
                     has_live_io: false,
                     boundary_stop: None,
@@ -5808,6 +5847,7 @@ impl JsIsolate {
                     pending_responses: HashMap::new(),
                     postgres_sessions: HashMap::new(),
                     next_postgres_session_id: 0,
+                    env_snapshot: std::env::vars().collect(),
                 },
             );
         }
@@ -5990,7 +6030,7 @@ impl JsIsolate {
                     call_index: 0,
                     checkpoints: Vec::new(),
                     recorded,
-                    recorded_now_ms: None,
+                    recorded_now_ms: Some(current_time_ms()),
                     logs: Vec::new(),
                     has_live_io: false,
                     boundary_stop: None,
@@ -6002,6 +6042,7 @@ impl JsIsolate {
                     pending_responses: HashMap::new(),
                     postgres_sessions: HashMap::new(),
                     next_postgres_session_id: 0,
+                    env_snapshot: std::env::vars().collect(),
                 },
             );
         }
@@ -6198,7 +6239,7 @@ impl JsIsolate {
                     call_index: 0,
                     checkpoints: Vec::new(),
                     recorded: HashMap::new(),
-                    recorded_now_ms: None,
+                    recorded_now_ms: Some(current_time_ms()),
                     logs: Vec::new(),
                     has_live_io: false,
                     boundary_stop: None,
@@ -6210,6 +6251,7 @@ impl JsIsolate {
                     pending_responses: HashMap::new(),
                     postgres_sessions: HashMap::new(),
                     next_postgres_session_id: 0,
+                    env_snapshot: std::env::vars().collect(),
                 },
             );
         }
@@ -6334,7 +6376,7 @@ async fn boot_inline_runtime_artifact(
                 call_index: 0,
                 checkpoints: Vec::new(),
                 recorded: HashMap::new(),
-                recorded_now_ms: None,
+                recorded_now_ms: Some(current_time_ms()),
                 logs: Vec::new(),
                 has_live_io: false,
                 boundary_stop: None,
@@ -6346,6 +6388,7 @@ async fn boot_inline_runtime_artifact(
                 pending_responses: HashMap::new(),
                 postgres_sessions: HashMap::new(),
                 next_postgres_session_id: 0,
+                env_snapshot: std::env::vars().collect(),
             },
         );
     }
@@ -6507,7 +6550,7 @@ async fn boot_built_runtime_artifact(
                 call_index: 0,
                 checkpoints: Vec::new(),
                 recorded: HashMap::new(),
-                recorded_now_ms: None,
+                recorded_now_ms: Some(current_time_ms()),
                 logs: Vec::new(),
                 has_live_io: false,
                 boundary_stop: None,
@@ -6519,6 +6562,7 @@ async fn boot_built_runtime_artifact(
                 pending_responses: HashMap::new(),
                 postgres_sessions: HashMap::new(),
                 next_postgres_session_id: 0,
+                env_snapshot: std::env::vars().collect(),
             },
         );
     }
@@ -8011,18 +8055,18 @@ if (!("global" in globalThis) || globalThis.global !== globalThis) {
 const __fluxProcessEnv = new Proxy({}, {
     get(_target, prop) {
         if (typeof prop !== "string") return undefined;
-        return Deno.core.ops.op_flux_env_get(prop);
+        return Deno.core.ops.op_flux_env_get(globalThis.__FLUX_EXECUTION_ID__ || "", prop);
     },
     has(_target, prop) {
         if (typeof prop !== "string") return false;
-        return Deno.core.ops.op_flux_env_get(prop) != null;
+        return Deno.core.ops.op_flux_env_get(globalThis.__FLUX_EXECUTION_ID__ || "", prop) != null;
     },
     ownKeys() {
         return [];
     },
     getOwnPropertyDescriptor(_target, prop) {
         if (typeof prop !== "string") return undefined;
-        const value = Deno.core.ops.op_flux_env_get(prop);
+        const value = Deno.core.ops.op_flux_env_get(globalThis.__FLUX_EXECUTION_ID__ || "", prop);
         if (value == null) return undefined;
         return {
             configurable: true,
@@ -8622,13 +8666,13 @@ if (!Deno.env) {
 
 if (typeof Deno.env.get !== "function") {
     Deno.env.get = function(key) {
-        return Deno.core.ops.op_flux_env_get(String(key));
+        return Deno.core.ops.op_flux_env_get(globalThis.__FLUX_EXECUTION_ID__ || "", String(key));
     };
 }
 
 if (typeof Deno.env.toObject !== "function") {
     Deno.env.toObject = function() {
-        return Deno.core.ops.op_flux_env_list();
+        return Deno.core.ops.op_flux_env_list(globalThis.__FLUX_EXECUTION_ID__ || "");
     };
 }
 
