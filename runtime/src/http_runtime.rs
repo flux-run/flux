@@ -433,7 +433,43 @@ async fn handle_net_request(
         .await;
     }
 
-    if let Some(nr) = result.body.get("net_response") {
+    if request_from_executor {
+        let status = if result.status == "ok" {
+            StatusCode::OK
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        let mut response = (
+            status,
+            Json(serde_json::json!({
+                "execution_id": result.execution_id,
+                "status": result.status,
+                "result": result.body,
+                "error": result.error,
+                "error_name": result.error_name,
+                "error_message": result.error_message,
+                "error_stack": result.error_stack,
+                "error_frames": result.error_frames,
+                "error_phase": result.error_phase,
+                "is_user_code": result.is_user_code,
+                "error_source": result.error_source,
+                "error_type": result.error_type,
+                "duration_ms": result.duration_ms,
+                "checkpoints": result.checkpoints,
+                "logs": result.logs,
+            })),
+        )
+            .into_response();
+
+        let code_v = state.code_version.read().await.clone();
+        attach_execution_headers(
+            &mut response,
+            &result.execution_id,
+            &result.request_id,
+            &code_v,
+        );
+        response
+    } else if let Some(nr) = result.body.get("net_response") {
         let status_code = nr.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
         let body_str = nr.get("body").and_then(|v| v.as_str()).unwrap_or("");
         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
