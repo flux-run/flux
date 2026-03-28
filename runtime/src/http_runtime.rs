@@ -252,6 +252,17 @@ async fn handle_request(
         pool.execute(payload, ctx, max_duration_ms).await
     };
 
+    tracing::info!(
+        execution_id = %result.execution_id,
+        request_id = %result.request_id,
+        route = %route,
+        status = %result.status,
+        checkpoints = result.checkpoints.len(),
+        logs = result.logs.len(),
+        from_executor = request_originates_from_executor(&headers),
+        "runtime handle_request execution complete"
+    );
+
     if runtime_should_record_execution(&state, &headers) {
         let _ = crate::server_client::record_execution(
             &state.server_url,
@@ -319,6 +330,7 @@ async fn handle_net_request(
         return gateway_mode_unavailable_response();
     }
 
+    let request_from_executor = request_originates_from_executor(request.headers());
     let should_record_execution = runtime_should_record_execution(&state, request.headers());
     let method = request.method().to_string();
 
@@ -394,6 +406,17 @@ async fn handle_net_request(
         pool.execute_net_request(context, net_req, max_duration_ms)
             .await
     };
+
+    tracing::info!(
+        execution_id = %result.execution_id,
+        request_id = %result.request_id,
+        path = %uri.path(),
+        status = %result.status,
+        checkpoints = result.checkpoints.len(),
+        logs = result.logs.len(),
+        from_executor = request_from_executor,
+        "runtime handle_net_request execution complete"
+    );
 
     if should_record_execution {
         let _ = crate::server_client::record_execution(

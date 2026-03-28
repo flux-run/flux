@@ -849,6 +849,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
     ) -> Result<Response<pb::RecordExecutionResponse>, Status> {
         let identity = self.authenticate(request.metadata()).await?;
         let req = request.into_inner();
+        let checkpoint_count = req.checkpoints.len();
+        let log_count = req.logs.len();
         tracing::info!(
             execution_id = %req.execution_id,
             request_id = %req.request_id,
@@ -858,6 +860,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             method = %req.method,
             path = %req.path,
             status = %req.status,
+            checkpoints = checkpoint_count,
+            logs = log_count,
             "record_execution called"
         );
 
@@ -1071,6 +1075,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             }
         }
 
+        let mut checkpoint_upserts = 0usize;
         for checkpoint in req.checkpoints {
             let request_json: serde_json::Value =
                 serde_json::from_str(&checkpoint.request_json).unwrap_or(serde_json::Value::Null);
@@ -1097,8 +1102,10 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .execute(&mut *tx)
             .await
             .map_err(|e| Status::internal(format!("failed to upsert checkpoint: {e}")))?;
+            checkpoint_upserts = checkpoint_upserts.saturating_add(1);
         }
 
+        let mut log_upserts = 0usize;
         for log in req.logs.into_iter() {
             sqlx::query(
                 "INSERT INTO flux.execution_console_logs \
@@ -1118,7 +1125,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .map_err(|e| {
                 Status::internal(format!("failed to upsert execution console log: {e}"))
             })?;
+            log_upserts = log_upserts.saturating_add(1);
         }
+
+        tracing::info!(
+            execution_id = %execution_id,
+            checkpoint_upserts,
+            log_upserts,
+            "record_execution db upserts complete"
+        );
 
         tx.commit()
             .await
