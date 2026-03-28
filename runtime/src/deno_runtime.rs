@@ -1394,14 +1394,12 @@ struct RuntimeExecutionState {
     /// Set when replay stops at an IO boundary with no recorded checkpoint.
     /// Value is the boundary name (e.g. "postgres", "http", "tcp", "redis").
     pub boundary_stop: Option<String>,
-    /// Random f64 values produced in Live mode; replayed in order in Replay mode.
+    /// Random f64 values produced in Live mode. Kept for backward-compatible
+    /// deserialization of recordings made before call_index tracking.
     recorded_random: Vec<f64>,
-    /// How many recorded_random values have been consumed so far in Replay mode.
-    random_index: usize,
-    /// UUID strings produced in Live mode; replayed in order in Replay mode.
+    /// UUID strings produced in Live mode. Kept for backward-compatible
+    /// deserialization of recordings made before call_index tracking.
     recorded_uuids: Vec<String>,
-    /// How many recorded_uuids have been consumed so far in Replay mode.
-    uuid_index: usize,
     /// Set to true when the user module calls `Deno.serve()`.
     is_server_mode: bool,
     /// Pending responses keyed by req_id, filled by `op_net_respond`.
@@ -1668,9 +1666,7 @@ fn op_begin_execution(
         has_live_io: false,
         boundary_stop: None,
         recorded_random,
-        random_index: 0,
         recorded_uuids,
-        uuid_index: 0,
         is_server_mode: false,
         pending_responses: HashMap::new(),
         postgres_sessions: HashMap::new(),
@@ -4345,12 +4341,31 @@ fn op_flux_now(state: &mut OpState, #[string] execution_id: String) -> f64 {
         None => return now_ms as f64,
     };
 
+    let call_index = exec.call_index;
+    exec.call_index = exec.call_index.saturating_add(1);
+
     match exec.context.mode {
-        ExecutionMode::Replay => exec.recorded_now_ms.unwrap_or(now_ms) as f64,
+        ExecutionMode::Replay => {
+            // Try the checkpoint recorded in Live mode first; fall back to the
+            // legacy recorded_now_ms field for recordings made before this change.
+            exec.recorded
+                .remove(&call_index)
+                .and_then(|cp| cp.response.as_f64())
+                .unwrap_or_else(|| exec.recorded_now_ms.unwrap_or(now_ms) as f64)
+        }
         ExecutionMode::Live => {
             if exec.recorded_now_ms.is_none() {
                 exec.recorded_now_ms = Some(now_ms);
             }
+            exec.checkpoints.push(FetchCheckpoint {
+                call_index,
+                boundary: "date.now".to_string(),
+                url: "".to_string(),
+                method: "".to_string(),
+                request: serde_json::json!({}),
+                response: serde_json::json!(now_ms),
+                duration_ms: 0,
+            });
             now_ms as f64
         }
     }
@@ -4563,8 +4578,8 @@ fn op_timer_delay(state: &mut OpState, #[string] execution_id: String, delay_ms:
     }
 }
 
-/// In Live mode: generate a value via `rand`, record it for later storage.
-/// In Replay mode: return the next recorded value in sequence (fallback: 0.5).
+/// In Live mode: generate a value via `rand` and record it as a checkpoint.
+/// In Replay mode: return the value from the matching call_index checkpoint.
 #[op2(fast)]
 fn op_random(state: &mut OpState, #[string] execution_id: String) -> f64 {
     let map = state.borrow_mut::<RuntimeStateMap>();
@@ -4572,16 +4587,29 @@ fn op_random(state: &mut OpState, #[string] execution_id: String) -> f64 {
         Some(e) => e,
         None => return rand::thread_rng().r#gen(),
     };
+
+    let call_index = exec.call_index;
+    exec.call_index = exec.call_index.saturating_add(1);
+
     match exec.context.mode {
         ExecutionMode::Live => {
             let v: f64 = rand::thread_rng().r#gen();
-            exec.recorded_random.push(v);
+            exec.checkpoints.push(FetchCheckpoint {
+                call_index,
+                boundary: "random".to_string(),
+                url: "".to_string(),
+                method: "".to_string(),
+                request: serde_json::json!({}),
+                response: serde_json::json!(v),
+                duration_ms: 0,
+            });
             v
         }
         ExecutionMode::Replay => {
-            let idx = exec.random_index;
-            exec.random_index += 1;
-            exec.recorded_random.get(idx).copied().unwrap_or(0.5)
+            exec.recorded
+                .remove(&call_index)
+                .and_then(|cp| cp.response.as_f64())
+                .unwrap_or(0.5)
         }
     }
 }
@@ -4700,8 +4728,8 @@ fn op_random_bytes(
     }
 }
 
-/// In Live mode: generate a UUID v4 and record it.
-/// In Replay mode: return the recorded UUID in sequence.
+/// In Live mode: generate a UUID v4, record it as a checkpoint.
+/// In Replay mode: return the UUID from the matching call_index checkpoint.
 #[op2]
 #[string]
 fn op_random_uuid(state: &mut OpState, #[string] execution_id: String) -> String {
@@ -4710,25 +4738,29 @@ fn op_random_uuid(state: &mut OpState, #[string] execution_id: String) -> String
         Some(e) => e,
         None => return Uuid::new_v4().to_string(),
     };
+
+    let call_index = exec.call_index;
+    exec.call_index = exec.call_index.saturating_add(1);
+
     match exec.context.mode {
         ExecutionMode::Live => {
             let id = Uuid::new_v4().to_string();
-            exec.recorded_uuids.push(id.clone());
+            exec.checkpoints.push(FetchCheckpoint {
+                call_index,
+                boundary: "uuid".to_string(),
+                url: "".to_string(),
+                method: "".to_string(),
+                request: serde_json::json!({}),
+                response: serde_json::json!(id),
+                duration_ms: 0,
+            });
             id
         }
         ExecutionMode::Replay => {
-            let idx = exec.uuid_index;
-            exec.uuid_index += 1;
-            let val = exec
-                .recorded_uuids
-                .get(idx)
-                .cloned()
-                .unwrap_or_else(|| Uuid::new_v4().to_string());
-            println!(
-                "  \x1b[2m›\x1b[0m \x1b[1mUUID\x1b[0m  \x1b[2m→\x1b[0m {}",
-                val
-            );
-            val
+            exec.recorded
+                .remove(&call_index)
+                .and_then(|cp| cp.response.as_str().map(String::from))
+                .unwrap_or_else(|| Uuid::new_v4().to_string())
         }
     }
 }
@@ -5903,9 +5935,7 @@ impl JsIsolate {
                     has_live_io: false,
                     boundary_stop: None,
                     recorded_random: Vec::new(),
-                    random_index: 0,
                     recorded_uuids: Vec::new(),
-                    uuid_index: 0,
                     is_server_mode: true,
                     pending_responses: HashMap::new(),
                     postgres_sessions: HashMap::new(),
@@ -6099,9 +6129,7 @@ impl JsIsolate {
                     has_live_io: false,
                     boundary_stop: None,
                     recorded_random: Vec::new(),
-                    random_index: 0,
                     recorded_uuids: Vec::new(),
-                    uuid_index: 0,
                     is_server_mode: false,
                     pending_responses: HashMap::new(),
                     postgres_sessions: HashMap::new(),
@@ -6309,9 +6337,7 @@ impl JsIsolate {
                     has_live_io: false,
                     boundary_stop: None,
                     recorded_random: Vec::new(),
-                    random_index: 0,
                     recorded_uuids: Vec::new(),
-                    uuid_index: 0,
                     is_server_mode: false,
                     pending_responses: HashMap::new(),
                     postgres_sessions: HashMap::new(),
@@ -6447,9 +6473,7 @@ async fn boot_inline_runtime_artifact(
                 has_live_io: false,
                 boundary_stop: None,
                 recorded_random: Vec::new(),
-                random_index: 0,
                 recorded_uuids: Vec::new(),
-                uuid_index: 0,
                 is_server_mode: false,
                 pending_responses: HashMap::new(),
                 postgres_sessions: HashMap::new(),
@@ -6622,9 +6646,7 @@ async fn boot_built_runtime_artifact(
                 has_live_io: false,
                 boundary_stop: None,
                 recorded_random: Vec::new(),
-                random_index: 0,
                 recorded_uuids: Vec::new(),
-                uuid_index: 0,
                 is_server_mode: false,
                 pending_responses: HashMap::new(),
                 postgres_sessions: HashMap::new(),
