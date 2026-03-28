@@ -172,6 +172,8 @@ message RecordExecutionRequest {
   string error_message = 26;
   string error_phase = 27;
   bool is_user_code = 28;
+  // JSON array of user-code stack frames [{file, line, col, fn?}, ...]
+  string error_frames_json = 29;
 }
 
 message RecordExecutionResponse {

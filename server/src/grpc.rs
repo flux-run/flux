@@ -898,11 +898,47 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             Some(req.is_user_code)
         };
 
+        // Parse structured frames sent by the runtime.
+        let error_frames: serde_json::Value =
+            serde_json::from_str(&req.error_frames_json).unwrap_or(serde_json::Value::Null);
+        let first_frame = error_frames.as_array().and_then(|arr| arr.first());
+        let failure_point_file = first_frame
+            .and_then(|f| f.get("file"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        let failure_point_line = first_frame
+            .and_then(|f| f.get("line"))
+            .and_then(|v| v.as_i64())
+            .map(|n| n as i32);
+        let aborted = (req.status == "error" || req.status == "critical").then_some(true);
+        let response_sent = (req.response_status > 0).then_some(true);
+        let error_frames_json = if error_frames.is_null() { None } else { Some(error_frames.clone()) };
+
+        // Resolve function_id from route — used in the execution row and issue upsert.
+        let route_project_id = project_id
+            .as_deref()
+            .and_then(|v| uuid::Uuid::parse_str(v).ok());
+        let function_id: Option<uuid::Uuid> = if let Some(rpid) = route_project_id {
+            let row: Option<(uuid::Uuid,)> = sqlx::query_as(
+                "SELECT function_id FROM control.routes WHERE project_id = $1 AND method = $2 AND path = $3",
+            )
+            .bind(rpid)
+            .bind(if req.request_method.trim().is_empty() { req.method.clone() } else { req.request_method.clone() })
+            .bind(req.path.clone())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| Status::internal(format!("failed to resolve route: {e}")))?;
+            row.map(|(fid,)| fid)
+        } else {
+            None
+        };
+
         sqlx::query(
             "INSERT INTO flux.executions \
              (id, request_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms, token_id, \
-              client_ip, user_agent, request_method, request_headers, request_body, response_status, response_body, error_name, error_message, error_stack, error_fingerprint, error_phase, is_user_code, error_source, error_type) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24) \
+              client_ip, user_agent, request_method, request_headers, request_body, response_status, response_body, error_name, error_message, error_stack, error_fingerprint, error_phase, is_user_code, error_source, error_type, function_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
@@ -929,6 +965,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(is_user_code)
         .bind(req.error_source.clone())
         .bind(req.error_type.clone())
+        .bind(function_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;
@@ -939,7 +976,9 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                  error = NULLIF($7, ''), code_sha = $8, duration_ms = $9, project_id = $10, org_id = $11, \
                  client_ip = $12, user_agent = $13, request_method = $14, request_headers = $15, request_body = $16, \
                  response_status = $17, response_body = $18, error_name = $19, error_message = $20, error_stack = $21, error_fingerprint = $22, \
-                 error_phase = $23, is_user_code = $24, error_source = $25, error_type = $26 \
+                 error_phase = $23, is_user_code = $24, error_source = $25, error_type = $26, \
+                 function_id = COALESCE($27, function_id), failure_point_file = $28, failure_point_line = $29, \
+                 aborted = $30, response_sent = $31, error_frames = $32 \
              WHERE id = $1",
         )
         .bind(execution_id)
@@ -968,6 +1007,12 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(is_user_code)
         .bind(req.error_source.clone())
         .bind(req.error_type.clone())
+        .bind(function_id)
+        .bind(failure_point_file)
+        .bind(failure_point_line)
+        .bind(aborted)
+        .bind(response_sent)
+        .bind(error_frames_json)
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to update execution: {e}")))?;
@@ -1001,28 +1046,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 req.error_message.clone()
             };
 
-            // Resolve function_id from route
-            let route_project_id = project_id
-                .as_deref()
-                .and_then(|value| uuid::Uuid::parse_str(value).ok());
-            let route_method = if req.request_method.trim().is_empty() {
-                req.method.clone()
-            } else {
-                req.request_method.clone()
-            };
-
-            if let Some(route_project_id) = route_project_id {
-                let route_info: Option<(uuid::Uuid,)> = sqlx::query_as(
-                    "SELECT function_id FROM control.routes WHERE project_id = $1 AND method = $2 AND path = $3"
-                )
-                .bind(route_project_id)
-                .bind(route_method)
-                .bind(req.path.clone())
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| Status::internal(format!("failed to resolve route: {e}")))?;
-
-                if let Some((function_id,)) = route_info {
+            // Reuse the function_id already resolved at the top of this transaction.
+            if let Some(fid) = function_id {
                 sqlx::query(
                     "INSERT INTO flux.issues \
                      (function_id, fingerprint, title, sample_execution_id, sample_stack, sample_message, occurrence_count, last_seen) \
@@ -1034,7 +1059,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                        sample_stack = EXCLUDED.sample_stack, \
                        sample_message = EXCLUDED.sample_message"
                 )
-                .bind(function_id)
+                .bind(fid)
                 .bind(fingerprint)
                 .bind(title)
                 .bind(execution_id)
@@ -1043,7 +1068,6 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| Status::internal(format!("failed to upsert issue: {e}")))?;
-                }
             }
         }
 

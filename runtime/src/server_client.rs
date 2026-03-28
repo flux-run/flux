@@ -71,6 +71,10 @@ pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelop
         error_message: envelope.result.error_message.unwrap_or_default(),
         error_phase: envelope.result.error_phase.unwrap_or_default(),
         is_user_code: envelope.result.is_user_code.unwrap_or(false),
+        error_frames_json: serde_json::to_string(
+            &envelope.result.error_frames.unwrap_or(serde_json::Value::Null),
+        )
+        .unwrap_or_default(),
     });
 
     request.metadata_mut().insert(

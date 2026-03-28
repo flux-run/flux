@@ -185,6 +185,24 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS is_user_code BOOLEAN")
         .execute(pool)
         .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS error_frames JSONB")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS function_id UUID")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS failure_point_file TEXT")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS failure_point_line INT")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS aborted BOOLEAN")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS response_sent BOOLEAN")
+        .execute(pool)
+        .await?;
 
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS flux.spans (
@@ -358,6 +376,8 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_checkpoints_execution_call ON flux.checkpoints (execution_id, call_index)")
         .execute(pool).await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_console_logs_execution_seq ON flux.execution_console_logs (execution_id, seq)")
+        .execute(pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_executions_function_started ON flux.executions (function_id, started_at DESC) WHERE function_id IS NOT NULL")
         .execute(pool).await?;
 
     // Deployment lifecycle tracking — one record per artifact upload + each boot attempt.
