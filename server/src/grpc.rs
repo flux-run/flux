@@ -1099,7 +1099,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .map_err(|e| Status::internal(format!("failed to upsert checkpoint: {e}")))?;
         }
 
-        for (seq, log) in req.logs.into_iter().enumerate() {
+        for log in req.logs.into_iter() {
             sqlx::query(
                 "INSERT INTO flux.execution_console_logs \
                  (execution_id, seq, org_id, level, message) \
@@ -1109,7 +1109,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                    message = EXCLUDED.message",
             )
             .bind(execution_id)
-            .bind(seq as i32)
+            .bind(log.seq as i32)
             .bind(org_id.clone())
             .bind(log.level)
             .bind(log.message)
@@ -1184,8 +1184,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             )
             .collect();
 
-        let console_log_rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT level, message \
+        let console_log_rows: Vec<(i32, String, String)> = sqlx::query_as(
+            "SELECT seq, level, message \
              FROM flux.execution_console_logs \
              WHERE execution_id = $1 AND org_id = $2 \
              ORDER BY seq ASC",
@@ -1198,7 +1198,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let logs = console_log_rows
             .into_iter()
-            .map(|(level, message)| pb::ConsoleLogEntry { level, message })
+            .map(|(seq, level, message)| pb::ConsoleLogEntry { level, message, seq: seq as u32 })
             .collect();
 
         Ok(Response::new(pb::GetTraceResponse {
@@ -1423,8 +1423,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .collect();
 
         // Fetch console logs for this execution
-        let console_log_rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT level, message \
+        let console_log_rows: Vec<(i32, String, String)> = sqlx::query_as(
+            "SELECT seq, level, message \
              FROM flux.execution_console_logs \
              WHERE execution_id = $1 AND org_id = $2 \
              ORDER BY seq ASC",
@@ -1437,7 +1437,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         let logs = console_log_rows
             .into_iter()
-            .map(|(level, message)| pb::ConsoleLogEntry { level, message })
+            .map(|(seq, level, message)| pb::ConsoleLogEntry { level, message, seq: seq as u32 })
             .collect::<Vec<_>>();
 
         let effective_error = if error_body.is_empty() {

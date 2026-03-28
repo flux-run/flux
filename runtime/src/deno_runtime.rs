@@ -254,6 +254,7 @@ pub struct FetchCheckpoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
+    pub call_index: u32,
     pub level: String,
     pub message: String,
 }
@@ -4455,7 +4456,13 @@ fn op_console(
 ) {
     let map = state.borrow_mut::<RuntimeStateMap>();
     if let Some(exec) = map.get_mut(&execution_id) {
+        // Consume a call_index slot so console events share the same ordered
+        // timeline as IO checkpoints. This allows the UI and CLI to merge
+        // all events into a single linear trace.
+        let call_index = exec.call_index;
+        exec.call_index = exec.call_index.saturating_add(1);
         exec.logs.push(LogEntry {
+            call_index,
             level: if is_err {
                 "error".to_string()
             } else {

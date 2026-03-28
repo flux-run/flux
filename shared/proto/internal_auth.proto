@@ -139,6 +139,7 @@ message CheckpointEntry {
 message ConsoleLogEntry {
   string level = 1;
   string message = 2;
+  uint32 seq = 3;  // call_index in the unified trace stream; 0 for legacy entries
 }
 
 message RecordExecutionRequest {

@@ -134,6 +134,7 @@ fn log_entry_to_proto(entry: LogEntry) -> pb::ConsoleLogEntry {
     pb::ConsoleLogEntry {
         level: entry.level,
         message: entry.message,
+        seq: entry.call_index,
     }
 }
 

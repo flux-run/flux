@@ -29,6 +29,7 @@ pub struct TraceCheckpoint {
 
 #[derive(Debug, Clone)]
 pub struct TraceConsoleLog {
+    pub call_index: i32,
     pub level: String,
     pub message: String,
 }
@@ -301,6 +302,7 @@ pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<Tra
             .logs
             .into_iter()
             .map(|log| TraceConsoleLog {
+                call_index: log.seq as i32,
                 level: log.level,
                 message: log.message,
             })

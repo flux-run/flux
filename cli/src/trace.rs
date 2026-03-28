@@ -44,29 +44,43 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
     println!("  response");
     print_json_block(&trace.response_json, args.verbose);
 
-    if !trace.logs.is_empty() {
-        println!();
-        println!("  \x1b[2mconsole\x1b[0m");
-        for log in &trace.logs {
-            let (color, icon) = match log.level.as_str() {
-                "error" => ("\x1b[31m", "✗"),
-                "warn" => ("\x1b[33m", "⚠"),
-                _ => ("\x1b[0m", "›"),
-            };
-            println!("  {}{}  {}\x1b[0m", color, icon, log.message);
-        }
-    }
-
-    if trace.checkpoints.is_empty() {
-        println!("\n  no checkpoints recorded\n");
+    if trace.checkpoints.is_empty() && trace.logs.is_empty() {
+        println!("\n  no trace events recorded\n");
         return Ok(());
     }
 
     println!();
-    println!("  checkpoints");
-    for cp in trace.checkpoints {
-        let req: serde_json::Value = serde_json::from_slice(&cp.request).unwrap_or_default();
-        let res: serde_json::Value = serde_json::from_slice(&cp.response).unwrap_or_default();
+    println!("  trace");
+
+    // Build a unified ordered event list from checkpoints + console logs.
+    // Both share the same call_index counter, so sorting by it gives the
+    // exact order events occurred during execution.
+    enum TraceEvent<'a> {
+        Checkpoint(&'a crate::grpc::TraceCheckpoint),
+        Log(&'a crate::grpc::TraceConsoleLog),
+    }
+    let mut events: Vec<(i32, TraceEvent)> = Vec::new();
+    for cp in &trace.checkpoints {
+        events.push((cp.call_index, TraceEvent::Checkpoint(cp)));
+    }
+    for log in &trace.logs {
+        events.push((log.call_index, TraceEvent::Log(log)));
+    }
+    events.sort_by_key(|(idx, _)| *idx);
+
+    for (_, event) in events {
+        match event {
+            TraceEvent::Log(log) => {
+                let (color, icon) = match log.level.as_str() {
+                    "error" => ("\x1b[31m", "✗"),
+                    "warn"  => ("\x1b[33m", "⚠"),
+                    _       => ("\x1b[2m", "›"),
+                };
+                println!("  [{}] {}LOG  {}{}\x1b[0m", log.call_index, color, log.message, "");
+            }
+            TraceEvent::Checkpoint(cp) => {
+                let req: serde_json::Value = serde_json::from_slice(&cp.request).unwrap_or_default();
+                let res: serde_json::Value = serde_json::from_slice(&cp.response).unwrap_or_default();
 
         let url = req
             .get("url")
@@ -250,7 +264,9 @@ pub async fn execute(args: TraceArgs) -> Result<()> {
             println!("      response");
             print_json_block(&response_json, true);
         }
-    }
+            } // TraceEvent::Checkpoint arm
+        } // match event
+    } // for events
 
     println!();
     Ok(())
