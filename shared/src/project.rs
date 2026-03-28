@@ -40,6 +40,7 @@ pub struct FluxBuildArtifact {
     pub project_id: Option<String>,
     pub graph_sha256: String,
     pub modules: Vec<ArtifactModule>,
+    #[serde(default)]
     pub npm_packages: Vec<NpmPackageSnapshot>,
 }
 
@@ -52,6 +53,7 @@ pub struct ArtifactModule {
     pub sha256: String,
     pub size_bytes: usize,
     pub source: String,
+    #[serde(default)]
     pub dependencies: Vec<ArtifactDependency>,
 }
 

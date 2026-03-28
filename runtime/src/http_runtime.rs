@@ -482,7 +482,10 @@ async fn handle_internal_reload(
             Ok(a) => RuntimeArtifact::Built(a),
             Err(e) => {
                 tracing::error!("❌ Artifact parse error: {}", e);
-                return (StatusCode::BAD_REQUEST, format!("invalid artifact: {}", e))
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": format!("invalid artifact: {}", e) })),
+                )
                     .into_response();
             }
         };
@@ -563,7 +566,7 @@ async fn handle_internal_reload(
         tracing::error!("❌ Boot script error: {}", error);
         return (
             StatusCode::BAD_REQUEST,
-            format!("boot execution error: {}", error),
+            Json(serde_json::json!({ "error": format!("boot execution error: {}", error) })),
         )
             .into_response();
     }
