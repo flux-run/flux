@@ -1105,7 +1105,7 @@ pub fn parse_user_stack_frames(stack: &str) -> serde_json::Value {
 
         // Skip runtime-internal frames
         if loc.starts_with("ext:") || loc.starts_with("deno:") || loc.starts_with("node:")
-            || loc.contains("<anonymous>") || loc.contains("internal/")
+            || loc.starts_with("flux:") || loc.contains("<anonymous>") || loc.contains("internal/")
         {
             continue;
         }
@@ -1130,7 +1130,9 @@ pub fn parse_user_stack_frames(stack: &str) -> serde_json::Value {
             .trim_start_matches("file:///")
             .trim_start_matches("file://");
 
-        if file_raw.starts_with("ext:") || file_raw.starts_with("deno:") || file_raw.starts_with("node:") {
+        if file_raw.starts_with("ext:") || file_raw.starts_with("deno:") || file_raw.starts_with("node:")
+            || file_raw.starts_with("flux:")
+        {
             continue;
         }
 
@@ -1139,7 +1141,8 @@ pub fn parse_user_stack_frames(stack: &str) -> serde_json::Value {
         let mut frame = serde_json::Map::new();
         if let Some(f) = fn_name {
             let clean = f.trim_start_matches("Object.").trim_start_matches("async ").trim();
-            if !clean.is_empty() && !clean.starts_with("__flux_") {
+            // Don't expose Flux shim wrapper names (e.g. globalThis.__flux_user_handler)
+            if !clean.is_empty() && !clean.starts_with("__flux_") && !clean.contains(".__flux_") {
                 frame.insert("fn".to_string(), serde_json::Value::String(clean.to_string()));
             }
         }
