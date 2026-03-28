@@ -1035,6 +1035,7 @@ pub struct NetRequestExecution {
     pub logs: Vec<LogEntry>,
     pub error_source: Option<String>,
     pub error_type: Option<String>,
+    pub error_frames: Option<serde_json::Value>,
     pub has_live_io: bool,
     /// Set when replay stops at an IO boundary with no recorded checkpoint.
     /// Value is the boundary name (e.g. "postgres", "http", "tcp", "redis").
@@ -1054,6 +1055,7 @@ pub struct JsExecutionOutput {
     pub logs: Vec<LogEntry>,
     pub error_source: Option<String>,
     pub error_type: Option<String>,
+    pub error_frames: Option<serde_json::Value>,
     pub has_live_io: bool,
     /// Set when replay stops at an IO boundary with no recorded checkpoint.
     pub boundary_stop: Option<String>,
@@ -1076,6 +1078,79 @@ pub struct StructuredExecutionError {
     pub is_user_code: Option<bool>,
     pub source: Option<String>,
     pub error_type: Option<String>,
+    /// Normalized user-code stack frames, filtered of runtime internals.
+    pub frames: Option<serde_json::Value>,
+}
+
+/// Parse a V8 stack trace string and return only the user-code frames,
+/// filtering out Deno/Node/ext internals and Flux bootstrap shims.
+pub fn parse_user_stack_frames(stack: &str) -> serde_json::Value {
+    let mut frames = Vec::new();
+    for line in stack.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("at ") {
+            continue;
+        }
+        let rest = &trimmed[3..];
+        let rest = rest.strip_prefix("async ").unwrap_or(rest);
+
+        // Split into "fn_name (location)" or just "location"
+        let (fn_name, loc) = if let Some(paren_pos) = rest.rfind('(') {
+            let fn_part = rest[..paren_pos].trim();
+            let loc_part = rest[paren_pos + 1..].trim_end_matches(')');
+            (if fn_part.is_empty() { None } else { Some(fn_part) }, loc_part)
+        } else {
+            (None, rest.trim())
+        };
+
+        // Skip runtime-internal frames
+        if loc.starts_with("ext:") || loc.starts_with("deno:") || loc.starts_with("node:")
+            || loc.contains("<anonymous>") || loc.contains("internal/")
+        {
+            continue;
+        }
+        if let Some(f) = fn_name {
+            if f.starts_with("__flux_") || f.contains("Object.__flux_") {
+                continue;
+            }
+        }
+
+        // Parse "file:///path/to/file.ts:line:col"
+        // Use rsplitn(3, ':') to handle file:// scheme safely.
+        let parts: Vec<&str> = loc.rsplitn(3, ':').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let col_no = parts[0].parse::<u32>().ok();
+        let line_no = match parts[1].parse::<u32>() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let file_raw = parts[2]
+            .trim_start_matches("file:///")
+            .trim_start_matches("file://");
+
+        if file_raw.starts_with("ext:") || file_raw.starts_with("deno:") || file_raw.starts_with("node:") {
+            continue;
+        }
+
+        let filename = file_raw.rsplit('/').next().unwrap_or(file_raw);
+
+        let mut frame = serde_json::Map::new();
+        if let Some(f) = fn_name {
+            let clean = f.trim_start_matches("Object.").trim_start_matches("async ").trim();
+            if !clean.is_empty() && !clean.starts_with("__flux_") {
+                frame.insert("fn".to_string(), serde_json::Value::String(clean.to_string()));
+            }
+        }
+        frame.insert("file".to_string(), serde_json::Value::String(filename.to_string()));
+        frame.insert("line".to_string(), serde_json::Value::Number(line_no.into()));
+        if let Some(c) = col_no {
+            frame.insert("col".to_string(), serde_json::Value::Number(c.into()));
+        }
+        frames.push(serde_json::Value::Object(frame));
+    }
+    serde_json::Value::Array(frames)
 }
 
 fn format_error_summary(
@@ -1212,6 +1287,7 @@ fn structured_error_from_parts(
     );
 
     let has_error = error.is_some();
+    let frames = normalized_stack.as_deref().map(parse_user_stack_frames);
     StructuredExecutionError {
         error,
         name: name.clone(),
@@ -1233,6 +1309,7 @@ fn structured_error_from_parts(
             }
         }),
         error_type: normalize_error_type(name.as_deref(), has_error),
+        frames,
     }
 }
 
@@ -5803,6 +5880,7 @@ impl JsIsolate {
                 is_user_code: Some(false),
                 error_source: Some("platform_runtime".to_string()),
                 error_type: Some("system_stop".to_string()),
+                error_frames: None,
                 logs: exec.logs,
                 has_live_io: false,
                 boundary_stop: Some(boundary),
@@ -5830,6 +5908,7 @@ impl JsIsolate {
             is_user_code: structured_error.is_user_code,
             error_source: structured_error.source,
             error_type: structured_error.error_type,
+            error_frames: structured_error.frames,
             logs: exec.logs,
             has_live_io: exec.has_live_io,
             boundary_stop: exec.boundary_stop,
@@ -6044,6 +6123,7 @@ impl JsIsolate {
             is_user_code: structured_error.is_user_code,
             error_source: structured_error.source,
             error_type: structured_error.error_type,
+            error_frames: structured_error.frames,
             logs,
             has_live_io,
             boundary_stop,
@@ -6174,6 +6254,7 @@ impl JsIsolate {
             is_user_code: None,
             error_source: None,
             error_type: None,
+            error_frames: None,
             logs: execution
                 .as_ref()
                 .map(|e| e.logs.clone())
@@ -6379,6 +6460,7 @@ async fn boot_inline_runtime_artifact(
             error_source: structured_error.source,
             error_type: structured_error.error_type,
             error_fingerprint: None,
+            error_frames: structured_error.frames,
         },
         is_server_mode,
         has_handler,
@@ -6571,6 +6653,7 @@ async fn boot_built_runtime_artifact(
             error_source: structured_error.source,
             error_type: structured_error.error_type,
             error_fingerprint: None,
+            error_frames: structured_error.frames,
         },
         is_server_mode,
         has_handler,
@@ -8725,7 +8808,8 @@ globalThis.__flux_dispatch_request = async function(reqId, method, url, headersJ
     const msg = String(err && err.message ? err.message : err);
     const stack = err && err.stack ? String(err.stack) : null;
     globalThis.__flux_last_error[__eid] = { name, message: msg, stack: stack };
-    Deno.core.ops.op_net_respond(__eid, reqId, 500, "[]", msg);
+    const errBody = JSON.stringify({ status: "error", type: "user_error", error: { name, message: msg } });
+    Deno.core.ops.op_net_respond(__eid, reqId, 500, '[["content-type","application/json"]]', errBody);
     return;
   }
 

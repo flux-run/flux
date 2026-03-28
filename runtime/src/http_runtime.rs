@@ -272,16 +272,23 @@ async fn handle_request(
     } else {
         StatusCode::BAD_REQUEST
     };
+    let execution_type = match (result.error.is_some(), result.error_source.as_deref()) {
+        (false, _) => "success",
+        (true, Some("platform_runtime")) => "infra_error",
+        (true, _) => "user_error",
+    };
     let mut response = (
         status,
         Json(serde_json::json!({
             "execution_id": result.execution_id,
             "status": result.status,
+            "type": execution_type,
             "result": result.body,
             "error": result.error,
             "error_name": result.error_name,
             "error_message": result.error_message,
             "error_stack": result.error_stack,
+            "error_frames": result.error_frames,
             "error_phase": result.error_phase,
             "is_user_code": result.is_user_code,
             "error_source": result.error_source,

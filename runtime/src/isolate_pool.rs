@@ -84,6 +84,7 @@ pub struct ExecutionResult {
     pub error_source: Option<String>,
     pub error_type: Option<String>,
     pub error_fingerprint: Option<String>,
+    pub error_frames: Option<serde_json::Value>,
 }
 
 fn measured_duration_ms(started: Instant) -> i32 {
@@ -371,6 +372,7 @@ pub async fn execute_one_shot_artifact(
                         error_source: out.error_source,
                         error_type: out.error_type,
                         error_fingerprint: None,
+                        error_frames: out.error_frames,
                     }
                 }
                 Err(err) => {
@@ -403,6 +405,7 @@ pub async fn execute_one_shot_artifact(
                         error_source: extracted.source,
                         error_type: extracted.error_type,
                         error_fingerprint: None,
+                        error_frames: extracted.frames,
                     }
                 }
             };
@@ -525,6 +528,7 @@ fn spawn_isolate_worker(
                                 is_user_code,
                                 error_source,
                                 error_type,
+                                error_frames,
                                 logs,
                                 has_live_io,
                                 boundary_stop,
@@ -584,6 +588,7 @@ fn spawn_isolate_worker(
                                     error_source,
                                     error_type,
                                     error_fingerprint: None,
+                                    error_frames,
                                 }
                             }
                             Err(err) => {
@@ -619,6 +624,7 @@ fn spawn_isolate_worker(
                                     error_source: extracted.source,
                                     error_type: extracted.error_type,
                                     error_fingerprint: None,
+                                    error_frames: extracted.frames,
                                 }
                             }
                         }
@@ -642,6 +648,7 @@ fn spawn_isolate_worker(
                                 is_user_code,
                                 error_source,
                                 error_type,
+                                error_frames,
                                 logs,
                                 has_live_io,
                                 boundary_stop,
@@ -690,6 +697,7 @@ fn spawn_isolate_worker(
                                     error_source,
                                     error_type,
                                     error_fingerprint: None,
+                                    error_frames,
                                 }
                             }
                             Err(err) => {
@@ -724,6 +732,7 @@ fn spawn_isolate_worker(
                                     error_source: extracted.source,
                                     error_type: extracted.error_type,
                                     error_fingerprint: None,
+                                    error_frames: extracted.frames,
                                 }
                             }
                         }
@@ -825,6 +834,7 @@ fn spawn_isolate_worker_with_mode(
                                 is_user_code,
                                 error_source,
                                 error_type,
+                                error_frames,
                                 logs,
                                 has_live_io,
                                 boundary_stop,
@@ -884,6 +894,7 @@ fn spawn_isolate_worker_with_mode(
                                     error_source,
                                     error_type,
                                     error_fingerprint: None,
+                                    error_frames,
                                 }
                             }
                             Err(err) => {
@@ -919,6 +930,7 @@ fn spawn_isolate_worker_with_mode(
                                     error_source: extracted.source,
                                     error_type: extracted.error_type,
                                     error_fingerprint: None,
+                                    error_frames: extracted.frames,
                                 }
                             }
                         }
@@ -942,6 +954,7 @@ fn spawn_isolate_worker_with_mode(
                                 is_user_code,
                                 error_source,
                                 error_type,
+                                error_frames,
                                 logs,
                                 has_live_io,
                                 boundary_stop,
@@ -990,6 +1003,7 @@ fn spawn_isolate_worker_with_mode(
                                     error_source,
                                     error_type,
                                     error_fingerprint: None,
+                                    error_frames,
                                 }
                             }
                             Err(err) => {
@@ -1024,6 +1038,7 @@ fn spawn_isolate_worker_with_mode(
                                     error_source: extracted.source,
                                     error_type: extracted.error_type,
                                     error_fingerprint: None,
+                                    error_frames: extracted.frames,
                                 }
                             }
                         }
@@ -1042,6 +1057,7 @@ fn spawn_isolate_worker_with_mode(
 }
 
 fn error_result(context: ExecutionContext, message: impl Into<String>) -> ExecutionResult {
+    let msg: String = message.into();
     ExecutionResult {
         execution_id: context.execution_id,
         request_id: context.request_id,
@@ -1049,7 +1065,7 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
         code_version: context.code_version,
         status: "error".to_string(),
         body: serde_json::Value::Null,
-        error: Some(message.into()),
+        error: Some(msg.clone()),
         duration_ms: 0,
         checkpoints: vec![],
         logs: vec![],
@@ -1063,12 +1079,13 @@ fn error_result(context: ExecutionContext, message: impl Into<String>) -> Execut
         response_status: None,
         response_body: None,
         error_name: None,
-        error_message: None,
+        error_message: Some(msg),
         error_stack: None,
-        error_phase: None,
-        is_user_code: None,
-        error_source: None,
-        error_type: None,
+        error_phase: Some("init".to_string()),
+        is_user_code: Some(false),
+        error_source: Some("platform_runtime".to_string()),
+        error_type: Some("infra_error".to_string()),
         error_fingerprint: None,
+        error_frames: None,
     }
 }

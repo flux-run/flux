@@ -402,6 +402,7 @@ async fn main() -> Result<()> {
                 error_source: res.error_source,
                 error_type: res.error_type,
                 error_fingerprint: None,
+                error_frames: res.error_frames,
             };
 
             // Robust error capture: fallback to logs if error is missing but status is error
@@ -629,6 +630,7 @@ async fn main() -> Result<()> {
                 error_source: res.error_source,
                 error_type: res.error_type,
                 error_fingerprint: None,
+                error_frames: res.error_frames,
             }
         };
 
