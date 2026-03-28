@@ -5744,7 +5744,7 @@ impl JsIsolate {
     }
 
     pub async fn new_from_artifact(artifact: &FluxBuildArtifact) -> Result<Self> {
-        let source_maps = Rc::new(RefCell::new(HashMap::new()));
+        let source_maps: SourceMapStore = Rc::new(RefCell::new(HashMap::new()));
         let modules = artifact
             .modules
             .iter()
@@ -5753,7 +5753,7 @@ impl JsIsolate {
             .collect::<HashMap<_, _>>();
         let mut runtime = JsRuntime::new(RuntimeOptions {
             module_loader: Some(Rc::new(ArtifactModuleLoader {
-                source_maps,
+                source_maps: source_maps.clone(),
                 modules,
             })),
             extensions: flux_extensions(),
@@ -5793,7 +5793,7 @@ impl JsIsolate {
             &main_module,
             artifact_media_type(entry_module.media_type.clone()),
             transformed_entry,
-            None,
+            Some(&source_maps),
         )
         .context("failed to transpile built artifact entry module")?;
 
@@ -6426,8 +6426,9 @@ async fn boot_inline_runtime_artifact(
     let prepared = prepare_user_code(user_code);
 
     let main_specifier = ModuleSpecifier::parse("file:///flux_user_code.ts").unwrap();
+    let source_maps: SourceMapStore = Rc::new(RefCell::new(HashMap::new()));
     let transformed_entry =
-        transpile_module_source(&main_specifier, MediaType::TypeScript, prepared, None)
+        transpile_module_source(&main_specifier, MediaType::TypeScript, prepared, Some(&source_maps))
             .context("failed to transpile inline entry module")?;
 
     let mut modules = HashMap::new();
@@ -6449,7 +6450,7 @@ async fn boot_inline_runtime_artifact(
 
     let mut runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(ArtifactModuleLoader {
-            source_maps: Rc::new(RefCell::new(HashMap::new())),
+            source_maps,
             modules,
         })),
         extensions: flux_extensions(),
