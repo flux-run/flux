@@ -193,6 +193,8 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
         r#"CREATE TABLE IF NOT EXISTS flux.executions (
             id UUID PRIMARY KEY,
             request_id UUID NOT NULL,
+            attempt INT NOT NULL DEFAULT 1,
+            parent_execution_id UUID,
             project_id TEXT,
             org_id TEXT,
             token_id UUID,
@@ -277,9 +279,26 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_executions_request_id ON flux.executions(request_id)")
         .execute(pool)
         .await?;
+    sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS uniq_flux_executions_request_attempt ON flux.executions(request_id, attempt)")
+        .execute(pool)
+        .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_execution_events_request_ts ON flux.execution_events(request_id, timestamp ASC)")
         .execute(pool)
         .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS parent_execution_id UUID")
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        r#"CREATE OR REPLACE VIEW flux.latest_executions AS
+           SELECT DISTINCT ON (request_id) *
+           FROM flux.executions
+           ORDER BY request_id, attempt DESC, started_at DESC"#,
+    )
+    .execute(pool)
+    .await?;
 
     sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS error_name TEXT")
         .execute(pool)

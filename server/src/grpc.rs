@@ -988,13 +988,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "INSERT INTO flux.executions \
-             (id, request_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms, token_id, \
+               (id, request_id, attempt, parent_execution_id, project_id, org_id, method, path, status, request, response, error, code_sha, duration_ms, token_id, \
               client_ip, user_agent, request_method, request_headers, request_body, response_status, response_body, error_name, error_message, error_stack, error_fingerprint, error_phase, is_user_code, error_source, error_type, function_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, NULL, NULL, $8, 0, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) \
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'running', $9, NULL, NULL, $10, 0, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(execution_id)
         .bind(request_id)
+           .bind(1)
+           .bind(Option::<uuid::Uuid>::None)
         .bind(project_id.clone())
         .bind(org_id.clone())
         .bind(req.method.clone())
@@ -1783,11 +1785,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "INSERT INTO flux.executions \
-             (id, request_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms, token_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12, $13)",
+               (id, request_id, attempt, parent_execution_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms, token_id) \
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, ''), $13, $14, $15)",
         )
         .bind(replay_execution_id)
         .bind(replay_request_id)
+           .bind(1)
+           .bind(Some(source_execution_id))
         .bind(identity.org_id.clone())
         .bind(identity.project_id.clone())
         .bind(method)
@@ -2057,11 +2061,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "INSERT INTO flux.executions \
-             (id, request_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms, token_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11, $12, $13)",
+               (id, request_id, attempt, parent_execution_id, org_id, project_id, method, path, status, request, response, error, code_sha, duration_ms, token_id) \
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, ''), $13, $14, $15)",
         )
         .bind(resume_execution_id)
         .bind(request_id)
+           .bind(1)
+           .bind(Some(source_execution_id))
         .bind(identity.org_id.clone())
         .bind(identity.project_id.clone())
         .bind(method)
