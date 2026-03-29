@@ -1101,12 +1101,15 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         sqlx::query(
             "UPDATE flux.requests \
              SET status = $2, \
-                 completed_at = now(), \
+                 completed_at = CASE WHEN $2 = 'success' THEN now() ELSE COALESCE(completed_at, now()) END, \
                  duration_ms = $3, \
                  updated_at = now(), \
                  note = CASE WHEN $4 = '' THEN note ELSE $4 END \
              WHERE id = $1 \
-               AND status IN ('received', 'dispatched', 'started', 'unknown')",
+               AND CASE \
+                     WHEN $2 = 'success' THEN status != 'success' \
+                     ELSE status IN ('received', 'dispatched', 'started', 'unknown', 'failed') \
+                   END",
         )
         .bind(request_id)
         .bind(request_terminal_status)

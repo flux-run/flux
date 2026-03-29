@@ -132,12 +132,19 @@ fn spawn_request_reconciler(pool: PgPool) {
 
             // Reap executions claimed but never started: runtime crashed between claim and
             // the first RecordExecution call. Mark them 'failed' so the request can be retried.
+            // Guard: only reap if no younger attempt exists for the same request — prevents
+            // overwriting a completed retry that raced in before the reconciler ran.
             let stale_executions: Vec<(uuid::Uuid, uuid::Uuid)> = match sqlx::query_as(
-                "UPDATE flux.executions \
+                "UPDATE flux.executions e \
                  SET status = 'failed' \
-                 WHERE status = 'starting' \
-                   AND created_at < now() - ($1::bigint * interval '1 second') \
-                 RETURNING id, request_id",
+                 WHERE e.status = 'starting' \
+                   AND e.created_at < now() - ($1::bigint * interval '1 second') \
+                   AND NOT EXISTS ( \
+                       SELECT 1 FROM flux.executions e2 \
+                       WHERE e2.request_id = e.request_id \
+                         AND e2.attempt > e.attempt \
+                   ) \
+                 RETURNING e.id, e.request_id",
             )
             .bind(starting_timeout_secs)
             .fetch_all(&pool)

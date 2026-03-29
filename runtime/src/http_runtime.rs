@@ -443,7 +443,8 @@ async fn handle_request(
                 Json(serde_json::json!({
                     "error": "execution claim service unavailable, please retry",
                     "code": "claim_unavailable",
-                    "request_id": ctx.request_id
+                    "request_id": ctx.request_id,
+                    "retry_after_ms": 500
                 })),
             )
                 .into_response();
@@ -686,7 +687,8 @@ async fn handle_net_request(
                 Json(serde_json::json!({
                     "error": "execution claim service unavailable, please retry",
                     "code": "claim_unavailable",
-                    "request_id": context.request_id
+                    "request_id": context.request_id,
+                    "retry_after_ms": 500
                 })),
             )
                 .into_response();
