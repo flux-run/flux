@@ -91,6 +91,12 @@ fn spawn_request_reconciler(pool: PgPool) {
         .filter(|value| *value > 0)
         .unwrap_or(30);
 
+    let retrying_timeout_secs = std::env::var("FLUX_RETRYING_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(30);
+
     tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(5));
         loop {
@@ -106,6 +112,7 @@ fn spawn_request_reconciler(pool: PgPool) {
             let stale_request_ids: Vec<uuid::Uuid> = match sqlx::query_scalar(
                 "UPDATE flux.requests \
                  SET status = 'unknown', \
+                     retry_reason = 'unknown_timeout', \
                      updated_at = now(), \
                      note = COALESCE(note, 'runtime did not acknowledge within threshold') \
                  WHERE status = 'dispatched' \
@@ -135,6 +142,41 @@ fn spawn_request_reconciler(pool: PgPool) {
                 .await
                 {
                     tracing::warn!(request_id = %request_id, error = %error, "failed to append timeout reconciliation event");
+                }
+            }
+
+            let stale_retrying_request_ids: Vec<uuid::Uuid> = match sqlx::query_scalar(
+                "UPDATE flux.requests \
+                 SET status = 'unknown', \
+                     retry_reason = 'unknown_timeout', \
+                     updated_at = now(), \
+                     note = COALESCE(note, 'retry dispatch did not complete within threshold') \
+                 WHERE status = 'retrying' \
+                   AND updated_at < now() - ($1::bigint * interval '1 second') \
+                 RETURNING id",
+            )
+            .bind(retrying_timeout_secs)
+            .fetch_all(&pool)
+            .await
+            {
+                Ok(ids) => ids,
+                Err(error) => {
+                    tracing::warn!(error = %error, "request reconciler failed to mark stale retrying requests");
+                    continue;
+                }
+            };
+
+            for request_id in stale_retrying_request_ids {
+                if let Err(error) = sqlx::query(
+                    "INSERT INTO flux.execution_events (request_id, step, status, metadata) \
+                     VALUES ($1, 'retry_timeout', 'unknown', $2)",
+                )
+                .bind(request_id)
+                .bind(serde_json::json!({ "source": "request_reconciler" }))
+                .execute(&pool)
+                .await
+                {
+                    tracing::warn!(request_id = %request_id, error = %error, "failed to append retry_timeout reconciliation event");
                 }
             }
 
@@ -313,6 +355,7 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             next_attempt INT NOT NULL DEFAULT 2,
             retry_count INT NOT NULL DEFAULT 0,
             last_attempt_at TIMESTAMPTZ,
+            retry_reason TEXT,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             ingestion_source TEXT NOT NULL,
             note TEXT
@@ -331,6 +374,9 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
     sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS retry_reason TEXT")
         .execute(pool)
         .await?;
     sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()")
