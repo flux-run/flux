@@ -285,6 +285,15 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_requests_dispatched_at ON flux.requests(dispatched_at)")
         .execute(pool)
         .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS parent_execution_id UUID")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()")
+        .execute(pool)
+        .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_executions_request_id ON flux.executions(request_id)")
         .execute(pool)
         .await?;
@@ -295,15 +304,6 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_execution_events_request_ts ON flux.execution_events(request_id, timestamp ASC)")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS parent_execution_id UUID")
-        .execute(pool)
-        .await?;
-    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()")
         .execute(pool)
         .await?;
     sqlx::query(
