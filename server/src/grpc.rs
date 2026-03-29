@@ -1433,8 +1433,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let attempt = req.attempt;
 
         let result = sqlx::query(
-            "INSERT INTO flux.executions (id, request_id, attempt, status, org_id) \
-             VALUES ($1, $2, $3, 'starting', $4) \
+            "INSERT INTO flux.executions (id, request_id, attempt, status, org_id, method, path, code_sha) \
+             VALUES ($1, $2, $3, 'starting', $4, '', '', '') \
              ON CONFLICT (request_id, attempt) DO NOTHING",
         )
         .bind(execution_id)
