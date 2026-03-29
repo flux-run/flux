@@ -82,6 +82,14 @@ fn spawn_request_reconciler(pool: PgPool) {
         .filter(|value| *value > 0)
         .unwrap_or(15);
 
+    // Executions stuck in 'starting' (claimed but runtime crashed before RecordExecution)
+    // are reaped after this threshold and marked as failed.
+    let starting_timeout_secs = std::env::var("FLUX_STARTING_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(30);
+
     tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(5));
         loop {
@@ -119,6 +127,45 @@ fn spawn_request_reconciler(pool: PgPool) {
                 .await
                 {
                     tracing::warn!(request_id = %request_id, error = %error, "failed to append timeout reconciliation event");
+                }
+            }
+
+            // Reap executions claimed but never started: runtime crashed between claim and
+            // the first RecordExecution call. Mark them 'failed' so the request can be retried.
+            let stale_executions: Vec<(uuid::Uuid, uuid::Uuid)> = match sqlx::query_as(
+                "UPDATE flux.executions \
+                 SET status = 'failed' \
+                 WHERE status = 'starting' \
+                   AND created_at < now() - ($1::bigint * interval '1 second') \
+                 RETURNING id, request_id",
+            )
+            .bind(starting_timeout_secs)
+            .fetch_all(&pool)
+            .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::warn!(error = %error, "reconciler failed to reap stale starting executions");
+                    continue;
+                }
+            };
+
+            for (execution_id, request_id) in stale_executions {
+                tracing::warn!(
+                    execution_id = %execution_id,
+                    request_id = %request_id,
+                    "reconciler reaped execution stuck in 'starting' — runtime likely crashed after claim"
+                );
+                if let Err(error) = sqlx::query(
+                    "INSERT INTO flux.execution_events (request_id, step, status, metadata) \
+                     VALUES ($1, 'claim_abandoned', 'failed', $2)",
+                )
+                .bind(request_id)
+                .bind(serde_json::json!({ "source": "request_reconciler", "execution_id": execution_id.to_string() }))
+                .execute(&pool)
+                .await
+                {
+                    tracing::warn!(execution_id = %execution_id, error = %error, "failed to append claim_abandoned event");
                 }
             }
         }

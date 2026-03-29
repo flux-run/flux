@@ -281,12 +281,26 @@ async fn maybe_get_completed_execution_hit(
     }
 }
 
+/// Outcome of an atomic execution claim attempt.
+enum ClaimOutcome {
+    /// This runtime won the slot — proceed with execution.
+    Claimed,
+    /// Another runtime already owns this (request_id, attempt) — return 409.
+    AlreadyClaimed,
+    /// Network error or timeout — return 503 (fail closed; correctness over availability).
+    Unavailable,
+}
+
 /// Attempt to atomically claim the execution slot for (request_id, attempt=1).
-/// Returns `true` if this runtime won the race, `false` if another already claimed it.
-/// On network failure, returns `true` (proceed rather than stall).
-async fn try_claim_execution(state: &RuntimeState, execution_id: &str, request_id: &str) -> bool {
+/// Network failure and timeouts fail CLOSED: we return Unavailable so the caller
+/// can surface a retryable 503 rather than risk a duplicate execution.
+async fn try_claim_execution(
+    state: &RuntimeState,
+    execution_id: &str,
+    request_id: &str,
+) -> ClaimOutcome {
     if state.service_token.is_empty() || state.server_url.is_empty() {
-        return true;
+        return ClaimOutcome::Claimed;
     }
     let fut = crate::server_client::claim_execution(
         &state.server_url,
@@ -296,14 +310,24 @@ async fn try_claim_execution(state: &RuntimeState, execution_id: &str, request_i
         1,
     );
     match tokio::time::timeout(Duration::from_millis(500), fut).await {
-        Ok(Ok(claimed)) => claimed,
+        Ok(Ok(true)) => ClaimOutcome::Claimed,
+        Ok(Ok(false)) => ClaimOutcome::AlreadyClaimed,
         Ok(Err(error)) => {
-            tracing::warn!(execution_id = %execution_id, request_id = %request_id, error = %error, "claim_execution failed, proceeding");
-            true
+            tracing::warn!(
+                execution_id = %execution_id,
+                request_id = %request_id,
+                error = %error,
+                "claim_execution RPC failed — returning 503"
+            );
+            ClaimOutcome::Unavailable
         }
         Err(_) => {
-            tracing::warn!(execution_id = %execution_id, request_id = %request_id, "claim_execution timed out, proceeding");
-            true
+            tracing::warn!(
+                execution_id = %execution_id,
+                request_id = %request_id,
+                "claim_execution timed out — returning 503"
+            );
+            ClaimOutcome::Unavailable
         }
     }
 }
@@ -399,15 +423,32 @@ async fn handle_request(
         return response;
     }
 
-    if !try_claim_execution(&state, &ctx.execution_id, &ctx.request_id).await {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "execution already in progress for this request",
-                "code": "concurrent_execution"
-            })),
-        )
-            .into_response();
+    match try_claim_execution(&state, &ctx.execution_id, &ctx.request_id).await {
+        ClaimOutcome::AlreadyClaimed => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "execution already in progress for this request",
+                    "code": "concurrent_execution",
+                    "request_id": ctx.request_id,
+                    "attempt": 1,
+                    "status": "in_progress"
+                })),
+            )
+                .into_response();
+        }
+        ClaimOutcome::Unavailable => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "execution claim service unavailable, please retry",
+                    "code": "claim_unavailable",
+                    "request_id": ctx.request_id
+                })),
+            )
+                .into_response();
+        }
+        ClaimOutcome::Claimed => {}
     }
 
     let max_duration_ms = headers
@@ -625,15 +666,32 @@ async fn handle_net_request(
         return response;
     }
 
-    if !try_claim_execution(&state, &context.execution_id, &context.request_id).await {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "execution already in progress for this request",
-                "code": "concurrent_execution"
-            })),
-        )
-            .into_response();
+    match try_claim_execution(&state, &context.execution_id, &context.request_id).await {
+        ClaimOutcome::AlreadyClaimed => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "execution already in progress for this request",
+                    "code": "concurrent_execution",
+                    "request_id": context.request_id,
+                    "attempt": 1,
+                    "status": "in_progress"
+                })),
+            )
+                .into_response();
+        }
+        ClaimOutcome::Unavailable => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "execution claim service unavailable, please retry",
+                    "code": "claim_unavailable",
+                    "request_id": context.request_id
+                })),
+            )
+                .into_response();
+        }
+        ClaimOutcome::Claimed => {}
     }
 
     let result = {
