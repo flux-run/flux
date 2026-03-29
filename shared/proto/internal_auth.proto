@@ -6,6 +6,7 @@ service InternalAuthService {
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
   rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
   rpc RecordExecution(RecordExecutionRequest) returns (RecordExecutionResponse);
+  rpc GetCompletedExecutionByRequest(GetCompletedExecutionByRequestRequest) returns (GetCompletedExecutionByRequestResponse);
   rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
   rpc Why(WhyRequest) returns (WhyResponse);
   rpc Tail(TailRequest) returns (stream TailEvent);
@@ -179,6 +180,32 @@ message RecordExecutionRequest {
 
 message RecordExecutionResponse {
   bool ok = 1;
+}
+
+message GetCompletedExecutionByRequestRequest {
+  string request_id = 1;
+}
+
+message GetCompletedExecutionByRequestResponse {
+  bool found = 1;
+  string execution_id = 2;
+  string request_id = 3;
+  string code_version = 4;
+  string status = 5;
+  string response_json = 6;
+  string error = 7;
+  int32 duration_ms = 8;
+  int32 response_status = 9;
+  string response_body = 10;
+  string error_name = 11;
+  string error_message = 12;
+  string error_stack = 13;
+  string error_phase = 14;
+  string error_source = 15;
+  string error_type = 16;
+  bool is_user_code = 17;
+  string error_frames_json = 18;
+  int32 attempt = 19;
 }
 
 message GetTraceRequest {

@@ -220,6 +220,7 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             error_source TEXT,
             error_type TEXT,
             code_sha TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             duration_ms INTEGER NOT NULL DEFAULT 0
         )"#,
@@ -239,6 +240,8 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             started_at TIMESTAMPTZ,
             completed_at TIMESTAMPTZ,
             duration_ms INTEGER,
+            next_attempt INT NOT NULL DEFAULT 2,
+            retry_count INT NOT NULL DEFAULT 0,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             ingestion_source TEXT NOT NULL,
             note TEXT
@@ -248,6 +251,12 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
 
     sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS dispatched_at TIMESTAMPTZ")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS next_attempt INT NOT NULL DEFAULT 2")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS retry_count INT NOT NULL DEFAULT 0")
         .execute(pool)
         .await?;
     sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()")
@@ -279,6 +288,9 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_executions_request_id ON flux.executions(request_id)")
         .execute(pool)
         .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_executions_status ON flux.executions(status)")
+        .execute(pool)
+        .await?;
     sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS uniq_flux_executions_request_attempt ON flux.executions(request_id, attempt)")
         .execute(pool)
         .await?;
@@ -291,11 +303,14 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS parent_execution_id UUID")
         .execute(pool)
         .await?;
+    sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()")
+        .execute(pool)
+        .await?;
     sqlx::query(
         r#"CREATE OR REPLACE VIEW flux.latest_executions AS
            SELECT DISTINCT ON (request_id) *
            FROM flux.executions
-           ORDER BY request_id, attempt DESC, started_at DESC"#,
+           ORDER BY request_id, attempt DESC, created_at DESC"#,
     )
     .execute(pool)
     .await?;

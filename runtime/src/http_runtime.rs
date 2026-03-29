@@ -165,6 +165,118 @@ fn runtime_should_record_execution(
     !request_originates_from_executor(headers)
 }
 
+fn cached_execution_type(hit: &crate::server_client::CompletedExecutionCacheHit) -> &'static str {
+    match (
+        !hit.error.is_empty() || !hit.error_source.is_empty() || !hit.error_type.is_empty(),
+        hit.error_source.as_str(),
+    ) {
+        (false, _) => "success",
+        (true, "platform_runtime") => "infra_error",
+        (true, _) => "user_error",
+    }
+}
+
+fn cached_invoke_payload(
+    hit: &crate::server_client::CompletedExecutionCacheHit,
+) -> serde_json::Value {
+    if let serde_json::Value::Object(mut map) = hit.response_json.clone() {
+        if map.contains_key("execution_id") {
+            map.insert("idempotent_hit".to_string(), serde_json::Value::Bool(true));
+            map.insert(
+                "cached_attempt".to_string(),
+                serde_json::Value::Number(hit.attempt.into()),
+            );
+            return serde_json::Value::Object(map);
+        }
+    }
+
+    serde_json::json!({
+        "execution_id": hit.execution_id,
+        "status": hit.status,
+        "type": cached_execution_type(hit),
+        "result": hit.response_json,
+        "error": if hit.error.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(hit.error.clone()) },
+        "error_name": if hit.error_name.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(hit.error_name.clone()) },
+        "error_message": if hit.error_message.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(hit.error_message.clone()) },
+        "error_stack": if hit.error_stack.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(hit.error_stack.clone()) },
+        "error_frames": hit.error_frames,
+        "error_phase": if hit.error_phase.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(hit.error_phase.clone()) },
+        "is_user_code": hit.is_user_code,
+        "error_source": if hit.error_source.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(hit.error_source.clone()) },
+        "error_type": if hit.error_type.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(hit.error_type.clone()) },
+        "duration_ms": hit.duration_ms,
+        "checkpoints": [],
+        "logs": [],
+        "idempotent_hit": true,
+        "cached_attempt": hit.attempt,
+    })
+}
+
+fn cached_response_from_net_response(
+    net_response: &serde_json::Value,
+    hit: &crate::server_client::CompletedExecutionCacheHit,
+) -> Response {
+    let status_code = net_response
+        .get("status")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(hit.response_status as u64) as u16;
+    let body_str = net_response
+        .get("body")
+        .and_then(|value| value.as_str())
+        .unwrap_or(&hit.response_body);
+    let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+
+    let mut response = if let Some(encoded) = body_str.strip_prefix("__FLUX_B64:") {
+        BASE64_STANDARD
+            .decode(encoded)
+            .unwrap_or_else(|_| body_str.as_bytes().to_vec())
+            .into_response()
+    } else {
+        body_str.as_bytes().to_vec().into_response()
+    };
+
+    *response.status_mut() = status;
+    if let Some(headers) = net_response.get("headers").and_then(|value| value.as_array()) {
+        for pair in headers {
+            let name = pair.get(0).and_then(|value| value.as_str());
+            let value = pair.get(1).and_then(|value| value.as_str());
+            if let (Some(name), Some(value)) = (name, value) {
+                if let (Ok(header_name), Ok(header_value)) = (
+                    HeaderName::from_bytes(name.as_bytes()),
+                    HeaderValue::from_str(value),
+                ) {
+                    response.headers_mut().insert(header_name, header_value);
+                }
+            }
+        }
+    }
+
+    response
+}
+
+async fn maybe_get_completed_execution_hit(
+    state: &RuntimeState,
+    request_id: &str,
+) -> Option<crate::server_client::CompletedExecutionCacheHit> {
+    if state.service_token.is_empty() {
+        return None;
+    }
+
+    match crate::server_client::get_completed_execution_by_request(
+        &state.server_url,
+        &state.service_token,
+        request_id,
+    )
+    .await
+    {
+        Ok(hit) => hit,
+        Err(error) => {
+            tracing::warn!(request_id = %request_id, error = %error, "completed-execution lookup failed");
+            None
+        }
+    }
+}
+
 async fn handle_request(
     State(state): State<RuntimeState>,
     Path(route): Path<String>,
@@ -239,6 +351,22 @@ async fn handle_request(
     };
 
     ctx.execution_id = exec_id;
+
+    if let Some(hit) = maybe_get_completed_execution_hit(&state, &ctx.request_id).await {
+        let status = if hit.status == "ok" {
+            StatusCode::OK
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        let mut response = (status, Json(cached_invoke_payload(&hit))).into_response();
+        attach_execution_headers(
+            &mut response,
+            &hit.execution_id,
+            &hit.request_id,
+            &hit.code_version,
+        );
+        return response;
+    }
 
     let max_duration_ms = headers
         .get("x-flux-max-duration-ms")
@@ -419,6 +547,41 @@ async fn handle_net_request(
         headers_json,
         body,
     };
+
+    if let Some(hit) = maybe_get_completed_execution_hit(&state, &context.request_id).await {
+        if request_from_executor {
+            let status = if hit.status == "ok" {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            let mut response = (status, Json(cached_invoke_payload(&hit))).into_response();
+            attach_execution_headers(
+                &mut response,
+                &hit.execution_id,
+                &hit.request_id,
+                &hit.code_version,
+            );
+            return response;
+        }
+
+        let mut response = if let Some(net_response) = hit.response_json.get("net_response") {
+            cached_response_from_net_response(net_response, &hit)
+        } else {
+            let fallback = serde_json::json!({
+                "status": if hit.response_status > 0 { hit.response_status } else { 200 },
+                "body": hit.response_body,
+            });
+            cached_response_from_net_response(&fallback, &hit)
+        };
+        attach_execution_headers(
+            &mut response,
+            &hit.execution_id,
+            &hit.request_id,
+            &hit.code_version,
+        );
+        return response;
+    }
 
     let result = {
         let pool = state.pool.read().await;

@@ -329,6 +329,27 @@ struct WhyExecution {
     is_user_code: Option<bool>,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct CompletedExecutionRow {
+    execution_id: String,
+    request_id: String,
+    code_version: String,
+    response_json: serde_json::Value,
+    error: Option<String>,
+    duration_ms: i32,
+    response_status: Option<i32>,
+    response_body: Option<String>,
+    error_name: Option<String>,
+    error_message: Option<String>,
+    error_stack: Option<String>,
+    error_phase: Option<String>,
+    error_source: Option<String>,
+    error_type: Option<String>,
+    is_user_code: Option<bool>,
+    error_frames: serde_json::Value,
+    attempt: i32,
+}
+
 #[derive(Debug, Clone)]
 struct WhyCheckpoint {
     call_index: i32,
@@ -1230,6 +1251,95 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .map_err(|e| Status::internal(format!("failed to commit execution: {e}")))?;
 
         Ok(Response::new(pb::RecordExecutionResponse { ok: true }))
+    }
+
+    async fn get_completed_execution_by_request(
+        &self,
+        request: Request<pb::GetCompletedExecutionByRequestRequest>,
+    ) -> Result<Response<pb::GetCompletedExecutionByRequestResponse>, Status> {
+        let identity = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+        let request_id = uuid::Uuid::parse_str(&req.request_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid request_id: {e}")))?;
+
+        let row: Option<CompletedExecutionRow> = sqlx::query_as(
+            "SELECT \
+                id::text AS execution_id, \
+                request_id::text AS request_id, \
+                code_sha AS code_version, \
+                response AS response_json, \
+                error, \
+                duration_ms, \
+                response_status, \
+                response_body, \
+                error_name, \
+                error_message, \
+                error_stack, \
+                error_phase, \
+                error_source, \
+                error_type, \
+                is_user_code, \
+                COALESCE(error_frames, 'null'::jsonb) AS error_frames, \
+                attempt \
+             FROM flux.executions \
+             WHERE request_id = $1 AND org_id = $2 AND status = 'ok' \
+             ORDER BY attempt DESC, created_at DESC \
+             LIMIT 1",
+        )
+        .bind(request_id)
+        .bind(identity.org_id.clone())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch completed execution by request: {e}")))?;
+
+        let Some(CompletedExecutionRow {
+            execution_id,
+            request_id: stored_request_id,
+            code_version,
+            response_json,
+            error,
+            duration_ms,
+            response_status,
+            response_body,
+            error_name,
+            error_message,
+            error_stack,
+            error_phase,
+            error_source,
+            error_type,
+            is_user_code,
+            error_frames,
+            attempt,
+        }) = row else {
+            return Ok(Response::new(pb::GetCompletedExecutionByRequestResponse {
+                found: false,
+                ..Default::default()
+            }));
+        };
+
+        Ok(Response::new(pb::GetCompletedExecutionByRequestResponse {
+            found: true,
+            execution_id,
+            request_id: stored_request_id,
+            code_version,
+            status: "ok".to_string(),
+            response_json: serde_json::to_string(&response_json)
+                .unwrap_or_else(|_| "null".to_string()),
+            error: error.unwrap_or_default(),
+            duration_ms,
+            response_status: response_status.unwrap_or_default(),
+            response_body: response_body.unwrap_or_default(),
+            error_name: error_name.unwrap_or_default(),
+            error_message: error_message.unwrap_or_default(),
+            error_stack: error_stack.unwrap_or_default(),
+            error_phase: error_phase.unwrap_or_default(),
+            error_source: error_source.unwrap_or_default(),
+            error_type: error_type.unwrap_or_default(),
+            is_user_code: is_user_code.unwrap_or(false),
+            error_frames_json: serde_json::to_string(&error_frames)
+                .unwrap_or_else(|_| "null".to_string()),
+            attempt,
+        }))
     }
 
     async fn get_trace(
