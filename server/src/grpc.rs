@@ -894,15 +894,25 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
 
         sqlx::query(
             "INSERT INTO flux.requests \
-             (id, project_id, route, method, status, received_at, started_at, ingestion_source) \
-             VALUES ($1, $2, $3, $4, 'started', now(), now(), 'runtime') \
+             (id, project_id, route, method, status, received_at, started_at, updated_at, ingestion_source) \
+             VALUES ($1, $2, $3, $4, 'started', now(), now(), now(), 'runtime') \
              ON CONFLICT (id) DO UPDATE SET \
                project_id = COALESCE(EXCLUDED.project_id, flux.requests.project_id), \
                route = EXCLUDED.route, \
                method = EXCLUDED.method, \
-               status = 'started', \
-               started_at = COALESCE(flux.requests.started_at, now()), \
-               ingestion_source = 'runtime'",
+               status = CASE \
+                   WHEN flux.requests.status IN ('received', 'dispatched', 'started') THEN 'started' \
+                   ELSE flux.requests.status \
+               END, \
+               started_at = CASE \
+                   WHEN flux.requests.status IN ('received', 'dispatched', 'started') THEN COALESCE(flux.requests.started_at, now()) \
+                   ELSE flux.requests.started_at \
+               END, \
+               updated_at = now(), \
+               ingestion_source = CASE \
+                   WHEN flux.requests.status IN ('received', 'dispatched', 'started') THEN 'runtime' \
+                   ELSE flux.requests.ingestion_source \
+               END",
         )
         .bind(request_id)
         .bind(request_project_id)
@@ -1070,8 +1080,10 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
              SET status = $2, \
                  completed_at = now(), \
                  duration_ms = $3, \
+                 updated_at = now(), \
                  note = CASE WHEN $4 = '' THEN note ELSE $4 END \
-             WHERE id = $1",
+             WHERE id = $1 \
+               AND status IN ('received', 'dispatched', 'started', 'unknown')",
         )
         .bind(request_id)
         .bind(request_terminal_status)
