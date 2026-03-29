@@ -168,6 +168,40 @@ pub async fn get_completed_execution_by_request(
     }))
 }
 
+pub async fn claim_execution(
+    url: &str,
+    token: &str,
+    execution_id: &str,
+    request_id: &str,
+    attempt: i32,
+) -> Result<bool> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+
+    let mut request = Request::new(pb::ClaimExecutionRequest {
+        execution_id: execution_id.to_string(),
+        request_id: request_id.to_string(),
+        attempt,
+    });
+
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .claim_execution(request)
+        .await
+        .context("claim_execution request failed")?
+        .into_inner();
+
+    Ok(response.claimed)
+}
+
 pub async fn get_trace(url: &str, token: &str, execution_id: &str) -> Result<pb::GetTraceResponse> {
     let endpoint = normalize_grpc_url(url);
     let mut client =

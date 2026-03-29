@@ -1342,6 +1342,43 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         }))
     }
 
+    async fn claim_execution(
+        &self,
+        request: Request<pb::ClaimExecutionRequest>,
+    ) -> Result<Response<pb::ClaimExecutionResponse>, Status> {
+        let identity = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+
+        let execution_id = uuid::Uuid::parse_str(&req.execution_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid execution_id: {e}")))?;
+        let request_id = uuid::Uuid::parse_str(&req.request_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid request_id: {e}")))?;
+        let attempt = req.attempt;
+
+        let result = sqlx::query(
+            "INSERT INTO flux.executions (id, request_id, attempt, status, org_id) \
+             VALUES ($1, $2, $3, 'starting', $4) \
+             ON CONFLICT (request_id, attempt) DO NOTHING",
+        )
+        .bind(execution_id)
+        .bind(request_id)
+        .bind(attempt)
+        .bind(&identity.org_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("claim_execution insert failed: {e}")))?;
+
+        let claimed = result.rows_affected() > 0;
+        tracing::info!(
+            execution_id = %req.execution_id,
+            request_id = %req.request_id,
+            attempt = attempt,
+            claimed = claimed,
+            "claim_execution"
+        );
+        Ok(Response::new(pb::ClaimExecutionResponse { claimed }))
+    }
+
     async fn get_trace(
         &self,
         request: Request<pb::GetTraceRequest>,

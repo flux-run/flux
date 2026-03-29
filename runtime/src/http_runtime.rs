@@ -13,6 +13,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use tokio::time::Duration;
 
 use crate::artifact::RuntimeArtifact;
 use crate::deno_runtime::{boot_runtime_artifact, FetchCheckpoint, NetRequest};
@@ -262,17 +263,47 @@ async fn maybe_get_completed_execution_hit(
         return None;
     }
 
-    match crate::server_client::get_completed_execution_by_request(
+    let fut = crate::server_client::get_completed_execution_by_request(
         &state.server_url,
         &state.service_token,
         request_id,
-    )
-    .await
-    {
-        Ok(hit) => hit,
-        Err(error) => {
+    );
+    match tokio::time::timeout(Duration::from_millis(500), fut).await {
+        Ok(Ok(hit)) => hit,
+        Ok(Err(error)) => {
             tracing::warn!(request_id = %request_id, error = %error, "completed-execution lookup failed");
             None
+        }
+        Err(_) => {
+            tracing::warn!(request_id = %request_id, "completed-execution lookup timed out, proceeding");
+            None
+        }
+    }
+}
+
+/// Attempt to atomically claim the execution slot for (request_id, attempt=1).
+/// Returns `true` if this runtime won the race, `false` if another already claimed it.
+/// On network failure, returns `true` (proceed rather than stall).
+async fn try_claim_execution(state: &RuntimeState, execution_id: &str, request_id: &str) -> bool {
+    if state.service_token.is_empty() || state.server_url.is_empty() {
+        return true;
+    }
+    let fut = crate::server_client::claim_execution(
+        &state.server_url,
+        &state.service_token,
+        execution_id,
+        request_id,
+        1,
+    );
+    match tokio::time::timeout(Duration::from_millis(500), fut).await {
+        Ok(Ok(claimed)) => claimed,
+        Ok(Err(error)) => {
+            tracing::warn!(execution_id = %execution_id, request_id = %request_id, error = %error, "claim_execution failed, proceeding");
+            true
+        }
+        Err(_) => {
+            tracing::warn!(execution_id = %execution_id, request_id = %request_id, "claim_execution timed out, proceeding");
+            true
         }
     }
 }
@@ -366,6 +397,17 @@ async fn handle_request(
             &hit.code_version,
         );
         return response;
+    }
+
+    if !try_claim_execution(&state, &ctx.execution_id, &ctx.request_id).await {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "execution already in progress for this request",
+                "code": "concurrent_execution"
+            })),
+        )
+            .into_response();
     }
 
     let max_duration_ms = headers
@@ -581,6 +623,17 @@ async fn handle_net_request(
             &hit.code_version,
         );
         return response;
+    }
+
+    if !try_claim_execution(&state, &context.execution_id, &context.request_id).await {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "execution already in progress for this request",
+                "code": "concurrent_execution"
+            })),
+        )
+            .into_response();
     }
 
     let result = {
