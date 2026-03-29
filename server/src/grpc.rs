@@ -931,16 +931,16 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                route = EXCLUDED.route, \
                method = EXCLUDED.method, \
                status = CASE \
-                   WHEN flux.requests.status IN ('received', 'dispatched', 'started') THEN 'started' \
+                   WHEN flux.requests.status IN ('received', 'dispatched', 'retrying', 'started') THEN 'started' \
                    ELSE flux.requests.status \
                END, \
                started_at = CASE \
-                   WHEN flux.requests.status IN ('received', 'dispatched', 'started') THEN COALESCE(flux.requests.started_at, now()) \
+                   WHEN flux.requests.status IN ('received', 'dispatched', 'retrying', 'started') THEN COALESCE(flux.requests.started_at, now()) \
                    ELSE flux.requests.started_at \
                END, \
                updated_at = now(), \
                ingestion_source = CASE \
-                   WHEN flux.requests.status IN ('received', 'dispatched', 'started') THEN 'runtime' \
+                   WHEN flux.requests.status IN ('received', 'dispatched', 'retrying', 'started') THEN 'runtime' \
                    ELSE flux.requests.ingestion_source \
                END",
         )
@@ -1134,7 +1134,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
              WHERE id = $1 \
                AND CASE \
                      WHEN $2 = 'success' THEN status != 'success' \
-                     ELSE status IN ('received', 'dispatched', 'started', 'unknown', 'failed') \
+                                         ELSE status IN ('received', 'dispatched', 'retrying', 'started', 'unknown', 'failed') \
                    END",
         )
         .bind(request_id)
