@@ -766,6 +766,15 @@ fn diff_json_values(
     diffs
 }
 
+fn compute_retry_after_ms(retry_count: i32, request_id: &uuid::Uuid) -> i32 {
+    let exp = retry_count.clamp(0, 4) as u32;
+    let base = 2_000_i32.saturating_mul(1_i32 << exp).min(30_000);
+    let now_ms = chrono::Utc::now().timestamp_millis() as i64;
+    let id_mix = (request_id.as_u128() & 0x1ff) as i64;
+    let jitter = ((now_ms + id_mix).rem_euclid(501)) as i32;
+    base.saturating_add(jitter)
+}
+
 #[tonic::async_trait]
 impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc {
     type TailStream = ReceiverStream<Result<pb::TailEvent, Status>>;
@@ -1045,7 +1054,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .await
         .map_err(|e| Status::internal(format!("failed to insert execution: {e}")))?;
 
-        sqlx::query(
+                let execution_update = sqlx::query(
             "UPDATE flux.executions \
              SET method = $2, path = $3, status = $4, request = $5, response = $6, \
                  error = NULLIF($7, ''), code_sha = $8, duration_ms = $9, project_id = $10, org_id = $11, \
@@ -1054,7 +1063,12 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
                  error_phase = $23, is_user_code = $24, error_source = $25, error_type = $26, \
                  function_id = COALESCE($27, function_id), failure_point_file = $28, failure_point_line = $29, \
                  aborted = $30, response_sent = $31, error_frames = $32 \
-             WHERE id = $1",
+                         WHERE id = $1 \
+                             AND NOT EXISTS ( \
+                                     SELECT 1 FROM flux.executions e2 \
+                                     WHERE e2.request_id = flux.executions.request_id \
+                                         AND e2.attempt > flux.executions.attempt \
+                             )",
         )
         .bind(execution_id)
         .bind(req.method.clone())
@@ -1091,6 +1105,18 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to update execution: {e}")))?;
+
+        if execution_update.rows_affected() == 0 {
+            tracing::warn!(
+                execution_id = %execution_id,
+                request_id = %request_id,
+                "skipping stale execution write: newer attempt already exists"
+            );
+            tx.commit()
+                .await
+                .map_err(|e| Status::internal(format!("failed to commit stale execution no-op: {e}")))?;
+            return Ok(Response::new(pb::RecordExecutionResponse { ok: true }));
+        }
 
         let request_terminal_status = match req.status.as_str() {
             "ok" => "success",
@@ -1342,6 +1368,54 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             error_frames_json: serde_json::to_string(&error_frames)
                 .unwrap_or_else(|_| "null".to_string()),
             attempt,
+        }))
+    }
+
+    async fn get_latest_execution_by_request(
+        &self,
+        request: Request<pb::GetLatestExecutionByRequestRequest>,
+    ) -> Result<Response<pb::GetLatestExecutionByRequestResponse>, Status> {
+        let identity = self.authenticate(request.metadata()).await?;
+        let req = request.into_inner();
+        let request_id = uuid::Uuid::parse_str(&req.request_id)
+            .map_err(|e| Status::invalid_argument(format!("invalid request_id: {e}")))?;
+
+        let row: Option<(String, String, String, i32)> = sqlx::query_as(
+            "SELECT id::text, request_id::text, status, attempt \
+             FROM flux.executions \
+             WHERE request_id = $1 AND org_id = $2 \
+             ORDER BY attempt DESC, created_at DESC \
+             LIMIT 1",
+        )
+        .bind(request_id)
+        .bind(identity.org_id.clone())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch latest execution by request: {e}")))?;
+
+        let Some((execution_id, stored_request_id, status, attempt)) = row else {
+            return Ok(Response::new(pb::GetLatestExecutionByRequestResponse {
+                found: false,
+                ..Default::default()
+            }));
+        };
+
+        let retry_count: i32 = sqlx::query_scalar(
+            "SELECT COALESCE(retry_count, 0) FROM flux.requests WHERE id = $1",
+        )
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Status::internal(format!("failed to fetch retry_count: {e}")))?
+        .unwrap_or(0);
+
+        Ok(Response::new(pb::GetLatestExecutionByRequestResponse {
+            found: true,
+            execution_id,
+            request_id: stored_request_id,
+            status,
+            attempt,
+            retry_after_ms: compute_retry_after_ms(retry_count, &request_id),
         }))
     }
 

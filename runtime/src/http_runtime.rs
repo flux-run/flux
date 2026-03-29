@@ -281,6 +281,32 @@ async fn maybe_get_completed_execution_hit(
     }
 }
 
+async fn maybe_get_latest_execution_state(
+    state: &RuntimeState,
+    request_id: &str,
+) -> Option<crate::server_client::LatestExecutionState> {
+    if state.service_token.is_empty() {
+        return None;
+    }
+
+    let fut = crate::server_client::get_latest_execution_by_request(
+        &state.server_url,
+        &state.service_token,
+        request_id,
+    );
+    match tokio::time::timeout(Duration::from_millis(500), fut).await {
+        Ok(Ok(hit)) => hit,
+        Ok(Err(error)) => {
+            tracing::warn!(request_id = %request_id, error = %error, "latest-execution lookup failed");
+            None
+        }
+        Err(_) => {
+            tracing::warn!(request_id = %request_id, "latest-execution lookup timed out, proceeding");
+            None
+        }
+    }
+}
+
 /// Outcome of an atomic execution claim attempt.
 enum ClaimOutcome {
     /// This runtime won the slot — proceed with execution.
@@ -423,6 +449,23 @@ async fn handle_request(
         return response;
     }
 
+    let latest_execution_state = maybe_get_latest_execution_state(&state, &ctx.request_id).await;
+    if let Some(latest) = latest_execution_state.as_ref() {
+        if latest.status == "starting" || latest.status == "running" {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "execution already in progress for this request",
+                    "code": "concurrent_execution",
+                    "request_id": ctx.request_id,
+                    "attempt": latest.attempt,
+                    "status": "in_progress"
+                })),
+            )
+                .into_response();
+        }
+    }
+
     match try_claim_execution(&state, &ctx.execution_id, &ctx.request_id).await {
         ClaimOutcome::AlreadyClaimed => {
             return (
@@ -438,13 +481,18 @@ async fn handle_request(
                 .into_response();
         }
         ClaimOutcome::Unavailable => {
+            let retry_after_ms = latest_execution_state
+                .as_ref()
+                .map(|state| state.retry_after_ms)
+                .filter(|value| *value > 0)
+                .unwrap_or(2500);
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({
                     "error": "execution claim service unavailable, please retry",
                     "code": "claim_unavailable",
                     "request_id": ctx.request_id,
-                    "retry_after_ms": 500
+                    "retry_after_ms": retry_after_ms
                 })),
             )
                 .into_response();
@@ -667,6 +715,23 @@ async fn handle_net_request(
         return response;
     }
 
+    let latest_execution_state = maybe_get_latest_execution_state(&state, &context.request_id).await;
+    if let Some(latest) = latest_execution_state.as_ref() {
+        if latest.status == "starting" || latest.status == "running" {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "execution already in progress for this request",
+                    "code": "concurrent_execution",
+                    "request_id": context.request_id,
+                    "attempt": latest.attempt,
+                    "status": "in_progress"
+                })),
+            )
+                .into_response();
+        }
+    }
+
     match try_claim_execution(&state, &context.execution_id, &context.request_id).await {
         ClaimOutcome::AlreadyClaimed => {
             return (
@@ -682,13 +747,18 @@ async fn handle_net_request(
                 .into_response();
         }
         ClaimOutcome::Unavailable => {
+            let retry_after_ms = latest_execution_state
+                .as_ref()
+                .map(|state| state.retry_after_ms)
+                .filter(|value| *value > 0)
+                .unwrap_or(2500);
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({
                     "error": "execution claim service unavailable, please retry",
                     "code": "claim_unavailable",
                     "request_id": context.request_id,
-                    "retry_after_ms": 500
+                    "retry_after_ms": retry_after_ms
                 })),
             )
                 .into_response();

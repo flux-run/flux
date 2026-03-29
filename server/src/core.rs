@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -95,6 +96,13 @@ fn spawn_request_reconciler(pool: PgPool) {
         loop {
             ticker.tick().await;
 
+            let jitter_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .map(|duration| (duration.subsec_nanos() % 6) as i64)
+                .unwrap_or(0);
+            let reap_threshold_secs = starting_timeout_secs.saturating_add(jitter_secs);
+
             let stale_request_ids: Vec<uuid::Uuid> = match sqlx::query_scalar(
                 "UPDATE flux.requests \
                  SET status = 'unknown', \
@@ -135,18 +143,26 @@ fn spawn_request_reconciler(pool: PgPool) {
             // Guard: only reap if no younger attempt exists for the same request — prevents
             // overwriting a completed retry that raced in before the reconciler ran.
             let stale_executions: Vec<(uuid::Uuid, uuid::Uuid)> = match sqlx::query_as(
-                "UPDATE flux.executions e \
-                 SET status = 'failed' \
-                 WHERE e.status = 'starting' \
-                   AND e.created_at < now() - ($1::bigint * interval '1 second') \
-                   AND NOT EXISTS ( \
-                       SELECT 1 FROM flux.executions e2 \
-                       WHERE e2.request_id = e.request_id \
-                         AND e2.attempt > e.attempt \
-                   ) \
-                 RETURNING e.id, e.request_id",
+                                "WITH candidates AS ( \
+                                         SELECT e.id \
+                                         FROM flux.executions e \
+                                         WHERE e.status = 'starting' \
+                                             AND e.created_at < now() - ($1::bigint * interval '1 second') \
+                                             AND NOT EXISTS ( \
+                                                     SELECT 1 FROM flux.executions e2 \
+                                                     WHERE e2.request_id = e.request_id \
+                                                         AND e2.attempt > e.attempt \
+                                             ) \
+                                         ORDER BY e.created_at \
+                                         LIMIT 500 \
+                                 ) \
+                                 UPDATE flux.executions e \
+                                 SET status = 'failed' \
+                                 FROM candidates c \
+                                 WHERE e.id = c.id \
+                                 RETURNING e.id, e.request_id",
             )
-            .bind(starting_timeout_secs)
+                        .bind(reap_threshold_secs)
             .fetch_all(&pool)
             .await
             {
@@ -296,6 +312,7 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             duration_ms INTEGER,
             next_attempt INT NOT NULL DEFAULT 2,
             retry_count INT NOT NULL DEFAULT 0,
+            last_attempt_at TIMESTAMPTZ,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             ingestion_source TEXT NOT NULL,
             note TEXT
@@ -311,6 +328,9 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
     sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS retry_count INT NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ")
         .execute(pool)
         .await?;
     sqlx::query("ALTER TABLE flux.requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()")

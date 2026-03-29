@@ -7,6 +7,7 @@ service InternalAuthService {
   rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
   rpc RecordExecution(RecordExecutionRequest) returns (RecordExecutionResponse);
   rpc GetCompletedExecutionByRequest(GetCompletedExecutionByRequestRequest) returns (GetCompletedExecutionByRequestResponse);
+  rpc GetLatestExecutionByRequest(GetLatestExecutionByRequestRequest) returns (GetLatestExecutionByRequestResponse);
   rpc ClaimExecution(ClaimExecutionRequest) returns (ClaimExecutionResponse);
   rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
   rpc Why(WhyRequest) returns (WhyResponse);
@@ -207,6 +208,19 @@ message GetCompletedExecutionByRequestResponse {
   bool is_user_code = 17;
   string error_frames_json = 18;
   int32 attempt = 19;
+}
+
+message GetLatestExecutionByRequestRequest {
+  string request_id = 1;
+}
+
+message GetLatestExecutionByRequestResponse {
+  bool found = 1;
+  string execution_id = 2;
+  string request_id = 3;
+  string status = 4;
+  int32 attempt = 5;
+  int32 retry_after_ms = 6;
 }
 
 message ClaimExecutionRequest {

@@ -37,6 +37,15 @@ pub struct CompletedExecutionCacheHit {
     pub attempt: i32,
 }
 
+#[derive(Debug, Clone)]
+pub struct LatestExecutionState {
+    pub execution_id: String,
+    pub request_id: String,
+    pub status: String,
+    pub attempt: i32,
+    pub retry_after_ms: i32,
+}
+
 pub async fn record_execution(url: &str, token: &str, envelope: ExecutionEnvelope) -> Result<()> {
     let endpoint = normalize_grpc_url(url);
     let mut client =
@@ -165,6 +174,46 @@ pub async fn get_completed_execution_by_request(
         error_frames: serde_json::from_str(&response.error_frames_json)
             .unwrap_or(serde_json::Value::Null),
         attempt: response.attempt,
+    }))
+}
+
+pub async fn get_latest_execution_by_request(
+    url: &str,
+    token: &str,
+    request_id: &str,
+) -> Result<Option<LatestExecutionState>> {
+    let endpoint = normalize_grpc_url(url);
+    let mut client =
+        pb::internal_auth_service_client::InternalAuthServiceClient::connect(endpoint.clone())
+            .await
+            .with_context(|| format!("failed to connect to Flux server at {}", endpoint))?;
+
+    let mut request = Request::new(pb::GetLatestExecutionByRequestRequest {
+        request_id: request_id.to_string(),
+    });
+
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(format!("Bearer {}", token))
+            .context("service token contains invalid metadata characters")?,
+    );
+
+    let response = client
+        .get_latest_execution_by_request(request)
+        .await
+        .context("get latest execution by request request failed")?
+        .into_inner();
+
+    if !response.found {
+        return Ok(None);
+    }
+
+    Ok(Some(LatestExecutionState {
+        execution_id: response.execution_id,
+        request_id: response.request_id,
+        status: response.status,
+        attempt: response.attempt,
+        retry_after_ms: response.retry_after_ms,
     }))
 }
 
