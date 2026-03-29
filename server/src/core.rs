@@ -173,6 +173,50 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS flux.requests (
+            id UUID PRIMARY KEY,
+            project_id UUID,
+            route TEXT NOT NULL,
+            method TEXT NOT NULL,
+            status TEXT NOT NULL,
+            received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            started_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ,
+            duration_ms INTEGER,
+            ingestion_source TEXT NOT NULL,
+            note TEXT
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS flux.execution_events (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            request_id UUID NOT NULL REFERENCES flux.requests(id) ON DELETE CASCADE,
+            step TEXT NOT NULL,
+            status TEXT,
+            metadata JSONB,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT now()
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_requests_project_received ON flux.requests(project_id, received_at DESC)")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_requests_status_received ON flux.requests(status, received_at DESC)")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_executions_request_id ON flux.executions(request_id)")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_flux_execution_events_request_ts ON flux.execution_events(request_id, timestamp ASC)")
+        .execute(pool)
+        .await?;
+
     sqlx::query("ALTER TABLE flux.executions ADD COLUMN IF NOT EXISTS error_name TEXT")
         .execute(pool)
         .await?;

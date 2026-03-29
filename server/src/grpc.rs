@@ -876,13 +876,53 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             .map_err(|e| Status::invalid_argument(format!("invalid response_json: {e}")))?;
 
         let project_id = normalized_project_id(&identity.project_id, &req.project_id);
+        let request_project_id = project_id
+            .as_deref()
+            .and_then(|value| uuid::Uuid::parse_str(value).ok());
         let org_id = identity.org_id;
+        let request_method = if req.request_method.trim().is_empty() {
+            req.method.clone()
+        } else {
+            req.request_method.clone()
+        };
 
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(|e| Status::internal(format!("failed to begin transaction: {e}")))?;
+
+        sqlx::query(
+            "INSERT INTO flux.requests \
+             (id, project_id, route, method, status, received_at, started_at, ingestion_source) \
+             VALUES ($1, $2, $3, $4, 'started', now(), now(), 'runtime') \
+             ON CONFLICT (id) DO UPDATE SET \
+               project_id = COALESCE(EXCLUDED.project_id, flux.requests.project_id), \
+               route = EXCLUDED.route, \
+               method = EXCLUDED.method, \
+               status = 'started', \
+               started_at = COALESCE(flux.requests.started_at, now()), \
+               ingestion_source = 'runtime'",
+        )
+        .bind(request_id)
+        .bind(request_project_id)
+        .bind(req.path.clone())
+        .bind(request_method.clone())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(format!("failed to upsert request lifecycle row: {e}")))?;
+
+        sqlx::query(
+            "INSERT INTO flux.execution_events (request_id, step, status, metadata) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(request_id)
+        .bind("handler_started")
+        .bind("started")
+        .bind(serde_json::json!({ "execution_id": execution_id.to_string() }))
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(format!("failed to append handler_started event: {e}")))?;
 
         let request_headers_json: serde_json::Value =
             serde_json::from_str(&req.request_headers_json).unwrap_or(serde_json::Value::Null);
@@ -920,15 +960,13 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         let error_frames_json = if error_frames.is_null() { None } else { Some(error_frames.clone()) };
 
         // Resolve function_id from route — used in the execution row and issue upsert.
-        let route_project_id = project_id
-            .as_deref()
-            .and_then(|v| uuid::Uuid::parse_str(v).ok());
+        let route_project_id = request_project_id;
         let function_id: Option<uuid::Uuid> = if let Some(rpid) = route_project_id {
             let row: Option<(uuid::Uuid,)> = sqlx::query_as(
                 "SELECT function_id FROM control.routes WHERE project_id = $1 AND method = $2 AND path = $3",
             )
             .bind(rpid)
-            .bind(if req.request_method.trim().is_empty() { req.method.clone() } else { req.request_method.clone() })
+            .bind(request_method.clone())
             .bind(req.path.clone())
             .fetch_optional(&mut *tx)
             .await
@@ -956,7 +994,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(identity.token_id)
         .bind(req.client_ip.clone())
         .bind(req.user_agent.clone())
-        .bind(req.request_method.clone())
+        .bind(request_method.clone())
         .bind(request_headers_json.clone())
         .bind(req.request_body.clone())
         .bind(req.response_status)
@@ -998,7 +1036,7 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .bind(org_id.clone())
         .bind(req.client_ip.clone())
         .bind(req.user_agent.clone())
-        .bind(req.request_method.clone())
+        .bind(request_method.clone())
         .bind(request_headers_json)
         .bind(req.request_body.clone())
         .bind(req.response_status)
@@ -1020,6 +1058,44 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
         .execute(&mut *tx)
         .await
         .map_err(|e| Status::internal(format!("failed to update execution: {e}")))?;
+
+        let request_terminal_status = match req.status.as_str() {
+            "ok" => "success",
+            "error" | "critical" | "timeout" => "failed",
+            _ => "unknown",
+        };
+
+        sqlx::query(
+            "UPDATE flux.requests \
+             SET status = $2, \
+                 completed_at = now(), \
+                 duration_ms = $3, \
+                 note = CASE WHEN $4 = '' THEN note ELSE $4 END \
+             WHERE id = $1",
+        )
+        .bind(request_id)
+        .bind(request_terminal_status)
+        .bind(req.duration_ms)
+        .bind(req.error.clone())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(format!("failed to update request lifecycle row: {e}")))?;
+
+        sqlx::query(
+            "INSERT INTO flux.execution_events (request_id, step, status, metadata) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(request_id)
+        .bind("completed")
+        .bind(request_terminal_status)
+        .bind(serde_json::json!({
+            "execution_id": execution_id.to_string(),
+            "runtime_status": &req.status,
+            "duration_ms": req.duration_ms
+        }))
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Status::internal(format!("failed to append completed event: {e}")))?;
 
         // Automated Issue Grouping / Fingerprinting
         if req.status == "error" || req.status == "critical" {

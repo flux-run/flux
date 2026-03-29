@@ -212,6 +212,14 @@ async fn handle_request(
 
     let code_version = state.code_version.read().await.clone();
     let mut ctx = ExecutionContext::with_project(code_version.clone(), state.project_id.clone());
+    if let Some(request_id) = headers
+        .get("x-flux-request-id")
+        .and_then(|h| h.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        ctx.request_id = request_id.to_string();
+    }
     if request_originates_from_executor(&headers) {
         ctx.cloud_ctx = true;
     }
@@ -372,6 +380,14 @@ async fn handle_net_request(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok());
 
+    let provided_request_id = request
+        .headers()
+        .get("x-flux-request-id")
+        .and_then(|h| h.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
     let body_bytes = match to_bytes(request.into_body(), 10 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
@@ -392,7 +408,10 @@ async fn handle_net_request(
     });
 
     let code_version = state.code_version.read().await.clone();
-    let context = ExecutionContext::with_project(code_version.clone(), state.project_id.clone());
+    let mut context = ExecutionContext::with_project(code_version.clone(), state.project_id.clone());
+    if let Some(request_id) = provided_request_id {
+        context.request_id = request_id;
+    }
     let net_req = NetRequest {
         req_id: context.request_id.clone(),
         method,
