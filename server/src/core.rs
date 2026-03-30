@@ -606,6 +606,7 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             method TEXT NOT NULL,
             path TEXT NOT NULL,
             function_id UUID REFERENCES control.functions(id) ON DELETE CASCADE,
+            pointer_version BIGINT NOT NULL DEFAULT 1,
             created_at TIMESTAMPTZ DEFAULT now(),
             UNIQUE(project_id, method, path)
         )",
@@ -624,6 +625,10 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    sqlx::query("ALTER TABLE control.routes ADD COLUMN IF NOT EXISTS pointer_version BIGINT NOT NULL DEFAULT 1")
+        .execute(pool)
+        .await?;
 
     // Performance indexes — idempotent with IF NOT EXISTS.
     sqlx::query(

@@ -2421,7 +2421,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
             "INSERT INTO control.routes (project_id, method, path, function_id) \
              VALUES ($1, 'GET', $2, $3) \
              ON CONFLICT (project_id, method, path) DO UPDATE SET \
-               function_id = EXCLUDED.function_id",
+             function_id = EXCLUDED.function_id, \
+             pointer_version = control.routes.pointer_version + 1",
         )
         .bind(project_id)
         .bind(format!("/api/{}", req.name))
