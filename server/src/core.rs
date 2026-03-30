@@ -574,6 +574,10 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
+    sqlx::query("CREATE SEQUENCE IF NOT EXISTS control.route_global_version_seq")
+        .execute(pool)
+        .await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS control.projects (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -607,6 +611,7 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             path TEXT NOT NULL,
             function_id UUID REFERENCES control.functions(id) ON DELETE CASCADE,
             pointer_version BIGINT NOT NULL DEFAULT 1,
+            global_version BIGINT NOT NULL DEFAULT nextval('control.route_global_version_seq'),
             created_at TIMESTAMPTZ DEFAULT now(),
             UNIQUE(project_id, method, path)
         )",
@@ -627,6 +632,21 @@ async fn ensure_runtime_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     .await?;
 
     sqlx::query("ALTER TABLE control.routes ADD COLUMN IF NOT EXISTS pointer_version BIGINT NOT NULL DEFAULT 1")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE control.routes ADD COLUMN IF NOT EXISTS global_version BIGINT")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE control.routes ALTER COLUMN global_version SET DEFAULT nextval('control.route_global_version_seq')")
+        .execute(pool)
+        .await?;
+    sqlx::query("UPDATE control.routes SET global_version = nextval('control.route_global_version_seq') WHERE global_version IS NULL")
+        .execute(pool)
+        .await?;
+    sqlx::query("ALTER TABLE control.routes ALTER COLUMN global_version SET NOT NULL")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_control_routes_global_version ON control.routes(global_version)")
         .execute(pool)
         .await?;
 

@@ -2422,7 +2422,8 @@ impl pb::internal_auth_service_server::InternalAuthService for InternalAuthGrpc 
              VALUES ($1, 'GET', $2, $3) \
              ON CONFLICT (project_id, method, path) DO UPDATE SET \
              function_id = EXCLUDED.function_id, \
-             pointer_version = control.routes.pointer_version + 1",
+             pointer_version = control.routes.pointer_version + 1, \
+             global_version = nextval('control.route_global_version_seq')",
         )
         .bind(project_id)
         .bind(format!("/api/{}", req.name))
